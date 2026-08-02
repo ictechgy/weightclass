@@ -17,7 +17,7 @@ weightclass has no runtime dependencies beyond Python 3.10 or later. Until a
 package registry release is published, install it from a local checkout:
 
 ```sh
-git clone https://github.com/YOUR-ACCOUNT/weightclass.git
+git clone https://github.com/ictechgy/weightclass.git
 cd weightclass
 python3 -m pip install .
 ```
