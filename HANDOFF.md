@@ -4,32 +4,34 @@ _Last updated: 2026-08-02 KST by Codex_
 
 ## Goal
 
-- Build a public local Subscription Agent Router (SAR) for choosing and rendering supported native Codex and Claude Code workflows while using subscriptions through the vendors' own tools.
+- Build a public local weightclass tool for choosing and rendering supported native Codex and Claude Code workflows while using subscriptions through the vendors' own tools.
 
 ## Current Status
 
 - Git repository initialized; project guidance is committed as `4896cdf`.
-- V1 persistence boundary is confirmed: SAR creates no router-owned artifacts or vendor configuration.
+- V1 persistence boundary is confirmed: weightclass creates no router-owned artifacts or vendor configuration.
 - A Python standard-library CLI classifies stdin task input deterministically, keeps explicit Codex/Claude source requests on the same vendor by default, and can run one selected command in the foreground without a shell.
-- V2 adds a declarative API-policy lane. It binds review acknowledgement to the selected provider, model, effort, source, intended recipient/billing metadata, and absolute external-runtime path before starting one foreground runtime. SAR itself still makes no network request and never handles credentials.
+- V2 adds a declarative API-policy lane. It binds review acknowledgement to the selected provider, model, effort, source, intended recipient/billing metadata, and absolute external-runtime path before starting one foreground runtime. weightclass itself still makes no network request and never handles credentials.
 - Reviewed policies can opt into mixed-vendor routing and declare opaque model labels per tier. Focused tests cover source-vendor filtering, mixed-vendor opt-in, model selection metadata, difficulty classification, routing, stdin execution, and redacted failure diagnostics.
 
 ## Important Context / Decisions
 
 - The automated-launcher design grew into process supervision, retry, lease, and crash-recovery guarantees. Avoid reintroducing that scope without an explicit product decision.
 - V1 accepts task bodies only as transient stdin: classify in memory, pass to one selected native child process, and never persist, log, echo, or place the task in diagnostics.
-- V1 selects routes deterministically and permits `sar route` review before `sar run`. It does not capture or interpret raw vendor output.
+- V1 selects routes deterministically and permits `wclass route` review before `wclass run`. It does not capture or interpret raw vendor output.
 - `--source-vendor codex|claude` identifies the calling vendor. Mixed-vendor routing is disabled by default and enabled only by `allow_mixed_vendors: true` in a reviewed policy.
-- Model labels are policy-owned opaque values. SAR never probes entitlement or model availability.
+- Model labels are policy-owned opaque values. weightclass never probes entitlement or model availability.
 - Do not handle credentials, subscription balances, or pricing data.
 - V1 does not write router-owned artifacts. Durable compilation remains out of scope unless a future version defines platform support and a filesystem/publication contract.
 - V1 runs one foreground command only. It does not retry, recover, background, monitor, or supervise vendor processes.
 - V2 accepts only `transport: "api"` declarative routes for `openai` or `anthropic`; it rejects arbitrary API commands. `allow_cross_provider` is required for a source vendor to select the other provider family. `allow_api` must also be true.
-- The API runtime protocol is fixed as `runtime --provider PROVIDER --model MODEL --effort EFFORT`, with task content on stdin only. API execution requires `--confirm-api-egress` and the exact `sar v2 route` fingerprint; SAR recomputes it at run time (including API and cross-provider permissions) and has no fallback or retry.
+- The API runtime protocol is fixed as `runtime --provider PROVIDER --model MODEL --effort EFFORT`, with task content on stdin only. API execution requires `--confirm-api-egress` and the exact `wclass v2 route` fingerprint; weightclass recomputes it at run time (including API and cross-provider permissions) and has no fallback or retry.
 
 ## Key Files & State
 
-- `README.md`: local usage, default routing policy, and security boundary.
+- `README.md`: install, local usage, default routing policy, and security boundary.
+- `pyproject.toml`: public package metadata and the `wclass` console command.
+- `LICENSE`: MIT license for the public repository.
 - `src/sar/`: deterministic classifier, selector, and foreground CLI runner.
 - `tests/test_router.py`: focused behavior tests.
 - `src/sar/v2.py`: bounded V2 policy parser, source/provider selection, review descriptor, and route fingerprinting.
@@ -61,10 +63,10 @@ _Last updated: 2026-08-02 KST by Codex_
 ## Next Steps
 
 1. Add narrow vendor integration snippets that pass `--source-vendor` explicitly, without changing vendor-global configuration automatically.
-2. Define and separately distribute an audited provider-runtime implementation only with its own credential, network, and billing contract; do not add it to SAR by default.
+2. Define and separately distribute an audited provider-runtime implementation only with its own credential, network, and billing contract; do not add it to weightclass by default.
 3. Add a release/install workflow only if a packaging requirement is approved; keep dependencies pinned and avoid vendor configuration changes.
 4. Preserve the one-foreground-process, no-persistence boundary for future changes.
 
 ## Resume Prompt
 
-Open this repository at `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`, `AGENTS.md`, and `README.md`, then preserve the V1 and V2 transient-task, no-persistence, one-foreground-process boundary. Keep V2 API routing declarative and external-runtime-only; never add credential access or direct provider networking to SAR without an explicit new approval and focused tests.
+Open this repository, read `HANDOFF.md`, `AGENTS.md`, and `README.md`, then preserve the V1 and V2 transient-task, no-persistence, one-foreground-process boundary. Keep V2 API routing declarative and external-runtime-only; never add credential access or direct provider networking to weightclass without an explicit new approval and focused tests.

@@ -1,4 +1,4 @@
-"""Run SAR as a module."""
+"""Run weightclass through its retained internal module name."""
 
 from .cli import main
 

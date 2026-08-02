@@ -1,1 +1,1 @@
-"""Subscription Agent Router public API."""
+"""weightclass public API, retained under the ``sar`` module name."""
