@@ -1,61 +1,82 @@
 # Subscription Agent Router
 
-Subscription Agent Router (SAR) is a local, decision-only command renderer for
-native Codex and Claude Code workflows. It reads a reviewed local policy and a
-redacted request descriptor, selects the first exact match, then prints a JSON
-command array for the user to inspect and run manually.
-
-SAR does not execute the rendered command.
+Subscription Agent Router (SAR) is a local task router for native Codex and
+Claude Code workflows. It classifies a task in memory as `low`, `standard`, or
+`high`, selects a deterministic route, and can run one selected vendor process
+in the foreground.
 
 ## Run locally
 
-SAR uses only the Python standard library. From the repository root:
+SAR uses only the Python standard library. From the repository root, inspect a
+route before running it:
 
 ```sh
-PYTHONPATH=src python3 -m sar --policy policy.json --descriptor descriptor.json
+printf '%s' 'Fix a spelling typo in the README.' | PYTHONPATH=src python3 -m sar route
+printf '%s' 'Fix a spelling typo in the README.' | PYTHONPATH=src python3 -m sar run
 ```
 
-`policy.json` is trusted local configuration. Routes are considered in listed
-order, so the first exact `vendor` and `workflow` match is selected.
+The built-in routes are intentionally conservative:
+
+- `low`: Codex `exec`, ephemeral session, workspace-write sandbox for small edits.
+- `standard`: Codex `exec`, ephemeral session, workspace-write sandbox.
+- `high`: Claude in print mode with `high` effort, manual permissions, and no
+  session persistence.
+
+Classification is local and deterministic. Security, authentication,
+authorization, data, migration, concurrency, performance, production, and
+architecture signals route to `high`. Short typo, spelling, formatting, and
+rename tasks route to `low`; other valid tasks route to `standard`. Unknown or
+oversized task input fails closed.
+
+The native Codex and Claude CLIs must already be installed and authenticated.
+SAR does not inspect or change their authentication or subscription state.
+
+## Override the routes
+
+Use `sar route --policy policy.json` or `sar run --policy policy.json` to use a
+reviewed local policy. Routes are considered in listed order, so the first
+matching `tier` is selected. Configure model labels and vendor-specific effort
+arguments only with labels you know are available to you.
 
 ```json
 {
   "routes": [
     {
-      "id": "codex-review",
+      "id": "codex-low",
       "vendor": "codex",
-      "workflow": "review",
-      "command": ["codex", "your-native-workflow", "--model", "preferred-label"]
+      "tier": "low",
+      "command": ["codex", "exec", "--model", "your-low-model-label", "-"]
+    },
+    {
+      "id": "claude-high",
+      "vendor": "claude",
+      "tier": "high",
+      "command": ["claude", "--print", "--model", "your-high-model-label", "--effort", "high"]
     }
   ]
 }
 ```
 
-`descriptor.json` intentionally accepts only route-selection metadata:
-
-```json
-{
-  "vendor": "codex",
-  "workflow": "review"
-}
-```
-
 The `command` tokens and model labels are opaque policy values. SAR validates
-their shape but does not assert that they are valid vendor CLI arguments; review
-the rendered output before using it.
+their shape but does not assert vendor CLI semantics or subscription access.
+Always run `sar route` with a representative non-sensitive task to inspect a
+policy before using `sar run`.
 
 ## Security boundary and non-goals
 
-- No persistence: SAR reads the two explicitly supplied JSON files and writes
-  no router artifacts or vendor configuration.
-- No credentials, subscription balances, pricing, cookies, task bodies, or raw
-  vendor output are read, stored, or emitted by SAR.
-- Route selection is exact and deterministic. Unsupported or malformed input
+- No persistence: SAR writes no router artifacts or vendor configuration.
+- Task text is read only from standard input, held in memory to classify and
+  pass to the selected child process, then discarded. SAR never logs, stores,
+  echoes, or places it in diagnostics.
+- SAR never reads credentials, subscription balances, pricing, cookies, or
+  vendor configuration. It does not capture or process vendor output.
+- Route selection is deterministic. Unsupported, malformed, or unsafe input
   fails closed with a redacted JSON diagnostic.
+- `sar run` starts exactly one configured command in the foreground without a
+  shell, retry, backgrounding, recovery, or process supervision.
 - SAR is not an API proxy, credential manager, cloud service, subscription
-  checker, vendor-command executor, or unattended process supervisor.
-- Policies must be reviewed before use. Do not place secrets or task content in
-  either input file.
+  checker, or unattended multi-agent supervisor.
+- Policies must be reviewed before use. Do not place secrets in a policy.
 
 ## Verify
 
