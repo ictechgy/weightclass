@@ -26,6 +26,9 @@ This installs the `wclass` command. The native Codex and Claude CLIs must
 already be installed and authenticated; weightclass never reads or changes
 their authentication or subscription state.
 
+For reviewable native Codex and Claude Code invocation examples, see
+[Native integrations](docs/integrations.md).
+
 ## Run locally
 
 Inspect a route before running it:

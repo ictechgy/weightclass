@@ -13,6 +13,9 @@ _Last updated: 2026-08-02 KST by Codex_
 - A Python standard-library CLI classifies stdin task input deterministically, keeps explicit Codex/Claude source requests on the same vendor by default, and can run one selected command in the foreground without a shell.
 - V2 adds a declarative API-policy lane. It binds review acknowledgement to the selected provider, model, effort, source, intended recipient/billing metadata, and absolute external-runtime path before starting one foreground runtime. weightclass itself still makes no network request and never handles credentials.
 - Reviewed policies can opt into mixed-vendor routing and declare opaque model labels per tier. Focused tests cover source-vendor filtering, mixed-vendor opt-in, model selection metadata, difficulty classification, routing, stdin execution, and redacted failure diagnostics.
+- The public package exposes the `wclass` command and has CI that installs the package, executes the installed CLI, and runs the test suite across Python 3.10, 3.12, and 3.13.
+- Native Codex and Claude Code invocation is documented as an explicit, reviewable standard-input workflow; weightclass does not modify vendor-global configuration or an existing interactive session.
+- Static, non-sensitive regression cases classify deployment rollback, privacy, credential, and Korean operational tasks as `high`, while short whitespace and punctuation edits classify as `low`.
 
 ## Important Context / Decisions
 
@@ -30,10 +33,12 @@ _Last updated: 2026-08-02 KST by Codex_
 ## Key Files & State
 
 - `README.md`: install, local usage, default routing policy, and security boundary.
+- `docs/integrations.md`: reviewable Codex and Claude Code invocation snippets.
 - `pyproject.toml`: public package metadata and the `wclass` console command.
 - `LICENSE`: MIT license for the public repository.
 - `src/sar/`: deterministic classifier, selector, and foreground CLI runner.
 - `tests/test_router.py`: focused behavior tests.
+- `tests/test_classification.py`: static regression coverage for deterministic tier selection.
 - `src/sar/v2.py`: bounded V2 policy parser, source/provider selection, review descriptor, and route fingerprinting.
 - `tests/test_v2.py`: API policy, confirmation, input-boundary, runtime-protocol, fingerprint, and cross-provider tests using no network.
 - `AGENTS.md`: shared constraints and public-repository rules.
@@ -62,9 +67,9 @@ _Last updated: 2026-08-02 KST by Codex_
 
 ## Next Steps
 
-1. Add narrow vendor integration snippets that pass `--source-vendor` explicitly, without changing vendor-global configuration automatically.
-2. Define and separately distribute an audited provider-runtime implementation only with its own credential, network, and billing contract; do not add it to weightclass by default.
-3. Add a release/install workflow only if a packaging requirement is approved; keep dependencies pinned and avoid vendor configuration changes.
+1. Create a separate public remote for `weightclass-runtime`, then push its committed source and enable its CI. Do not add the runtime to this repository by default.
+2. Observe the GitHub Actions results for the main package's clean-install verification before a registry release.
+3. Before a runtime release, build from a clean environment and publish SHA-256 checksums as documented by that repository's `RELEASING.md`.
 4. Preserve the one-foreground-process, no-persistence boundary for future changes.
 
 ## Resume Prompt
