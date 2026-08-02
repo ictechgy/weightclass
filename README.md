@@ -77,6 +77,76 @@ Set `"allow_mixed_vendors": true` only when you intentionally want a Codex
 request to select a Claude route, or the reverse. When it is `false` or absent,
 the source-vendor filter is applied before tier and model selection.
 
+## V2 API routing through an external runtime
+
+V2 adds declarative API-route selection without turning SAR into an API client.
+SAR does not read API keys, inspect authentication, or make network requests.
+Instead, you provide an already-installed, trusted runtime at an absolute,
+executable path. That runtime is responsible for provider credentials, HTTP,
+billing, and any provider output.
+
+Use a V2 policy only for API routes; unlike the V1 legacy policy, it cannot
+contain arbitrary command arrays. A route is eligible only for its declared
+source vendors. `codex` maps to the OpenAI provider family and `claude` maps to
+the Anthropic provider family; `allow_cross_provider` must be `true` before a
+route can cross those families.
+
+```json
+{
+  "schema_version": 2,
+  "allow_cross_provider": false,
+  "allow_api": true,
+  "routes": [
+    {
+      "id": "openai-high-api",
+      "tier": "high",
+      "eligible_source_vendors": ["codex"],
+      "provider": "openai",
+      "transport": "api",
+      "model": "your-openai-model-label",
+      "effort": "high",
+      "intended_recipient": "OpenAI API",
+      "intended_billing_boundary": "your OpenAI API account"
+    }
+  ]
+}
+```
+
+First review the selected destination and copy the returned fingerprint. SAR
+reports the intended recipient and billing boundary from the reviewed policy;
+it does not verify either claim.
+
+```sh
+printf '%s' 'Review this authorization change.' | \
+  PYTHONPATH=src python3 -m sar v2 route \
+  --policy api-policy.json --source-vendor codex \
+  --api-runtime /absolute/path/to/provider-runtime
+```
+
+Starting an API route requires both an explicit egress confirmation and the
+exact fingerprint from that review. SAR recomputes the route before spawning
+the runtime, so a change to the selected model, effort, source, destination,
+runtime path, or API/cross-provider permission invalidates the acknowledgement.
+
+```sh
+printf '%s' 'Review this authorization change.' | \
+  PYTHONPATH=src python3 -m sar v2 run \
+  --policy api-policy.json --source-vendor codex \
+  --api-runtime /absolute/path/to/provider-runtime \
+  --confirm-api-egress --ack-route-fingerprint 'sha256:copied-from-route'
+```
+
+For a selected V2 route, SAR invokes exactly this fixed protocol, without a
+shell, and passes the task only on standard input:
+
+```text
+/absolute/path/to/provider-runtime --provider PROVIDER --model MODEL --effort EFFORT
+```
+
+Do not put API keys, tokens, task text, or personal information in the policy,
+route metadata, or command line. V2 does not provide retries, failover,
+credential management, background execution, or a bundled provider runtime.
+
 ## Security boundary and non-goals
 
 - No persistence: SAR writes no router artifacts or vendor configuration.
@@ -84,7 +154,9 @@ the source-vendor filter is applied before tier and model selection.
   pass to the selected child process, then discarded. SAR never logs, stores,
   echoes, or places it in diagnostics.
 - SAR never reads credentials, subscription balances, pricing, cookies, or
-  vendor configuration. It does not capture or process vendor output.
+  vendor configuration. It does not capture or process vendor output. V2 does
+  not issue provider HTTP requests; a separately installed runtime may do so
+  only after the explicit acknowledgement described above.
 - Route selection is deterministic. Unsupported, malformed, or unsafe input
   fails closed with a redacted JSON diagnostic.
 - SAR does not infer source vendor, model availability, subscription tier, or
@@ -93,7 +165,7 @@ the source-vendor filter is applied before tier and model selection.
 - `sar run` starts exactly one configured command in the foreground without a
   shell, retry, backgrounding, recovery, or process supervision.
 - SAR is not an API proxy, credential manager, cloud service, subscription
-  checker, or unattended multi-agent supervisor.
+  checker, bundled provider runtime, or unattended multi-agent supervisor.
 - Policies must be reviewed before use. Do not place secrets in a policy.
 
 ## Verify

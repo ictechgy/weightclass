@@ -18,6 +18,16 @@ from .router import (
     select_route,
     select_tier_route,
 )
+from .v2 import (
+    V2InvalidInputError,
+    V2InvalidTaskError,
+    load_api_policy,
+    read_task_from_standard_input,
+    render_api_route,
+    route_fingerprint,
+    select_api_route,
+    validate_api_runtime,
+)
 
 
 class InvalidInputError(ValueError):
@@ -147,6 +157,110 @@ def build_route_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_v2_route_parser() -> argparse.ArgumentParser:
+    """Parse an explicit V2 API route review request."""
+    parser = SafeArgumentParser(description="Review a declarative API route.")
+    parser.add_argument("--policy", required=True, type=Path)
+    parser.add_argument("--source-vendor", required=True, choices=sorted(SUPPORTED_VENDORS))
+    parser.add_argument("--api-runtime", required=True, type=Path)
+    return parser
+
+
+def build_v2_run_parser() -> argparse.ArgumentParser:
+    """Parse an explicit V2 API execution request."""
+    parser = build_v2_route_parser()
+    parser.description = "Run a reviewed declarative API route."
+    parser.add_argument("--confirm-api-egress", action="store_true")
+    parser.add_argument("--ack-route-fingerprint")
+    return parser
+
+
+def v2_route_from_standard_input(
+    policy_path: Path,
+    source_vendor: str,
+    runtime_path: Path,
+) -> int:
+    """Render an API review descriptor without sending data to a provider."""
+    try:
+        runtime_path = validate_api_runtime(runtime_path)
+        task = read_task_from_standard_input()
+        policy = load_api_policy(policy_path)
+        tier, route = select_api_route(task, policy, source_vendor)
+    except V2InvalidTaskError:
+        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
+        return 2
+    except InvalidTaskError:
+        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
+        return 2
+    except (V2InvalidInputError, InvalidInputError):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    except RouteSelectionError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+    print(json.dumps(render_api_route(route, policy, tier, source_vendor, runtime_path)))
+    return 0
+
+
+def v2_run_from_standard_input(
+    policy_path: Path,
+    source_vendor: str,
+    runtime_path: Path,
+    confirm_api_egress: bool,
+    acknowledged_fingerprint: str | None,
+) -> int:
+    """Start one acknowledged external API runtime without handling credentials."""
+    try:
+        runtime_path = validate_api_runtime(runtime_path)
+        task = read_task_from_standard_input()
+        policy = load_api_policy(policy_path)
+        tier, route = select_api_route(task, policy, source_vendor)
+    except V2InvalidTaskError:
+        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
+        return 2
+    except InvalidTaskError:
+        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
+        return 2
+    except (V2InvalidInputError, InvalidInputError):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    except RouteSelectionError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+
+    if not confirm_api_egress:
+        print(json.dumps({"error": "api_confirmation_required"}), file=sys.stderr)
+        return 5
+    if acknowledged_fingerprint != route_fingerprint(
+        route,
+        policy,
+        tier,
+        source_vendor,
+        runtime_path,
+    ):
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
+    try:
+        completed_process = subprocess.run(
+            (
+                str(runtime_path),
+                "--provider",
+                route.provider,
+                "--model",
+                route.model,
+                "--effort",
+                route.effort,
+            ),
+            check=False,
+            input=task,
+            text=True,
+        )
+    except OSError:
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    return completed_process.returncode
+
+
 def classify_from_standard_input() -> int:
     """Classify a task read from stdin without echoing or persisting it."""
     try:
@@ -245,6 +359,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
         return run_from_standard_input(arguments.policy, arguments.source_vendor)
+    if len(provided_arguments) >= 2 and provided_arguments[:2] == ["v2", "route"]:
+        try:
+            arguments = build_v2_route_parser().parse_args(provided_arguments[2:])
+        except InvalidInputError:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        return v2_route_from_standard_input(
+            arguments.policy,
+            arguments.source_vendor,
+            arguments.api_runtime,
+        )
+    if len(provided_arguments) >= 2 and provided_arguments[:2] == ["v2", "run"]:
+        try:
+            arguments = build_v2_run_parser().parse_args(provided_arguments[2:])
+        except InvalidInputError:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        return v2_run_from_standard_input(
+            arguments.policy,
+            arguments.source_vendor,
+            arguments.api_runtime,
+            arguments.confirm_api_egress,
+            arguments.ack_route_fingerprint,
+        )
     try:
         arguments = build_parser().parse_args(provided_arguments)
         route = select_route(load_routes(arguments.policy), load_request(arguments.descriptor))

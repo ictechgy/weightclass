@@ -11,6 +11,7 @@ _Last updated: 2026-08-02 KST by Codex_
 - Git repository initialized; project guidance is committed as `4896cdf`.
 - V1 persistence boundary is confirmed: SAR creates no router-owned artifacts or vendor configuration.
 - A Python standard-library CLI classifies stdin task input deterministically, keeps explicit Codex/Claude source requests on the same vendor by default, and can run one selected command in the foreground without a shell.
+- V2 adds a declarative API-policy lane. It binds review acknowledgement to the selected provider, model, effort, source, intended recipient/billing metadata, and absolute external-runtime path before starting one foreground runtime. SAR itself still makes no network request and never handles credentials.
 - Reviewed policies can opt into mixed-vendor routing and declare opaque model labels per tier. Focused tests cover source-vendor filtering, mixed-vendor opt-in, model selection metadata, difficulty classification, routing, stdin execution, and redacted failure diagnostics.
 
 ## Important Context / Decisions
@@ -23,12 +24,16 @@ _Last updated: 2026-08-02 KST by Codex_
 - Do not handle credentials, subscription balances, or pricing data.
 - V1 does not write router-owned artifacts. Durable compilation remains out of scope unless a future version defines platform support and a filesystem/publication contract.
 - V1 runs one foreground command only. It does not retry, recover, background, monitor, or supervise vendor processes.
+- V2 accepts only `transport: "api"` declarative routes for `openai` or `anthropic`; it rejects arbitrary API commands. `allow_cross_provider` is required for a source vendor to select the other provider family. `allow_api` must also be true.
+- The API runtime protocol is fixed as `runtime --provider PROVIDER --model MODEL --effort EFFORT`, with task content on stdin only. API execution requires `--confirm-api-egress` and the exact `sar v2 route` fingerprint; SAR recomputes it at run time (including API and cross-provider permissions) and has no fallback or retry.
 
 ## Key Files & State
 
 - `README.md`: local usage, default routing policy, and security boundary.
 - `src/sar/`: deterministic classifier, selector, and foreground CLI runner.
 - `tests/test_router.py`: focused behavior tests.
+- `src/sar/v2.py`: bounded V2 policy parser, source/provider selection, review descriptor, and route fingerprinting.
+- `tests/test_v2.py`: API policy, confirmation, input-boundary, runtime-protocol, fingerprint, and cross-provider tests using no network.
 - `AGENTS.md`: shared constraints and public-repository rules.
 - `CLAUDE.md`: Claude Code entry point that references `AGENTS.md`.
 - `.coderabbit.yaml`: conservative automated-review preferences.
@@ -37,8 +42,8 @@ _Last updated: 2026-08-02 KST by Codex_
 
 ## Verification
 
-- Ran: `PYTHONPATH=src python3 -m unittest tests/test_router.py`
-  - Result: 18 tests passed.
+- Ran: `PYTHONPATH=src python3 -m unittest discover -s tests`
+  - Result: 25 tests passed.
 - Ran: `PYTHONPATH=src python3 -m compileall -q src`
   - Result: source compiled without errors.
 
@@ -56,10 +61,10 @@ _Last updated: 2026-08-02 KST by Codex_
 ## Next Steps
 
 1. Add narrow vendor integration snippets that pass `--source-vendor` explicitly, without changing vendor-global configuration automatically.
-2. Review default routes and model-labeled policies with intended local users, using `sar route` before any `sar run` invocation.
+2. Define and separately distribute an audited provider-runtime implementation only with its own credential, network, and billing contract; do not add it to SAR by default.
 3. Add a release/install workflow only if a packaging requirement is approved; keep dependencies pinned and avoid vendor configuration changes.
 4. Preserve the one-foreground-process, no-persistence boundary for future changes.
 
 ## Resume Prompt
 
-Open this repository at `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`, `AGENTS.md`, and `README.md`, then preserve the V1 transient-task, no-persistence, one-foreground-process boundary while evolving classification or policy behavior only with focused tests.
+Open this repository at `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`, `AGENTS.md`, and `README.md`, then preserve the V1 and V2 transient-task, no-persistence, one-foreground-process boundary. Keep V2 API routing declarative and external-runtime-only; never add credential access or direct provider networking to SAR without an explicit new approval and focused tests.
