@@ -12,6 +12,7 @@ from .router import (
     Route,
     RouteRequest,
     RouteSelectionError,
+    RoutingPolicy,
     SUPPORTED_VENDORS,
     DEFAULT_ROUTES,
     select_route,
@@ -57,8 +58,14 @@ def _parse_route(value: object) -> Route:
         raise InvalidInputError()
 
     keys = set(value)
-    has_workflow = keys == {"id", "vendor", "workflow", "command"}
-    has_tier = keys == {"id", "vendor", "tier", "command"}
+    has_workflow = keys in (
+        {"id", "vendor", "workflow", "command"},
+        {"id", "vendor", "workflow", "command", "model"},
+    )
+    has_tier = keys in (
+        {"id", "vendor", "tier", "command"},
+        {"id", "vendor", "tier", "command", "model"},
+    )
     if not has_workflow and not has_tier:
         raise InvalidInputError()
 
@@ -75,6 +82,7 @@ def _parse_route(value: object) -> Route:
         if parsed_tier not in {"low", "standard", "high"}:
             raise InvalidInputError()
         tier = cast(Tier, parsed_tier)
+    model = _require_model_label(value["model"]) if "model" in value else None
 
     return Route(
         route_id=route_id,
@@ -82,13 +90,29 @@ def _parse_route(value: object) -> Route:
         workflow=workflow,
         command=tuple(_require_nonempty_string(argument) for argument in command),
         tier=tier,
+        model=model,
     )
+
+
+def _require_model_label(value: object) -> str:
+    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+        raise InvalidInputError()
+    return value
 
 
 def load_routes(policy_path: Path) -> tuple[Route, ...]:
     """Load a strictly shaped, trusted-local route policy."""
+    return load_routing_policy(policy_path).routes
+
+
+def load_routing_policy(policy_path: Path) -> RoutingPolicy:
+    """Load routing options and strictly shaped trusted-local routes."""
     policy = _read_json_object(policy_path)
-    _require_exact_keys(policy, {"routes"})
+    if set(policy) not in ({"routes"}, {"routes", "allow_mixed_vendors"}):
+        raise InvalidInputError()
+    allow_mixed_vendors = policy.get("allow_mixed_vendors", False)
+    if not isinstance(allow_mixed_vendors, bool):
+        raise InvalidInputError()
     routes = policy["routes"]
     if not isinstance(routes, list) or not routes:
         raise InvalidInputError()
@@ -96,7 +120,7 @@ def load_routes(policy_path: Path) -> tuple[Route, ...]:
     parsed_routes = tuple(_parse_route(route) for route in routes)
     if len({route.route_id for route in parsed_routes}) != len(parsed_routes):
         raise InvalidInputError()
-    return parsed_routes
+    return RoutingPolicy(parsed_routes, allow_mixed_vendors)
 
 
 def load_request(descriptor_path: Path) -> RouteRequest:
@@ -119,6 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
 def build_route_parser() -> argparse.ArgumentParser:
     parser = SafeArgumentParser(description="Select a command for a task read from stdin.")
     parser.add_argument("--policy", type=Path)
+    parser.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
     return parser
 
 
@@ -133,17 +158,30 @@ def classify_from_standard_input() -> int:
     return 0
 
 
-def select_task_route(task: str, policy_path: Path | None) -> tuple[Tier, Route]:
+def select_task_route(
+    task: str,
+    policy_path: Path | None,
+    source_vendor: str | None = None,
+) -> tuple[Tier, Route]:
     """Classify a task and select its route without retaining task content."""
     tier = classify_task(task)
-    routes = load_routes(policy_path) if policy_path is not None else DEFAULT_ROUTES
-    return tier, select_tier_route(routes, tier)
+    policy = (
+        load_routing_policy(policy_path)
+        if policy_path is not None
+        else RoutingPolicy(DEFAULT_ROUTES)
+    )
+    return tier, select_tier_route(
+        policy.routes,
+        tier,
+        source_vendor,
+        policy.allow_mixed_vendors,
+    )
 
 
-def route_from_standard_input(policy_path: Path | None) -> int:
+def route_from_standard_input(policy_path: Path | None, source_vendor: str | None) -> int:
     """Select and render a command without echoing or persisting the task."""
     try:
-        tier, route = select_task_route(sys.stdin.read(), policy_path)
+        tier, route = select_task_route(sys.stdin.read(), policy_path, source_vendor)
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
@@ -153,15 +191,20 @@ def route_from_standard_input(policy_path: Path | None) -> int:
     except RouteSelectionError:
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
-    print(json.dumps({"command": list(route.command), "route": route.route_id, "tier": tier}))
+    response = {"command": list(route.command), "route": route.route_id, "tier": tier}
+    if source_vendor is not None:
+        response["vendor"] = route.vendor
+    if route.model is not None:
+        response["model"] = route.model
+    print(json.dumps(response))
     return 0
 
 
-def run_from_standard_input(policy_path: Path | None) -> int:
+def run_from_standard_input(policy_path: Path | None, source_vendor: str | None) -> int:
     """Run a selected native command without a shell or output capture."""
     task = sys.stdin.read()
     try:
-        _, route = select_task_route(task, policy_path)
+        _, route = select_task_route(task, policy_path, source_vendor)
         completed_process = subprocess.run(
             route.command,
             check=False,
@@ -194,14 +237,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         except InvalidInputError:
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
-        return route_from_standard_input(arguments.policy)
+        return route_from_standard_input(arguments.policy, arguments.source_vendor)
     if provided_arguments and provided_arguments[0] == "run":
         try:
             arguments = build_route_parser().parse_args(provided_arguments[1:])
         except InvalidInputError:
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
-        return run_from_standard_input(arguments.policy)
+        return run_from_standard_input(arguments.policy, arguments.source_vendor)
     try:
         arguments = build_parser().parse_args(provided_arguments)
         route = select_route(load_routes(arguments.policy), load_request(arguments.descriptor))

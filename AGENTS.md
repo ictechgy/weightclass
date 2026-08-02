@@ -8,7 +8,7 @@
 
 ## Product direction
 
-Subscription Agent Router (SAR) is intended to be a public, local tool that classifies a task and selects or starts a supported native Codex or Claude Code workflow. Treat model labels and subscription availability as user-provided opaque configuration; do not infer entitlements, pricing, or remaining subscription usage.
+Subscription Agent Router (SAR) is intended to be a public, local tool that classifies a task and selects or starts a supported native Codex or Claude Code workflow. By default, a route stays with its explicit source vendor; cross-vendor routing requires an explicit policy opt-in. Treat model labels and subscription availability as user-provided opaque configuration; do not infer entitlements, pricing, or remaining subscription usage.
 
 Before implementation, confirm the V1 boundary from `HANDOFF.md`. Do not silently broaden it into an API proxy, credential manager, cloud service, or unattended multi-agent process supervisor. V1 may run exactly one selected vendor process in the foreground; it does not retry, recover, background, or supervise that process.
 

@@ -120,6 +120,207 @@ class CommandLineTests(unittest.TestCase):
         )
         self.assertNotIn("authorization", result.stdout)
 
+    def test_keeps_a_codex_request_on_its_configured_high_model_when_mixing_is_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "allow_mixed_vendors": False,
+                        "routes": [
+                            {
+                                "id": "codex-high",
+                                "vendor": "codex",
+                                "tier": "high",
+                                "model": "codex-high-label",
+                                "command": ["codex", "exec", "--model", "codex-high-label", "-"],
+                            },
+                            {
+                                "id": "claude-high",
+                                "vendor": "claude",
+                                "tier": "high",
+                                "model": "claude-high-label",
+                                "command": ["claude", "--print", "--model", "claude-high-label"],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "sar",
+                    "route",
+                    "--policy",
+                    str(policy_path),
+                    "--source-vendor",
+                    "codex",
+                ],
+                capture_output=True,
+                check=False,
+                input="Review the authentication architecture for this service.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "command": ["codex", "exec", "--model", "codex-high-label", "-"],
+                "model": "codex-high-label",
+                "route": "codex-high",
+                "tier": "high",
+                "vendor": "codex",
+            },
+        )
+        self.assertNotIn("authentication", result.stdout)
+
+    def test_allows_a_codex_request_to_use_a_claude_model_when_mixing_is_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "allow_mixed_vendors": True,
+                        "routes": [
+                            {
+                                "id": "claude-high",
+                                "vendor": "claude",
+                                "tier": "high",
+                                "model": "claude-high-label",
+                                "command": ["claude", "--print", "--model", "claude-high-label"],
+                            },
+                            {
+                                "id": "codex-high",
+                                "vendor": "codex",
+                                "tier": "high",
+                                "model": "codex-high-label",
+                                "command": ["codex", "exec", "--model", "codex-high-label", "-"],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "sar",
+                    "route",
+                    "--policy",
+                    str(policy_path),
+                    "--source-vendor",
+                    "codex",
+                ],
+                capture_output=True,
+                check=False,
+                input="Review the security boundary for this service.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "command": ["claude", "--print", "--model", "claude-high-label"],
+                "model": "claude-high-label",
+                "route": "claude-high",
+                "tier": "high",
+                "vendor": "claude",
+            },
+        )
+        self.assertNotIn("security boundary", result.stdout)
+
+    def test_routes_a_codex_high_task_to_the_built_in_codex_high_route(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "sar", "route", "--source-vendor", "codex"],
+            capture_output=True,
+            check=False,
+            input="Review the security implications of this authorization change.",
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "command": [
+                    "codex",
+                    "exec",
+                    "--ephemeral",
+                    "--sandbox",
+                    "workspace-write",
+                    "-",
+                ],
+                "route": "codex-high",
+                "tier": "high",
+                "vendor": "codex",
+            },
+        )
+
+    def test_routes_a_claude_low_task_to_the_built_in_claude_low_route(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "sar", "route", "--source-vendor", "claude"],
+            capture_output=True,
+            check=False,
+            input="Fix a typo.",
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "command": [
+                    "claude",
+                    "--print",
+                    "--no-session-persistence",
+                    "--permission-mode",
+                    "manual",
+                    "--effort",
+                    "low",
+                ],
+                "route": "claude-low",
+                "tier": "low",
+                "vendor": "claude",
+            },
+        )
+
+    def test_routes_a_claude_standard_task_to_the_built_in_claude_standard_route(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "sar", "route", "--source-vendor", "claude"],
+            capture_output=True,
+            check=False,
+            input="Add a focused unit test for this formatter.",
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "command": [
+                    "claude",
+                    "--print",
+                    "--no-session-persistence",
+                    "--permission-mode",
+                    "manual",
+                    "--effort",
+                    "medium",
+                ],
+                "route": "claude-standard",
+                "tier": "standard",
+                "vendor": "claude",
+            },
+        )
+
     def test_routes_a_high_effort_task_to_the_built_in_claude_command(self) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "sar", "route"],
