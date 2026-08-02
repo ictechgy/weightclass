@@ -1,0 +1,44 @@
+# Secrets and local credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+auth.json
+
+# Operating systems and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local agent and router state
+.sar/
+.codex/
+.claude/
+logs/
+tmp/
+
+# JavaScript and TypeScript
+node_modules/
+dist/
+coverage/
+.next/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Go and generic build output
+bin/
+build/
+*.test
+*.out
