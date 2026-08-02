@@ -8,19 +8,23 @@ _Last updated: 2026-08-02 KST by Codex_
 
 ## Current Status
 
-- The project directory exists but is not yet a Git repository and contains no implementation code.
-- Project instructions, this handoff, CodeRabbit preferences, and `.gitignore` were added for a future implementation session.
-- Several `ralplan` attempts explored an automated launcher and then a decision-only renderer. No plan reached Critic approval yet.
+- Git repository initialized; project guidance is committed as `4896cdf`.
+- V1 persistence boundary is confirmed: in-memory selection and rendering only; SAR creates no router-owned artifacts.
+- A Python standard-library CLI selects a policy route deterministically and renders a JSON command array without executing it.
+- Focused tests cover ordered exact-match selection, successful rendering, unsupported routes, and redacted malformed-input failures.
 
 ## Important Context / Decisions
 
 - The automated-launcher design grew into process supervision, retry, lease, and crash-recovery guarantees. Avoid reintroducing that scope without an explicit product decision.
-- The safer candidate V1 is decision-only: accept trusted local policy plus a redacted descriptor, select a route deterministically, explain it, and render a user-reviewable native command or snippet. The user runs vendor tools manually.
+- V1 is decision-only: accept trusted local policy plus a redacted descriptor, select a route deterministically, and render a user-reviewable native command array. The user runs vendor tools manually.
 - Do not handle credentials, task bodies, raw vendor output, subscription balances, or pricing data.
-- Before coding, decide whether V1 writes any router-owned artifacts. A completely in-memory renderer is the smallest path; durable compilation requires a precise, platform-supported filesystem and publication contract.
+- V1 does not write router-owned artifacts. Durable compilation remains out of scope unless a future version defines platform support and a filesystem/publication contract.
 
 ## Key Files & State
 
+- `README.md`: local usage plus security boundary and V1 non-goals.
+- `src/sar/`: deterministic selector and non-executing CLI renderer.
+- `tests/test_router.py`: focused behavior tests.
 - `AGENTS.md`: shared constraints and public-repository rules.
 - `CLAUDE.md`: Claude Code entry point that references `AGENTS.md`.
 - `.coderabbit.yaml`: conservative automated-review preferences.
@@ -29,15 +33,15 @@ _Last updated: 2026-08-02 KST by Codex_
 
 ## Verification
 
-- Ran: project-directory inspection
-  - Result: no existing source files or Git repository.
-- No build, lint, or tests were run because implementation has not started.
+- Ran: `PYTHONPATH=src python3 -m unittest tests/test_router.py`
+  - Result: 4 tests passed.
+- Ran: `PYTHONPATH=src python3 -m compileall -q src`
+  - Result: source compiled without errors.
 
 ## Blockers & Open Questions
 
-- Choose the V1 persistence boundary: in-memory rendering only, or router-owned compiled bundles.
-- If adding durable bundles, define supported operating systems and exact safe filesystem semantics before writing path-handling code.
-- Create and initialize the Git repository in a future session if the user approves it.
+- Define the supported workflow-policy schema beyond the current exact `vendor` and `workflow` fields only when a concrete user requirement needs it.
+- Before adding durable bundles, define supported operating systems and exact safe filesystem semantics.
 
 ## What Did Not Work / Avoid
 
@@ -46,10 +50,10 @@ _Last updated: 2026-08-02 KST by Codex_
 
 ## Next Steps
 
-1. Confirm the V1 persistence boundary with the user.
-2. Initialize Git only with approval, then scaffold the smallest implementation and tests.
-3. Add public documentation for threat boundaries, local data handling, and non-goals before any release.
+1. Review the policy schema and rendered commands with intended local users.
+2. Add a release/install workflow only if a packaging requirement is approved; keep dependencies pinned and avoid vendor configuration changes.
+3. Preserve the decision-only boundary for future changes.
 
 ## Resume Prompt
 
-Open this repository at `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and `AGENTS.md`, then confirm the V1 persistence boundary before implementing anything.
+Open this repository at `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`, `AGENTS.md`, and `README.md`, then preserve the V1 decision-only, no-persistence boundary while evolving the policy schema only for concrete requirements.
