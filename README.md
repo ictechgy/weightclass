@@ -52,7 +52,7 @@ them:
 
 | Code | Meaning |
 | --- | --- |
-| `0` | The selected command ran and exited `0`. |
+| `0` | Success. For `run` and `v2 run`, the selected command exited `0`. |
 | `2` | `invalid_task` or `invalid_input`. |
 | `3` | `unsupported_route` — no policy route matched. |
 | `4` | `executor_unavailable` — the command could not be started. |
@@ -60,11 +60,18 @@ them:
 | `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
 | `7` | `executor_failed` — the command started and exited non-zero. |
 
+Code `1` is not weightclass's; it means the interpreter died on an unhandled
+exception, which is a bug worth reporting.
+
 Code `7` carries the real status in its diagnostic, as
 `{"error": "executor_failed", "executor_exit_code": N}` or, for a command killed
-by a signal, `{"error": "executor_failed", "executor_signal": N}`. A vendor CLI
-that reports success while declining to do the work still exits `0`; weightclass
-cannot detect that and does not claim to.
+by a signal, `{"error": "executor_failed", "executor_signal": N}`. A selected
+command inherits standard error, so this diagnostic is always written on a fresh
+line and is the **last line** of standard error — parse that line, not the whole
+stream, which also holds whatever the command itself printed.
+
+A vendor CLI that reports success while declining to do the work still exits
+`0`; weightclass cannot detect that and does not claim to.
 
 Inspect a route before running it:
 
@@ -83,10 +90,11 @@ The built-in routes are intentionally conservative:
   and efforts `low`, `medium`, and `high`. Permissions are `acceptEdits`,
   because print mode is non-interactive: a permission mode that asks a human
   has nobody to ask, so every edit is refused while `claude` still exits `0` —
-  the router would report success having changed nothing. The built-in Codex
-  routes can already write through `--sandbox workspace-write`, so this keeps
-  the two vendors at one capability rather than letting the vendor, instead of
-  the tier, decide what a task can accomplish.
+  the router would report success having changed nothing. `acceptEdits`
+  auto-accepts file edits only, which lets the Claude route change files as the
+  Codex route already could. It does not make the two identical: Codex's
+  `workspace-write` also runs commands, while under `acceptEdits` a non-edit
+  tool still goes to a prompt that print mode cannot answer.
 
 Neither default route pins a model. Model selection stays your reviewed
 policy's decision, expressed inside that policy's `command`; see

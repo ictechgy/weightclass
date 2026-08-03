@@ -912,8 +912,11 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "claude-worker-ran\n")
 
-    def _run_worker_exiting_with(self, worker_body: str, task: str = "Fix a typo.") -> "subprocess.CompletedProcess[str]":
+    def _run_worker_exiting_with(
+        self, worker_body: str
+    ) -> "subprocess.CompletedProcess[str]":
         """Run `wclass run` against a worker whose exit status the caller controls."""
+        task = "Fix a typo."
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             worker_path = directory / "worker.py"
@@ -974,6 +977,28 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(
             json.loads(result.stderr),
             {"error": "executor_failed", "executor_signal": 15},
+        )
+
+    def test_keeps_the_failure_diagnostic_parseable_after_unterminated_child_output(
+        self,
+    ) -> None:
+        """Breaks if the diagnostic can be concatenated onto the child's own stderr.
+
+        자식은 stderr 를 상속받는다. 진행 표시처럼 개행 없이 끝나는 출력 뒤에
+        진단이 그대로 이어붙으면 어떤 파싱으로도 종료 코드를 복구할 수 없다.
+        """
+        result = self._run_worker_exiting_with(
+            "import sys\n"
+            "sys.stdin.buffer.read()\n"
+            "sys.stderr.write('Working...')\n"
+            "raise SystemExit(2)\n"
+        )
+
+        self.assertEqual(result.returncode, 7)
+        self.assertIn("Working...", result.stderr)
+        self.assertEqual(
+            json.loads(result.stderr.splitlines()[-1]),
+            {"error": "executor_failed", "executor_exit_code": 2},
         )
 
     def test_passes_through_a_successful_child(self) -> None:

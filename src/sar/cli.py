@@ -62,7 +62,11 @@ def _report_executor_result(completed_process: subprocess.CompletedProcess[bytes
         diagnostic["executor_signal"] = -completed_process.returncode
     else:
         diagnostic["executor_exit_code"] = completed_process.returncode
-    print(json.dumps(diagnostic), file=sys.stderr)
+    # 자식은 stderr 를 상속받으므로 이 진단은 자식이 이미 쓴 내용 뒤에 붙는다.
+    # 진행 표시처럼 개행 없이 끝나는 출력 뒤에 그대로 이으면 JSON 이 그 줄에
+    # 섞여 어떤 파싱으로도 복구되지 않는다. 항상 새 줄에서 시작하게 해서
+    # "stderr 의 마지막 줄"이 언제나 진단이 되도록 보장한다.
+    print("\n" + json.dumps(diagnostic), file=sys.stderr)
     return EXECUTOR_FAILED_EXIT_CODE
 
 
