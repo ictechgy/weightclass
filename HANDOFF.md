@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-03 09:40 KST by Codex_
+_Last updated: 2026-08-03 by Claude Code_
 
 ## Goal
 
@@ -21,6 +21,28 @@ _Last updated: 2026-08-03 09:40 KST by Codex_
 
 ## Completed
 
+- Contract-hardening pass on branch `fix/router-contract-hardening` (7 commits).
+  An audit found that several documented guarantees were not upheld:
+  - Task text is now read as bounded UTF-8 bytes and handed to the child as
+    UTF-8 bytes. Previously invalid UTF-8 produced a traceback instead of a
+    redacted diagnostic, `text=True` leaked task characters through
+    `UnicodeEncodeError` under a non-UTF-8 locale, and the size limit was
+    checked only after buffering the whole stream (443 MB RSS for a 200 MB
+    input, now 24 MB).
+  - A V1 route's `model` label must now appear in its `command`. It was
+    render-only, so a reviewed descriptor could advertise one model while
+    `wclass run` executed another.
+  - Vendor is pinned even without `--source-vendor` (to the first declared
+    route's vendor), and `vendor` is always present in `wclass route` output.
+    Previously the high tier silently crossed to a second vendor.
+  - Built-in Codex routes differentiate tiers via
+    `-c model_reasoning_effort=low|medium|high`; all three were identical.
+  - ASCII classification signals match on word boundaries for both tiers, and
+    Korean/inflected vocabulary was extended.
+  - The CLI is argparse subcommands with `--help`, `--version`, and
+    `allow_abbrev=False`; `--c` used to satisfy `--confirm-api-egress`.
+  - Tests: 27 -> 48, with a mutation check confirming each new guard's test
+    fails when the guard is removed.
 - `weightclass` package metadata exposes the `wclass` command and uses MIT.
 - Main CI installs the package, runs the installed CLI, and runs tests on
   Python 3.10, 3.12, and 3.13.
@@ -69,10 +91,17 @@ _Last updated: 2026-08-03 09:40 KST by Codex_
 
 - Ran in the main repository:
   `PYTHONPATH=src python3 -m unittest discover -s tests`
-  - Result: 27 tests passed.
+  - Result: 48 tests passed.
 - Ran in the main repository:
   `PYTHONPATH=src python3 -m compileall -q src`
   - Result: passed.
+- Reproduced the committed CI job locally in a clean venv: `pip install .`,
+  then the installed-CLI check, then the suite against the installed package.
+  - Result: all three steps passed; `wclass --version` reports
+    `weightclass 0.1.0` from the single `sar.__version__` source.
+- Mutation-checked the new tests by deleting each guard in turn (vendor filter,
+  `allow_api`, model/command agreement, runtime path validation).
+  - Result: every deletion failed at least one test.
 - Ran in the runtime repository:
   `PYTHONPATH=src python3 -m unittest discover -s tests`
   - Result: 8 tests passed; fake connections only.
@@ -111,6 +140,12 @@ _Last updated: 2026-08-03 09:40 KST by Codex_
 
 ## Next Steps
 
+0. Review and merge `fix/router-contract-hardening`. It changes observable
+   behavior that a caller may depend on: `wclass route` always emits `vendor`;
+   omitting `--source-vendor` no longer crosses vendors; a policy whose `model`
+   is absent from its `command` is now rejected; the bare
+   `wclass --policy ... --descriptor ...` form moved to `wclass render`; and
+   the built-in Codex commands gained `-c model_reasoning_effort=...`.
 1. Inspect CI results for commits `7cb02d6` and `fe28566`; fix only confirmed
    clean-install or test failures.
 2. Set the runtime repository description, then decide whether to create a
