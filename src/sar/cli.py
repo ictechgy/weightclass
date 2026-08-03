@@ -5,7 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Sequence, cast
+from typing import Any, Final, Sequence, cast
 
 from . import __version__
 from .classification import (
@@ -34,8 +34,30 @@ from .v2 import (
 )
 
 
+EXECUTOR_FAILED_EXIT_CODE: Final = 7
+
+
 class InvalidInputError(ValueError):
     """Raised for invalid policy or descriptor data without exposing it."""
+
+
+def _report_executor_result(completed_process: subprocess.CompletedProcess[bytes]) -> int:
+    """Map a finished child's status to a router exit code without hiding it.
+
+    자식의 종료 코드를 그대로 반환하면 라우터 자신의 진단 코드(2~6)와 구분할 수
+    없고, 시그널로 죽은 경우(음수)는 Python 이 241 같은 값으로 뭉갠다. 실패는
+    전용 코드로 보고하고 실제 값은 진단에 담는다. 종료 코드는 태스크 내용이
+    아니므로 진단에 실어도 비유출 계약을 지킨다.
+    """
+    if completed_process.returncode == 0:
+        return 0
+    diagnostic: dict[str, object] = {"error": "executor_failed"}
+    if completed_process.returncode < 0:
+        diagnostic["executor_signal"] = -completed_process.returncode
+    else:
+        diagnostic["executor_exit_code"] = completed_process.returncode
+    print(json.dumps(diagnostic), file=sys.stderr)
+    return EXECUTOR_FAILED_EXIT_CODE
 
 
 class SafeArgumentParser(argparse.ArgumentParser):
@@ -278,7 +300,7 @@ def v2_run_from_standard_input(
     except OSError:
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
-    return completed_process.returncode
+    return _report_executor_result(completed_process)
 
 
 def classify_from_standard_input() -> int:
@@ -363,7 +385,7 @@ def run_from_standard_input(policy_path: Path | None, source_vendor: str | None)
     except OSError:
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
-    return completed_process.returncode
+    return _report_executor_result(completed_process)
 
 
 
