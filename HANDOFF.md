@@ -41,8 +41,16 @@ _Last updated: 2026-08-03 by Claude Code_
     Korean/inflected vocabulary was extended.
   - The CLI is argparse subcommands with `--help`, `--version`, and
     `allow_abbrev=False`; `--c` used to satisfy `--confirm-api-egress`.
-  - Tests: 27 -> 48, with a mutation check confirming each new guard's test
-    fails when the guard is removed.
+  - Tests: 27 -> 54. Each guard listed under Verification was mutation-checked:
+    deleting it fails at least one test.
+  - Two independent reviews (Claude, Codex) then found that applying word
+    boundaries to HIGH signals had dropped every inflected form
+    (`credentials`, `migrations`, `race conditions`, `refactoring`), which
+    combined with the widened LOW vocabulary to move
+    "Reformatting the credentials file" from `high` to `low`. Fixed by allowing
+    common suffixes inside the boundary. Codex additionally found that
+    `data loss` missed its hyphenated spelling and that argparse's built-in
+    version action exited before validating the rest of argv.
 - `weightclass` package metadata exposes the `wclass` command and uses MIT.
 - Main CI installs the package, runs the installed CLI, and runs tests on
   Python 3.10, 3.12, and 3.13.
@@ -91,7 +99,12 @@ _Last updated: 2026-08-03 by Claude Code_
 
 - Ran in the main repository:
   `PYTHONPATH=src python3 -m unittest discover -s tests`
-  - Result: 48 tests passed.
+  - Result: 54 tests passed.
+- Differential-classified 760 generated tasks against `main` to bound the
+  classifier change.
+  - Result: the only downgrades from `high` are the two intended ones
+    (`reproduction`, `preproduction` no longer matching `production`); every
+    `standard` -> `low` move contains no high-tier word.
 - Ran in the main repository:
   `PYTHONPATH=src python3 -m compileall -q src`
   - Result: passed.
