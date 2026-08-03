@@ -68,6 +68,16 @@ architecture signals route to `high`. Short typo, spelling, formatting, and
 rename tasks route to `low`; other valid tasks route to `standard`. Unknown or
 oversized task input fails closed.
 
+Three rules make the outcome predictable:
+
+- Signals are matched on whole words, so `reproduction` does not count as
+  `production`. Korean has no word boundaries, so Korean signals are matched by
+  containment and a compound word that embeds a signal may over-escalate.
+- When both a `high` and a `low` signal are present, `high` wins. Under-rating a
+  task is the more expensive mistake.
+- A task of 1,200 characters or more is treated as `high` on length alone, so
+  pasting a large context escalates the tier regardless of wording.
+
 ## Override the routes
 
 Use `wclass route --policy policy.json` or `wclass run --policy policy.json` to
