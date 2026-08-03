@@ -7,12 +7,17 @@ from .classification import Tier
 
 
 SUPPORTED_VENDORS: Final = frozenset({"claude", "codex"})
+# manual 은 사람에게 승인을 묻는 모드다. --print 는 비대화형이라 물어볼 상대가
+# 없어 모든 편집이 거부되고, 그런데도 claude 는 0으로 종료한다. 즉 라우터가
+# 성공을 보고하면서 아무 일도 일어나지 않는다. acceptEdits 는 Codex 기본
+# 라우트의 workspace-write 와 같은 수준으로, 두 벤더가 같은 일을 할 수 있게 한다.
+# 실행 전 wclass route 로 명령을 검토하는 절차가 승인 지점을 대신한다.
 CLAUDE_COMMAND_PREFIX: Final = (
     "claude",
     "--print",
     "--no-session-persistence",
     "--permission-mode",
-    "manual",
+    "acceptEdits",
     "--effort",
 )
 CODEX_COMMAND_PREFIX: Final = (

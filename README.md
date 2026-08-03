@@ -47,6 +47,25 @@ policy — exits `2` with `{"error": "invalid_input"}` on standard error and
 nothing else, so a caller can parse the failure without scraping usage text.
 Flag names are never abbreviated: `--confirm-api-egress` cannot be shortened.
 
+Exit codes are weightclass's own; a selected command's status never overwrites
+them:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The selected command ran and exited `0`. |
+| `2` | `invalid_task` or `invalid_input`. |
+| `3` | `unsupported_route` — no policy route matched. |
+| `4` | `executor_unavailable` — the command could not be started. |
+| `5` | `api_confirmation_required` — V2 without `--confirm-api-egress`. |
+| `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
+| `7` | `executor_failed` — the command started and exited non-zero. |
+
+Code `7` carries the real status in its diagnostic, as
+`{"error": "executor_failed", "executor_exit_code": N}` or, for a command killed
+by a signal, `{"error": "executor_failed", "executor_signal": N}`. A vendor CLI
+that reports success while declining to do the work still exits `0`; weightclass
+cannot detect that and does not claim to.
+
 Inspect a route before running it:
 
 ```sh
@@ -60,8 +79,11 @@ The built-in routes are intentionally conservative:
   workspace-write sandbox with `model_reasoning_effort` set to `low`, `medium`,
   and `high`. Codex has no dedicated effort flag, so the effort is passed as a
   `-c` configuration override for that one invocation.
-- Claude: `low`, `standard`, and `high` use print mode, manual permissions,
-  no session persistence, and efforts `low`, `medium`, and `high`.
+- Claude: `low`, `standard`, and `high` use print mode, no session persistence,
+  and efforts `low`, `medium`, and `high`. Permissions are `acceptEdits`,
+  because print mode is non-interactive: a permission mode that asks a human
+  has nobody to ask, so every edit is refused while `claude` still exits `0`.
+  Reviewing the command with `wclass route` is the approval step.
 
 Neither default route pins a model. Model selection stays your reviewed
 policy's decision, expressed inside that policy's `command`; see
