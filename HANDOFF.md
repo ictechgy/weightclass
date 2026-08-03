@@ -91,9 +91,9 @@ _Last updated: 2026-08-03 by Claude Code_
 
 - `README.md`: installation, native/API boundaries, and local usage.
 - `docs/integrations.md`: safe Codex/Claude invocation snippets.
-- `src/sar/classification.py`: local deterministic tier selection; no remote
+- `src/weightclass/classification.py`: local deterministic tier selection; no remote
   triage or persistence.
-- `src/sar/v2.py`: API route review/acknowledgement; it launches only a
+- `src/weightclass/v2.py`: API route review/acknowledgement; it launches only a
   supplied external runtime and never handles credentials or HTTP.
 - `tests/test_classification.py`: regression examples for tier selection.
 - `.github/workflows/ci.yml`: clean-install and test verification for the main
@@ -138,7 +138,7 @@ _Last updated: 2026-08-03 by Claude Code_
 - Reproduced the committed CI job locally in a clean venv: `pip install .`,
   then the installed-CLI check, then the suite against the installed package.
   - Result: all three steps passed; `wclass --version` reports
-    `weightclass 0.1.0` from the single `sar.__version__` source.
+    `weightclass 0.1.0` from the single `weightclass.__version__` source.
 - Mutation-checked the new tests by deleting each guard in turn: vendor filter,
   vendor pinning on tier routes, `allow_api`, runtime path validation, the
   stdin byte bound, `allow_abbrev=False`, `--version` exclusivity, signal
