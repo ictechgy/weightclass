@@ -16,8 +16,12 @@ _Last updated: 2026-08-03 by Claude Code_
   branch `main`, tracking `origin/main` at commit `fe28566`.
 - Both repositories are public-source ready. Main-repository CI is green on
   `main`; no registry release exists.
-- The main worktree has unrelated untracked `.omc/` and `.serena/` directories.
-  Preserve and exclude them from commits.
+- The main worktree has unrelated `.omc/` and `.serena/` directories holding
+  local agent state. They are now in `.gitignore`; 172 of these files were
+  committed by mistake in `fd1fbc0` and reached `origin/main` before being
+  untracked. They contain no credentials and no conversation text, but they do
+  carry local absolute paths, a session title, and session UUIDs. They remain in
+  git history; purging that needs a force-push and has not been done.
 
 ## Completed
 
