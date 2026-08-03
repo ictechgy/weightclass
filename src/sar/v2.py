@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import sys
 from typing import Any, Final, cast
 
 from .classification import Tier, classify_task
@@ -14,7 +13,6 @@ from .router import RouteSelectionError, SUPPORTED_VENDORS
 
 POLICY_SCHEMA_VERSION: Final = 2
 MAX_POLICY_BYTES: Final = 262_144
-MAX_TASK_BYTES: Final = 80_000
 MAX_LABEL_LENGTH: Final = 240
 SUPPORTED_PROVIDERS: Final = frozenset({"openai", "anthropic"})
 SOURCE_PROVIDER: Final = {"codex": "openai", "claude": "anthropic"}
@@ -22,10 +20,6 @@ SOURCE_PROVIDER: Final = {"codex": "openai", "claude": "anthropic"}
 
 class V2InvalidInputError(ValueError):
     """Raised for unsafe V2 input without including the original value."""
-
-
-class V2InvalidTaskError(ValueError):
-    """Raised when task bytes cannot be safely classified."""
 
 
 @dataclass(frozen=True)
@@ -149,17 +143,6 @@ def validate_api_runtime(path: Path) -> Path:
     if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
         raise V2InvalidInputError()
     return path
-
-
-def read_task_from_standard_input() -> str:
-    """Read at most the documented task limit without echoing task contents."""
-    try:
-        task_bytes = sys.stdin.buffer.read(MAX_TASK_BYTES + 1)
-        if len(task_bytes) > MAX_TASK_BYTES:
-            raise V2InvalidTaskError()
-        return task_bytes.decode("utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        raise V2InvalidTaskError() from error
 
 
 def select_api_route(

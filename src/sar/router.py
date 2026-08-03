@@ -15,16 +15,40 @@ CLAUDE_COMMAND_PREFIX: Final = (
     "manual",
     "--effort",
 )
+CODEX_COMMAND_PREFIX: Final = (
+    "codex",
+    "exec",
+    "--ephemeral",
+    "--sandbox",
+    "workspace-write",
+    "-c",
+)
+
+
+def codex_command(reasoning_effort: str) -> tuple[str, ...]:
+    """Build the built-in Codex command for one reasoning effort label.
+
+    Codex exec에는 Claude의 --effort에 해당하는 전용 플래그가 없으므로,
+    설정 오버라이드(-c)로 티어별 추론 강도를 전달한다. 마지막 "-"는 태스크를
+    표준 입력에서 읽으라는 뜻이다.
+    """
+    return CODEX_COMMAND_PREFIX + (f"model_reasoning_effort={reasoning_effort}", "-")
 
 
 @dataclass(frozen=True)
 class Route:
+    """A reviewable vendor command. `command` is the only thing ever executed.
+
+    모델을 별도 라벨로 들고 있지 않는 것은 의도적이다. 실행되는 것은 command
+    뿐이므로, 검증할 수 없는 라벨을 함께 실으면 리뷰 산출물이 실제 실행과
+    어긋날 수 있다. 모델은 command 안에서 드러난다.
+    """
+
     route_id: str
     vendor: str
     workflow: str
     command: tuple[str, ...]
     tier: Tier | None = None
-    model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,14 +69,21 @@ DEFAULT_ROUTES: Final = (
         vendor="codex",
         workflow="",
         tier="low",
-        command=("codex", "exec", "--ephemeral", "--sandbox", "workspace-write", "-"),
+        command=codex_command("low"),
     ),
     Route(
         route_id="codex-standard",
         vendor="codex",
         workflow="",
         tier="standard",
-        command=("codex", "exec", "--ephemeral", "--sandbox", "workspace-write", "-"),
+        command=codex_command("medium"),
+    ),
+    Route(
+        route_id="codex-high",
+        vendor="codex",
+        workflow="",
+        tier="high",
+        command=codex_command("high"),
     ),
     Route(
         route_id="claude-low",
@@ -75,13 +106,6 @@ DEFAULT_ROUTES: Final = (
         tier="high",
         command=CLAUDE_COMMAND_PREFIX + ("high",),
     ),
-    Route(
-        route_id="codex-high",
-        vendor="codex",
-        workflow="",
-        tier="high",
-        command=("codex", "exec", "--ephemeral", "--sandbox", "workspace-write", "-"),
-    ),
 )
 
 
@@ -103,11 +127,34 @@ def select_tier_route(
     source_vendor: str | None = None,
     allow_mixed_vendors: bool = False,
 ) -> Route:
-    """Return the first tier route allowed for the originating vendor."""
+    """Return the first tier route allowed for the originating vendor.
+
+    source_vendor가 없어도 벤더는 하나로 고정한다. 고정하지 않으면 정책의 나열
+    순서에 따라 난이도별로 벤더가 바뀌어, allow_mixed_vendors 옵트인 없이도
+    태스크가 다른 벤더·다른 구독·다른 과금 경계로 넘어간다.
+    """
+    required_vendor = _required_vendor(routes, source_vendor, allow_mixed_vendors)
     for route in routes:
         if route.tier != tier:
             continue
-        if source_vendor is not None and not allow_mixed_vendors and route.vendor != source_vendor:
+        if required_vendor is not None and route.vendor != required_vendor:
             continue
         return route
     raise RouteSelectionError("No supported route matches the request.")
+
+
+def _required_vendor(
+    routes: tuple[Route, ...],
+    source_vendor: str | None,
+    allow_mixed_vendors: bool,
+) -> str | None:
+    """Return the vendor every candidate route must match, or None when mixing is allowed."""
+    if allow_mixed_vendors:
+        return None
+    if source_vendor is not None:
+        return source_vendor
+    # 호출자가 벤더를 밝히지 않은 경우, 정책이 처음 선언한 티어 라우트의 벤더를
+    # 그 정책의 벤더로 본다. 리뷰 가능한 값이므로 선택 결과가 결정적이다.
+    # workflow 라우트는 티어 선택 후보가 아니므로 기준에서 제외한다. 포함하면
+    # workflow 라우트를 먼저 선언한 정책의 모든 티어가 선택 불가능해진다.
+    return next((route.vendor for route in routes if route.tier is not None), None)
