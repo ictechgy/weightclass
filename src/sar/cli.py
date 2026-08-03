@@ -5,7 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Sequence, cast
+from typing import Any, Final, Sequence, cast
 
 from . import __version__
 from .classification import (
@@ -34,8 +34,40 @@ from .v2 import (
 )
 
 
+EXECUTOR_FAILED_EXIT_CODE: Final = 7
+
+
 class InvalidInputError(ValueError):
     """Raised for invalid policy or descriptor data without exposing it."""
+
+
+def _report_executor_result(completed_process: subprocess.CompletedProcess[bytes]) -> int:
+    """Map a finished child's status to a router exit code without hiding it.
+
+    자식의 종료 코드를 그대로 반환하면 라우터 자신의 진단 코드(2~6)와 구분할 수
+    없고, 시그널로 죽은 경우(음수)는 Python 이 241 같은 값으로 뭉갠다. 실패는
+    전용 코드로 보고하고 실제 값은 진단에 담는다.
+
+    자식이 종료 코드에 태스크에서 유도한 값을 실을 수 있다는 지적이 리뷰에서
+    나왔으나, 이는 새로운 유출 경로가 아니다. 자식은 이미 태스크 전문을 받고
+    stdout/stderr 를 상속받으므로(라우터는 캡처하지 않는다) 훨씬 넓은 대역으로
+    무엇이든 내보낼 수 있다. 라우터가 비유출을 보장하는 대상은 라우터가
+    생성하는 값이며, 여기 실리는 정수는 자식이 스스로 고른 값이다. 이 값을 빼면
+    진단 능력만 잃고 실제 경계는 달라지지 않는다.
+    """
+    if completed_process.returncode == 0:
+        return 0
+    diagnostic: dict[str, object] = {"error": "executor_failed"}
+    if completed_process.returncode < 0:
+        diagnostic["executor_signal"] = -completed_process.returncode
+    else:
+        diagnostic["executor_exit_code"] = completed_process.returncode
+    # 자식은 stderr 를 상속받으므로 이 진단은 자식이 이미 쓴 내용 뒤에 붙는다.
+    # 진행 표시처럼 개행 없이 끝나는 출력 뒤에 그대로 이으면 JSON 이 그 줄에
+    # 섞여 어떤 파싱으로도 복구되지 않는다. 항상 새 줄에서 시작하게 해서
+    # "stderr 의 마지막 줄"이 언제나 진단이 되도록 보장한다.
+    print("\n" + json.dumps(diagnostic), file=sys.stderr)
+    return EXECUTOR_FAILED_EXIT_CODE
 
 
 class SafeArgumentParser(argparse.ArgumentParser):
@@ -278,7 +310,7 @@ def v2_run_from_standard_input(
     except OSError:
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
-    return completed_process.returncode
+    return _report_executor_result(completed_process)
 
 
 def classify_from_standard_input() -> int:
@@ -363,7 +395,7 @@ def run_from_standard_input(policy_path: Path | None, source_vendor: str | None)
     except OSError:
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
-    return completed_process.returncode
+    return _report_executor_result(completed_process)
 
 
 
