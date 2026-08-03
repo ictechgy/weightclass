@@ -11,13 +11,13 @@ _Last updated: 2026-08-03 by Claude Code_
 ## Current Status
 
 - Main repository: `https://github.com/ictechgy/weightclass`, branch `main`,
-  tracking `origin/main` at commit `7cb02d6`.
+  tracking `origin/main` at commit `9da2039` (PR #1 and #2 merged).
 - Separate runtime repository: `https://github.com/ictechgy/weightclass-runtime`,
   branch `main`, tracking `origin/main` at commit `fe28566`.
-- Both repositories are public-source ready; no registry release or GitHub
-  Actions result has been inspected yet.
-- The main worktree has an unrelated untracked `.omc/` directory. Preserve and
-  exclude it from commits.
+- Both repositories are public-source ready. Main-repository CI is green on
+  `main`; no registry release exists.
+- The main worktree has unrelated untracked `.omc/` and `.serena/` directories.
+  Preserve and exclude them from commits.
 
 ## Completed
 
@@ -56,6 +56,26 @@ _Last updated: 2026-08-03 by Claude Code_
     common suffixes inside the boundary. Codex additionally found that
     `data loss` missed its hyphenated spelling and that argparse's built-in
     version action exited before validating the rest of argv.
+- Executor-result pass on branch `fix/executor-result-reporting` (PR #2),
+  prompted by running the real vendor CLIs end to end for the first time:
+  - The built-in Claude command used `--permission-mode manual`. Print mode is
+    non-interactive, so every edit was refused and `claude` still exited `0` —
+    the router reported success having changed nothing, while the Codex route
+    could write. Now `acceptEdits`, which auto-accepts file edits only; Codex's
+    `workspace-write` still also runs commands, so the asymmetry is narrowed,
+    not removed.
+  - `run` and `v2 run` no longer return the child's exit code. A non-zero child
+    yields exit `7` plus `{"error": "executor_failed", "executor_exit_code": N}`
+    (or `executor_signal`) on a fresh line, so the diagnostic is always the last
+    line of inherited standard error and stays parseable after unterminated
+    child output. Previously a child exiting `3` was indistinguishable from
+    `unsupported_route`, and signal deaths were mangled into values like 241.
+  - Two reviews (Codex, Claude) ran on this PR and found non-overlapping
+    defects. Codex found that the first commit's justification for `acceptEdits`
+    was false — `route` and `run` read the policy independently, so reviewing a
+    route does not bind the command a later `run` executes. That claim was
+    retracted and the limitation documented. Claude's reviewer found the stderr
+    concatenation defect above.
 - `weightclass` package metadata exposes the `wclass` command and uses MIT.
 - Main CI installs the package, runs the installed CLI, and runs tests on
   Python 3.10, 3.12, and 3.13.
@@ -135,12 +155,25 @@ _Last updated: 2026-08-03 by Claude Code_
   process environment: exit code `10`, redacted diagnostic, no network call.
 - Local Python installations lack `setuptools`, so a local wheel build was not
   run. The committed CI workflows are intended to validate clean installation.
+- Ran both built-in native routes end to end against the real vendor CLIs, from
+  an installed `wclass` in a clean venv, inside a throwaway git repository.
+  - Codex: created the requested file, verified it itself, exit `0`.
+  - Claude with `manual`: refused the write, created nothing, exit `0` — the
+    defect PR #2 fixes. With `acceptEdits`: created the file.
+  - Codex outside a git repository: exits `1` ("Not inside a trusted directory
+    and --skip-git-repo-check was not specified"). Left as-is; it fails closed.
 
 ## Blockers & Open Questions
 
-- Main-repository CI passed on PR #1 for Python 3.10, 3.12, and 3.13
-  (install, installed-CLI check, tests). The runtime repository's first
-  GitHub Actions run has still not been inspected.
+- Main-repository CI passes on Python 3.10, 3.12, and 3.13 (install,
+  installed-CLI check, tests). The runtime repository's first GitHub Actions
+  run has still not been inspected.
+- Known limitations carried deliberately, each documented where it applies:
+  `route` does not bind a later `run` (V1 has no `route_fingerprint`); a policy
+  `command` token cannot contain whitespace, so paths with spaces are
+  unusable; V2 fingerprints the runtime path, not its contents; a task of
+  1,200+ characters is `high` on length alone; a vendor CLI that declines work
+  while exiting `0` cannot be detected.
 - A package-registry publication, version/tag policy, and release artifacts
   have not been approved or created.
 - Provider model/effort compatibility and actual API behavior remain
@@ -164,14 +197,14 @@ _Last updated: 2026-08-03 by Claude Code_
 
 ## Next Steps
 
-0. Review and merge `fix/router-contract-hardening`. It changes observable
-   behavior that a caller may depend on: `wclass route` always emits `vendor`
-   and no longer emits `model`; omitting `--source-vendor` no longer crosses
-   vendors; a policy declaring a `model` field is now rejected; the bare
-   `wclass --policy ... --descriptor ...` form moved to `wclass render`; and
-   the built-in Codex commands gained `-c model_reasoning_effort=...`.
-1. Inspect CI results for commits `7cb02d6` and `fe28566`; fix only confirmed
-   clean-install or test failures.
+1. Inspect the runtime repository's GitHub Actions result for `fe28566`; fix
+   only confirmed clean-install or test failures. The main repository is green.
+   Note the accumulated breaking changes before any release: `wclass route`
+   always emits `vendor` and no longer emits `model`; a policy declaring a
+   `model` field is rejected; omitting `--source-vendor` no longer crosses
+   vendors; the bare `wclass --policy ... --descriptor ...` form moved to
+   `wclass render`; `run`/`v2 run` report child failure as exit `7` instead of
+   passing the child's code through.
 2. Set the runtime repository description, then decide whether to create a
    versioned release. If releasing, build in a clean environment and publish
    checksums per its `RELEASING.md`.
