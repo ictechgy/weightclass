@@ -53,4 +53,4 @@ jobs:
       - name: Build distributions
         run: python -m build
       - name: Verify distribution metadata
-        run: twine check dist/*
+        run: twine check --strict dist/*

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 
 def _api_policy(**overrides: object) -> dict[str, object]:
@@ -483,7 +484,7 @@ class V2CommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path = directory / "policy.json"
-            original_policy = {
+            original_policy: dict[str, Any] = {
                 "schema_version": 2,
                 "allow_cross_provider": False,
                 "allow_api": True,

@@ -7,7 +7,9 @@ the project directory after installing `weightclass`.
 
 ## Shared safe workflow
 
-1. Pass the task on standard input and review the selected route first.
+1. Pass the task on standard input and review the selected route first, then
+   pass its `route_fingerprint` to `run` so the selection you read is the
+   selection that executes.
 2. Run the route only after the rendered command and vendor are acceptable. The
    command is the whole decision: the model and effort arguments appear in it.
 3. Keep a Codex-originated task on Codex and a Claude-originated task on Claude
@@ -52,9 +54,10 @@ printf '%s' 'Add a focused unit test for this formatter.' | \
 With the built-in policy, this starts exactly one foreground `claude --print`
 process with `acceptEdits` permissions and no session persistence. Print mode is
 non-interactive, so a permission mode that prompts a human refuses every edit
-while still exiting `0`. Note that `route` and `run` read the policy separately,
-so reviewing a route does not bind the command a later `run` will execute. It
-does not change
+while still exiting `0`. `route` and `run` read the policy separately, so pass
+`run` the `route_fingerprint` from the review to bind the two together; without
+it the run re-selects whatever the policy says at that moment. It does not
+change
 the configuration or context of an already-running Claude Code session. Use a
 reviewed local policy for model selection; weightclass never probes model
 availability, subscription access, or remaining usage.

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "entries": {
+    "79a93d4a2f8f50b95f852280616242fee1855dc99a3c75211917f55e72e95fae": {
+      "last_emitted_at_ms": 1785726932489,
+      "message": "Use parallel execution for independent tasks. Use run_in_background for long operations (npm install, builds, tests)."
+    },
+    "466399dafa2d20f60587180bad0a07358eb7f2bce724df0ff682f038ad33f5ad": {
+      "last_emitted_at_ms": 1785726917090,
+      "message": "Read multiple files in parallel when possible for faster analysis."
+    },
+    "445ed27a3872b681d98190bae61ccb84954e1bc4e140df5370be958dee776b3a": {
+      "last_emitted_at_ms": 1785726909130,
+      "message": "Verify changes work after editing. Test functionality before marking complete."
+    },
+    "b4f1376fd3a593f59035aeefa393b9ff8ec1df6b4299cb718fd62c69d69ab8e2": {
+      "last_emitted_at_ms": 1785723733236,
+      "message": "Spawning agent: oh-my-claudecode:code-reviewer (opus) | Task: Review PR 2"
+    }
+  },
+  "updated_at": "2026-08-03T03:15:32.489Z"
+}

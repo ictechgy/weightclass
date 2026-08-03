@@ -245,14 +245,14 @@ class TaskConfidentialityTests(unittest.TestCase):
 
 
 class CommandLineTests(unittest.TestCase):
-    def _rendered_route(self, result: "subprocess.CompletedProcess[str]") -> dict:
+    def _rendered_route(self, result: "subprocess.CompletedProcess[str]") -> dict[str, object]:
         """Parse a `wclass route` descriptor, checking and removing its fingerprint.
 
         지문 값 자체는 명령·티어·벤더에서 유도되므로 개별 테스트가 리터럴로
         고정할 필요가 없다. 형태만 확인하고 나머지 필드를 비교하게 한다.
         """
-        rendered = json.loads(result.stdout)
-        fingerprint = rendered.pop("route_fingerprint")
+        rendered: dict[str, object] = json.loads(result.stdout)
+        fingerprint = str(rendered.pop("route_fingerprint"))
         self.assertTrue(fingerprint.startswith("sha256:"), fingerprint)
         self.assertEqual(len(fingerprint), len("sha256:") + 64)
         return rendered
@@ -423,7 +423,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_refuses_to_leave_the_policy_vendor_when_no_source_vendor_is_given(self) -> None:
         """Breaks if a tier can silently move a task to a second vendor without opt-in."""
-        mixed_vendor_policy = {
+        mixed_vendor_policy: dict[str, object] = {
             "routes": [
                 {
                     "id": "codex-low",
@@ -1118,6 +1118,122 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(unbound.returncode, 0, unbound.stderr)
         self.assertEqual(unbound.stdout, "swapped-worker\n")
 
+    def test_binds_every_field_the_fingerprint_claims_to_cover(self) -> None:
+        """Breaks if a bound field is dropped from the fingerprint.
+
+        명령만 바꿔 검증하면 route id 나 allow_mixed_vendors 가 지문에서 빠져도
+        테스트가 통과한다. 명령을 동일하게 둔 채 나머지 필드를 하나씩 바꾼다.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            worker_path = directory / "worker.py"
+            worker_path.write_text(
+                "import sys\nsys.stdin.buffer.read()\nprint('ran')\n", encoding="utf-8"
+            )
+            shared_command = [sys.executable, str(worker_path)]
+            policy_path = directory / "policy.json"
+
+            def write_policy(prefix: str, allow_mixed_vendors: bool) -> None:
+                policy_path.write_text(
+                    json.dumps(
+                        {
+                            "allow_mixed_vendors": allow_mixed_vendors,
+                            "routes": [
+                                {
+                                    "id": f"{prefix}-{tier}",
+                                    "vendor": "codex",
+                                    "tier": tier,
+                                    "command": shared_command,
+                                }
+                                for tier in ("low", "standard", "high")
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            def route_fingerprint_for(task: str) -> str:
+                review = subprocess.run(
+                    [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                    capture_output=True,
+                    check=False,
+                    input=task,
+                    text=True,
+                )
+                self.assertEqual(review.returncode, 0, review.stderr)
+                return str(json.loads(review.stdout)["route_fingerprint"])
+
+            def run_with(task: str, fingerprint: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "sar",
+                        "run",
+                        "--policy",
+                        str(policy_path),
+                        "--ack-route-fingerprint",
+                        fingerprint,
+                    ],
+                    capture_output=True,
+                    check=False,
+                    input=task,
+                    text=True,
+                )
+
+            write_policy("codex", allow_mixed_vendors=False)
+            baseline = route_fingerprint_for("Fix a typo.")
+
+            # 1. route id 만 다르다. 명령은 글자 그대로 같다.
+            write_policy("renamed", allow_mixed_vendors=False)
+            renamed_id = run_with("Fix a typo.", baseline)
+
+            # 2. allow_mixed_vendors 만 다르다.
+            write_policy("codex", allow_mixed_vendors=True)
+            flipped_mixing = run_with("Fix a typo.", baseline)
+
+            # 3. 티어만 다르다. 세 티어의 명령이 모두 같으므로 명령은 동일하다.
+            write_policy("codex", allow_mixed_vendors=False)
+            other_tier = run_with("Review the authorization boundary.", baseline)
+
+            unchanged = run_with("Fix a typo.", baseline)
+
+        for label, result in (
+            ("route id", renamed_id),
+            ("allow_mixed_vendors", flipped_mixing),
+            ("tier", other_tier),
+        ):
+            with self.subTest(changed=label):
+                self.assertEqual(result.returncode, 6)
+                self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+        self.assertEqual(unchanged.returncode, 0, unchanged.stderr)
+
+    def test_reproduces_its_fingerprint_from_the_rendered_route_alone(self) -> None:
+        """Breaks if the fingerprint binds an input the review descriptor never shows.
+
+        검토자가 route 출력만으로 지문을 재현할 수 없으면 감사할 수 없고,
+        동일한 선택이 거부되는 오탐이 생긴다.
+        """
+        task = "Fix a typo."
+        without_vendor = subprocess.run(
+            [sys.executable, "-m", "sar", "route"],
+            capture_output=True,
+            check=False,
+            input=task,
+            text=True,
+        )
+        with_vendor = subprocess.run(
+            [sys.executable, "-m", "sar", "route", "--source-vendor", "codex"],
+            capture_output=True,
+            check=False,
+            input=task,
+            text=True,
+        )
+
+        self.assertEqual(without_vendor.returncode, 0, without_vendor.stderr)
+        self.assertEqual(with_vendor.returncode, 0, with_vendor.stderr)
+        self.assertEqual(json.loads(without_vendor.stdout), json.loads(with_vendor.stdout))
+
     def test_accepts_a_command_argument_containing_spaces(self) -> None:
         """Breaks if an install path with spaces or a multi-word flag value is refused."""
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1164,7 +1280,20 @@ class CommandLineTests(unittest.TestCase):
         트레이스백을 남긴다. 개행과 앞뒤 공백은 route 출력에서 드러나지 않아
         검토를 무력화한다.
         """
-        for argument in ("a\x00b", "a\nb", "a\tb", " /bin/echo", "/bin/echo "):
+        invisible_arguments = (
+            "a\x00b",  # NUL: 검증을 통과하면 exec 에서 ValueError 로 터진다
+            "a\nb",  # 개행
+            "a\tb",  # 탭
+            "a\x1bb",  # ESC (C0)
+            "a\x9bb",  # CSI (C1)
+            "\ud800",  # lone surrogate: exec 에서 UnicodeEncodeError
+            "a\u200bb",  # zero-width space
+            "a\u202eb",  # RTL override
+            "a\u00a0b",  # NBSP: 스페이스로 보이지만 다른 인자
+            " /bin/echo",  # 앞 공백
+            "/bin/echo ",  # 뒤 공백
+        )
+        for argument in invisible_arguments:
             with self.subTest(argument=argument):
                 with tempfile.TemporaryDirectory() as temporary_directory:
                     policy_path = Path(temporary_directory) / "policy.json"

@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 import sys
+import unicodedata
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Final, NoReturn, cast
@@ -108,16 +109,27 @@ def _require_command_argument(value: object) -> str:
     전달되므로 내부 공백은 위험하지 않고, "/Users/me/My Tools/claude" 같은
     설치 경로나 여러 단어로 된 플래그 값에는 반드시 필요하다.
 
-    대신 눈에 보이지 않는 문자는 막는다. 제어문자는 wclass route 출력에서
-    드러나지 않아 검토를 무력화하고, NUL 은 검증을 통과한 뒤 exec 단계에서
-    ValueError 로 터져 진단 없이 트레이스백을 남긴다. 앞뒤 공백도 경로를
-    조용히 다른 값으로 만들므로 거부한다.
+    거부 기준은 "검토자가 본 대로 실행되는가"이다. ord 범위를 손으로 나열하면
+    매번 빠진 문자가 나온다(NUL, 그다음 lone surrogate). 대신 두 규칙으로
+    정한다.
+
+    - 유니코드 대분류 C 는 전부 거부한다. 제어문자(Cc, C0/C1), 서식
+      문자(Cf, zero-width space·RTL override·BOM), 서로게이트(Cs),
+      사용자 영역(Co), 미할당(Cn)이 여기 든다. 앞의 둘은 route 출력에
+      드러나지 않아 검토를 무력화하고, 서로게이트는 exec 단계에서
+      UnicodeEncodeError 로 터져 진단 없이 트레이스백을 남긴다.
+    - 공백은 ASCII 스페이스만 허용한다. NBSP 같은 문자는 스페이스처럼 보이지만
+      다른 인자를 만든다. 앞뒤 공백도 경로를 조용히 다른 값으로 만든다.
     """
     if (
         not isinstance(value, str)
         or not value
         or value != value.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        or any(
+            unicodedata.category(character).startswith("C")
+            or (character.isspace() and character != " ")
+            for character in value
+        )
     ):
         raise InvalidInputError()
     return value
@@ -333,7 +345,10 @@ def v2_run_from_standard_input(
             check=False,
             input=task.encode("utf-8"),
         )
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError 는 argv 를 실제로 인코딩하는 단계에서 나온다(NUL, 서로게이트).
+        # 검증기가 이미 막고 있지만, 규칙에 빈틈이 생겨도 트레이스백 대신
+        # 진단으로 닫히도록 두 번째 방어선을 둔다.
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
     return _report_executor_result(completed_process)
@@ -395,9 +410,7 @@ def route_from_standard_input(policy_path: Path | None, source_vendor: str | Non
         "vendor": route.vendor,
         # 이 지문을 wclass run --ack-route-fingerprint 로 넘기면 검토한 선택이
         # 실행 직전에 다시 확인된다. 넘기지 않으면 구속력은 없다.
-        "route_fingerprint": native_route_fingerprint(
-            route, tier, source_vendor, policy.allow_mixed_vendors
-        ),
+        "route_fingerprint": native_route_fingerprint(route, tier, policy.allow_mixed_vendors),
     }
     print(json.dumps(response))
     return 0
@@ -413,7 +426,7 @@ def run_from_standard_input(
         task = read_task_from_standard_input()
         tier, route, policy = select_task_route(task, policy_path, source_vendor)
         if acknowledged_fingerprint is not None and acknowledged_fingerprint != (
-            native_route_fingerprint(route, tier, source_vendor, policy.allow_mixed_vendors)
+            native_route_fingerprint(route, tier, policy.allow_mixed_vendors)
         ):
             print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
             return 6
@@ -433,7 +446,10 @@ def run_from_standard_input(
     except RouteSelectionError:
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError 는 argv 를 실제로 인코딩하는 단계에서 나온다(NUL, 서로게이트).
+        # 검증기가 이미 막고 있지만, 규칙에 빈틈이 생겨도 트레이스백 대신
+        # 진단으로 닫히도록 두 번째 방어선을 둔다.
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
     return _report_executor_result(completed_process)

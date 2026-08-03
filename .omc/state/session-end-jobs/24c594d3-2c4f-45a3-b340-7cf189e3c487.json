@@ -1,0 +1,349 @@
+{
+  "version": 1,
+  "jobId": "5b0eb507-7126-4fad-8eb4-786a65cbdf92",
+  "sessionId": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+  "scopeKey": "2a933ca7621334b1c080fa0e0abaec502b35d85f77aa6f93f9451ee327cb6127",
+  "revision": 41,
+  "createdAt": "2026-08-03T02:57:35.231Z",
+  "updatedAt": "2026-08-03T02:57:36.138Z",
+  "producerGraceExpiresAt": "2026-08-03T02:58:05.231Z",
+  "bestEffortDeadlineAt": "2026-08-03T02:58:56.231Z",
+  "producers": {
+    "core": {
+      "state": "sealed",
+      "intentKey": "a2df4710c066051ccfadc810f68fc3b521ce8caf14d40f97b7b44dc828dc4d2f",
+      "payloadDigest": "a2df4710c066051ccfadc810f68fc3b521ce8caf14d40f97b7b44dc828dc4d2f",
+      "sealedAt": "2026-08-03T02:57:35.276Z",
+      "sealedBy": "foreground"
+    },
+    "wiki": {
+      "state": "no-op",
+      "sealedAt": "2026-08-03T02:57:35.231Z",
+      "sealedBy": "wiki-producer"
+    }
+  },
+  "actions": {
+    "foreground-cleanup": {
+      "class": "required",
+      "phase": "deferred-required",
+      "status": "completed",
+      "attempts": 0,
+      "idempotencyKey": "febf6dba2f2536433960a07f7cedce72e946b43ced0896570df80f017b8914d2",
+      "payload": {
+        "transcriptPath": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+        "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+        "reason": "other",
+        "input": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "transcript_path": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+          "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+          "prompt_id": "e3082070-432e-4719-9ca1-0784a2689d90",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "metrics": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "ended_at": "2026-08-03T02:57:35.229Z",
+          "reason": "other",
+          "agents_spawned": 0,
+          "agents_completed": 0,
+          "modes_used": []
+        },
+        "initialTeamNames": [],
+        "openClawEnabled": false,
+        "openClawRouting": {
+          "tmux": "/var/folders/lw/r6rd_zlj3ps7pb_h2sdtcr3w0000gn/T/light-terminal-501/.lterm.sock.tmux-compat,7419,0",
+          "tmuxPane": "%3"
+        },
+        "foregroundResult": {
+          "removedTransientFiles": 3,
+          "completedAt": "2026-08-03T02:57:35.276Z"
+        }
+      },
+      "budgetMs": 9000,
+      "completedAt": "2026-08-03T02:57:35.276Z",
+      "lastOutcomeCode": "completed"
+    },
+    "wiki-capture": {
+      "class": "required",
+      "phase": "deferred-required",
+      "status": "completed",
+      "attempts": 0,
+      "idempotencyKey": "1719cd1ef5b51e0269b78c4cb8c9308c9c1f7b82fd1c067fc034c060f23863f5",
+      "payload": {},
+      "budgetMs": 9000,
+      "completedAt": "2026-08-03T02:57:35.231Z"
+    },
+    "team-cleanup": {
+      "class": "required",
+      "phase": "deferred-required",
+      "status": "completed",
+      "attempts": 1,
+      "idempotencyKey": "cee6ac31df545408e1e822247ac249b3f8182a98a5fe8e448ae3b251e55bdee1",
+      "payload": {
+        "transcriptPath": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+        "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+        "reason": "other",
+        "input": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "transcript_path": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+          "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+          "prompt_id": "e3082070-432e-4719-9ca1-0784a2689d90",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "metrics": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "ended_at": "2026-08-03T02:57:35.229Z",
+          "reason": "other",
+          "agents_spawned": 0,
+          "agents_completed": 0,
+          "modes_used": []
+        },
+        "initialTeamNames": [],
+        "openClawEnabled": false,
+        "openClawRouting": {
+          "tmux": "/var/folders/lw/r6rd_zlj3ps7pb_h2sdtcr3w0000gn/T/light-terminal-501/.lterm.sock.tmux-compat,7419,0",
+          "tmuxPane": "%3"
+        }
+      },
+      "budgetMs": 9000,
+      "claimedAt": "2026-08-03T02:57:35.317Z",
+      "runner": {
+        "attempt": 1,
+        "runnerNonce": "5db3ec89-f78d-4eb3-9773-44c9af39a625",
+        "phase": "terminal",
+        "deadlineAt": "2026-08-03T02:57:45.287Z"
+      },
+      "lastOutcomeCode": "completed",
+      "completedAt": "2026-08-03T02:57:35.440Z"
+    },
+    "python-cleanup": {
+      "class": "required",
+      "phase": "deferred-required",
+      "status": "completed",
+      "attempts": 1,
+      "idempotencyKey": "1f1370c4ac056606059d517e2f106b602d8cbcb04587b3fcc5f3b9f89e649cd0",
+      "payload": {
+        "transcriptPath": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+        "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+        "reason": "other",
+        "input": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "transcript_path": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+          "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+          "prompt_id": "e3082070-432e-4719-9ca1-0784a2689d90",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "metrics": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "ended_at": "2026-08-03T02:57:35.229Z",
+          "reason": "other",
+          "agents_spawned": 0,
+          "agents_completed": 0,
+          "modes_used": []
+        },
+        "initialTeamNames": [],
+        "openClawEnabled": false,
+        "openClawRouting": {
+          "tmux": "/var/folders/lw/r6rd_zlj3ps7pb_h2sdtcr3w0000gn/T/light-terminal-501/.lterm.sock.tmux-compat,7419,0",
+          "tmuxPane": "%3"
+        }
+      },
+      "budgetMs": 9000,
+      "claimedAt": "2026-08-03T02:57:35.464Z",
+      "runner": {
+        "attempt": 1,
+        "runnerNonce": "cf078989-5b32-44fc-bfac-a06699ed4976",
+        "phase": "terminal",
+        "deadlineAt": "2026-08-03T02:57:45.287Z"
+      },
+      "lastOutcomeCode": "completed",
+      "completedAt": "2026-08-03T02:57:35.586Z"
+    },
+    "reply-cleanup": {
+      "class": "required",
+      "phase": "deferred-required",
+      "status": "completed",
+      "attempts": 1,
+      "idempotencyKey": "0b3a8b47c28b26d56aca004d4f572b96c118f16819c0d35162418816f9a5420a",
+      "payload": {
+        "transcriptPath": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+        "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+        "reason": "other",
+        "input": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "transcript_path": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+          "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+          "prompt_id": "e3082070-432e-4719-9ca1-0784a2689d90",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "metrics": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "ended_at": "2026-08-03T02:57:35.229Z",
+          "reason": "other",
+          "agents_spawned": 0,
+          "agents_completed": 0,
+          "modes_used": []
+        },
+        "initialTeamNames": [],
+        "openClawEnabled": false,
+        "openClawRouting": {
+          "tmux": "/var/folders/lw/r6rd_zlj3ps7pb_h2sdtcr3w0000gn/T/light-terminal-501/.lterm.sock.tmux-compat,7419,0",
+          "tmuxPane": "%3"
+        }
+      },
+      "budgetMs": 9000,
+      "claimedAt": "2026-08-03T02:57:35.603Z",
+      "runner": {
+        "attempt": 1,
+        "runnerNonce": "295c9b5c-24d1-42e8-9ec5-de141897464e",
+        "phase": "terminal",
+        "deadlineAt": "2026-08-03T02:57:45.287Z"
+      },
+      "lastOutcomeCode": "completed",
+      "completedAt": "2026-08-03T02:57:35.714Z"
+    },
+    "callback": {
+      "class": "best-effort",
+      "phase": "deferred-best-effort",
+      "status": "completed",
+      "attempts": 1,
+      "idempotencyKey": "d068ede2655bf89e0c0950e087d0603d7dcf45538e94f20a654d08c6f4841895",
+      "payload": {
+        "transcriptPath": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+        "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+        "reason": "other",
+        "input": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "transcript_path": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+          "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+          "prompt_id": "e3082070-432e-4719-9ca1-0784a2689d90",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "metrics": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "ended_at": "2026-08-03T02:57:35.229Z",
+          "reason": "other",
+          "agents_spawned": 0,
+          "agents_completed": 0,
+          "modes_used": []
+        },
+        "initialTeamNames": [],
+        "openClawEnabled": false,
+        "openClawRouting": {
+          "tmux": "/var/folders/lw/r6rd_zlj3ps7pb_h2sdtcr3w0000gn/T/light-terminal-501/.lterm.sock.tmux-compat,7419,0",
+          "tmuxPane": "%3"
+        }
+      },
+      "budgetMs": 2000,
+      "claimedAt": "2026-08-03T02:57:35.735Z",
+      "runner": {
+        "attempt": 1,
+        "runnerNonce": "f35c9c84-1356-4732-8df5-f0d419fae168",
+        "phase": "terminal",
+        "deadlineAt": "2026-08-03T02:57:45.287Z"
+      },
+      "lastOutcomeCode": "completed",
+      "completedAt": "2026-08-03T02:57:35.853Z"
+    },
+    "notification": {
+      "class": "best-effort",
+      "phase": "deferred-best-effort",
+      "status": "completed",
+      "attempts": 1,
+      "idempotencyKey": "89c0438ff63097ce04beb60efb87292ff68a7af350a0ee331f3de9dbf42d62fc",
+      "payload": {
+        "transcriptPath": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+        "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+        "reason": "other",
+        "input": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "transcript_path": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+          "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+          "prompt_id": "e3082070-432e-4719-9ca1-0784a2689d90",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "metrics": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "ended_at": "2026-08-03T02:57:35.229Z",
+          "reason": "other",
+          "agents_spawned": 0,
+          "agents_completed": 0,
+          "modes_used": []
+        },
+        "initialTeamNames": [],
+        "openClawEnabled": false,
+        "openClawRouting": {
+          "tmux": "/var/folders/lw/r6rd_zlj3ps7pb_h2sdtcr3w0000gn/T/light-terminal-501/.lterm.sock.tmux-compat,7419,0",
+          "tmuxPane": "%3"
+        }
+      },
+      "budgetMs": 2000,
+      "claimedAt": "2026-08-03T02:57:35.873Z",
+      "runner": {
+        "attempt": 1,
+        "runnerNonce": "c22fb456-1112-4255-8140-0be7e8ac8441",
+        "phase": "terminal",
+        "deadlineAt": "2026-08-03T02:57:45.287Z"
+      },
+      "lastOutcomeCode": "completed",
+      "completedAt": "2026-08-03T02:57:35.982Z"
+    },
+    "openclaw": {
+      "class": "best-effort",
+      "phase": "deferred-best-effort",
+      "status": "completed",
+      "attempts": 1,
+      "idempotencyKey": "31fe8f6e1cf204e27006de511df257326fdd98655122ca437013e8779ffc735b",
+      "payload": {
+        "transcriptPath": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+        "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+        "reason": "other",
+        "input": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "transcript_path": "/Users/jinhongan/.claude/projects/-Users-jinhongan-Desktop-subscription-agent-router/24c594d3-2c4f-45a3-b340-7cf189e3c487.jsonl",
+          "cwd": "/Users/jinhongan/Desktop/subscription-agent-router",
+          "prompt_id": "e3082070-432e-4719-9ca1-0784a2689d90",
+          "hook_event_name": "SessionEnd",
+          "reason": "other"
+        },
+        "metrics": {
+          "session_id": "24c594d3-2c4f-45a3-b340-7cf189e3c487",
+          "ended_at": "2026-08-03T02:57:35.229Z",
+          "reason": "other",
+          "agents_spawned": 0,
+          "agents_completed": 0,
+          "modes_used": []
+        },
+        "initialTeamNames": [],
+        "openClawEnabled": false,
+        "openClawRouting": {
+          "tmux": "/var/folders/lw/r6rd_zlj3ps7pb_h2sdtcr3w0000gn/T/light-terminal-501/.lterm.sock.tmux-compat,7419,0",
+          "tmuxPane": "%3"
+        }
+      },
+      "budgetMs": 2000,
+      "claimedAt": "2026-08-03T02:57:35.998Z",
+      "runner": {
+        "attempt": 1,
+        "runnerNonce": "9c6074f1-0363-4995-9347-32e14396e13b",
+        "phase": "terminal",
+        "deadlineAt": "2026-08-03T02:57:45.287Z"
+      },
+      "lastOutcomeCode": "completed",
+      "completedAt": "2026-08-03T02:57:36.101Z"
+    }
+  },
+  "owner": null,
+  "phase": "complete",
+  "completion": {
+    "completedAt": "2026-08-03T02:57:36.120Z",
+    "terminalDigest": "666891da14e43ee5520c346c2205c2ad8ac687589520abf7a1b2915af209fd0f",
+    "terminalRevision": 40
+  }
+}
