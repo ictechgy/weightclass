@@ -209,6 +209,45 @@ class CommandLineTests(unittest.TestCase):
         )
         self.assertNotIn("authentication", result.stdout)
 
+    def test_rejects_a_policy_whose_model_label_is_absent_from_its_command(self) -> None:
+        """Breaks if a reviewed descriptor can advertise a model the command contradicts."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "claude-high",
+                                "vendor": "claude",
+                                "tier": "high",
+                                "model": "reviewed-expensive-label",
+                                "command": [
+                                    "claude",
+                                    "--print",
+                                    "--model",
+                                    "actually-cheap-label",
+                                ],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Review the authorization boundary.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+        self.assertNotIn("reviewed-expensive-label", result.stderr)
+
     def test_allows_a_codex_request_to_use_a_claude_model_when_mixing_is_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)

@@ -95,22 +95,25 @@ def _parse_route(value: object) -> Route:
         if parsed_tier not in {"low", "standard", "high"}:
             raise InvalidInputError()
         tier = cast(Tier, parsed_tier)
-    model = _require_model_label(value["model"]) if "model" in value else None
+    parsed_command = tuple(_require_nonempty_string(argument) for argument in command)
+
+    model: str | None = None
+    if "model" in value:
+        model = _require_nonempty_string(value["model"])
+        # `wclass route` 출력의 model 필드는 리뷰어가 승인 근거로 읽는 값이다.
+        # 실행되는 것은 command뿐이므로, 둘이 어긋나면 리뷰한 것과 다른 모델이
+        # 실행된다. 정합성을 로드 시점에 강제해 리뷰 산출물을 신뢰할 수 있게 한다.
+        if model not in parsed_command:
+            raise InvalidInputError()
 
     return Route(
         route_id=route_id,
         vendor=vendor,
         workflow=workflow,
-        command=tuple(_require_nonempty_string(argument) for argument in command),
+        command=parsed_command,
         tier=tier,
         model=model,
     )
-
-
-def _require_model_label(value: object) -> str:
-    if not isinstance(value, str) or not value.strip() or "\x00" in value:
-        raise InvalidInputError()
-    return value
 
 
 def load_routes(policy_path: Path) -> tuple[Route, ...]:
