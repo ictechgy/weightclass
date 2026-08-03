@@ -29,9 +29,14 @@ _Last updated: 2026-08-03 by Claude Code_
     `UnicodeEncodeError` under a non-UTF-8 locale, and the size limit was
     checked only after buffering the whole stream (443 MB RSS for a 200 MB
     input, now 24 MB).
-  - A V1 route's `model` label must now appear in its `command`. It was
-    render-only, so a reviewed descriptor could advertise one model while
-    `wclass run` executed another.
+  - A V1 route no longer has a `model` field; a policy declaring one is
+    rejected. It was render-only, so a reviewed descriptor could advertise one
+    model while `wclass run` executed another. Requiring the label to appear in
+    `command` was tried first and rejected in review: membership of any token
+    still admits `model: "haiku"` alongside `--model opus --append-system-prompt
+    haiku`, while legitimate `--model=opus` and `-c model=X` forms were refused.
+    Verifying a label properly needs vendor CLI semantics the tool declines to
+    assert, so the model is declared once, inside `command`.
   - Vendor is pinned even without `--source-vendor` (to the first declared
     route's vendor), and `vendor` is always present in `wclass route` output.
     Previously the high tier silently crossed to a second vendor.
@@ -154,9 +159,9 @@ _Last updated: 2026-08-03 by Claude Code_
 ## Next Steps
 
 0. Review and merge `fix/router-contract-hardening`. It changes observable
-   behavior that a caller may depend on: `wclass route` always emits `vendor`;
-   omitting `--source-vendor` no longer crosses vendors; a policy whose `model`
-   is absent from its `command` is now rejected; the bare
+   behavior that a caller may depend on: `wclass route` always emits `vendor`
+   and no longer emits `model`; omitting `--source-vendor` no longer crosses
+   vendors; a policy declaring a `model` field is now rejected; the bare
    `wclass --policy ... --descriptor ...` form moved to `wclass render`; and
    the built-in Codex commands gained `-c model_reasoning_effort=...`.
 1. Inspect CI results for commits `7cb02d6` and `fe28566`; fix only confirmed

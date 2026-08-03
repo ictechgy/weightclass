@@ -453,7 +453,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
         self.assertEqual(json.loads(allowed.stdout)["vendor"], "claude")
 
-    def test_keeps_a_codex_request_on_its_configured_high_model_when_mixing_is_disabled(self) -> None:
+    def test_keeps_a_codex_request_on_its_configured_high_route_when_mixing_is_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path = directory / "policy.json"
@@ -466,14 +466,12 @@ class CommandLineTests(unittest.TestCase):
                                 "id": "codex-high",
                                 "vendor": "codex",
                                 "tier": "high",
-                                "model": "codex-high-label",
                                 "command": ["codex", "exec", "--model", "codex-high-label", "-"],
                             },
                             {
                                 "id": "claude-high",
                                 "vendor": "claude",
                                 "tier": "high",
-                                "model": "claude-high-label",
                                 "command": ["claude", "--print", "--model", "claude-high-label"],
                             },
                         ],
@@ -504,7 +502,6 @@ class CommandLineTests(unittest.TestCase):
             json.loads(result.stdout),
             {
                 "command": ["codex", "exec", "--model", "codex-high-label", "-"],
-                "model": "codex-high-label",
                 "route": "codex-high",
                 "tier": "high",
                 "vendor": "codex",
@@ -512,8 +509,12 @@ class CommandLineTests(unittest.TestCase):
         )
         self.assertNotIn("authentication", result.stdout)
 
-    def test_rejects_a_policy_whose_model_label_is_absent_from_its_command(self) -> None:
-        """Breaks if a reviewed descriptor can advertise a model the command contradicts."""
+    def test_rejects_a_policy_carrying_a_separate_model_label(self) -> None:
+        """Breaks if a route may declare a model outside the command it executes.
+
+        model 라벨은 실행되지 않으므로 검증할 수 없다. 라벨을 허용하면 리뷰
+        산출물이 실제 실행과 다른 모델을 광고할 수 있으므로 스키마에서 뺐다.
+        """
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path = directory / "policy.json"
@@ -551,7 +552,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
         self.assertNotIn("reviewed-expensive-label", result.stderr)
 
-    def test_allows_a_codex_request_to_use_a_claude_model_when_mixing_is_enabled(self) -> None:
+    def test_allows_a_codex_request_to_use_a_claude_route_when_mixing_is_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path = directory / "policy.json"
@@ -564,14 +565,12 @@ class CommandLineTests(unittest.TestCase):
                                 "id": "claude-high",
                                 "vendor": "claude",
                                 "tier": "high",
-                                "model": "claude-high-label",
                                 "command": ["claude", "--print", "--model", "claude-high-label"],
                             },
                             {
                                 "id": "codex-high",
                                 "vendor": "codex",
                                 "tier": "high",
-                                "model": "codex-high-label",
                                 "command": ["codex", "exec", "--model", "codex-high-label", "-"],
                             },
                         ],
@@ -602,7 +601,6 @@ class CommandLineTests(unittest.TestCase):
             json.loads(result.stdout),
             {
                 "command": ["claude", "--print", "--model", "claude-high-label"],
-                "model": "claude-high-label",
                 "route": "claude-high",
                 "tier": "high",
                 "vendor": "claude",

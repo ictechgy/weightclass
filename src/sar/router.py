@@ -37,12 +37,18 @@ def codex_command(reasoning_effort: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class Route:
+    """A reviewable vendor command. `command` is the only thing ever executed.
+
+    모델을 별도 라벨로 들고 있지 않는 것은 의도적이다. 실행되는 것은 command
+    뿐이므로, 검증할 수 없는 라벨을 함께 실으면 리뷰 산출물이 실제 실행과
+    어긋날 수 있다. 모델은 command 안에서 드러난다.
+    """
+
     route_id: str
     vendor: str
     workflow: str
     command: tuple[str, ...]
     tier: Tier | None = None
-    model: str | None = None
 
 
 @dataclass(frozen=True)
