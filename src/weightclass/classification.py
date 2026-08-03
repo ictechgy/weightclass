@@ -41,6 +41,44 @@ HIGH_SIGNALS: Final = frozenset(
         "리팩토링",
     }
 )
+# 접미사 규칙으로 유도할 수 없는 어형. HIGH_SIGNALS 는 명사형만 담고 있어서
+# "deployment" 는 잡고 "deploy" 는 놓쳤다. 규칙으로 만들 수 없는 형태이므로
+# 표로 못박는다. 빈 튜플은 "추가할 것이 없다"가 아니라 "추가하지 않기로
+# 결정했다"는 뜻이며, 이유는 아래 HIGH_SIGNAL_NO_INFLECTION_RATIONALE 에 적는다.
+HIGH_SIGNAL_INFLECTIONS: Final = {
+    "architecture": ("architectural",),
+    "authentication": ("authenticate", "authenticating"),
+    "authorization": ("authorize", "authorizing", "authorise", "authorising", "authorisation"),
+    "concurrency": ("concurrent", "concurrently"),
+    "credential": (),
+    "data loss": (),
+    "database": (),
+    "deployment": ("deploy",),
+    "migration": ("migrate", "migrating"),
+    "payment": (),
+    "performance": ("performant",),
+    "privacy": (),
+    "production": (),
+    "race condition": (),
+    "refactor": (),
+    "rollback": ("roll back",),
+    "security": ("secure", "securing", "insecure"),
+}
+
+# 빈 튜플로 둔 이유. 없으면 나중에 누군가 "빠졌네" 하고 오탐을 만들어 넣는다.
+HIGH_SIGNAL_NO_INFLECTION_RATIONALE: Final = {
+    "credential": "credentials 는 접미사 규칙으로 유도된다.",
+    "data loss": "data-loss 는 구분자 규칙이 처리한다. 'lose data' 는 너무 느슨하다.",
+    "database": "databases 는 접미사 규칙으로 유도된다.",
+    "payment": "pay 는 'pay attention' 처럼 일상 표현에서 흔해 오탐이 크다.",
+    "privacy": "private 는 '이 메서드를 private 으로 바꿔줘' 같은 사소한 작업에서 흔하다.",
+    "production": (
+        "produce 는 같은 뜻의 어형이 아니다. '주간 보고서를 produce' 는 어려운 일이 아니다."
+    ),
+    "race condition": "race 단독은 판단이 갈린다. 측정 후 별도로 결정한다.",
+    "refactor": "refactors/refactoring/refactored 는 접미사 규칙으로 유도된다.",
+}
+
 LOW_SIGNALS: Final = frozenset(
     {
         "format",
@@ -126,10 +164,25 @@ def _select_non_ascii_signals(signals: frozenset[str]) -> frozenset[str]:
 # 그 결과 "저작권한도"처럼 시그널을 품은 합성어가 상위 티어로 오분류될 수 있다.
 # 상위 티어로의 오분류는 보수적인 방향이므로, 형태소 분석 의존성을 들이는 대신
 # 이 한계를 문서화하고 감수한다.
-_HIGH_ASCII_PATTERN: Final = _compile_ascii_signals(HIGH_SIGNALS)
+_HIGH_ASCII_PATTERN: Final = _compile_ascii_signals(
+    HIGH_SIGNALS.union(*HIGH_SIGNAL_INFLECTIONS.values())
+)
 _HIGH_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(HIGH_SIGNALS)
 _LOW_ASCII_PATTERN: Final = _compile_ascii_signals(LOW_SIGNALS)
 _LOW_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_SIGNALS)
+
+
+def validate_task(task: str) -> str:
+    """Return the normalized task, rejecting input that must not be routed.
+
+    이 검증은 분류와 분리되어 있어야 한다. 티어를 밖에서 받아 분류를 건너뛰는
+    경로(--tier)가 생기면, 검증이 classify_task 안에만 있을 경우 빈 입력이나
+    상한 초과 입력이 그대로 벤더 프로세스로 넘어간다.
+    """
+    normalized_task = task.strip().casefold()
+    if not normalized_task or len(normalized_task) > MAX_TASK_CHARACTERS:
+        raise InvalidTaskError()
+    return normalized_task
 
 
 def classify_task(task: str) -> Tier:
@@ -138,9 +191,7 @@ def classify_task(task: str) -> Tier:
     두 티어의 시그널이 함께 잡히면 항상 high가 이긴다. 난이도를 낮게 잡는 쪽이
     비싼 실수이므로 의도적으로 보수적인 우선순위를 둔다.
     """
-    normalized_task = task.strip().casefold()
-    if not normalized_task or len(normalized_task) > MAX_TASK_CHARACTERS:
-        raise InvalidTaskError()
+    normalized_task = validate_task(task)
     if len(normalized_task) >= HIGH_TASK_CHARACTERS or _has_signal(
         normalized_task, _HIGH_ASCII_PATTERN, _HIGH_NON_ASCII_SIGNALS
     ):

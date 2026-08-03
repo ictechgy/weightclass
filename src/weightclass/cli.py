@@ -15,6 +15,7 @@ from .classification import (
     Tier,
     classify_task,
     read_task_from_standard_input,
+    validate_task,
 )
 from .router import (
     DEFAULT_ROUTES,
@@ -27,6 +28,7 @@ from .router import (
     select_route,
     select_tier_route,
 )
+from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
 from .v2 import (
     V2InvalidInputError,
     load_api_policy,
@@ -223,11 +225,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="store_true")
     subcommands = parser.add_subparsers(dest="command")
 
-    subcommands.add_parser(
+    classify = subcommands.add_parser(
         "classify",
         allow_abbrev=False,
         description="Print the tier of a task read from standard input.",
     )
+    classify.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
+    # 로컬 판정이 기본이다. 이 플래그를 줄 때만 벤더 CLI 를 한 번 실행한다.
+    classify.add_argument("--ask-vendor", action="store_true")
+    # 판정 명령도 내장 벤더 명령이므로 실행 전에 볼 수 있어야 한다.
+    classify.add_argument("--show-triage-command", action="store_true")
     for name, description in (
         ("route", "Select and print a command for a task read from standard input."),
         ("run", "Select and start a command for a task read from standard input."),
@@ -235,6 +242,9 @@ def build_parser() -> argparse.ArgumentParser:
         native = subcommands.add_parser(name, allow_abbrev=False, description=description)
         native.add_argument("--policy", type=Path)
         native.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
+        # wclass classify 가 낸 티어를 그대로 받는다. route 와 run 은 이 경로에서도
+        # 네트워크를 쓰지 않는다. 판정은 별도 명령에서 이미 끝났다.
+        native.add_argument("--tier", choices=("low", "standard", "high"))
         if name == "run":
             native.add_argument("--ack-route-fingerprint")
 
@@ -354,14 +364,50 @@ def v2_run_from_standard_input(
     return _report_executor_result(completed_process)
 
 
-def classify_from_standard_input() -> int:
-    """Classify a task read from stdin without echoing or persisting it."""
+def classify_from_standard_input(
+    source_vendor: str | None = None,
+    ask_vendor: bool = False,
+    show_triage_command: bool = False,
+) -> int:
+    """Classify a task read from stdin without echoing or persisting it.
+
+    기본값은 로컬 판정이다. --ask-vendor 는 이미 설치된 벤더 CLI 를 한 번
+    실행해 난이도를 묻는다. 로컬 키워드 판정은 어휘만 보므로 전문용어 없이
+    설명된 어려운 작업을 놓친다.
+    """
+    if (ask_vendor or show_triage_command) and source_vendor is None:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    if show_triage_command:
+        assert source_vendor is not None
+        # 태스크를 읽지 않고 벤더도 부르지 않는다. 명령만 보여준다.
+        print(json.dumps(triage_descriptor(source_vendor)))
+        return 0
     try:
-        tier = classify_task(read_task_from_standard_input())
+        task = read_task_from_standard_input()
+        if not ask_vendor:
+            tier = classify_task(task)
+            tier_source = "local"
+        else:
+            # 티어를 밖에서 받더라도 검증은 건너뛰지 않는다.
+            validate_task(task)
+            assert source_vendor is not None
+            tier = ask_vendor_for_tier(task, source_vendor)
+            tier_source = "vendor"
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
-    print(json.dumps({"tier": tier}))
+    except TriageUnavailableError:
+        # 조용히 로컬로 되돌아가지 않는다. 판정을 못 했다는 사실이 보여야 한다.
+        print(json.dumps({"error": "triage_unavailable"}), file=sys.stderr)
+        return 8
+    # 기본 경로의 출력은 글자 그대로 유지한다. packaging/homebrew/weightclass.rb
+    # 와 .github/workflows/ci.yml 이 {"tier": "low"} 를 정확히 단언하고 있고,
+    # formula 는 이미 배포되어 있다. 새 키는 --ask-vendor 를 쓴 경우에만 붙인다.
+    response: dict[str, str] = {"tier": tier}
+    if ask_vendor:
+        response["tier_source"] = tier_source
+    print(json.dumps(response))
     return 0
 
 
@@ -369,9 +415,19 @@ def select_task_route(
     task: str,
     policy_path: Path | None,
     source_vendor: str | None = None,
+    explicit_tier: Tier | None = None,
 ) -> tuple[Tier, Route, RoutingPolicy]:
-    """Classify a task and select its route without retaining task content."""
-    tier = classify_task(task)
+    """Classify a task and select its route without retaining task content.
+
+    explicit_tier 는 wclass classify 가 이미 낸 판정을 받는 경로다. 분류를
+    건너뛰더라도 검증은 건너뛰지 않는다. 그러지 않으면 빈 입력이나 상한 초과
+    입력이 그대로 벤더 프로세스로 넘어간다.
+    """
+    if explicit_tier is not None:
+        validate_task(task)
+        tier = explicit_tier
+    else:
+        tier = classify_task(task)
     policy = (
         load_routing_policy(policy_path)
         if policy_path is not None
@@ -386,11 +442,15 @@ def select_task_route(
     return tier, route, policy
 
 
-def route_from_standard_input(policy_path: Path | None, source_vendor: str | None) -> int:
+def route_from_standard_input(
+    policy_path: Path | None,
+    source_vendor: str | None,
+    explicit_tier: Tier | None = None,
+) -> int:
     """Select and render a command without echoing or persisting the task."""
     try:
         tier, route, policy = select_task_route(
-            read_task_from_standard_input(), policy_path, source_vendor
+            read_task_from_standard_input(), policy_path, source_vendor, explicit_tier
         )
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
@@ -420,11 +480,12 @@ def run_from_standard_input(
     policy_path: Path | None,
     source_vendor: str | None,
     acknowledged_fingerprint: str | None = None,
+    explicit_tier: Tier | None = None,
 ) -> int:
     """Run a selected native command without a shell or output capture."""
     try:
         task = read_task_from_standard_input()
-        _, route, policy = select_task_route(task, policy_path, source_vendor)
+        _, route, policy = select_task_route(task, policy_path, source_vendor, explicit_tier)
         if acknowledged_fingerprint is not None and acknowledged_fingerprint != (
             native_route_fingerprint(route, policy.allow_mixed_vendors)
         ):
@@ -490,14 +551,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if arguments.command == "classify":
-        return classify_from_standard_input()
+        return classify_from_standard_input(
+            arguments.source_vendor, arguments.ask_vendor, arguments.show_triage_command
+        )
     if arguments.command == "route":
-        return route_from_standard_input(arguments.policy, arguments.source_vendor)
+        return route_from_standard_input(arguments.policy, arguments.source_vendor, arguments.tier)
     if arguments.command == "run":
         return run_from_standard_input(
             arguments.policy,
             arguments.source_vendor,
             arguments.ack_route_fingerprint,
+            arguments.tier,
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
