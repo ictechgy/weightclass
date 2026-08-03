@@ -130,17 +130,17 @@ class RouteSelectionError(LookupError):
     """Raised when no policy route supports a request."""
 
 
-def native_route_fingerprint(
-    route: Route,
-    tier: Tier,
-    allow_mixed_vendors: bool,
-) -> str:
+def native_route_fingerprint(route: Route, allow_mixed_vendors: bool) -> str:
     """Bind a rendered review to the selection it rendered.
 
     route 와 run 은 정책을 각각 따로 읽으므로, 사이에 정책이 바뀌면 검토한 것과
     다른 명령이 실행된다. run 에 이 지문을 넘기면 실행 직전에 다시 계산해
     비교하므로, 선택된 라우트·명령·벤더·티어·혼합 허용 여부 중 하나라도
     달라지면 실행되지 않는다.
+
+    분류된 티어는 따로 넣지 않는다. select_tier_route 가 route.tier 와 같은
+    라우트만 돌려주므로 이미 route 안에 들어 있고, 중복해서 넣으면 그 필드만
+    독립적으로 검증할 수 없는 죽은 항목이 된다.
 
     묶는 것은 "선택 결과"이지 태스크가 아니다. 태스크를 묶으려면 해시를 남겨야
     하는데, 이 프로젝트는 태스크의 해시조차 금지한다. 따라서 같은 티어의 다른
@@ -150,7 +150,6 @@ def native_route_fingerprint(
     """
     semantic_route = {
         "schema_version": NATIVE_FINGERPRINT_VERSION,
-        "tier": tier,
         "policy": {"allow_mixed_vendors": allow_mixed_vendors},
         "route": {
             "id": route.route_id,

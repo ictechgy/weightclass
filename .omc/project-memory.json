@@ -62,14 +62,14 @@
   "hotPaths": [
     {
       "path": "src/sar/cli.py",
-      "accessCount": 54,
-      "lastAccessed": 1785726911286,
+      "accessCount": 55,
+      "lastAccessed": 1785727328251,
       "type": "file"
     },
     {
       "path": "tests/test_router.py",
-      "accessCount": 28,
-      "lastAccessed": 1785727017551,
+      "accessCount": 29,
+      "lastAccessed": 1785727342161,
       "type": "file"
     },
     {

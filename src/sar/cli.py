@@ -410,7 +410,7 @@ def route_from_standard_input(policy_path: Path | None, source_vendor: str | Non
         "vendor": route.vendor,
         # 이 지문을 wclass run --ack-route-fingerprint 로 넘기면 검토한 선택이
         # 실행 직전에 다시 확인된다. 넘기지 않으면 구속력은 없다.
-        "route_fingerprint": native_route_fingerprint(route, tier, policy.allow_mixed_vendors),
+        "route_fingerprint": native_route_fingerprint(route, policy.allow_mixed_vendors),
     }
     print(json.dumps(response))
     return 0
@@ -424,9 +424,9 @@ def run_from_standard_input(
     """Run a selected native command without a shell or output capture."""
     try:
         task = read_task_from_standard_input()
-        tier, route, policy = select_task_route(task, policy_path, source_vendor)
+        _, route, policy = select_task_route(task, policy_path, source_vendor)
         if acknowledged_fingerprint is not None and acknowledged_fingerprint != (
-            native_route_fingerprint(route, tier, policy.allow_mixed_vendors)
+            native_route_fingerprint(route, policy.allow_mixed_vendors)
         ):
             print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
             return 6
