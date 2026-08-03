@@ -6,7 +6,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sar.router import Route, RouteRequest, select_route
+from sar.router import DEFAULT_ROUTES, Route, RouteRequest, select_route
+
+
+class DefaultRouteTests(unittest.TestCase):
+    def test_every_vendor_differentiates_all_three_tiers(self) -> None:
+        """Breaks if a vendor's tiers collapse back to one indistinguishable command."""
+        for vendor in ("codex", "claude"):
+            with self.subTest(vendor=vendor):
+                commands = [
+                    route.command for route in DEFAULT_ROUTES if route.vendor == vendor
+                ]
+
+                self.assertEqual(len(commands), 3)
+                self.assertEqual(len(set(commands)), 3)
 
 
 class SelectRouteTests(unittest.TestCase):
@@ -373,6 +386,8 @@ class CommandLineTests(unittest.TestCase):
                     "--ephemeral",
                     "--sandbox",
                     "workspace-write",
+                    "-c",
+                    "model_reasoning_effort=high",
                     "-",
                 ],
                 "route": "codex-high",
@@ -473,6 +488,8 @@ class CommandLineTests(unittest.TestCase):
                     "--ephemeral",
                     "--sandbox",
                     "workspace-write",
+                    "-c",
+                    "model_reasoning_effort=low",
                     "-",
                 ],
                 "route": "codex-low",
@@ -481,6 +498,7 @@ class CommandLineTests(unittest.TestCase):
             },
         )
         self.assertNotIn("typo", result.stdout)
+        self.assertIn("model_reasoning_effort=low", result.stdout)
 
     def test_routes_a_general_task_to_the_built_in_workspace_codex_command(self) -> None:
         result = subprocess.run(
@@ -501,6 +519,8 @@ class CommandLineTests(unittest.TestCase):
                     "--ephemeral",
                     "--sandbox",
                     "workspace-write",
+                    "-c",
+                    "model_reasoning_effort=medium",
                     "-",
                 ],
                 "route": "codex-standard",

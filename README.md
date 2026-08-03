@@ -40,16 +40,27 @@ printf '%s' 'Fix a spelling typo in the README.' | wclass run --source-vendor co
 
 The built-in routes are intentionally conservative:
 
-- Codex: `low`, `standard`, and `high` all use an ephemeral `exec` session in
-  a workspace-write sandbox.
+- Codex: `low`, `standard`, and `high` use an ephemeral `exec` session in a
+  workspace-write sandbox with `model_reasoning_effort` set to `low`, `medium`,
+  and `high`. Codex has no dedicated effort flag, so the effort is passed as a
+  `-c` configuration override for that one invocation.
 - Claude: `low`, `standard`, and `high` use print mode, manual permissions,
   no session persistence, and efforts `low`, `medium`, and `high`.
+
+Neither default route pins a model label. Model selection stays your reviewed
+policy's decision; see [Override the routes](#override-the-routes).
 
 `--source-vendor` is required when weightclass is called from a Codex or Claude
 integration. With the default policy, `--source-vendor codex` selects only
 Codex routes and `--source-vendor claude` selects only Claude routes.
 weightclass is a standalone process, so it does not try to infer its parent
 application.
+
+When `--source-vendor` is omitted, weightclass still pins every tier to a
+single vendor: the vendor of the first route declared in the policy (`codex`
+for the built-in routes). A tier is never silently served by a second vendor —
+that requires `"allow_mixed_vendors": true`. The `vendor` field is always
+present in `wclass route` output.
 
 Classification is local and deterministic. Security, authentication,
 authorization, data, migration, concurrency, performance, production, and
@@ -90,13 +101,19 @@ available to you.
 
 The `command` tokens and model labels are opaque policy values. weightclass
 validates their shape but does not assert vendor CLI semantics or subscription
-access. When a selected route declares `model`, `wclass route` includes that
-model label in its output. Always run `wclass route` with a representative
-non-sensitive task to inspect a policy before using `wclass run`.
+access. Always run `wclass route` with a representative non-sensitive task to
+inspect a policy before using `wclass run`.
+
+A route's optional `model` is a review label, not a second control channel:
+only `command` is ever executed. weightclass therefore requires the `model`
+value to appear as one of the `command` tokens, so the model shown in a
+reviewed `wclass route` descriptor is the model the command actually names.
 
 Set `"allow_mixed_vendors": true` only when you intentionally want a Codex
 request to select a Claude route, or the reverse. When it is `false` or absent,
-the source-vendor filter is applied before tier and model selection.
+the vendor filter is applied before tier and model selection — including when
+`--source-vendor` is omitted, in which case the first declared route's vendor
+is used.
 
 ## V2 API routing through an external runtime
 

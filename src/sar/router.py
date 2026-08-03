@@ -15,6 +15,24 @@ CLAUDE_COMMAND_PREFIX: Final = (
     "manual",
     "--effort",
 )
+CODEX_COMMAND_PREFIX: Final = (
+    "codex",
+    "exec",
+    "--ephemeral",
+    "--sandbox",
+    "workspace-write",
+    "-c",
+)
+
+
+def codex_command(reasoning_effort: str) -> tuple[str, ...]:
+    """Build the built-in Codex command for one reasoning effort label.
+
+    Codex exec에는 Claude의 --effort에 해당하는 전용 플래그가 없으므로,
+    설정 오버라이드(-c)로 티어별 추론 강도를 전달한다. 마지막 "-"는 태스크를
+    표준 입력에서 읽으라는 뜻이다.
+    """
+    return CODEX_COMMAND_PREFIX + (f"model_reasoning_effort={reasoning_effort}", "-")
 
 
 @dataclass(frozen=True)
@@ -45,14 +63,21 @@ DEFAULT_ROUTES: Final = (
         vendor="codex",
         workflow="",
         tier="low",
-        command=("codex", "exec", "--ephemeral", "--sandbox", "workspace-write", "-"),
+        command=codex_command("low"),
     ),
     Route(
         route_id="codex-standard",
         vendor="codex",
         workflow="",
         tier="standard",
-        command=("codex", "exec", "--ephemeral", "--sandbox", "workspace-write", "-"),
+        command=codex_command("medium"),
+    ),
+    Route(
+        route_id="codex-high",
+        vendor="codex",
+        workflow="",
+        tier="high",
+        command=codex_command("high"),
     ),
     Route(
         route_id="claude-low",
@@ -74,13 +99,6 @@ DEFAULT_ROUTES: Final = (
         workflow="",
         tier="high",
         command=CLAUDE_COMMAND_PREFIX + ("high",),
-    ),
-    Route(
-        route_id="codex-high",
-        vendor="codex",
-        workflow="",
-        tier="high",
-        command=("codex", "exec", "--ephemeral", "--sandbox", "workspace-write", "-"),
     ),
 )
 
