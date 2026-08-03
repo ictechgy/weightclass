@@ -43,7 +43,7 @@ class V2EgressGateTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -123,7 +123,7 @@ class V2EgressGateTests(unittest.TestCase):
             arguments = [
                 sys.executable,
                 "-m",
-                "sar",
+                "weightclass",
                 "v2",
                 "run",
                 "--policy",
@@ -176,7 +176,7 @@ class V2ExecutorResultTests(unittest.TestCase):
             arguments = [
                 sys.executable,
                 "-m",
-                "sar",
+                "weightclass",
                 "v2",
                 "run",
                 "--policy",
@@ -285,7 +285,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -354,7 +354,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "run",
                     "--policy",
@@ -407,7 +407,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -460,7 +460,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -480,7 +480,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "run",
                     "--policy",
@@ -534,7 +534,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -555,7 +555,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "run",
                     "--policy",
@@ -606,7 +606,7 @@ class V2CommandLineTests(unittest.TestCase):
             common_arguments = [
                 sys.executable,
                 "-m",
-                "sar",
+                "weightclass",
                 "v2",
                 "route",
                 "--policy",
@@ -668,7 +668,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -689,7 +689,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "run",
                     "--policy",

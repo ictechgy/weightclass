@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sar import cli
-from sar.router import DEFAULT_ROUTES, Route, RouteRequest, select_route
+from weightclass import cli
+from weightclass.router import DEFAULT_ROUTES, Route, RouteRequest, select_route
 
 
 class DefaultRouteTests(unittest.TestCase):
@@ -77,8 +77,10 @@ class ExecutorSpawnFailureTests(unittest.TestCase):
             )
             errors = io.StringIO()
             with (
-                mock.patch("sar.cli.subprocess.run", side_effect=raised),
-                mock.patch("sar.cli.read_task_from_standard_input", return_value="Fix a typo."),
+                mock.patch("weightclass.cli.subprocess.run", side_effect=raised),
+                mock.patch(
+                    "weightclass.cli.read_task_from_standard_input", return_value="Fix a typo."
+                ),
                 contextlib.redirect_stderr(errors),
             ):
                 exit_code = cli.run_from_standard_input(policy_path, None)
@@ -99,7 +101,7 @@ class CommandSurfaceTests(unittest.TestCase):
     def test_help_lists_every_reachable_subcommand(self) -> None:
         """Breaks if a mode becomes undiscoverable from the command line."""
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "--help"],
+            [sys.executable, "-m", "weightclass", "--help"],
             capture_output=True,
             check=False,
             text=True,
@@ -113,7 +115,7 @@ class CommandSurfaceTests(unittest.TestCase):
     def test_rejects_a_version_query_carrying_extra_arguments(self) -> None:
         """Breaks if --version exits successfully without validating the rest of argv."""
         accepted = subprocess.run(
-            [sys.executable, "-m", "sar", "--version"],
+            [sys.executable, "-m", "weightclass", "--version"],
             capture_output=True,
             check=False,
             text=True,
@@ -124,7 +126,7 @@ class CommandSurfaceTests(unittest.TestCase):
         for extra in (["--definitely-invalid"], ["classify"]):
             with self.subTest(extra=extra):
                 result = subprocess.run(
-                    [sys.executable, "-m", "sar", "--version", *extra],
+                    [sys.executable, "-m", "weightclass", "--version", *extra],
                     capture_output=True,
                     check=False,
                     input="",
@@ -171,7 +173,7 @@ class CommandSurfaceTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "run",
                     "--policy",
@@ -280,7 +282,7 @@ class TaskConfidentialityTests(unittest.TestCase):
             ):
                 with self.subTest(arguments=arguments):
                     result = subprocess.run(
-                        [sys.executable, "-m", "sar", *arguments],
+                        [sys.executable, "-m", "weightclass", *arguments],
                         capture_output=True,
                         check=False,
                         input=task,
@@ -308,7 +310,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_classifies_a_short_spelling_fix_as_low_effort(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "classify"],
+            [sys.executable, "-m", "weightclass", "classify"],
             capture_output=True,
             check=False,
             input="Fix a spelling typo in the README heading.",
@@ -321,7 +323,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_rejects_an_empty_task_with_a_redacted_diagnostic(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "classify"],
+            [sys.executable, "-m", "weightclass", "classify"],
             capture_output=True,
             check=False,
             input="",
@@ -336,7 +338,7 @@ class CommandLineTests(unittest.TestCase):
         for arguments in (["classify"], ["route"], ["run"]):
             with self.subTest(arguments=arguments):
                 result = subprocess.run(
-                    [sys.executable, "-m", "sar", *arguments],
+                    [sys.executable, "-m", "weightclass", *arguments],
                     capture_output=True,
                     check=False,
                     input=b"\x80\x81",
@@ -353,13 +355,13 @@ class CommandLineTests(unittest.TestCase):
         통과하지만 바이트 상한은 넘는 입력을 만들 수 있다. 이 입력이 통과하면
         바이트 경계가 사라진 것이다.
         """
-        from sar.classification import MAX_TASK_BYTES, MAX_TASK_CHARACTERS
+        from weightclass.classification import MAX_TASK_BYTES, MAX_TASK_CHARACTERS
 
         oversized = b"a" * MAX_TASK_CHARACTERS
         oversized += b" " * (MAX_TASK_BYTES + 1 - len(oversized))
 
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "classify"],
+            [sys.executable, "-m", "weightclass", "classify"],
             capture_output=True,
             check=False,
             input=oversized,
@@ -371,7 +373,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_classifies_a_security_task_as_high_effort(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "classify"],
+            [sys.executable, "-m", "weightclass", "classify"],
             capture_output=True,
             check=False,
             input="Review the authorization boundary for this endpoint.",
@@ -409,7 +411,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Review the security implications of this authorization change.",
@@ -459,7 +461,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Add a helper function to the parser.",
@@ -493,7 +495,7 @@ class CommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             policy_path = Path(temporary_directory) / "policy.json"
             policy_path.write_text(json.dumps(mixed_vendor_policy), encoding="utf-8")
-            arguments = [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)]
+            arguments = [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)]
             blocked = subprocess.run(
                 arguments,
                 capture_output=True,
@@ -549,7 +551,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "route",
                     "--policy",
                     str(policy_path),
@@ -606,7 +608,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Review the authorization boundary.",
@@ -648,7 +650,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "route",
                     "--policy",
                     str(policy_path),
@@ -675,7 +677,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_codex_high_task_to_the_built_in_codex_high_route(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route", "--source-vendor", "codex"],
+            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
             capture_output=True,
             check=False,
             input="Review the security implications of this authorization change.",
@@ -704,7 +706,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_claude_low_task_to_the_built_in_claude_low_route(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route", "--source-vendor", "claude"],
+            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "claude"],
             capture_output=True,
             check=False,
             input="Fix a typo.",
@@ -732,7 +734,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_claude_standard_task_to_the_built_in_claude_standard_route(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route", "--source-vendor", "claude"],
+            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "claude"],
             capture_output=True,
             check=False,
             input="Add a focused unit test for this formatter.",
@@ -761,7 +763,7 @@ class CommandLineTests(unittest.TestCase):
     def test_keeps_a_high_effort_task_on_the_default_policy_vendor(self) -> None:
         """Breaks if omitting --source-vendor lets the high tier switch vendors."""
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route"],
+            [sys.executable, "-m", "weightclass", "route"],
             capture_output=True,
             check=False,
             input="Assess the security boundary for the new authorization flow.",
@@ -777,7 +779,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_short_spelling_fix_to_the_built_in_workspace_codex_command(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route"],
+            [sys.executable, "-m", "weightclass", "route"],
             capture_output=True,
             check=False,
             input="Fix a typo.",
@@ -808,7 +810,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_general_task_to_the_built_in_workspace_codex_command(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route"],
+            [sys.executable, "-m", "weightclass", "route"],
             capture_output=True,
             check=False,
             input="Add a focused unit test for this formatter.",
@@ -867,7 +869,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Fix a typo.",
@@ -912,7 +914,7 @@ class CommandLineTests(unittest.TestCase):
             # LC_ALL=C 는 cron, systemd, Docker, CI 러너에서 흔한 기본값이다.
             ascii_only_environment = dict(os.environ, LC_ALL="C", PYTHONUTF8="0")
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 env=ascii_only_environment,
@@ -958,7 +960,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "run",
                     "--policy",
                     str(policy_path),
@@ -1001,7 +1003,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             return subprocess.run(
-                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input=task,
@@ -1107,7 +1109,7 @@ class CommandLineTests(unittest.TestCase):
 
             write_policy("reviewed.py")
             review = subprocess.run(
-                [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Fix a typo.",
@@ -1120,7 +1122,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "run",
                     "--policy",
                     str(policy_path),
@@ -1138,7 +1140,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "run",
                     "--policy",
                     str(policy_path),
@@ -1151,7 +1153,7 @@ class CommandLineTests(unittest.TestCase):
                 text=True,
             )
             unbound = subprocess.run(
-                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Fix a typo.",
@@ -1203,7 +1205,7 @@ class CommandLineTests(unittest.TestCase):
 
             def route_fingerprint_for(task: str) -> str:
                 review = subprocess.run(
-                    [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                    [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
                     capture_output=True,
                     check=False,
                     input=task,
@@ -1217,7 +1219,7 @@ class CommandLineTests(unittest.TestCase):
                     [
                         sys.executable,
                         "-m",
-                        "sar",
+                        "weightclass",
                         "run",
                         "--policy",
                         str(policy_path),
@@ -1289,14 +1291,14 @@ class CommandLineTests(unittest.TestCase):
         """
         task = "Fix a typo."
         without_vendor = subprocess.run(
-            [sys.executable, "-m", "sar", "route"],
+            [sys.executable, "-m", "weightclass", "route"],
             capture_output=True,
             check=False,
             input=task,
             text=True,
         )
         with_vendor = subprocess.run(
-            [sys.executable, "-m", "sar", "route", "--source-vendor", "codex"],
+            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
             capture_output=True,
             check=False,
             input=task,
@@ -1336,7 +1338,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Fix a typo.",
@@ -1387,7 +1389,7 @@ class CommandLineTests(unittest.TestCase):
                     )
 
                     result = subprocess.run(
-                        [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                        [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
                         capture_output=True,
                         check=False,
                         input="Fix a typo.",
@@ -1420,7 +1422,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Fix a typo.",
@@ -1460,7 +1462,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "render",
                     "--policy",
                     str(policy_path),
@@ -1511,7 +1513,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "render",
                     "--policy",
                     str(policy_path),
@@ -1562,7 +1564,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "render",
                     "--policy",
                     str(policy_path),
