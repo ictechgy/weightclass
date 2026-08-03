@@ -7,7 +7,13 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence, cast
 
-from .classification import InvalidTaskError, Tier, classify_task
+from . import __version__
+from .classification import (
+    InvalidTaskError,
+    Tier,
+    classify_task,
+    read_task_from_standard_input,
+)
 from .router import (
     Route,
     RouteRequest,
@@ -20,9 +26,7 @@ from .router import (
 )
 from .v2 import (
     V2InvalidInputError,
-    V2InvalidTaskError,
     load_api_policy,
-    read_task_from_standard_input,
     render_api_route,
     route_fingerprint,
     select_api_route,
@@ -68,14 +72,8 @@ def _parse_route(value: object) -> Route:
         raise InvalidInputError()
 
     keys = set(value)
-    has_workflow = keys in (
-        {"id", "vendor", "workflow", "command"},
-        {"id", "vendor", "workflow", "command", "model"},
-    )
-    has_tier = keys in (
-        {"id", "vendor", "tier", "command"},
-        {"id", "vendor", "tier", "command", "model"},
-    )
+    has_workflow = keys == {"id", "vendor", "workflow", "command"}
+    has_tier = keys == {"id", "vendor", "tier", "command"}
     if not has_workflow and not has_tier:
         raise InvalidInputError()
 
@@ -92,22 +90,13 @@ def _parse_route(value: object) -> Route:
         if parsed_tier not in {"low", "standard", "high"}:
             raise InvalidInputError()
         tier = cast(Tier, parsed_tier)
-    model = _require_model_label(value["model"]) if "model" in value else None
-
     return Route(
         route_id=route_id,
         vendor=vendor,
         workflow=workflow,
         command=tuple(_require_nonempty_string(argument) for argument in command),
         tier=tier,
-        model=model,
     )
-
-
-def _require_model_label(value: object) -> str:
-    if not isinstance(value, str) or not value.strip() or "\x00" in value:
-        raise InvalidInputError()
-    return value
 
 
 def load_routes(policy_path: Path) -> tuple[Route, ...]:
@@ -143,35 +132,71 @@ def load_request(descriptor_path: Path) -> RouteRequest:
     return RouteRequest(vendor=vendor, workflow=_require_nonempty_string(descriptor["workflow"]))
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = SafeArgumentParser(description="Render a supported native workflow command.")
-    parser.add_argument("--policy", required=True, type=Path)
-    parser.add_argument("--descriptor", required=True, type=Path)
-    return parser
-
-
-def build_route_parser() -> argparse.ArgumentParser:
-    parser = SafeArgumentParser(description="Select a command for a task read from stdin.")
-    parser.add_argument("--policy", type=Path)
-    parser.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
-    return parser
-
-
-def build_v2_route_parser() -> argparse.ArgumentParser:
-    """Parse an explicit V2 API route review request."""
-    parser = SafeArgumentParser(description="Review a declarative API route.")
+def _add_api_route_arguments(parser: argparse.ArgumentParser) -> None:
+    """Declare the arguments shared by both V2 API subcommands."""
     parser.add_argument("--policy", required=True, type=Path)
     parser.add_argument("--source-vendor", required=True, choices=sorted(SUPPORTED_VENDORS))
     parser.add_argument("--api-runtime", required=True, type=Path)
-    return parser
 
 
-def build_v2_run_parser() -> argparse.ArgumentParser:
-    """Parse an explicit V2 API execution request."""
-    parser = build_v2_route_parser()
-    parser.description = "Run a reviewed declarative API route."
-    parser.add_argument("--confirm-api-egress", action="store_true")
-    parser.add_argument("--ack-route-fingerprint")
+def build_parser() -> argparse.ArgumentParser:
+    """Build the whole command surface so `--help` lists every reachable mode.
+
+    allow_abbrev를 끈 것은 --confirm-api-egress 같은 명시적 승인 플래그가
+    --c 같은 축약으로 만족되면 안 되기 때문이다.
+    """
+    parser = SafeArgumentParser(
+        prog="wclass",
+        description="Classify a task and select a reviewable vendor command.",
+        allow_abbrev=False,
+    )
+    # argparse 내장 version 액션은 argv의 나머지를 검증하기 전에 종료해 버려서
+    # `wclass --version --bogus` 가 0으로 성공한다. 파싱을 끝낸 뒤 직접 처리한다.
+    parser.add_argument("--version", action="store_true")
+    subcommands = parser.add_subparsers(dest="command")
+
+    subcommands.add_parser(
+        "classify",
+        allow_abbrev=False,
+        description="Print the tier of a task read from standard input.",
+    )
+    for name, description in (
+        ("route", "Select and print a command for a task read from standard input."),
+        ("run", "Select and start a command for a task read from standard input."),
+    ):
+        native = subcommands.add_parser(name, allow_abbrev=False, description=description)
+        native.add_argument("--policy", type=Path)
+        native.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
+
+    render = subcommands.add_parser(
+        "render",
+        allow_abbrev=False,
+        description="Render the command of a policy route named by a workflow descriptor.",
+    )
+    render.add_argument("--policy", required=True, type=Path)
+    render.add_argument("--descriptor", required=True, type=Path)
+
+    api = subcommands.add_parser(
+        "v2",
+        allow_abbrev=False,
+        description="Select a declarative API route served by an external runtime.",
+    )
+    api_subcommands = api.add_subparsers(dest="api_command", required=True)
+    _add_api_route_arguments(
+        api_subcommands.add_parser(
+            "route",
+            allow_abbrev=False,
+            description="Review a declarative API route.",
+        )
+    )
+    api_run = api_subcommands.add_parser(
+        "run",
+        allow_abbrev=False,
+        description="Run a reviewed declarative API route.",
+    )
+    _add_api_route_arguments(api_run)
+    api_run.add_argument("--confirm-api-egress", action="store_true")
+    api_run.add_argument("--ack-route-fingerprint")
     return parser
 
 
@@ -186,9 +211,6 @@ def v2_route_from_standard_input(
         task = read_task_from_standard_input()
         policy = load_api_policy(policy_path)
         tier, route = select_api_route(task, policy, source_vendor)
-    except V2InvalidTaskError:
-        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
-        return 2
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
@@ -215,9 +237,6 @@ def v2_run_from_standard_input(
         task = read_task_from_standard_input()
         policy = load_api_policy(policy_path)
         tier, route = select_api_route(task, policy, source_vendor)
-    except V2InvalidTaskError:
-        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
-        return 2
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
@@ -241,6 +260,8 @@ def v2_run_from_standard_input(
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
     try:
+        # 로케일 인코딩을 쓰는 text 모드는 비ASCII 태스크에서 UnicodeEncodeError를 내고,
+        # 그 예외 메시지가 태스크 문자와 위치를 진단에 노출한다. 항상 UTF-8 바이트로 넘긴다.
         completed_process = subprocess.run(
             (
                 str(runtime_path),
@@ -252,8 +273,7 @@ def v2_run_from_standard_input(
                 route.effort,
             ),
             check=False,
-            input=task,
-            text=True,
+            input=task.encode("utf-8"),
         )
     except OSError:
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
@@ -264,7 +284,7 @@ def v2_run_from_standard_input(
 def classify_from_standard_input() -> int:
     """Classify a task read from stdin without echoing or persisting it."""
     try:
-        tier = classify_task(sys.stdin.read())
+        tier = classify_task(read_task_from_standard_input())
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
@@ -295,7 +315,9 @@ def select_task_route(
 def route_from_standard_input(policy_path: Path | None, source_vendor: str | None) -> int:
     """Select and render a command without echoing or persisting the task."""
     try:
-        tier, route = select_task_route(sys.stdin.read(), policy_path, source_vendor)
+        tier, route = select_task_route(
+            read_task_from_standard_input(), policy_path, source_vendor
+        )
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
@@ -305,25 +327,29 @@ def route_from_standard_input(policy_path: Path | None, source_vendor: str | Non
     except RouteSelectionError:
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
-    response = {"command": list(route.command), "route": route.route_id, "tier": tier}
-    if source_vendor is not None:
-        response["vendor"] = route.vendor
-    if route.model is not None:
-        response["model"] = route.model
+    # vendor는 항상 싣는다. 생략하면 정책이 벤더를 바꿔도 리뷰 출력만 봐서는
+    # 어느 벤더로 나가는지 알 수 없다.
+    response = {
+        "command": list(route.command),
+        "route": route.route_id,
+        "tier": tier,
+        "vendor": route.vendor,
+    }
     print(json.dumps(response))
     return 0
 
 
 def run_from_standard_input(policy_path: Path | None, source_vendor: str | None) -> int:
     """Run a selected native command without a shell or output capture."""
-    task = sys.stdin.read()
     try:
+        task = read_task_from_standard_input()
         _, route = select_task_route(task, policy_path, source_vendor)
+        # text 모드는 로케일 인코딩을 사용하므로 LC_ALL=C 환경에서 비ASCII 태스크가
+        # UnicodeEncodeError로 새어 나간다. 자식 출력을 읽지 않으므로 바이트로 전달한다.
         completed_process = subprocess.run(
             route.command,
             check=False,
-            input=task,
-            text=True,
+            input=task.encode("utf-8"),
         )
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
@@ -340,52 +366,11 @@ def run_from_standard_input(policy_path: Path | None, source_vendor: str | None)
     return completed_process.returncode
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Classify, route, render, or run a native command from explicit input."""
-    provided_arguments = list(sys.argv[1:] if argv is None else argv)
-    if provided_arguments == ["classify"]:
-        return classify_from_standard_input()
-    if provided_arguments and provided_arguments[0] == "route":
-        try:
-            arguments = build_route_parser().parse_args(provided_arguments[1:])
-        except InvalidInputError:
-            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-            return 2
-        return route_from_standard_input(arguments.policy, arguments.source_vendor)
-    if provided_arguments and provided_arguments[0] == "run":
-        try:
-            arguments = build_route_parser().parse_args(provided_arguments[1:])
-        except InvalidInputError:
-            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-            return 2
-        return run_from_standard_input(arguments.policy, arguments.source_vendor)
-    if len(provided_arguments) >= 2 and provided_arguments[:2] == ["v2", "route"]:
-        try:
-            arguments = build_v2_route_parser().parse_args(provided_arguments[2:])
-        except InvalidInputError:
-            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-            return 2
-        return v2_route_from_standard_input(
-            arguments.policy,
-            arguments.source_vendor,
-            arguments.api_runtime,
-        )
-    if len(provided_arguments) >= 2 and provided_arguments[:2] == ["v2", "run"]:
-        try:
-            arguments = build_v2_run_parser().parse_args(provided_arguments[2:])
-        except InvalidInputError:
-            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-            return 2
-        return v2_run_from_standard_input(
-            arguments.policy,
-            arguments.source_vendor,
-            arguments.api_runtime,
-            arguments.confirm_api_egress,
-            arguments.ack_route_fingerprint,
-        )
+
+def render_workflow_route(policy_path: Path, descriptor_path: Path) -> int:
+    """Render the command of the policy route named by a workflow descriptor."""
     try:
-        arguments = build_parser().parse_args(provided_arguments)
-        route = select_route(load_routes(arguments.policy), load_request(arguments.descriptor))
+        route = select_route(load_routes(policy_path), load_request(descriptor_path))
     except InvalidInputError:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
@@ -394,3 +379,46 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 3
     print(json.dumps({"command": list(route.command), "route": route.route_id}))
     return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Classify, route, render, or run a native command from explicit input."""
+    try:
+        arguments = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    except InvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+
+    if arguments.version:
+        # 버전 조회는 단독 호출일 때만 유효하다. 서브커맨드와 함께 오면 어느 쪽을
+        # 요청한 것인지 알 수 없으므로 닫는 방향으로 거부한다.
+        if arguments.command is not None:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        print(f"weightclass {__version__}")
+        return 0
+    if arguments.command is None:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+
+    if arguments.command == "classify":
+        return classify_from_standard_input()
+    if arguments.command == "route":
+        return route_from_standard_input(arguments.policy, arguments.source_vendor)
+    if arguments.command == "run":
+        return run_from_standard_input(arguments.policy, arguments.source_vendor)
+    if arguments.command == "render":
+        return render_workflow_route(arguments.policy, arguments.descriptor)
+    if arguments.api_command == "route":
+        return v2_route_from_standard_input(
+            arguments.policy,
+            arguments.source_vendor,
+            arguments.api_runtime,
+        )
+    return v2_run_from_standard_input(
+        arguments.policy,
+        arguments.source_vendor,
+        arguments.api_runtime,
+        arguments.confirm_api_egress,
+        arguments.ack_route_fingerprint,
+    )

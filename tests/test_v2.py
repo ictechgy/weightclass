@@ -1,9 +1,135 @@
 import json
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+
+def _api_policy(**overrides: object) -> dict[str, object]:
+    """Build a minimal single-route V2 policy for one test."""
+    policy: dict[str, object] = {
+        "schema_version": 2,
+        "allow_cross_provider": False,
+        "allow_api": True,
+        "routes": [
+            {
+                "id": "openai-low-api",
+                "tier": "low",
+                "eligible_source_vendors": ["codex"],
+                "provider": "openai",
+                "transport": "api",
+                "model": "opaque-openai-low-model",
+                "effort": "low",
+                "intended_recipient": "OpenAI API",
+                "intended_billing_boundary": "user OpenAI API account",
+            }
+        ],
+    }
+    policy.update(overrides)
+    return policy
+
+
+class V2EgressGateTests(unittest.TestCase):
+    """Egress를 막는 각 게이트가 실제로 단독으로 동작하는지 고정한다."""
+
+    def _review(self, policy: dict[str, object], runtime: str) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            return subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "sar",
+                    "v2",
+                    "route",
+                    "--policy",
+                    str(policy_path),
+                    "--source-vendor",
+                    "codex",
+                    "--api-runtime",
+                    runtime,
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+    def test_allow_api_false_blocks_every_route(self) -> None:
+        """Breaks if the policy-wide API kill switch stops being consulted."""
+        result = self._review(_api_policy(allow_api=False), sys.executable)
+
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(json.loads(result.stderr), {"error": "unsupported_route"})
+
+    def test_rejects_a_relative_api_runtime_path(self) -> None:
+        """Breaks if a runtime can be resolved through the caller's working directory."""
+        result = self._review(_api_policy(), "python3")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+
+    def test_rejects_a_non_executable_api_runtime(self) -> None:
+        """Breaks if an ordinary data file can be named as the provider runtime."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            runtime_path = Path(temporary_directory) / "not-executable"
+            runtime_path.write_text("#!/bin/sh\n", encoding="utf-8")
+
+            result = self._review(_api_policy(), str(runtime_path))
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+
+    def test_hides_runtime_startup_details_when_the_runtime_cannot_execute(self) -> None:
+        """Breaks if a failed runtime launch leaks its path or a traceback."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
+            # 실행 비트는 있지만 실행 가능한 형식이 아니므로 spawn 단계에서 OSError 가 난다.
+            runtime_path = directory / "unlaunchable-runtime"
+            runtime_path.write_bytes(b"\x7fnot-a-real-executable\n")
+            runtime_path.chmod(runtime_path.stat().st_mode | stat.S_IXUSR)
+            arguments = [
+                sys.executable,
+                "-m",
+                "sar",
+                "v2",
+                "run",
+                "--policy",
+                str(policy_path),
+                "--source-vendor",
+                "codex",
+                "--api-runtime",
+                str(runtime_path),
+            ]
+            review = subprocess.run(
+                arguments[:4] + ["route"] + arguments[5:],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+            result = subprocess.run(
+                arguments
+                + [
+                    "--confirm-api-egress",
+                    "--ack-route-fingerprint",
+                    json.loads(review.stdout)["route_fingerprint"],
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 4)
+        self.assertEqual(json.loads(result.stderr), {"error": "executor_unavailable"})
+        self.assertNotIn("unlaunchable-runtime", result.stderr)
 
 
 class V2CommandLineTests(unittest.TestCase):

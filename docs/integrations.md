@@ -8,7 +8,8 @@ the project directory after installing `weightclass`.
 ## Shared safe workflow
 
 1. Pass the task on standard input and review the selected route first.
-2. Run the route only after the command, model label, and vendor are acceptable.
+2. Run the route only after the rendered command and vendor are acceptable. The
+   command is the whole decision: the model and effort arguments appear in it.
 3. Keep a Codex-originated task on Codex and a Claude-originated task on Claude
    unless a reviewed policy explicitly enables cross-vendor routing.
 
