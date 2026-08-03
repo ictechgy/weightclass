@@ -39,6 +39,10 @@ wclass = "sar.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Typing :: Typed 를 광고하려면 마커를 실제로 배포해야 한다.
+[tool.setuptools.package-data]
+sar = ["py.typed"]
+
 [tool.setuptools.dynamic]
 version = {attr = "sar.__version__"}
 
@@ -51,4 +55,6 @@ select = ["E", "F", "W", "I", "UP", "B"]
 
 [tool.mypy]
 strict = true
-files = ["src/sar"]
+# 테스트도 포함한다. src 만 보면 테스트의 타입 회귀가 CI 에 보이지 않는다.
+files = ["src/sar", "tests"]
+mypy_path = ["src"]

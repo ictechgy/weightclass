@@ -169,11 +169,12 @@ _Last updated: 2026-08-03 by Claude Code_
   installed-CLI check, tests). The runtime repository's first GitHub Actions
   run has still not been inspected.
 - Known limitations carried deliberately, each documented where it applies:
-  `route` does not bind a later `run` (V1 has no `route_fingerprint`); a policy
-  `command` token cannot contain whitespace, so paths with spaces are
-  unusable; V2 fingerprints the runtime path, not its contents; a task of
-  1,200+ characters is `high` on length alone; a vendor CLI that declines work
-  while exiting `0` cannot be detected.
+  `wclass run` binds a review only when given `--ack-route-fingerprint`, and the
+  binding covers the policy's selection — not the task (binding a task would
+  require hashing it, which this project forbids) and not the identity of the
+  executable behind the argv; V2 likewise fingerprints the runtime path, not its
+  contents; a task of 1,200+ characters is `high` on length alone; a vendor CLI
+  that declines work while exiting `0` cannot be detected.
 - A package-registry publication, version/tag policy, and release artifacts
   have not been approved or created.
 - Provider model/effort compatibility and actual API behavior remain
