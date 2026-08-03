@@ -7,12 +7,24 @@ from .classification import Tier
 
 
 SUPPORTED_VENDORS: Final = frozenset({"claude", "codex"})
+# manual 은 사람에게 승인을 묻는 모드다. --print 는 비대화형이라 물어볼 상대가
+# 없어 모든 편집이 거부되고, 그런데도 claude 는 0으로 종료한다. 즉 라우터가
+# 성공을 보고하면서 아무 일도 일어나지 않는다. acceptEdits 는 파일 편집만
+# 자동 승인하므로, Codex 기본 라우트가 이미 할 수 있던 파일 수정을 Claude
+# 라우트도 할 수 있게 한다. 명령 실행까지 같아지는 것은 아니다. Codex 의
+# workspace-write 는 명령을 실행하지만 acceptEdits 는 편집 외 도구를 여전히
+# 프롬프트로 넘기고, --print 에는 응답할 사람이 없다.
+#
+# 이 선택을 "wclass route 로 검토했으니 안전하다"로 정당화하지 말 것. route 와
+# run 은 정책을 각각 따로 읽으므로 그 사이에 정책이 바뀌면 검토한 것과 다른
+# 명령이 실행된다(V1 에는 V2 의 route_fingerprint 같은 결속이 없다). 실제 경계는
+# 정책 파일에 대한 사용자의 통제와, 코드에 고정되어 교체할 수 없는 기본 라우트다.
 CLAUDE_COMMAND_PREFIX: Final = (
     "claude",
     "--print",
     "--no-session-persistence",
     "--permission-mode",
-    "manual",
+    "acceptEdits",
     "--effort",
 )
 CODEX_COMMAND_PREFIX: Final = (

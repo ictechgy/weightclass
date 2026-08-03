@@ -47,6 +47,32 @@ policy — exits `2` with `{"error": "invalid_input"}` on standard error and
 nothing else, so a caller can parse the failure without scraping usage text.
 Flag names are never abbreviated: `--confirm-api-egress` cannot be shortened.
 
+Exit codes are weightclass's own; a selected command's status never overwrites
+them:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success. For `run` and `v2 run`, the selected command exited `0`. |
+| `2` | `invalid_task` or `invalid_input`. |
+| `3` | `unsupported_route` — no policy route matched. |
+| `4` | `executor_unavailable` — the command could not be started. |
+| `5` | `api_confirmation_required` — V2 without `--confirm-api-egress`. |
+| `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
+| `7` | `executor_failed` — the command started and exited non-zero. |
+
+Code `1` is not weightclass's; it means the interpreter died on an unhandled
+exception, which is a bug worth reporting.
+
+Code `7` carries the real status in its diagnostic, as
+`{"error": "executor_failed", "executor_exit_code": N}` or, for a command killed
+by a signal, `{"error": "executor_failed", "executor_signal": N}`. A selected
+command inherits standard error, so this diagnostic is always written on a fresh
+line and is the **last line** of standard error — parse that line, not the whole
+stream, which also holds whatever the command itself printed.
+
+A vendor CLI that reports success while declining to do the work still exits
+`0`; weightclass cannot detect that and does not claim to.
+
 Inspect a route before running it:
 
 ```sh
@@ -60,8 +86,15 @@ The built-in routes are intentionally conservative:
   workspace-write sandbox with `model_reasoning_effort` set to `low`, `medium`,
   and `high`. Codex has no dedicated effort flag, so the effort is passed as a
   `-c` configuration override for that one invocation.
-- Claude: `low`, `standard`, and `high` use print mode, manual permissions,
-  no session persistence, and efforts `low`, `medium`, and `high`.
+- Claude: `low`, `standard`, and `high` use print mode, no session persistence,
+  and efforts `low`, `medium`, and `high`. Permissions are `acceptEdits`,
+  because print mode is non-interactive: a permission mode that asks a human
+  has nobody to ask, so every edit is refused while `claude` still exits `0` —
+  the router would report success having changed nothing. `acceptEdits`
+  auto-accepts file edits only, which lets the Claude route change files as the
+  Codex route already could. It does not make the two identical: Codex's
+  `workspace-write` also runs commands, while under `acceptEdits` a non-edit
+  tool still goes to a prompt that print mode cannot answer.
 
 Neither default route pins a model. Model selection stays your reviewed
 policy's decision, expressed inside that policy's `command`; see
@@ -235,6 +268,15 @@ credential management, background execution, or a bundled provider runtime.
   subscription checker, bundled provider runtime, or unattended multi-agent
   supervisor.
 - Policies must be reviewed before use. Do not place secrets in a policy.
+- `wclass route` is not a binding approval of a later `wclass run`. The two
+  commands read the policy independently, so a policy edited in between yields a
+  command that was never reviewed, and weightclass does not detect it. V2 closes
+  this with `route_fingerprint`; V1 has no equivalent. The real boundary is your
+  control of the policy file, plus the built-in routes, which live in code and
+  cannot be swapped. Treat a policy file the way you treat a shell script.
+- A selected command receives the task on standard input and inherits standard
+  output and error. Whatever it does with the task — including writing it
+  somewhere — is outside weightclass's control, and its exit status is its own.
 
 ## Development verification
 

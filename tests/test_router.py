@@ -655,7 +655,7 @@ class CommandLineTests(unittest.TestCase):
                     "--print",
                     "--no-session-persistence",
                     "--permission-mode",
-                    "manual",
+                    "acceptEdits",
                     "--effort",
                     "low",
                 ],
@@ -683,7 +683,7 @@ class CommandLineTests(unittest.TestCase):
                     "--print",
                     "--no-session-persistence",
                     "--permission-mode",
-                    "manual",
+                    "acceptEdits",
                     "--effort",
                     "medium",
                 ],
@@ -911,6 +911,105 @@ class CommandLineTests(unittest.TestCase):
         # codex-low 가 먼저 선언되어 있으므로, 벤더 필터가 없으면 그쪽이 실행된다.
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "claude-worker-ran\n")
+
+    def _run_worker_exiting_with(
+        self, worker_body: str
+    ) -> "subprocess.CompletedProcess[str]":
+        """Run `wclass run` against a worker whose exit status the caller controls."""
+        task = "Fix a typo."
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            worker_path = directory / "worker.py"
+            worker_path.write_text(worker_body, encoding="utf-8")
+            policy_path = directory / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": f"codex-{tier}",
+                                "vendor": "codex",
+                                "tier": tier,
+                                "command": [sys.executable, str(worker_path)],
+                            }
+                            for tier in ("low", "standard", "high")
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            return subprocess.run(
+                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input=task,
+                text=True,
+            )
+
+    def test_reports_a_failing_child_without_colliding_with_router_codes(self) -> None:
+        """Breaks if a child's exit status can be mistaken for a router diagnostic.
+
+        라우터는 2~6을 자신의 진단에 쓴다. 자식이 3으로 죽었을 때 그대로
+        돌려주면 호출자는 unsupported_route 와 구분할 수 없다.
+        """
+        for child_exit_code in (1, 3, 5, 9):
+            with self.subTest(child_exit_code=child_exit_code):
+                result = self._run_worker_exiting_with(
+                    f"import sys\nsys.stdin.buffer.read()\nraise SystemExit({child_exit_code})\n"
+                )
+
+                self.assertEqual(result.returncode, 7)
+                self.assertEqual(
+                    json.loads(result.stderr),
+                    {"error": "executor_failed", "executor_exit_code": child_exit_code},
+                )
+
+    def test_reports_a_child_killed_by_a_signal_as_a_signal(self) -> None:
+        """Breaks if a signal death is folded into an ordinary exit status."""
+        result = self._run_worker_exiting_with(
+            "import os, signal, sys\n"
+            "sys.stdin.buffer.read()\n"
+            "os.kill(os.getpid(), signal.SIGTERM)\n"
+        )
+
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(
+            json.loads(result.stderr),
+            {"error": "executor_failed", "executor_signal": 15},
+        )
+
+    def test_keeps_the_failure_diagnostic_parseable_after_unterminated_child_output(
+        self,
+    ) -> None:
+        """Breaks if the diagnostic can be concatenated onto the child's own stderr.
+
+        자식은 stderr 를 상속받는다. 진행 표시처럼 개행 없이 끝나는 출력 뒤에
+        진단이 그대로 이어붙으면 어떤 파싱으로도 종료 코드를 복구할 수 없다.
+        """
+        result = self._run_worker_exiting_with(
+            "import sys\n"
+            "sys.stdin.buffer.read()\n"
+            "sys.stderr.write('Working...')\n"
+            "raise SystemExit(2)\n"
+        )
+
+        self.assertEqual(result.returncode, 7)
+        self.assertIn("Working...", result.stderr)
+        self.assertEqual(
+            json.loads(result.stderr.splitlines()[-1]),
+            {"error": "executor_failed", "executor_exit_code": 2},
+        )
+
+    def test_passes_through_a_successful_child(self) -> None:
+        """Breaks if a successful run stops reporting success."""
+        result = self._run_worker_exiting_with(
+            "import sys\nsys.stdin.buffer.read()\nprint('done')\n"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "done\n")
+        self.assertEqual(result.stderr, "")
 
     def test_hides_executor_startup_details_when_a_route_command_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
