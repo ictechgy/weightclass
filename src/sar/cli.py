@@ -308,9 +308,14 @@ def route_from_standard_input(policy_path: Path | None, source_vendor: str | Non
     except RouteSelectionError:
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
-    response = {"command": list(route.command), "route": route.route_id, "tier": tier}
-    if source_vendor is not None:
-        response["vendor"] = route.vendor
+    # vendor는 항상 싣는다. 생략하면 정책이 벤더를 바꿔도 리뷰 출력만 봐서는
+    # 어느 벤더로 나가는지 알 수 없다.
+    response = {
+        "command": list(route.command),
+        "route": route.route_id,
+        "tier": tier,
+        "vendor": route.vendor,
+    }
     if route.model is not None:
         response["model"] = route.model
     print(json.dumps(response))

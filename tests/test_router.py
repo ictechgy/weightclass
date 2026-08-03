@@ -114,10 +114,10 @@ class CommandLineTests(unittest.TestCase):
                     {
                         "routes": [
                             {
-                                "id": "codex-low",
-                                "vendor": "codex",
+                                "id": "claude-low",
+                                "vendor": "claude",
                                 "tier": "low",
-                                "command": ["codex", "exec", "-"],
+                                "command": ["claude", "--print", "--effort", "low"],
                             },
                             {
                                 "id": "claude-high",
@@ -146,9 +146,56 @@ class CommandLineTests(unittest.TestCase):
                 "command": ["claude", "--print", "--effort", "high"],
                 "route": "claude-high",
                 "tier": "high",
+                "vendor": "claude",
             },
         )
         self.assertNotIn("authorization", result.stdout)
+
+    def test_refuses_to_leave_the_policy_vendor_when_no_source_vendor_is_given(self) -> None:
+        """Breaks if a tier can silently move a task to a second vendor without opt-in."""
+        mixed_vendor_policy = {
+            "routes": [
+                {
+                    "id": "codex-low",
+                    "vendor": "codex",
+                    "tier": "low",
+                    "command": ["codex", "exec", "-"],
+                },
+                {
+                    "id": "claude-high",
+                    "vendor": "claude",
+                    "tier": "high",
+                    "command": ["claude", "--print", "--effort", "high"],
+                },
+            ]
+        }
+        high_effort_task = "Review the security implications of this authorization change."
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(json.dumps(mixed_vendor_policy), encoding="utf-8")
+            arguments = [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)]
+            blocked = subprocess.run(
+                arguments,
+                capture_output=True,
+                check=False,
+                input=high_effort_task,
+                text=True,
+            )
+            mixed_vendor_policy["allow_mixed_vendors"] = True
+            policy_path.write_text(json.dumps(mixed_vendor_policy), encoding="utf-8")
+            allowed = subprocess.run(
+                arguments,
+                capture_output=True,
+                check=False,
+                input=high_effort_task,
+                text=True,
+            )
+
+        self.assertEqual(blocked.returncode, 3)
+        self.assertEqual(json.loads(blocked.stderr), {"error": "unsupported_route"})
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        self.assertEqual(json.loads(allowed.stdout)["vendor"], "claude")
 
     def test_keeps_a_codex_request_on_its_configured_high_model_when_mixing_is_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -390,7 +437,8 @@ class CommandLineTests(unittest.TestCase):
             },
         )
 
-    def test_routes_a_high_effort_task_to_the_built_in_claude_command(self) -> None:
+    def test_keeps_a_high_effort_task_on_the_default_policy_vendor(self) -> None:
+        """Breaks if omitting --source-vendor lets the high tier switch vendors."""
         result = subprocess.run(
             [sys.executable, "-m", "sar", "route"],
             capture_output=True,
@@ -400,23 +448,11 @@ class CommandLineTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            json.loads(result.stdout),
-            {
-                "command": [
-                    "claude",
-                    "--print",
-                    "--no-session-persistence",
-                    "--permission-mode",
-                    "manual",
-                    "--effort",
-                    "high",
-                ],
-                "route": "claude-high",
-                "tier": "high",
-            },
-        )
-        self.assertNotIn("authorization", result.stdout)
+        rendered = json.loads(result.stdout)
+        self.assertEqual(rendered["tier"], "high")
+        self.assertEqual(rendered["vendor"], "codex")
+        self.assertEqual(rendered["route"], "codex-high")
+        self.assertNotIn("claude", result.stdout)
 
     def test_routes_a_short_spelling_fix_to_the_built_in_workspace_codex_command(self) -> None:
         result = subprocess.run(
@@ -441,6 +477,7 @@ class CommandLineTests(unittest.TestCase):
                 ],
                 "route": "codex-low",
                 "tier": "low",
+                "vendor": "codex",
             },
         )
         self.assertNotIn("typo", result.stdout)
@@ -468,6 +505,7 @@ class CommandLineTests(unittest.TestCase):
                 ],
                 "route": "codex-standard",
                 "tier": "standard",
+                "vendor": "codex",
             },
         )
         self.assertNotIn("formatter", result.stdout)
