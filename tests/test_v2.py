@@ -66,6 +66,32 @@ class V2EgressGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 3)
         self.assertEqual(json.loads(result.stderr), {"error": "unsupported_route"})
 
+    def test_rejects_a_label_carrying_invisible_characters(self) -> None:
+        """Breaks if a V2 label may hold a character the review descriptor cannot show.
+
+        model 과 effort 는 런타임에 argv 로 전달된다. 서로게이트는 exec 단계에서
+        UnicodeEncodeError 로 터지고, 서식 문자는 검토 출력에 드러나지 않는다.
+        """
+        invisible_labels = (
+            "\ud800",  # lone surrogate
+            "a​b",  # zero-width space
+            "a‮b",  # RTL override
+            "ab",  # C1 control
+            "a b",  # NBSP
+        )
+        for label in invisible_labels:
+            with self.subTest(label=ascii(label)):
+                policy = _api_policy()
+                routes = policy["routes"]
+                assert isinstance(routes, list)
+                routes[0]["model"] = label
+
+                result = self._review(policy, sys.executable)
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+                self.assertNotIn("Traceback", result.stderr)
+
     def test_rejects_a_relative_api_runtime_path(self) -> None:
         """Breaks if a runtime can be resolved through the caller's working directory."""
         result = self._review(_api_policy(), "python3")
