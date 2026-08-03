@@ -243,6 +243,18 @@ class TaskConfidentialityTests(unittest.TestCase):
 
 
 class CommandLineTests(unittest.TestCase):
+    def _rendered_route(self, result: "subprocess.CompletedProcess[str]") -> dict:
+        """Parse a `wclass route` descriptor, checking and removing its fingerprint.
+
+        지문 값 자체는 명령·티어·벤더에서 유도되므로 개별 테스트가 리터럴로
+        고정할 필요가 없다. 형태만 확인하고 나머지 필드를 비교하게 한다.
+        """
+        rendered = json.loads(result.stdout)
+        fingerprint = rendered.pop("route_fingerprint")
+        self.assertTrue(fingerprint.startswith("sha256:"), fingerprint)
+        self.assertEqual(len(fingerprint), len("sha256:") + 64)
+        return rendered
+
     def test_classifies_a_short_spelling_fix_as_low_effort(self) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "sar", "classify"],
@@ -355,7 +367,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": ["claude", "--print", "--effort", "high"],
                 "route": "claude-high",
@@ -499,7 +511,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": ["codex", "exec", "--model", "codex-high-label", "-"],
                 "route": "codex-high",
@@ -598,7 +610,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": ["claude", "--print", "--model", "claude-high-label"],
                 "route": "claude-high",
@@ -619,7 +631,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": [
                     "codex",
@@ -648,7 +660,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": [
                     "claude",
@@ -676,7 +688,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": [
                     "claude",
@@ -721,7 +733,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": [
                     "codex",
@@ -752,7 +764,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": [
                     "codex",
@@ -1011,6 +1023,183 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result.stdout, "done\n")
         self.assertEqual(result.stderr, "")
 
+    def test_refuses_to_run_a_route_that_changed_since_it_was_reviewed(self) -> None:
+        """Breaks if an acknowledged native route can be swapped before it runs.
+
+        route 와 run 은 정책을 각각 따로 읽는다. 지문을 제시하면 실행 직전에
+        다시 계산해 비교하므로, 사이에 정책이 바뀌면 실행되지 않아야 한다.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            for name in ("reviewed", "swapped"):
+                (directory / f"{name}.py").write_text(
+                    f"import sys\nsys.stdin.buffer.read()\nprint('{name}-worker')\n",
+                    encoding="utf-8",
+                )
+
+            def write_policy(worker: str) -> None:
+                policy_path.write_text(
+                    json.dumps(
+                        {
+                            "routes": [
+                                {
+                                    "id": f"codex-{tier}",
+                                    "vendor": "codex",
+                                    "tier": tier,
+                                    "command": [sys.executable, str(directory / worker)],
+                                }
+                                for tier in ("low", "standard", "high")
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            write_policy("reviewed.py")
+            review = subprocess.run(
+                [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+            fingerprint = json.loads(review.stdout)["route_fingerprint"]
+
+            accepted = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "sar",
+                    "run",
+                    "--policy",
+                    str(policy_path),
+                    "--ack-route-fingerprint",
+                    fingerprint,
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+            write_policy("swapped.py")
+            refused = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "sar",
+                    "run",
+                    "--policy",
+                    str(policy_path),
+                    "--ack-route-fingerprint",
+                    fingerprint,
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+            unbound = subprocess.run(
+                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(accepted.stdout, "reviewed-worker\n")
+        self.assertEqual(refused.returncode, 6)
+        self.assertEqual(
+            json.loads(refused.stderr), {"error": "route_fingerprint_mismatch"}
+        )
+        self.assertEqual(refused.stdout, "")
+        # 지문을 제시하지 않으면 구속력이 없다는 점도 함께 고정한다.
+        self.assertEqual(unbound.returncode, 0, unbound.stderr)
+        self.assertEqual(unbound.stdout, "swapped-worker\n")
+
+    def test_accepts_a_command_argument_containing_spaces(self) -> None:
+        """Breaks if an install path with spaces or a multi-word flag value is refused."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            spaced_directory = directory / "My Tools"
+            spaced_directory.mkdir()
+            worker_path = spaced_directory / "worker.py"
+            worker_path.write_text(
+                "import sys\n"
+                "sys.stdin.buffer.read()\n"
+                "print(sys.argv[1])\n",
+                encoding="utf-8",
+            )
+            policy_path = directory / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "codex-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": [sys.executable, str(worker_path), "be terse"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "be terse\n")
+
+    def test_rejects_a_command_argument_with_invisible_characters(self) -> None:
+        """Breaks if a token that a reviewer cannot see reaches the executor.
+
+        NUL 은 검증을 통과하면 exec 단계에서 ValueError 로 터져 진단 없이
+        트레이스백을 남긴다. 개행과 앞뒤 공백은 route 출력에서 드러나지 않아
+        검토를 무력화한다.
+        """
+        for argument in ("a\x00b", "a\nb", "a\tb", " /bin/echo", "/bin/echo "):
+            with self.subTest(argument=argument):
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    policy_path = Path(temporary_directory) / "policy.json"
+                    policy_path.write_text(
+                        json.dumps(
+                            {
+                                "routes": [
+                                    {
+                                        "id": "codex-low",
+                                        "vendor": "codex",
+                                        "tier": "low",
+                                        "command": ["/bin/echo", argument],
+                                    }
+                                ]
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    result = subprocess.run(
+                        [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                        capture_output=True,
+                        check=False,
+                        input="Fix a typo.",
+                        text=True,
+                    )
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+                self.assertNotIn("Traceback", result.stderr)
+
     def test_hides_executor_startup_details_when_a_route_command_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
@@ -1086,6 +1275,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stderr)
+        # render 는 태스크를 읽지 않으므로 티어도 지문도 없다.
         self.assertEqual(
             json.loads(result.stdout),
             {

@@ -21,6 +21,7 @@ from .router import (
     RoutingPolicy,
     SUPPORTED_VENDORS,
     DEFAULT_ROUTES,
+    native_route_fingerprint,
     select_route,
     select_tier_route,
 )
@@ -94,7 +95,30 @@ def _require_exact_keys(value: dict[str, Any], expected_keys: set[str]) -> None:
 
 
 def _require_nonempty_string(value: object) -> str:
+    """Require an identifier-like policy value: no whitespace at all."""
     if not isinstance(value, str) or not value or any(character.isspace() for character in value):
+        raise InvalidInputError()
+    return value
+
+
+def _require_command_argument(value: object) -> str:
+    """Require one reviewable argv token.
+
+    명령 인자는 식별자와 규칙이 다르다. 셸을 거치지 않고 argv 로 그대로
+    전달되므로 내부 공백은 위험하지 않고, "/Users/me/My Tools/claude" 같은
+    설치 경로나 여러 단어로 된 플래그 값에는 반드시 필요하다.
+
+    대신 눈에 보이지 않는 문자는 막는다. 제어문자는 wclass route 출력에서
+    드러나지 않아 검토를 무력화하고, NUL 은 검증을 통과한 뒤 exec 단계에서
+    ValueError 로 터져 진단 없이 트레이스백을 남긴다. 앞뒤 공백도 경로를
+    조용히 다른 값으로 만들므로 거부한다.
+    """
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
         raise InvalidInputError()
     return value
 
@@ -126,7 +150,7 @@ def _parse_route(value: object) -> Route:
         route_id=route_id,
         vendor=vendor,
         workflow=workflow,
-        command=tuple(_require_nonempty_string(argument) for argument in command),
+        command=tuple(_require_command_argument(argument) for argument in command),
         tier=tier,
     )
 
@@ -199,6 +223,8 @@ def build_parser() -> argparse.ArgumentParser:
         native = subcommands.add_parser(name, allow_abbrev=False, description=description)
         native.add_argument("--policy", type=Path)
         native.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
+        if name == "run":
+            native.add_argument("--ack-route-fingerprint")
 
     render = subcommands.add_parser(
         "render",
@@ -328,7 +354,7 @@ def select_task_route(
     task: str,
     policy_path: Path | None,
     source_vendor: str | None = None,
-) -> tuple[Tier, Route]:
+) -> tuple[Tier, Route, RoutingPolicy]:
     """Classify a task and select its route without retaining task content."""
     tier = classify_task(task)
     policy = (
@@ -336,18 +362,19 @@ def select_task_route(
         if policy_path is not None
         else RoutingPolicy(DEFAULT_ROUTES)
     )
-    return tier, select_tier_route(
+    route = select_tier_route(
         policy.routes,
         tier,
         source_vendor,
         policy.allow_mixed_vendors,
     )
+    return tier, route, policy
 
 
 def route_from_standard_input(policy_path: Path | None, source_vendor: str | None) -> int:
     """Select and render a command without echoing or persisting the task."""
     try:
-        tier, route = select_task_route(
+        tier, route, policy = select_task_route(
             read_task_from_standard_input(), policy_path, source_vendor
         )
     except InvalidTaskError:
@@ -366,16 +393,30 @@ def route_from_standard_input(policy_path: Path | None, source_vendor: str | Non
         "route": route.route_id,
         "tier": tier,
         "vendor": route.vendor,
+        # 이 지문을 wclass run --ack-route-fingerprint 로 넘기면 검토한 선택이
+        # 실행 직전에 다시 확인된다. 넘기지 않으면 구속력은 없다.
+        "route_fingerprint": native_route_fingerprint(
+            route, tier, source_vendor, policy.allow_mixed_vendors
+        ),
     }
     print(json.dumps(response))
     return 0
 
 
-def run_from_standard_input(policy_path: Path | None, source_vendor: str | None) -> int:
+def run_from_standard_input(
+    policy_path: Path | None,
+    source_vendor: str | None,
+    acknowledged_fingerprint: str | None = None,
+) -> int:
     """Run a selected native command without a shell or output capture."""
     try:
         task = read_task_from_standard_input()
-        _, route = select_task_route(task, policy_path, source_vendor)
+        tier, route, policy = select_task_route(task, policy_path, source_vendor)
+        if acknowledged_fingerprint is not None and acknowledged_fingerprint != (
+            native_route_fingerprint(route, tier, source_vendor, policy.allow_mixed_vendors)
+        ):
+            print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+            return 6
         # text 모드는 로케일 인코딩을 사용하므로 LC_ALL=C 환경에서 비ASCII 태스크가
         # UnicodeEncodeError로 새어 나간다. 자식 출력을 읽지 않으므로 바이트로 전달한다.
         completed_process = subprocess.run(
@@ -438,7 +479,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "route":
         return route_from_standard_input(arguments.policy, arguments.source_vendor)
     if arguments.command == "run":
-        return run_from_standard_input(arguments.policy, arguments.source_vendor)
+        return run_from_standard_input(
+            arguments.policy,
+            arguments.source_vendor,
+            arguments.ack_route_fingerprint,
+        )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
     if arguments.api_command == "route":
