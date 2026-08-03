@@ -20,6 +20,8 @@ Thumbs.db
 .sar/
 .codex/
 .claude/
+.omc/
+.serena/
 logs/
 tmp/
 
