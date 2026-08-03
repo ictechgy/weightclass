@@ -365,6 +365,48 @@ class CommandLineTests(unittest.TestCase):
         )
         self.assertNotIn("authorization", result.stdout)
 
+    def test_pins_the_vendor_to_the_first_tier_route_not_the_first_route(self) -> None:
+        """Breaks if a leading workflow route makes every tier route unselectable.
+
+        workflow 라우트는 티어 선택 후보가 아니다. 벤더 고정 기준에 포함하면
+        workflow 라우트를 먼저 선언한 정책에서 어떤 티어도 매칭되지 않는다.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "claude-review",
+                                "vendor": "claude",
+                                "workflow": "review",
+                                "command": ["claude", "review"],
+                            },
+                            {
+                                "id": "codex-standard",
+                                "vendor": "codex",
+                                "tier": "standard",
+                                "command": ["codex", "exec", "-"],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Add a helper function to the parser.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["route"], "codex-standard")
+        self.assertEqual(json.loads(result.stdout)["vendor"], "codex")
+
     def test_refuses_to_leave_the_policy_vendor_when_no_source_vendor_is_given(self) -> None:
         """Breaks if a tier can silently move a task to a second vendor without opt-in."""
         mixed_vendor_policy = {
