@@ -1,0 +1,7 @@
+{
+  "tool_name": "StructuredOutput",
+  "tool_input_preview": "{\"verdicts\":[{\"title\":\"docs/integrations.md still tells integrators that reviewing a route does not bind a later run, and never mentions --ack-route-fingerprint\",\"status\":\"OVERSTATED\",\"corrected_sever...",
+  "error": "Output does not match required schema: /verdicts/0: must NOT have additional properties, /verdicts/1: must NOT have additional properties, /verdicts/2: must NOT have additional properties, /verdicts/3: must NOT have additional properties",
+  "timestamp": "2026-08-03T03:11:44.290Z",
+  "retry_count": 1
+}

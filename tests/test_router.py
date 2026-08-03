@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -5,8 +7,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from sar.router import DEFAULT_ROUTES, Route, RouteRequest, select_route
+from weightclass import cli
+from weightclass.router import DEFAULT_ROUTES, Route, RouteRequest, select_route
 
 
 class DefaultRouteTests(unittest.TestCase):
@@ -14,9 +18,7 @@ class DefaultRouteTests(unittest.TestCase):
         """Breaks if a vendor's tiers collapse back to one indistinguishable command."""
         for vendor in ("codex", "claude"):
             with self.subTest(vendor=vendor):
-                commands = [
-                    route.command for route in DEFAULT_ROUTES if route.vendor == vendor
-                ]
+                commands = [route.command for route in DEFAULT_ROUTES if route.vendor == vendor]
 
                 self.assertEqual(len(commands), 3)
                 self.assertEqual(len(set(commands)), 3)
@@ -39,9 +41,7 @@ class SelectRouteTests(unittest.TestCase):
             ),
         )
 
-        selected_route = select_route(
-            routes, RouteRequest(vendor="codex", workflow="review")
-        )
+        selected_route = select_route(routes, RouteRequest(vendor="codex", workflow="review"))
 
         self.assertEqual(selected_route.route_id, "codex-review")
         self.assertEqual(
@@ -50,11 +50,58 @@ class SelectRouteTests(unittest.TestCase):
         )
 
 
+class ExecutorSpawnFailureTests(unittest.TestCase):
+    """spawn 단계 방어선은 검증기가 이미 막고 있어 CLI 로는 도달할 수 없다.
+
+    검증 규칙에 빈틈이 생기면 그때 이 경로가 트레이스백 대신 진단을 내야 하므로,
+    subprocess 를 직접 실패시켜 단위로 확인한다.
+    """
+
+    def _assert_maps_to_executor_unavailable(self, raised: Exception) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "codex-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": ["/bin/echo", "ok"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            errors = io.StringIO()
+            with (
+                mock.patch("weightclass.cli.subprocess.run", side_effect=raised),
+                mock.patch(
+                    "weightclass.cli.read_task_from_standard_input", return_value="Fix a typo."
+                ),
+                contextlib.redirect_stderr(errors),
+            ):
+                exit_code = cli.run_from_standard_input(policy_path, None)
+
+        self.assertEqual(exit_code, 4)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_unavailable"})
+
+    def test_maps_an_argv_encoding_failure_to_a_redacted_diagnostic(self) -> None:
+        """Breaks if a validator gap can reach exec and raise instead of failing closed."""
+        self._assert_maps_to_executor_unavailable(ValueError("embedded null byte"))
+
+    def test_maps_a_missing_executable_to_a_redacted_diagnostic(self) -> None:
+        """Breaks if the pre-existing OSError path stops being handled."""
+        self._assert_maps_to_executor_unavailable(FileNotFoundError("no such file"))
+
+
 class CommandSurfaceTests(unittest.TestCase):
     def test_help_lists_every_reachable_subcommand(self) -> None:
         """Breaks if a mode becomes undiscoverable from the command line."""
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "--help"],
+            [sys.executable, "-m", "weightclass", "--help"],
             capture_output=True,
             check=False,
             text=True,
@@ -68,7 +115,7 @@ class CommandSurfaceTests(unittest.TestCase):
     def test_rejects_a_version_query_carrying_extra_arguments(self) -> None:
         """Breaks if --version exits successfully without validating the rest of argv."""
         accepted = subprocess.run(
-            [sys.executable, "-m", "sar", "--version"],
+            [sys.executable, "-m", "weightclass", "--version"],
             capture_output=True,
             check=False,
             text=True,
@@ -79,7 +126,7 @@ class CommandSurfaceTests(unittest.TestCase):
         for extra in (["--definitely-invalid"], ["classify"]):
             with self.subTest(extra=extra):
                 result = subprocess.run(
-                    [sys.executable, "-m", "sar", "--version", *extra],
+                    [sys.executable, "-m", "weightclass", "--version", *extra],
                     capture_output=True,
                     check=False,
                     input="",
@@ -126,7 +173,7 @@ class CommandSurfaceTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "run",
                     "--policy",
@@ -222,14 +269,20 @@ class TaskConfidentialityTests(unittest.TestCase):
                 ["route", "--policy", "/nonexistent/policy.json"],
                 ["run", "--policy", str(native_policy_path)],
                 ["run", "--policy", "/nonexistent/policy.json"],
-                ["render", "--policy", "/nonexistent/p.json", "--descriptor", "/nonexistent/d.json"],
+                [
+                    "render",
+                    "--policy",
+                    "/nonexistent/p.json",
+                    "--descriptor",
+                    "/nonexistent/d.json",
+                ],
                 ["v2", "route", *api_arguments],
                 ["v2", "run", *api_arguments],
                 ["v2", "run", *api_arguments, "--confirm-api-egress"],
             ):
                 with self.subTest(arguments=arguments):
                     result = subprocess.run(
-                        [sys.executable, "-m", "sar", *arguments],
+                        [sys.executable, "-m", "weightclass", *arguments],
                         capture_output=True,
                         check=False,
                         input=task,
@@ -243,9 +296,21 @@ class TaskConfidentialityTests(unittest.TestCase):
 
 
 class CommandLineTests(unittest.TestCase):
+    def _rendered_route(self, result: "subprocess.CompletedProcess[str]") -> dict[str, object]:
+        """Parse a `wclass route` descriptor, checking and removing its fingerprint.
+
+        지문 값 자체는 명령·티어·벤더에서 유도되므로 개별 테스트가 리터럴로
+        고정할 필요가 없다. 형태만 확인하고 나머지 필드를 비교하게 한다.
+        """
+        rendered: dict[str, object] = json.loads(result.stdout)
+        fingerprint = str(rendered.pop("route_fingerprint"))
+        self.assertTrue(fingerprint.startswith("sha256:"), fingerprint)
+        self.assertEqual(len(fingerprint), len("sha256:") + 64)
+        return rendered
+
     def test_classifies_a_short_spelling_fix_as_low_effort(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "classify"],
+            [sys.executable, "-m", "weightclass", "classify"],
             capture_output=True,
             check=False,
             input="Fix a spelling typo in the README heading.",
@@ -258,7 +323,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_rejects_an_empty_task_with_a_redacted_diagnostic(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "classify"],
+            [sys.executable, "-m", "weightclass", "classify"],
             capture_output=True,
             check=False,
             input="",
@@ -273,7 +338,7 @@ class CommandLineTests(unittest.TestCase):
         for arguments in (["classify"], ["route"], ["run"]):
             with self.subTest(arguments=arguments):
                 result = subprocess.run(
-                    [sys.executable, "-m", "sar", *arguments],
+                    [sys.executable, "-m", "weightclass", *arguments],
                     capture_output=True,
                     check=False,
                     input=b"\x80\x81",
@@ -290,13 +355,13 @@ class CommandLineTests(unittest.TestCase):
         통과하지만 바이트 상한은 넘는 입력을 만들 수 있다. 이 입력이 통과하면
         바이트 경계가 사라진 것이다.
         """
-        from sar.classification import MAX_TASK_BYTES, MAX_TASK_CHARACTERS
+        from weightclass.classification import MAX_TASK_BYTES, MAX_TASK_CHARACTERS
 
         oversized = b"a" * MAX_TASK_CHARACTERS
         oversized += b" " * (MAX_TASK_BYTES + 1 - len(oversized))
 
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "classify"],
+            [sys.executable, "-m", "weightclass", "classify"],
             capture_output=True,
             check=False,
             input=oversized,
@@ -308,7 +373,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_classifies_a_security_task_as_high_effort(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "classify"],
+            [sys.executable, "-m", "weightclass", "classify"],
             capture_output=True,
             check=False,
             input="Review the authorization boundary for this endpoint.",
@@ -346,7 +411,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Review the security implications of this authorization change.",
@@ -355,7 +420,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": ["claude", "--print", "--effort", "high"],
                 "route": "claude-high",
@@ -396,7 +461,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Add a helper function to the parser.",
@@ -409,7 +474,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_refuses_to_leave_the_policy_vendor_when_no_source_vendor_is_given(self) -> None:
         """Breaks if a tier can silently move a task to a second vendor without opt-in."""
-        mixed_vendor_policy = {
+        mixed_vendor_policy: dict[str, object] = {
             "routes": [
                 {
                     "id": "codex-low",
@@ -430,7 +495,7 @@ class CommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             policy_path = Path(temporary_directory) / "policy.json"
             policy_path.write_text(json.dumps(mixed_vendor_policy), encoding="utf-8")
-            arguments = [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)]
+            arguments = [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)]
             blocked = subprocess.run(
                 arguments,
                 capture_output=True,
@@ -453,7 +518,9 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
         self.assertEqual(json.loads(allowed.stdout)["vendor"], "claude")
 
-    def test_keeps_a_codex_request_on_its_configured_high_route_when_mixing_is_disabled(self) -> None:
+    def test_keeps_a_codex_request_on_its_configured_high_route_when_mixing_is_disabled(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path = directory / "policy.json"
@@ -484,7 +551,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "route",
                     "--policy",
                     str(policy_path),
@@ -499,7 +566,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": ["codex", "exec", "--model", "codex-high-label", "-"],
                 "route": "codex-high",
@@ -541,7 +608,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "route", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Review the authorization boundary.",
@@ -583,7 +650,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "route",
                     "--policy",
                     str(policy_path),
@@ -598,7 +665,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": ["claude", "--print", "--model", "claude-high-label"],
                 "route": "claude-high",
@@ -610,7 +677,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_codex_high_task_to_the_built_in_codex_high_route(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route", "--source-vendor", "codex"],
+            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
             capture_output=True,
             check=False,
             input="Review the security implications of this authorization change.",
@@ -619,7 +686,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": [
                     "codex",
@@ -639,7 +706,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_claude_low_task_to_the_built_in_claude_low_route(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route", "--source-vendor", "claude"],
+            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "claude"],
             capture_output=True,
             check=False,
             input="Fix a typo.",
@@ -648,7 +715,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": [
                     "claude",
@@ -667,7 +734,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_claude_standard_task_to_the_built_in_claude_standard_route(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route", "--source-vendor", "claude"],
+            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "claude"],
             capture_output=True,
             check=False,
             input="Add a focused unit test for this formatter.",
@@ -676,7 +743,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": [
                     "claude",
@@ -696,7 +763,7 @@ class CommandLineTests(unittest.TestCase):
     def test_keeps_a_high_effort_task_on_the_default_policy_vendor(self) -> None:
         """Breaks if omitting --source-vendor lets the high tier switch vendors."""
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route"],
+            [sys.executable, "-m", "weightclass", "route"],
             capture_output=True,
             check=False,
             input="Assess the security boundary for the new authorization flow.",
@@ -712,7 +779,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_short_spelling_fix_to_the_built_in_workspace_codex_command(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route"],
+            [sys.executable, "-m", "weightclass", "route"],
             capture_output=True,
             check=False,
             input="Fix a typo.",
@@ -721,7 +788,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": [
                     "codex",
@@ -743,7 +810,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_general_task_to_the_built_in_workspace_codex_command(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "sar", "route"],
+            [sys.executable, "-m", "weightclass", "route"],
             capture_output=True,
             check=False,
             input="Add a focused unit test for this formatter.",
@@ -752,7 +819,7 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            json.loads(result.stdout),
+            self._rendered_route(result),
             {
                 "command": [
                     "codex",
@@ -802,7 +869,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Fix a typo.",
@@ -847,11 +914,11 @@ class CommandLineTests(unittest.TestCase):
             # LC_ALL=C 는 cron, systemd, Docker, CI 러너에서 흔한 기본값이다.
             ascii_only_environment = dict(os.environ, LC_ALL="C", PYTHONUTF8="0")
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 env=ascii_only_environment,
-                input="개인정보 처리 방침 오타 수정".encode("utf-8"),
+                input="개인정보 처리 방침 오타 수정".encode(),
             )
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -868,9 +935,7 @@ class CommandLineTests(unittest.TestCase):
             for vendor in ("codex", "claude"):
                 worker_path = directory / f"{vendor}_worker.py"
                 worker_path.write_text(
-                    "import sys\n"
-                    "sys.stdin.read()\n"
-                    f"print('{vendor}-worker-ran')\n",
+                    f"import sys\nsys.stdin.read()\nprint('{vendor}-worker-ran')\n",
                     encoding="utf-8",
                 )
                 workers[vendor] = worker_path
@@ -895,7 +960,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "run",
                     "--policy",
                     str(policy_path),
@@ -912,9 +977,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "claude-worker-ran\n")
 
-    def _run_worker_exiting_with(
-        self, worker_body: str
-    ) -> "subprocess.CompletedProcess[str]":
+    def _run_worker_exiting_with(self, worker_body: str) -> "subprocess.CompletedProcess[str]":
         """Run `wclass run` against a worker whose exit status the caller controls."""
         task = "Fix a typo."
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -940,7 +1003,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             return subprocess.run(
-                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input=task,
@@ -1011,6 +1074,332 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result.stdout, "done\n")
         self.assertEqual(result.stderr, "")
 
+    def test_refuses_to_run_a_route_that_changed_since_it_was_reviewed(self) -> None:
+        """Breaks if an acknowledged native route can be swapped before it runs.
+
+        route 와 run 은 정책을 각각 따로 읽는다. 지문을 제시하면 실행 직전에
+        다시 계산해 비교하므로, 사이에 정책이 바뀌면 실행되지 않아야 한다.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            for name in ("reviewed", "swapped"):
+                (directory / f"{name}.py").write_text(
+                    f"import sys\nsys.stdin.buffer.read()\nprint('{name}-worker')\n",
+                    encoding="utf-8",
+                )
+
+            def write_policy(worker: str) -> None:
+                policy_path.write_text(
+                    json.dumps(
+                        {
+                            "routes": [
+                                {
+                                    "id": f"codex-{tier}",
+                                    "vendor": "codex",
+                                    "tier": tier,
+                                    "command": [sys.executable, str(directory / worker)],
+                                }
+                                for tier in ("low", "standard", "high")
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            write_policy("reviewed.py")
+            review = subprocess.run(
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+            fingerprint = json.loads(review.stdout)["route_fingerprint"]
+
+            accepted = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "run",
+                    "--policy",
+                    str(policy_path),
+                    "--ack-route-fingerprint",
+                    fingerprint,
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+            write_policy("swapped.py")
+            refused = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "run",
+                    "--policy",
+                    str(policy_path),
+                    "--ack-route-fingerprint",
+                    fingerprint,
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+            unbound = subprocess.run(
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(accepted.stdout, "reviewed-worker\n")
+        self.assertEqual(refused.returncode, 6)
+        self.assertEqual(json.loads(refused.stderr), {"error": "route_fingerprint_mismatch"})
+        self.assertEqual(refused.stdout, "")
+        # 지문을 제시하지 않으면 구속력이 없다는 점도 함께 고정한다.
+        self.assertEqual(unbound.returncode, 0, unbound.stderr)
+        self.assertEqual(unbound.stdout, "swapped-worker\n")
+
+    def test_binds_every_field_the_fingerprint_claims_to_cover(self) -> None:
+        """Breaks if a bound field is dropped from the fingerprint.
+
+        명령만 바꿔 검증하면 route id 나 allow_mixed_vendors 가 지문에서 빠져도
+        테스트가 통과한다. 명령을 동일하게 둔 채 나머지 필드를 하나씩 바꾼다.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            worker_path = directory / "worker.py"
+            worker_path.write_text(
+                "import sys\nsys.stdin.buffer.read()\nprint('ran')\n", encoding="utf-8"
+            )
+            shared_command = [sys.executable, str(worker_path)]
+            policy_path = directory / "policy.json"
+
+            def write_policy(prefix: str, allow_mixed_vendors: bool) -> None:
+                policy_path.write_text(
+                    json.dumps(
+                        {
+                            "allow_mixed_vendors": allow_mixed_vendors,
+                            "routes": [
+                                {
+                                    "id": f"{prefix}-{tier}",
+                                    "vendor": "codex",
+                                    "tier": tier,
+                                    "command": shared_command,
+                                }
+                                for tier in ("low", "standard", "high")
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            def route_fingerprint_for(task: str) -> str:
+                review = subprocess.run(
+                    [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                    capture_output=True,
+                    check=False,
+                    input=task,
+                    text=True,
+                )
+                self.assertEqual(review.returncode, 0, review.stderr)
+                return str(json.loads(review.stdout)["route_fingerprint"])
+
+            def run_with(task: str, fingerprint: str) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "weightclass",
+                        "run",
+                        "--policy",
+                        str(policy_path),
+                        "--ack-route-fingerprint",
+                        fingerprint,
+                    ],
+                    capture_output=True,
+                    check=False,
+                    input=task,
+                    text=True,
+                )
+
+            def write_single_vendor_policy(vendor: str) -> None:
+                policy_path.write_text(
+                    json.dumps(
+                        {
+                            "routes": [
+                                {
+                                    "id": "shared-low",
+                                    "vendor": vendor,
+                                    "tier": "low",
+                                    "command": shared_command,
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            write_policy("codex", allow_mixed_vendors=False)
+            baseline = route_fingerprint_for("Fix a typo.")
+
+            # 0. 벤더만 다르다. route id 와 명령은 글자 그대로 같다.
+            write_single_vendor_policy("codex")
+            vendor_baseline = route_fingerprint_for("Fix a typo.")
+            write_single_vendor_policy("claude")
+            other_vendor = run_with("Fix a typo.", vendor_baseline)
+
+            # 1. route id 만 다르다. 명령은 글자 그대로 같다.
+            write_policy("renamed", allow_mixed_vendors=False)
+            renamed_id = run_with("Fix a typo.", baseline)
+
+            # 2. allow_mixed_vendors 만 다르다.
+            write_policy("codex", allow_mixed_vendors=True)
+            flipped_mixing = run_with("Fix a typo.", baseline)
+
+            # 3. 티어만 다르다. 세 티어의 명령이 모두 같으므로 명령은 동일하다.
+            write_policy("codex", allow_mixed_vendors=False)
+            other_tier = run_with("Review the authorization boundary.", baseline)
+
+            unchanged = run_with("Fix a typo.", baseline)
+
+        for label, result in (
+            ("vendor", other_vendor),
+            ("route id", renamed_id),
+            ("allow_mixed_vendors", flipped_mixing),
+            ("tier", other_tier),
+        ):
+            with self.subTest(changed=label):
+                self.assertEqual(result.returncode, 6)
+                self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+        self.assertEqual(unchanged.returncode, 0, unchanged.stderr)
+
+    def test_reproduces_its_fingerprint_from_the_rendered_route_alone(self) -> None:
+        """Breaks if the fingerprint binds an input the review descriptor never shows.
+
+        검토자가 route 출력만으로 지문을 재현할 수 없으면 감사할 수 없고,
+        동일한 선택이 거부되는 오탐이 생긴다.
+        """
+        task = "Fix a typo."
+        without_vendor = subprocess.run(
+            [sys.executable, "-m", "weightclass", "route"],
+            capture_output=True,
+            check=False,
+            input=task,
+            text=True,
+        )
+        with_vendor = subprocess.run(
+            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
+            capture_output=True,
+            check=False,
+            input=task,
+            text=True,
+        )
+
+        self.assertEqual(without_vendor.returncode, 0, without_vendor.stderr)
+        self.assertEqual(with_vendor.returncode, 0, with_vendor.stderr)
+        self.assertEqual(json.loads(without_vendor.stdout), json.loads(with_vendor.stdout))
+
+    def test_accepts_a_command_argument_containing_spaces(self) -> None:
+        """Breaks if an install path with spaces or a multi-word flag value is refused."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            spaced_directory = directory / "My Tools"
+            spaced_directory.mkdir()
+            worker_path = spaced_directory / "worker.py"
+            worker_path.write_text(
+                "import sys\nsys.stdin.buffer.read()\nprint(sys.argv[1])\n",
+                encoding="utf-8",
+            )
+            policy_path = directory / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "codex-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": [sys.executable, str(worker_path), "be terse"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "be terse\n")
+
+    def test_rejects_a_command_argument_with_invisible_characters(self) -> None:
+        """Breaks if a token that a reviewer cannot see reaches the executor.
+
+        NUL 은 검증을 통과하면 exec 단계에서 ValueError 로 터져 진단 없이
+        트레이스백을 남긴다. 개행과 앞뒤 공백은 route 출력에서 드러나지 않아
+        검토를 무력화한다.
+        """
+        invisible_arguments = (
+            "a\x00b",  # NUL: 검증을 통과하면 exec 에서 ValueError 로 터진다
+            "a\nb",  # 개행
+            "a\tb",  # 탭
+            "a\x1bb",  # ESC (C0)
+            "a\x9bb",  # CSI (C1)
+            "\ud800",  # lone surrogate: exec 에서 UnicodeEncodeError
+            "a\u200bb",  # zero-width space
+            "a\u202eb",  # RTL override
+            "a\u00a0b",  # NBSP: 스페이스로 보이지만 다른 인자
+            " /bin/echo",  # 앞 공백
+            "/bin/echo ",  # 뒤 공백
+        )
+        for argument in invisible_arguments:
+            with self.subTest(argument=argument):
+                with tempfile.TemporaryDirectory() as temporary_directory:
+                    policy_path = Path(temporary_directory) / "policy.json"
+                    policy_path.write_text(
+                        json.dumps(
+                            {
+                                "routes": [
+                                    {
+                                        "id": "codex-low",
+                                        "vendor": "codex",
+                                        "tier": "low",
+                                        "command": ["/bin/echo", argument],
+                                    }
+                                ]
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    result = subprocess.run(
+                        [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
+                        capture_output=True,
+                        check=False,
+                        input="Fix a typo.",
+                        text=True,
+                    )
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+                self.assertNotIn("Traceback", result.stderr)
+
     def test_hides_executor_startup_details_when_a_route_command_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
@@ -1033,7 +1422,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 input="Fix a typo.",
@@ -1073,7 +1462,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "render",
                     "--policy",
                     str(policy_path),
@@ -1086,6 +1475,7 @@ class CommandLineTests(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stderr)
+        # render 는 태스크를 읽지 않으므로 티어도 지문도 없다.
         self.assertEqual(
             json.loads(result.stdout),
             {
@@ -1123,7 +1513,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "render",
                     "--policy",
                     str(policy_path),
@@ -1174,7 +1564,7 @@ class CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "render",
                     "--policy",
                     str(policy_path),

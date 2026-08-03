@@ -1,6 +1,6 @@
 import unittest
 
-from sar.classification import (
+from weightclass.classification import (
     HIGH_SIGNALS,
     HIGH_TASK_CHARACTERS,
     LOW_TASK_CHARACTERS,
