@@ -1,6 +1,8 @@
 import unittest
 
 from weightclass.classification import (
+    HIGH_SIGNAL_INFLECTIONS,
+    HIGH_SIGNAL_NO_INFLECTION_RATIONALE,
     HIGH_SIGNALS,
     HIGH_TASK_CHARACTERS,
     LOW_TASK_CHARACTERS,
@@ -12,6 +14,42 @@ from weightclass.classification import (
 
 class SignalInflectionTests(unittest.TestCase):
     """굴절형이 시그널에서 빠져나가면 위험한 작업이 싼 티어로 떨어진다."""
+
+    def test_every_ascii_high_signal_has_a_reviewed_inflection_entry(self) -> None:
+        """Breaks if a HIGH signal is added without deciding its non-derivable forms.
+
+        복수형 루프는 이 결함을 원리상 잡을 수 없다. 접미사 규칙이 이미 처리하는
+        형태만 검사하기 때문이다. "deployment" 에서 "deploy" 를 규칙으로 유도할
+        방법이 없으므로, 어형은 표로 못박고 그 표의 완전성을 여기서 강제한다.
+        """
+        ascii_signals = {signal for signal in HIGH_SIGNALS if signal.isascii()}
+
+        self.assertEqual(set(HIGH_SIGNAL_INFLECTIONS), ascii_signals)
+        # 빈 튜플은 결정이어야 한다. 이유가 없으면 나중에 누군가 오탐을 채워 넣는다.
+        self.assertEqual(
+            {signal for signal, forms in HIGH_SIGNAL_INFLECTIONS.items() if not forms},
+            set(HIGH_SIGNAL_NO_INFLECTION_RATIONALE),
+        )
+
+    def test_declared_inflections_actually_reach_the_high_tier(self) -> None:
+        """Breaks if an inflection is listed but never wired into the pattern."""
+        for signal, forms in sorted(HIGH_SIGNAL_INFLECTIONS.items()):
+            for form in forms:
+                with self.subTest(signal=signal, form=form):
+                    self.assertEqual(classify_task(f"Please handle the {form} here."), "high")
+
+    def test_excluded_inflections_stay_out_of_the_high_tier(self) -> None:
+        """Breaks if a form excluded for false positives gets added anyway."""
+        excluded_but_ordinary = {
+            "Make this method private.": "privacy",
+            "Pay attention to the import order.": "payment",
+            "Produce the weekly report.": "production",
+        }
+
+        for task, signal in excluded_but_ordinary.items():
+            with self.subTest(signal=signal):
+                self.assertIn(signal, HIGH_SIGNAL_NO_INFLECTION_RATIONALE)
+                self.assertNotEqual(classify_task(task), "high")
 
     def test_every_ascii_high_signal_survives_its_plural(self) -> None:
         for signal in sorted(HIGH_SIGNALS):
