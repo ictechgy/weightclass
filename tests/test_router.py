@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -57,6 +58,35 @@ class CommandLineTests(unittest.TestCase):
             check=False,
             input="",
             text=True,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
+
+    def test_rejects_invalid_utf8_stdin_with_a_redacted_diagnostic(self) -> None:
+        """Breaks if undecodable input produces a traceback instead of failing closed."""
+        for arguments in (["classify"], ["route"], ["run"]):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [sys.executable, "-m", "sar", *arguments],
+                    capture_output=True,
+                    check=False,
+                    input=b"\x80\x81",
+                )
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
+                self.assertNotIn(b"Traceback", result.stderr)
+
+    def test_rejects_oversized_stdin_without_buffering_the_whole_stream(self) -> None:
+        """Breaks if the byte bound stops guarding the classifier's character limit."""
+        from sar.classification import MAX_TASK_BYTES
+
+        result = subprocess.run(
+            [sys.executable, "-m", "sar", "classify"],
+            capture_output=True,
+            check=False,
+            input=b"a" * (MAX_TASK_BYTES + 1),
         )
 
         self.assertEqual(result.returncode, 2)
@@ -444,6 +474,52 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "worker-received-task\n")
         self.assertNotIn("Fix a typo.", result.stdout)
+
+    def test_passes_a_non_ascii_task_to_the_child_under_a_non_utf8_locale(self) -> None:
+        """Breaks if a task's characters can leak through a locale encoding error."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            worker_path = directory / "worker.py"
+            worker_path.write_text(
+                "import sys\n"
+                "task = sys.stdin.buffer.read().decode('utf-8')\n"
+                "if task == '개인정보 처리 방침 오타 수정':\n"
+                "    print('worker-received-task')\n"
+                "else:\n"
+                "    raise SystemExit(9)\n",
+                encoding="utf-8",
+            )
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "codex-high",
+                                "vendor": "codex",
+                                "tier": "high",
+                                "command": [sys.executable, str(worker_path)],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            # LC_ALL=C 는 cron, systemd, Docker, CI 러너에서 흔한 기본값이다.
+            ascii_only_environment = dict(os.environ, LC_ALL="C", PYTHONUTF8="0")
+            result = subprocess.run(
+                [sys.executable, "-m", "sar", "run", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                env=ascii_only_environment,
+                input="개인정보 처리 방침 오타 수정".encode("utf-8"),
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, b"worker-received-task\n")
+        self.assertNotIn(b"UnicodeEncodeError", result.stderr)
+        self.assertNotIn(b"Traceback", result.stderr)
 
     def test_hides_executor_startup_details_when_a_route_command_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

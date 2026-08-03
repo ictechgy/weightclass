@@ -7,7 +7,12 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence, cast
 
-from .classification import InvalidTaskError, Tier, classify_task
+from .classification import (
+    InvalidTaskError,
+    Tier,
+    classify_task,
+    read_task_from_standard_input,
+)
 from .router import (
     Route,
     RouteRequest,
@@ -20,9 +25,7 @@ from .router import (
 )
 from .v2 import (
     V2InvalidInputError,
-    V2InvalidTaskError,
     load_api_policy,
-    read_task_from_standard_input,
     render_api_route,
     route_fingerprint,
     select_api_route,
@@ -186,9 +189,6 @@ def v2_route_from_standard_input(
         task = read_task_from_standard_input()
         policy = load_api_policy(policy_path)
         tier, route = select_api_route(task, policy, source_vendor)
-    except V2InvalidTaskError:
-        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
-        return 2
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
@@ -215,9 +215,6 @@ def v2_run_from_standard_input(
         task = read_task_from_standard_input()
         policy = load_api_policy(policy_path)
         tier, route = select_api_route(task, policy, source_vendor)
-    except V2InvalidTaskError:
-        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
-        return 2
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
@@ -241,6 +238,8 @@ def v2_run_from_standard_input(
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
     try:
+        # 로케일 인코딩을 쓰는 text 모드는 비ASCII 태스크에서 UnicodeEncodeError를 내고,
+        # 그 예외 메시지가 태스크 문자와 위치를 진단에 노출한다. 항상 UTF-8 바이트로 넘긴다.
         completed_process = subprocess.run(
             (
                 str(runtime_path),
@@ -252,8 +251,7 @@ def v2_run_from_standard_input(
                 route.effort,
             ),
             check=False,
-            input=task,
-            text=True,
+            input=task.encode("utf-8"),
         )
     except OSError:
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
@@ -264,7 +262,7 @@ def v2_run_from_standard_input(
 def classify_from_standard_input() -> int:
     """Classify a task read from stdin without echoing or persisting it."""
     try:
-        tier = classify_task(sys.stdin.read())
+        tier = classify_task(read_task_from_standard_input())
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
@@ -295,7 +293,9 @@ def select_task_route(
 def route_from_standard_input(policy_path: Path | None, source_vendor: str | None) -> int:
     """Select and render a command without echoing or persisting the task."""
     try:
-        tier, route = select_task_route(sys.stdin.read(), policy_path, source_vendor)
+        tier, route = select_task_route(
+            read_task_from_standard_input(), policy_path, source_vendor
+        )
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
@@ -316,14 +316,15 @@ def route_from_standard_input(policy_path: Path | None, source_vendor: str | Non
 
 def run_from_standard_input(policy_path: Path | None, source_vendor: str | None) -> int:
     """Run a selected native command without a shell or output capture."""
-    task = sys.stdin.read()
     try:
+        task = read_task_from_standard_input()
         _, route = select_task_route(task, policy_path, source_vendor)
+        # text 모드는 로케일 인코딩을 사용하므로 LC_ALL=C 환경에서 비ASCII 태스크가
+        # UnicodeEncodeError로 새어 나간다. 자식 출력을 읽지 않으므로 바이트로 전달한다.
         completed_process = subprocess.run(
             route.command,
             check=False,
-            input=task,
-            text=True,
+            input=task.encode("utf-8"),
         )
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
