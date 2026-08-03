@@ -21,7 +21,7 @@ _Last updated: 2026-08-03 by Claude Code_
 
 ## Completed
 
-- Contract-hardening pass on branch `fix/router-contract-hardening` (7 commits).
+- Contract-hardening pass on branch `fix/router-contract-hardening` (PR #1).
   An audit found that several documented guarantees were not upheld:
   - Task text is now read as bounded UTF-8 bytes and handed to the child as
     UTF-8 bytes. Previously invalid UTF-8 produced a traceback instead of a
@@ -37,9 +37,9 @@ _Last updated: 2026-08-03 by Claude Code_
     haiku`, while legitimate `--model=opus` and `-c model=X` forms were refused.
     Verifying a label properly needs vendor CLI semantics the tool declines to
     assert, so the model is declared once, inside `command`.
-  - Vendor is pinned even without `--source-vendor` (to the first declared
-    route's vendor), and `vendor` is always present in `wclass route` output.
-    Previously the high tier silently crossed to a second vendor.
+  - Vendor is pinned even without `--source-vendor` (to the vendor of the first
+    declared tier route), and `vendor` is always present in `wclass route`
+    output. Previously the high tier silently crossed to a second vendor.
   - Built-in Codex routes differentiate tiers via
     `-c model_reasoning_effort=low|medium|high`; all three were identical.
   - ASCII classification signals match on word boundaries for both tiers, and
@@ -88,7 +88,9 @@ _Last updated: 2026-08-03 by Claude Code_
   or include it in diagnostics.
 - `--source-vendor codex|claude` is explicit. Native routes remain on their
   source vendor unless a reviewed policy sets `allow_mixed_vendors: true`.
-- Model and effort labels are opaque, user-reviewed policy values. Never infer
+- Model and effort arguments are opaque, user-reviewed values that live inside
+  a policy route's `command`. A route carries no separate `model` label, since
+  the tool cannot verify one without asserting vendor CLI semantics. Never infer
   entitlement, pricing, remaining usage, or model availability.
 - V2 permits only declarative `openai`/`anthropic` API routes. It needs both
   `--confirm-api-egress` and the exact reviewed fingerprint. The runtime stays
@@ -117,9 +119,12 @@ _Last updated: 2026-08-03 by Claude Code_
   then the installed-CLI check, then the suite against the installed package.
   - Result: all three steps passed; `wclass --version` reports
     `weightclass 0.1.0` from the single `sar.__version__` source.
-- Mutation-checked the new tests by deleting each guard in turn (vendor filter,
-  `allow_api`, model/command agreement, runtime path validation).
-  - Result: every deletion failed at least one test.
+- Mutation-checked the new tests by deleting each guard in turn: vendor filter,
+  vendor pinning on tier routes, `allow_api`, runtime path validation, the
+  stdin byte bound, `allow_abbrev=False`, `--version` exclusivity, signal
+  inflection, and the hyphenated multi-word separator.
+  - Result: every deletion failed at least one test. Two tests that did not
+    were rewritten, and one missing test was added, before this was true.
 - Ran in the runtime repository:
   `PYTHONPATH=src python3 -m unittest discover -s tests`
   - Result: 8 tests passed; fake connections only.
@@ -133,8 +138,9 @@ _Last updated: 2026-08-03 by Claude Code_
 
 ## Blockers & Open Questions
 
-- Inspect the first GitHub Actions runs for both repositories before claiming
-  clean-install CI has passed.
+- Main-repository CI passed on PR #1 for Python 3.10, 3.12, and 3.13
+  (install, installed-CLI check, tests). The runtime repository's first
+  GitHub Actions run has still not been inspected.
 - A package-registry publication, version/tag policy, and release artifacts
   have not been approved or created.
 - Provider model/effort compatibility and actual API behavior remain
