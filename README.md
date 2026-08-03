@@ -157,10 +157,35 @@ available to you.
 }
 ```
 
-The `command` tokens and model labels are opaque policy values. weightclass
-validates their shape but does not assert vendor CLI semantics or subscription
-access. Always run `wclass route` with a representative non-sensitive task to
-inspect a policy before using `wclass run`.
+The `command` tokens are opaque policy values. weightclass validates their shape
+but does not assert vendor CLI semantics or subscription access. Always run
+`wclass route` with a representative non-sensitive task to inspect a policy
+before using `wclass run`.
+
+A token is passed to the selected program as one `argv` entry, without a shell,
+so a token may contain spaces — an install path such as
+`/Users/me/My Tools/claude`, or a multi-word flag value. A token may not contain
+control characters or leading or trailing whitespace, because neither is visible
+in a rendered route and review is the point of rendering it.
+
+## Bind a review to the run it approves
+
+`wclass route` prints a `route_fingerprint` over the selected command, vendor,
+tier, and the policy's `allow_mixed_vendors` setting. Pass it back to bind the
+run to exactly what you reviewed:
+
+```sh
+task='Review this authorization change.'
+fingerprint="$(printf '%s' "$task" | wclass route --policy policy.json \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["route_fingerprint"])')"
+printf '%s' "$task" | wclass run --policy policy.json \
+  --ack-route-fingerprint "$fingerprint"
+```
+
+If the policy, the selected route, or the task's tier changed since the review,
+the run stops with exit `6` and `{"error": "route_fingerprint_mismatch"}` rather
+than executing an unreviewed command. The flag is optional; without it `run`
+simply re-selects from the policy as it finds it.
 
 A route has no separate `model` field, and a policy that declares one is
 rejected. Only `command` is ever executed, and weightclass cannot verify that a
@@ -268,21 +293,30 @@ credential management, background execution, or a bundled provider runtime.
   subscription checker, bundled provider runtime, or unattended multi-agent
   supervisor.
 - Policies must be reviewed before use. Do not place secrets in a policy.
-- `wclass route` is not a binding approval of a later `wclass run`. The two
-  commands read the policy independently, so a policy edited in between yields a
-  command that was never reviewed, and weightclass does not detect it. V2 closes
-  this with `route_fingerprint`; V1 has no equivalent. The real boundary is your
-  control of the policy file, plus the built-in routes, which live in code and
-  cannot be swapped. Treat a policy file the way you treat a shell script.
+- `wclass route` binds a later `wclass run` only when you pass the fingerprint
+  it prints. Without `--ack-route-fingerprint`, the two commands read the policy
+  independently and a policy edited in between yields a command that was never
+  reviewed. Your control of the policy file, plus the built-in routes that live
+  in code and cannot be swapped, is the boundary that always applies. Treat a
+  policy file the way you treat a shell script.
 - A selected command receives the task on standard input and inherits standard
   output and error. Whatever it does with the task — including writing it
   somewhere — is outside weightclass's control, and its exit status is its own.
 
 ## Development verification
 
+weightclass has no runtime dependencies. These development tools are not
+required to use it, only to reproduce what CI checks:
+
 ```sh
 PYTHONPATH=src python3 -m unittest discover -s tests
 PYTHONPATH=src python3 -m compileall -q src
+
+python3 -m pip install ruff mypy build twine
+ruff check src tests
+ruff format --check src tests
+mypy
+python3 -m build && twine check dist/*
 ```
 
 ## License

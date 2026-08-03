@@ -3,7 +3,6 @@
 
 import sys
 
-
 EXPECTED_ARGUMENTS = [
     "--provider",
     "openai",

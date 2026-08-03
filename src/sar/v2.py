@@ -1,15 +1,14 @@
 """Declarative V2 API routing without credential or network access."""
 
-from dataclasses import asdict, dataclass
 import hashlib
 import json
 import os
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final, cast
 
 from .classification import Tier, classify_task
-from .router import RouteSelectionError, SUPPORTED_VENDORS
-
+from .router import SUPPORTED_VENDORS, RouteSelectionError
 
 POLICY_SCHEMA_VERSION: Final = 2
 MAX_POLICY_BYTES: Final = 262_144
@@ -91,10 +90,9 @@ def _parse_route(value: object) -> ApiRoute:
     if not isinstance(eligible_sources, list) or not eligible_sources:
         raise V2InvalidInputError()
     parsed_sources = tuple(_require_label(source) for source in eligible_sources)
-    if (
-        any(source not in SUPPORTED_VENDORS for source in parsed_sources)
-        or len(set(parsed_sources)) != len(parsed_sources)
-    ):
+    if any(source not in SUPPORTED_VENDORS for source in parsed_sources) or len(
+        set(parsed_sources)
+    ) != len(parsed_sources):
         raise V2InvalidInputError()
     provider = _require_label(value["provider"])
     if provider not in SUPPORTED_PROVIDERS:
@@ -123,7 +121,9 @@ def load_api_policy(path: Path) -> ApiRoutingPolicy:
         raise V2InvalidInputError()
     if not isinstance(policy["schema_version"], int) or isinstance(policy["schema_version"], bool):
         raise V2InvalidInputError()
-    if not isinstance(policy["allow_cross_provider"], bool) or not isinstance(policy["allow_api"], bool):
+    if not isinstance(policy["allow_cross_provider"], bool) or not isinstance(
+        policy["allow_api"], bool
+    ):
         raise V2InvalidInputError()
     routes = policy["routes"]
     if not isinstance(routes, list) or not routes:

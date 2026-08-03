@@ -135,7 +135,9 @@ class V2EgressGateTests(unittest.TestCase):
 class V2ExecutorResultTests(unittest.TestCase):
     """V2 도 자식의 종료 상태를 라우터 진단 코드와 섞지 않아야 한다."""
 
-    def _run_acknowledged_route(self, runtime_body: str, task: str = "Fix a typo.") -> subprocess.CompletedProcess[str]:
+    def _run_acknowledged_route(
+        self, runtime_body: str, task: str = "Fix a typo."
+    ) -> subprocess.CompletedProcess[str]:
         """Review and then run a V2 route served by a caller-supplied fake runtime."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)

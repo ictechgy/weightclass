@@ -1,12 +1,11 @@
 """Deterministic route selection for user-reviewable vendor commands."""
 
-from dataclasses import dataclass
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import Final
 
 from .classification import Tier
-
 
 NATIVE_FINGERPRINT_VERSION: Final = 1
 
