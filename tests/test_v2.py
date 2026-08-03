@@ -132,6 +132,94 @@ class V2EgressGateTests(unittest.TestCase):
         self.assertNotIn("unlaunchable-runtime", result.stderr)
 
 
+class V2ExecutorResultTests(unittest.TestCase):
+    """V2 도 자식의 종료 상태를 라우터 진단 코드와 섞지 않아야 한다."""
+
+    def _run_acknowledged_route(self, runtime_body: str, task: str = "Fix a typo.") -> subprocess.CompletedProcess[str]:
+        """Review and then run a V2 route served by a caller-supplied fake runtime."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
+            runtime_path = directory / "fake-runtime"
+            runtime_path.write_text(f"#!{sys.executable}\n{runtime_body}", encoding="utf-8")
+            runtime_path.chmod(runtime_path.stat().st_mode | stat.S_IXUSR)
+            arguments = [
+                sys.executable,
+                "-m",
+                "sar",
+                "v2",
+                "run",
+                "--policy",
+                str(policy_path),
+                "--source-vendor",
+                "codex",
+                "--api-runtime",
+                str(runtime_path),
+            ]
+            review = subprocess.run(
+                arguments[:4] + ["route"] + arguments[5:],
+                capture_output=True,
+                check=False,
+                input=task,
+                text=True,
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+            return subprocess.run(
+                arguments
+                + [
+                    "--confirm-api-egress",
+                    "--ack-route-fingerprint",
+                    json.loads(review.stdout)["route_fingerprint"],
+                ],
+                capture_output=True,
+                check=False,
+                input=task,
+                text=True,
+            )
+
+    def test_reports_a_failing_runtime_without_colliding_with_router_codes(self) -> None:
+        """Breaks if a runtime's exit status can be mistaken for a router diagnostic."""
+        task = "Fix a typo in the glimmerfast heading."
+        for runtime_exit_code in (1, 3, 6):
+            with self.subTest(runtime_exit_code=runtime_exit_code):
+                result = self._run_acknowledged_route(
+                    f"import sys\nsys.stdin.buffer.read()\nraise SystemExit({runtime_exit_code})\n",
+                    task=task,
+                )
+
+                self.assertEqual(result.returncode, 7)
+                self.assertEqual(
+                    json.loads(result.stderr),
+                    {"error": "executor_failed", "executor_exit_code": runtime_exit_code},
+                )
+                self.assertNotIn("glimmerfast", result.stderr)
+
+    def test_reports_a_runtime_killed_by_a_signal_as_a_signal(self) -> None:
+        """Breaks if a signal death is folded into an ordinary exit status."""
+        result = self._run_acknowledged_route(
+            "import os, signal, sys\n"
+            "sys.stdin.buffer.read()\n"
+            "os.kill(os.getpid(), signal.SIGTERM)\n"
+        )
+
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(
+            json.loads(result.stderr),
+            {"error": "executor_failed", "executor_signal": 15},
+        )
+
+    def test_passes_through_a_successful_runtime(self) -> None:
+        """Breaks if a successful V2 run stops reporting success."""
+        result = self._run_acknowledged_route(
+            "import sys\nsys.stdin.buffer.read()\nprint('runtime-done')\n"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "runtime-done\n")
+        self.assertEqual(result.stderr, "")
+
+
 class V2CommandLineTests(unittest.TestCase):
     def test_renders_a_reviewable_api_route_without_echoing_the_task(self) -> None:
         """Breaks if V2 no longer exposes the selected API destination safely."""
