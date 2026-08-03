@@ -1,77 +1,129 @@
 # Handoff
 
-_Last updated: 2026-08-02 KST by Codex_
+_Last updated: 2026-08-03 09:40 KST by Codex_
 
 ## Goal
 
-- Build a public local weightclass tool for choosing and rendering supported native Codex and Claude Code workflows while using subscriptions through the vendors' own tools.
+- Maintain public, local `weightclass`: a deterministic task router for native
+  Codex and Claude Code workflows, with optional reviewed API routing through
+  a separately distributed runtime.
 
 ## Current Status
 
-- Git repository initialized; project guidance is committed as `4896cdf`.
-- V1 persistence boundary is confirmed: weightclass creates no router-owned artifacts or vendor configuration.
-- A Python standard-library CLI classifies stdin task input deterministically, keeps explicit Codex/Claude source requests on the same vendor by default, and can run one selected command in the foreground without a shell.
-- V2 adds a declarative API-policy lane. It binds review acknowledgement to the selected provider, model, effort, source, intended recipient/billing metadata, and absolute external-runtime path before starting one foreground runtime. weightclass itself still makes no network request and never handles credentials.
-- Reviewed policies can opt into mixed-vendor routing and declare opaque model labels per tier. Focused tests cover source-vendor filtering, mixed-vendor opt-in, model selection metadata, difficulty classification, routing, stdin execution, and redacted failure diagnostics.
-- The public package exposes the `wclass` command and has CI that installs the package, executes the installed CLI, and runs the test suite across Python 3.10, 3.12, and 3.13.
-- Native Codex and Claude Code invocation is documented as an explicit, reviewable standard-input workflow; weightclass does not modify vendor-global configuration or an existing interactive session.
-- Static, non-sensitive regression cases classify deployment rollback, privacy, credential, and Korean operational tasks as `high`, while short whitespace and punctuation edits classify as `low`.
+- Main repository: `https://github.com/ictechgy/weightclass`, branch `main`,
+  tracking `origin/main` at commit `7cb02d6`.
+- Separate runtime repository: `https://github.com/ictechgy/weightclass-runtime`,
+  branch `main`, tracking `origin/main` at commit `fe28566`.
+- Both repositories are public-source ready; no registry release or GitHub
+  Actions result has been inspected yet.
+- The main worktree has an unrelated untracked `.omc/` directory. Preserve and
+  exclude it from commits.
 
-## Important Context / Decisions
+## Completed
 
-- The automated-launcher design grew into process supervision, retry, lease, and crash-recovery guarantees. Avoid reintroducing that scope without an explicit product decision.
-- V1 accepts task bodies only as transient stdin: classify in memory, pass to one selected native child process, and never persist, log, echo, or place the task in diagnostics.
-- V1 selects routes deterministically and permits `wclass route` review before `wclass run`. It does not capture or interpret raw vendor output.
-- `--source-vendor codex|claude` identifies the calling vendor. Mixed-vendor routing is disabled by default and enabled only by `allow_mixed_vendors: true` in a reviewed policy.
-- Model labels are policy-owned opaque values. weightclass never probes entitlement or model availability.
-- Do not handle credentials, subscription balances, or pricing data.
-- V1 does not write router-owned artifacts. Durable compilation remains out of scope unless a future version defines platform support and a filesystem/publication contract.
-- V1 runs one foreground command only. It does not retry, recover, background, monitor, or supervise vendor processes.
-- V2 accepts only `transport: "api"` declarative routes for `openai` or `anthropic`; it rejects arbitrary API commands. `allow_cross_provider` is required for a source vendor to select the other provider family. `allow_api` must also be true.
-- The API runtime protocol is fixed as `runtime --provider PROVIDER --model MODEL --effort EFFORT`, with task content on stdin only. API execution requires `--confirm-api-egress` and the exact `wclass v2 route` fingerprint; weightclass recomputes it at run time (including API and cross-provider permissions) and has no fallback or retry.
+- `weightclass` package metadata exposes the `wclass` command and uses MIT.
+- Main CI installs the package, runs the installed CLI, and runs tests on
+  Python 3.10, 3.12, and 3.13.
+- `docs/integrations.md` documents explicit, reviewable Codex and Claude Code
+  invocation with `--source-vendor`; it never changes vendor-global config.
+- The classifier has static, non-sensitive regression coverage for deployment
+  rollback, privacy, credentials, Korean operational tasks, whitespace, and
+  punctuation edits.
+- `weightclass-runtime` has the public package/CLI name, MIT license, CI,
+  offline tests, and checksum release guidance in `RELEASING.md`.
 
 ## Key Files & State
 
-- `README.md`: install, local usage, default routing policy, and security boundary.
-- `docs/integrations.md`: reviewable Codex and Claude Code invocation snippets.
-- `pyproject.toml`: public package metadata and the `wclass` console command.
-- `LICENSE`: MIT license for the public repository.
-- `src/sar/`: deterministic classifier, selector, and foreground CLI runner.
-- `tests/test_router.py`: focused behavior tests.
-- `tests/test_classification.py`: static regression coverage for deterministic tier selection.
-- `src/sar/v2.py`: bounded V2 policy parser, source/provider selection, review descriptor, and route fingerprinting.
-- `tests/test_v2.py`: API policy, confirmation, input-boundary, runtime-protocol, fingerprint, and cross-provider tests using no network.
-- `AGENTS.md`: shared constraints and public-repository rules.
-- `CLAUDE.md`: Claude Code entry point that references `AGENTS.md`.
-- `.coderabbit.yaml`: conservative automated-review preferences.
-- `.gitignore`: excludes secrets, local tool state, and common build output.
-- Previous planning records are under `~/.local/state/codex-lterm-workflows/ralplan/`; they are reference material, not project files. The latest decision-only review still needs iteration.
+- `README.md`: installation, native/API boundaries, and local usage.
+- `docs/integrations.md`: safe Codex/Claude invocation snippets.
+- `src/sar/classification.py`: local deterministic tier selection; no remote
+  triage or persistence.
+- `src/sar/v2.py`: API route review/acknowledgement; it launches only a
+  supplied external runtime and never handles credentials or HTTP.
+- `tests/test_classification.py`: regression examples for tier selection.
+- `.github/workflows/ci.yml`: clean-install and test verification for the main
+  package.
+- Sibling runtime repository `/Users/jinhongan/Desktop/sar-provider-runtime`:
+  separate API runtime; read its `AGENTS.md`, `README.md`, and `RELEASING.md`
+  before changing it.
+
+## Important Context / Decisions
+
+- Task text is transient standard input only: never persist, log, echo, hash,
+  or include it in diagnostics.
+- `--source-vendor codex|claude` is explicit. Native routes remain on their
+  source vendor unless a reviewed policy sets `allow_mixed_vendors: true`.
+- Model and effort labels are opaque, user-reviewed policy values. Never infer
+  entitlement, pricing, remaining usage, or model availability.
+- V2 permits only declarative `openai`/`anthropic` API routes. It needs both
+  `--confirm-api-egress` and the exact reviewed fingerprint. The runtime stays
+  separate; do not turn the main tool into an API client or credential manager.
+- Runtime credentials are inherited environment variables only. Never access
+  `.env`, keychains, auth files, shell profiles, or real provider endpoints
+  without explicit approval.
+- Use an immutable runtime path plus a published SHA-256 checksum. The main
+  tool fingerprints the path, not file contents, so same-path replacement is a
+  known TOCTOU risk.
 
 ## Verification
 
-- Ran: `PYTHONPATH=src python3 -m unittest discover -s tests`
-  - Result: 25 tests passed.
-- Ran: `PYTHONPATH=src python3 -m compileall -q src`
-  - Result: source compiled without errors.
+- Ran in the main repository:
+  `PYTHONPATH=src python3 -m unittest discover -s tests`
+  - Result: 27 tests passed.
+- Ran in the main repository:
+  `PYTHONPATH=src python3 -m compileall -q src`
+  - Result: passed.
+- Ran in the runtime repository:
+  `PYTHONPATH=src python3 -m unittest discover -s tests`
+  - Result: 8 tests passed; fake connections only.
+- Ran in the runtime repository:
+  `PYTHONPATH=src python3 -m compileall -q src`
+  - Result: passed.
+- Verified runtime missing-credential behavior with keys removed from the
+  process environment: exit code `10`, redacted diagnostic, no network call.
+- Local Python installations lack `setuptools`, so a local wheel build was not
+  run. The committed CI workflows are intended to validate clean installation.
 
 ## Blockers & Open Questions
 
-- Validate the built-in classification thresholds and keyword signals against real, non-sensitive task examples; expand only with an explicit regression test.
-- Decide whether future versions need an optional model-aware triage provider. This must remain opt-in and must document task-data handling before implementation.
-- Before adding durable bundles, define supported operating systems and exact safe filesystem semantics.
+- Inspect the first GitHub Actions runs for both repositories before claiming
+  clean-install CI has passed.
+- A package-registry publication, version/tag policy, and release artifacts
+  have not been approved or created.
+- Provider model/effort compatibility and actual API behavior remain
+  user/provider dependent; do not test with real credentials without approval.
+
+## What Worked
+
+- Offline tests use fake provider connections and preserve the no-egress
+  boundary.
+- Explicit source-vendor commands make native routing reviewable without
+  vendor configuration changes.
 
 ## What Did Not Work / Avoid
 
-- Do not claim an automated launcher is safe without fully specifying process ownership, recovery, concurrency, and vendor safety-profile enforcement.
-- Do not let planning expand release tooling, cross-platform filesystem behavior, and vendor installation into V1 without a concrete acceptance requirement.
+- A deliberate `ralplan` attempt produced no usable plan because its Planner
+  recursively tried to launch `ralplan`; it made no repository changes. Do not
+  rely on that run as approval evidence.
+- Do not reintroduce retries, background execution, process supervision,
+  durable task storage, arbitrary API commands, or automatic vendor config
+  changes.
 
 ## Next Steps
 
-1. Create a separate public remote for `weightclass-runtime`, then push its committed source and enable its CI. Do not add the runtime to this repository by default.
-2. Observe the GitHub Actions results for the main package's clean-install verification before a registry release.
-3. Before a runtime release, build from a clean environment and publish SHA-256 checksums as documented by that repository's `RELEASING.md`.
-4. Preserve the one-foreground-process, no-persistence boundary for future changes.
+1. Inspect CI results for commits `7cb02d6` and `fe28566`; fix only confirmed
+   clean-install or test failures.
+2. Set the runtime repository description, then decide whether to create a
+   versioned release. If releasing, build in a clean environment and publish
+   checksums per its `RELEASING.md`.
+3. Before any PyPI publication, approve a release/versioning policy and verify
+   package builds without reading credentials or invoking real APIs.
 
 ## Resume Prompt
 
-Open this repository, read `HANDOFF.md`, `AGENTS.md`, and `README.md`, then preserve the V1 and V2 transient-task, no-persistence, one-foreground-process boundary. Keep V2 API routing declarative and external-runtime-only; never add credential access or direct provider networking to weightclass without an explicit new approval and focused tests.
+Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`,
+`AGENTS.md`, and `README.md`. First inspect the GitHub Actions results for
+`7cb02d6`; preserve the transient-task, one-foreground-process, no-credential
+boundary. For runtime work, also open
+`/Users/jinhongan/Desktop/sar-provider-runtime` and read its `AGENTS.md` before
+making changes.
