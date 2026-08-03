@@ -15,7 +15,8 @@ _Last updated: 2026-08-03 by Claude Code_
 - Separate runtime repository: `https://github.com/ictechgy/weightclass-runtime`,
   branch `main`, tracking `origin/main` at commit `fe28566`.
 - Both repositories are public-source ready. Main-repository CI is green on
-  `main`; no registry release exists.
+  `main`. `weightclass 0.1.0` is published to PyPI and installable through
+  `ictechgy/homebrew-tap`.
 - The main worktree has unrelated `.omc/` and `.serena/` directories holding
   local agent state. They are now in `.gitignore`; 172 of these files were
   committed by mistake in `fd1fbc0` and reached `origin/main` before being
@@ -132,7 +133,7 @@ _Last updated: 2026-08-03 by Claude Code_
 
 - Ran in the main repository:
   `PYTHONPATH=src python3 -m unittest discover -s tests`
-  - Result: 54 tests passed.
+  - Result: 95 tests passed.
 - Differential-classified 760 generated tasks against `main` to bound the
   classifier change.
   - Result: the only downgrades from `high` are the two intended ones
