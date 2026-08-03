@@ -94,6 +94,8 @@ _Last updated: 2026-08-03 by Claude Code_
 ## Key Files & State
 
 - `README.md`: installation, native/API boundaries, and local usage.
+- `RELEASING.md`: version/tag policy, PyPI Trusted Publishing setup, and the
+  Homebrew formula update procedure.
 - `docs/integrations.md`: safe Codex/Claude invocation snippets.
 - `src/weightclass/classification.py`: local deterministic tier selection; no remote
   triage or persistence.
@@ -179,8 +181,16 @@ _Last updated: 2026-08-03 by Claude Code_
   executable behind the argv; V2 likewise fingerprints the runtime path, not its
   contents; a task of 1,200+ characters is `high` on length alone; a vendor CLI
   that declines work while exiting `0` cannot be detected.
-- A package-registry publication, version/tag policy, and release artifacts
-  have not been approved or created.
+- A version/tag policy and a release path now exist in `RELEASING.md`:
+  pushing a `v*` tag runs `.github/workflows/release.yml`, which re-runs every
+  gate, refuses a tag that disagrees with `weightclass.__version__`, and uploads
+  to PyPI through Trusted Publishing (no token is stored anywhere). Nothing has
+  been published yet. Two one-time steps remain and are the user's to take:
+  register the PyPI pending publisher (owner `ictechgy`, repo `weightclass`,
+  workflow `release.yml`, environment `pypi`), then push the first tag.
+  `packaging/homebrew/weightclass.rb` is the source of truth for the formula in
+  `ictechgy/homebrew-tap`; it references the PyPI sdist, so it can only be
+  filled in after the first publish.
 - Provider model/effort compatibility and actual API behavior remain
   user/provider dependent; do not test with real credentials without approval.
 
