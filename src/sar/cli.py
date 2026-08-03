@@ -4,8 +4,9 @@ import argparse
 import json
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Final, Sequence, cast
+from typing import Any, Final, NoReturn, cast
 
 from . import __version__
 from .classification import (
@@ -15,12 +16,12 @@ from .classification import (
     read_task_from_standard_input,
 )
 from .router import (
+    DEFAULT_ROUTES,
+    SUPPORTED_VENDORS,
     Route,
     RouteRequest,
     RouteSelectionError,
     RoutingPolicy,
-    SUPPORTED_VENDORS,
-    DEFAULT_ROUTES,
     native_route_fingerprint,
     select_route,
     select_tier_route,
@@ -33,7 +34,6 @@ from .v2 import (
     select_api_route,
     validate_api_runtime,
 )
-
 
 EXECUTOR_FAILED_EXIT_CODE: Final = 7
 
@@ -74,7 +74,7 @@ def _report_executor_result(completed_process: subprocess.CompletedProcess[bytes
 class SafeArgumentParser(argparse.ArgumentParser):
     """Avoid including caller-provided values in diagnostics."""
 
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> NoReturn:
         del message
         raise InvalidInputError()
 
@@ -437,7 +437,6 @@ def run_from_standard_input(
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
     return _report_executor_result(completed_process)
-
 
 
 def render_workflow_route(policy_path: Path, descriptor_path: Path) -> int:

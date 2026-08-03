@@ -4,7 +4,6 @@ import re
 import sys
 from typing import Final, Literal
 
-
 Tier = Literal["low", "standard", "high"]
 
 HIGH_SIGNALS: Final = frozenset(

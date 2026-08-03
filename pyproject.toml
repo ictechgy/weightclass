@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,8 +8,30 @@ dynamic = ["version"]
 description = "Local, policy-driven routing for Codex and Claude workflows."
 readme = "README.md"
 requires-python = ">=3.10"
-license = {file = "LICENSE"}
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["cli", "codex", "claude", "router", "task-classification"]
 dependencies = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Utilities",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/ictechgy/weightclass"
+Repository = "https://github.com/ictechgy/weightclass"
+Issues = "https://github.com/ictechgy/weightclass/issues"
 
 [project.scripts]
 wclass = "sar.cli:main"
@@ -19,3 +41,14 @@ where = ["src"]
 
 [tool.setuptools.dynamic]
 version = {attr = "sar.__version__"}
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.mypy]
+strict = true
+files = ["src/sar"]

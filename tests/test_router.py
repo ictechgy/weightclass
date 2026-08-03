@@ -14,9 +14,7 @@ class DefaultRouteTests(unittest.TestCase):
         """Breaks if a vendor's tiers collapse back to one indistinguishable command."""
         for vendor in ("codex", "claude"):
             with self.subTest(vendor=vendor):
-                commands = [
-                    route.command for route in DEFAULT_ROUTES if route.vendor == vendor
-                ]
+                commands = [route.command for route in DEFAULT_ROUTES if route.vendor == vendor]
 
                 self.assertEqual(len(commands), 3)
                 self.assertEqual(len(set(commands)), 3)
@@ -39,9 +37,7 @@ class SelectRouteTests(unittest.TestCase):
             ),
         )
 
-        selected_route = select_route(
-            routes, RouteRequest(vendor="codex", workflow="review")
-        )
+        selected_route = select_route(routes, RouteRequest(vendor="codex", workflow="review"))
 
         self.assertEqual(selected_route.route_id, "codex-review")
         self.assertEqual(
@@ -222,7 +218,13 @@ class TaskConfidentialityTests(unittest.TestCase):
                 ["route", "--policy", "/nonexistent/policy.json"],
                 ["run", "--policy", str(native_policy_path)],
                 ["run", "--policy", "/nonexistent/policy.json"],
-                ["render", "--policy", "/nonexistent/p.json", "--descriptor", "/nonexistent/d.json"],
+                [
+                    "render",
+                    "--policy",
+                    "/nonexistent/p.json",
+                    "--descriptor",
+                    "/nonexistent/d.json",
+                ],
                 ["v2", "route", *api_arguments],
                 ["v2", "run", *api_arguments],
                 ["v2", "run", *api_arguments, "--confirm-api-egress"],
@@ -465,7 +467,9 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(allowed.returncode, 0, allowed.stderr)
         self.assertEqual(json.loads(allowed.stdout)["vendor"], "claude")
 
-    def test_keeps_a_codex_request_on_its_configured_high_route_when_mixing_is_disabled(self) -> None:
+    def test_keeps_a_codex_request_on_its_configured_high_route_when_mixing_is_disabled(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path = directory / "policy.json"
@@ -863,7 +867,7 @@ class CommandLineTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
                 env=ascii_only_environment,
-                input="개인정보 처리 방침 오타 수정".encode("utf-8"),
+                input="개인정보 처리 방침 오타 수정".encode(),
             )
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -880,9 +884,7 @@ class CommandLineTests(unittest.TestCase):
             for vendor in ("codex", "claude"):
                 worker_path = directory / f"{vendor}_worker.py"
                 worker_path.write_text(
-                    "import sys\n"
-                    "sys.stdin.read()\n"
-                    f"print('{vendor}-worker-ran')\n",
+                    f"import sys\nsys.stdin.read()\nprint('{vendor}-worker-ran')\n",
                     encoding="utf-8",
                 )
                 workers[vendor] = worker_path
@@ -924,9 +926,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "claude-worker-ran\n")
 
-    def _run_worker_exiting_with(
-        self, worker_body: str
-    ) -> "subprocess.CompletedProcess[str]":
+    def _run_worker_exiting_with(self, worker_body: str) -> "subprocess.CompletedProcess[str]":
         """Run `wclass run` against a worker whose exit status the caller controls."""
         task = "Fix a typo."
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1112,9 +1112,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         self.assertEqual(accepted.stdout, "reviewed-worker\n")
         self.assertEqual(refused.returncode, 6)
-        self.assertEqual(
-            json.loads(refused.stderr), {"error": "route_fingerprint_mismatch"}
-        )
+        self.assertEqual(json.loads(refused.stderr), {"error": "route_fingerprint_mismatch"})
         self.assertEqual(refused.stdout, "")
         # 지문을 제시하지 않으면 구속력이 없다는 점도 함께 고정한다.
         self.assertEqual(unbound.returncode, 0, unbound.stderr)
@@ -1128,9 +1126,7 @@ class CommandLineTests(unittest.TestCase):
             spaced_directory.mkdir()
             worker_path = spaced_directory / "worker.py"
             worker_path.write_text(
-                "import sys\n"
-                "sys.stdin.buffer.read()\n"
-                "print(sys.argv[1])\n",
+                "import sys\nsys.stdin.buffer.read()\nprint(sys.argv[1])\n",
                 encoding="utf-8",
             )
             policy_path = directory / "policy.json"
