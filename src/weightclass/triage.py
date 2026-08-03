@@ -55,8 +55,22 @@ high      subtle, high-stakes, or easy to get subtly wrong
 """
 
 # 판정 호출은 짧고 싸야 한다. 실제 작업이 아니라 한 단어를 받는 호출이다.
+#
+# 두 벤더 모두 도구 실행을 막아 둔다. 이 호출의 프롬프트에는 신뢰할 수 없는
+# 태스크 텍스트가 들어가는데, 난이도를 묻는 호출이 파일을 고치거나 명령을
+# 실행할 이유는 없다. claude 는 plan("no actual tool execution"), codex 는
+# --sandbox read-only 가 그 역할을 한다. 실행 라우트의 권한과 혼동하지 말 것.
+TRIAGE_READ_ONLY_MARKERS: Final = {"claude": "plan", "codex": "read-only"}
 TRIAGE_COMMANDS: Final = {
-    "claude": ("claude", "--print", "--no-session-persistence", "--effort", "low"),
+    "claude": (
+        "claude",
+        "--print",
+        "--no-session-persistence",
+        "--permission-mode",
+        "plan",
+        "--effort",
+        "low",
+    ),
     "codex": (
         "codex",
         "exec",
@@ -154,9 +168,11 @@ def ask_vendor_for_tier(task: str, source_vendor: str) -> Tier:
     except UnicodeDecodeError as error:
         raise TriageUnavailableError() from error
 
-    for candidate in (decoded, decoded.split()[-1] if decoded.split() else ""):
-        if candidate in _VALID_TIERS:
-            return candidate  # type: ignore[return-value]
+    # decoded 는 이미 strip 되어 있으므로 유효 티어는 항상 마지막 토큰과 같다.
+    # 모델이 문장으로 답해도 끝 단어만 보면 된다.
+    tokens = decoded.split()
+    if tokens and tokens[-1] in _VALID_TIERS:
+        return tokens[-1]  # type: ignore[return-value]
     raise TriageUnavailableError()
 
 

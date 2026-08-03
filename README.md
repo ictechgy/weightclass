@@ -150,7 +150,9 @@ printf '%s' "$task" | wclass classify --source-vendor claude --ask-vendor
 
 On the same 40 tasks that scored 15/40 locally, this scored 33/40, and never
 over-rated. It still under-rates 7 of the 15 genuinely hard tasks, so it is
-better, not solved.
+better, not solved. The corpus and the scoring script are in `tests/eval/`, and
+`PYTHONPATH=src python3 tests/eval/score.py` re-derives both figures without
+touching the network.
 
 This does not make weightclass an API client. It runs one vendor CLI in the
 foreground, exactly as `wclass run` already does; that CLI owns its credentials
@@ -172,9 +174,12 @@ tier you obtained instead:
 
 ```sh
 tier="$(printf '%s' "$task" | wclass classify --source-vendor claude --ask-vendor \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["tier"])')"
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["tier"])')" || exit
 printf '%s' "$task" | wclass run --source-vendor claude --tier "$tier"
 ```
+
+The `|| exit` matters: on exit `8` the first command prints nothing, and without
+it the pipeline would continue with an empty tier.
 
 Reusing the tier means the vendor is asked once, not once per command.
 

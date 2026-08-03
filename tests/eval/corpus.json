@@ -1,0 +1,482 @@
+[
+ {
+  "index": 0,
+  "language": "en",
+  "task": "Bump the copyright year in LICENSE and in the footer component to 2026.",
+  "ratings": [
+   "low",
+   "low",
+   "low"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 1,
+  "language": "en",
+  "task": "rename `usr` to `user` everywhere under src/auth, it's been bugging me for months",
+  "ratings": [
+   "low",
+   "low",
+   "standard"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 2,
+  "language": "ko",
+  "task": "README 설치 섹션에 있는 npm 명령어들 전부 pnpm으로 바꿔줘.",
+  "ratings": [
+   "low",
+   "low",
+   "low"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 3,
+  "language": "en",
+  "task": "Add a .editorconfig at the repo root — 2 space indent, LF line endings, trim trailing whitespace.",
+  "ratings": [
+   "low",
+   "low",
+   "low"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 4,
+  "language": "en",
+  "task": "The Kafka consumer logs \"recieved message for partition\" — fix that word and grep for the same misspelling elsewhere while you're in there.",
+  "ratings": [
+   "low",
+   "low",
+   "low"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 5,
+  "language": "ko",
+  "task": "src/components 밑 파일들 default export를 전부 named export로 바꾸고 import 하는 쪽도 같이 고쳐줘.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 6,
+  "language": "en",
+  "task": "Sort the deps and devDeps in package.json alphabetically.",
+  "ratings": [
+   "low",
+   "low",
+   "low"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 7,
+  "language": "en",
+  "task": "There's a big commented-out block at the bottom of payment_service.py from the old flow. Delete it.",
+  "ratings": [
+   "low",
+   "low",
+   "low"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 8,
+  "language": "ko",
+  "task": "config/logging.yaml에서 기본 로그 레벨 debug에서 info로 내려줘.",
+  "ratings": [
+   "low",
+   "low",
+   "low"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 9,
+  "language": "en",
+  "task": "yamllint is complaining about missing newline at end of file for everything in .github/workflows. Just add them.",
+  "ratings": [
+   "low",
+   "low",
+   "low"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 10,
+  "language": "en",
+  "task": "Change the default page size on GET /orders from 20 to 50.",
+  "ratings": [
+   "low",
+   "low",
+   "low"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 11,
+  "language": "ko",
+  "task": "테스트 파일 이름이 *_test.py랑 test_*.py 두 가지로 섞여 있는데 test_*.py로 통일해줘.",
+  "ratings": [
+   "low",
+   "low",
+   "low"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 12,
+  "language": "en",
+  "task": "The Redis key TTL is hardcoded as 3600 in both the session store and the rate limiter. Move it to constants.ts and import it in both places.",
+  "ratings": [
+   "low",
+   "low",
+   "low"
+  ],
+  "consensus": "low",
+  "recorded_vendor_tier": "low"
+ },
+ {
+  "index": 13,
+  "language": "en",
+  "task": "Add cursor-based pagination to /api/v1/subscriptions. Follow the same pattern the invoices endpoint already uses so the response shape stays consistent.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 14,
+  "language": "ko",
+  "task": "구독 취소 API 통합 테스트 좀 작성해줘. 이미 취소된 구독을 또 취소하는 경우랑 존재하지 않는 ID로 요청하는 경우도 포함해서.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 15,
+  "language": "en",
+  "task": "Write unit tests for the retry helper in utils/retry.ts — I want the exponential backoff intervals and the max-attempts cutoff both covered, with fake timers.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 16,
+  "language": "en",
+  "task": "Add a --dry-run flag to the migration CLI that prints the statements it would execute without touching the database.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 17,
+  "language": "en",
+  "task": "People keep emailing support asking for their billing history. Add an endpoint that returns it as CSV and put a download button on the billing settings page.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 18,
+  "language": "ko",
+  "task": "회원가입 폼에 이메일 중복 확인 붙여줘. 서버가 409 주면 이메일 입력칸 아래에 에러 문구 띄우고 제출 버튼 막아줘.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 19,
+  "language": "en",
+  "task": "Set up a GitHub Actions workflow that runs the test suite on PRs targeting main and comments the coverage diff.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 20,
+  "language": "en",
+  "task": "Add request IDs to the FastAPI logging middleware and propagate them on outgoing HTTP calls so I can follow one request across services in the log aggregator.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 21,
+  "language": "ko",
+  "task": "다크모드 토글 추가하고 선택한 테마 localStorage에 저장해서 새로고침해도 유지되게 해줘.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 22,
+  "language": "en",
+  "task": "The Stripe webhook handler processes events without checking the signature header. Add verification and a test that a tampered payload gets rejected with a 400.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 23,
+  "language": "en",
+  "task": "Add a notification_preferences jsonb column to the user_settings table with a sensible default, write the alembic migration, and update the model + serializer.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 24,
+  "language": "en",
+  "task": "Our /healthz just returns 200 unconditionally, which is useless. Make it actually check the database and Redis connections and return 503 when either is down.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 25,
+  "language": "ko",
+  "task": "상품 목록 페이지 무한 스크롤로 바꿔줘. 지금은 하단 페이지네이션 버튼인데, 스크롤 내려가면 다음 페이지 자동으로 불러오게.",
+  "ratings": [
+   "standard",
+   "standard",
+   "standard"
+  ],
+  "consensus": "standard",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 26,
+  "language": "en",
+  "task": "About once a week a customer gets charged twice. Same idempotency key, two rows in the payments table, timestamps a few milliseconds apart. I've stared at the payment path for days and I can't see how both requests get past the check. Can you trace it end to end and tell me what I'm missing?",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "high"
+ },
+ {
+  "index": 27,
+  "language": "ko",
+  "task": "어제 배포 이후로 p99 응답시간이 80ms에서 900ms로 튀었어. 코드 변경은 크지 않았는데 원인을 못 찾겠어. 프로파일링부터 시작해서 뭐가 느려졌는지 찾아줘.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 28,
+  "language": "en",
+  "task": "Background workers sometimes run the same job twice when a pod gets rescheduled. My guess is the lease renewal in worker/lease.go, but honestly I'm not sure the bug lives there — could be the clock assumptions.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 29,
+  "language": "en",
+  "task": "I want the pricing engine pulled out of the monolith into its own module with a clean interface. Fair warning: a lot of call sites reach into its internals through the shared request context object, and test coverage on that path is thin, so figure out the hidden dependencies before you start moving files.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "high"
+ },
+ {
+  "index": 30,
+  "language": "ko",
+  "task": "여러 요청이 동시에 같은 계좌에서 잔액을 차감할 때 가끔 잔액이 음수로 내려가. 트랜잭션 격리 수준이랑 락 잡는 방식까지 같이 검토해서 근본 원인 찾아줘.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "high"
+ },
+ {
+  "index": 31,
+  "language": "en",
+  "task": "Our password reset endpoint responds differently depending on whether the email exists, so anyone can enumerate accounts. Fix that, and while you're there check how the reset token is generated and how long it stays valid — I don't trust either.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 32,
+  "language": "en",
+  "task": "The ingest service memory grows steadily until the OOM killer gets it, roughly every day and a half. I took a heap dump and nothing jumped out at me. Have a look.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "high"
+ },
+ {
+  "index": 33,
+  "language": "ko",
+  "task": "이벤트 스트림 처리에서 같은 엔티티에 대한 순서 보장이 가끔 깨지는 것 같아. 파티션 키 설계랑 컨슈머 리밸런싱 중에 벌어지는 시나리오까지 같이 봐줘.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 34,
+  "language": "en",
+  "task": "We need to switch the accounts table primary key from bigint to uuid with no downtime. Give me a phased migration plan and implement the dual-write stage, including how we backfill and how we cut over reads.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "high"
+ },
+ {
+  "index": 35,
+  "language": "en",
+  "task": "Two services both write subscription state and they end up disagreeing about once a day. Find where the write paths can interleave badly and propose a fix — ideally something that doesn't need a distributed lock.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 36,
+  "language": "ko",
+  "task": "사용자가 가끔 예전 데이터를 보는 문제가 있어. 캐시 무효화가 제대로 안 되는 것 같은데 어느 경로에서 stale이 생기는지 추적하고 고쳐줘.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "standard"
+ },
+ {
+  "index": 37,
+  "language": "en",
+  "task": "There's a race between websocket reconnect and token refresh. If the access token expires while the client is reconnecting, it ends up connected but every message it sends gets rejected, and it never recovers until you reload the tab. Fix it properly, not with a retry timer.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "high"
+ },
+ {
+  "index": 38,
+  "language": "en",
+  "task": "The search query used to run in 200ms and now takes 12 seconds since we added the tenant_id filter. Work out what changed in the plan and fix it at the schema/query level — I don't want a planner hint bandaid.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "high"
+ },
+ {
+  "index": 39,
+  "language": "en",
+  "task": "Someone put a SELECT ... FOR UPDATE inside a loop in the order fulfillment code and now we're getting deadlocks under load. Rework it so lock acquisition order is deterministic, and add a test that reproduces the deadlock against the current code.",
+  "ratings": [
+   "high",
+   "high",
+   "high"
+  ],
+  "consensus": "high",
+  "recorded_vendor_tier": "high"
+ }
+]

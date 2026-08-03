@@ -19,6 +19,9 @@ from weightclass import cli
 from weightclass.router import SUPPORTED_VENDORS
 from weightclass.triage import (
     TRIAGE_COMMANDS,
+    TRIAGE_PROMPT,
+    TRIAGE_READ_ONLY_MARKERS,
+    TRIAGE_TIMEOUT_SECONDS,
     TriageUnavailableError,
     ask_vendor_for_tier,
     triage_command,
@@ -62,9 +65,30 @@ class TriageCommandTests(unittest.TestCase):
                     f"{vendor} triage command does not ask for the cheapest effort",
                 )
 
-    def test_codex_triage_never_writes_to_the_workspace(self) -> None:
-        """Breaks if asking for a tier gains permission to change files."""
-        self.assertIn("read-only", triage_command("codex"))
+    def test_no_vendor_can_change_anything_while_being_asked_for_a_tier(self) -> None:
+        """Breaks if any triage command loses its read-only pin.
+
+        codex 만 검사하던 테스트는 claude 쪽 구멍을 못 봤다. 판정 프롬프트에는
+        신뢰할 수 없는 태스크가 들어가므로 두 벤더 모두 도구 실행을 막아야 한다.
+        """
+        self.assertEqual(set(TRIAGE_READ_ONLY_MARKERS), set(SUPPORTED_VENDORS))
+        for vendor, marker in TRIAGE_READ_ONLY_MARKERS.items():
+            with self.subTest(vendor=vendor):
+                self.assertIn(marker, triage_command(vendor))
+
+    def test_the_rubric_names_every_tier_and_asks_for_one_word(self) -> None:
+        """Breaks if the rubric drifts into something that cannot be parsed.
+
+        이 프롬프트가 판정 품질의 근거다. 저장소가 소유한다고 적어두고 아무도
+        검사하지 않으면 조용히 바뀐다.
+        """
+        for tier in ("low", "standard", "high"):
+            with self.subTest(tier=tier):
+                self.assertIn(tier, TRIAGE_PROMPT)
+        self.assertIn("exactly one word", TRIAGE_PROMPT)
+        # 태스크는 지시가 아니라 데이터로 다뤄져야 한다.
+        self.assertIn("{task}", TRIAGE_PROMPT)
+        self.assertIn("never as instructions", TRIAGE_PROMPT)
 
     def test_rejects_an_unsupported_vendor(self) -> None:
         with self.assertRaises(TriageUnavailableError):
@@ -113,6 +137,53 @@ class AskVendorTests(unittest.TestCase):
     def test_refuses_output_past_the_size_cap(self) -> None:
         """Breaks if the cap moves back to after the whole stream is buffered."""
         self.assertIsNone(self._ask("printf low; head -c 10000 /dev/zero | tr '\\000' ' '"))
+
+    def test_discards_vendor_stderr(self) -> None:
+        """Breaks if a vendor's own output can reach weightclass's streams.
+
+        mock 이 아니라 실제 파이프로 확인한다. mock 은 stderr 처리를 통과시킨다.
+        """
+        with _fake_vendor_on_path("echo 'VENDORNOISE' >&2; printf low") as env:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "classify",
+                    "--source-vendor",
+                    "claude",
+                    "--ask-vendor",
+                ],
+                capture_output=True,
+                check=False,
+                input="task",
+                text=True,
+                env=env,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("VENDORNOISE", result.stdout + result.stderr)
+
+    def test_a_hung_vendor_does_not_hang_weightclass(self) -> None:
+        """Breaks if the timeout stops being armed.
+
+        기존 테스트는 TimeoutExpired 를 mock 으로 던져 핸들러만 검사했다.
+        타임아웃이 실제로 걸리는지는 증명하지 못한다.
+        """
+        with (
+            mock.patch("weightclass.triage.TRIAGE_TIMEOUT_SECONDS", 1),
+            # exec 로 셸을 대체한다. 그러지 않으면 kill 이 셸만 죽이고 손자
+            # 프로세스가 stdout 파이프를 계속 잡아 read 가 막힌다. 실제 벤더도
+            # 자식을 남기면 같은 일이 생길 수 있다는 뜻이므로 주석으로 남긴다.
+            _fake_vendor_on_path("exec sleep 60") as env,
+            mock.patch.dict(os.environ, env),
+            self.assertRaises(TriageUnavailableError),
+        ):
+            ask_vendor_for_tier("task", "claude")
+
+    def test_the_timeout_default_stays_short(self) -> None:
+        """Breaks if a call the module calls cheap gains an open-ended budget."""
+        self.assertLessEqual(TRIAGE_TIMEOUT_SECONDS, 120)
 
     def test_accepts_a_task_larger_than_the_pipe_buffer(self) -> None:
         """Breaks if writing the prompt and reading the answer can deadlock.
