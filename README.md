@@ -13,8 +13,14 @@ provider network requests itself.
 
 ## Install
 
-weightclass has no runtime dependencies beyond Python 3.10 or later. Until a
-package registry release is published, install it from a local checkout:
+weightclass has no runtime dependencies beyond Python 3.10 or later.
+
+```sh
+uv tool install weightclass      # or: pipx install weightclass
+brew install ictechgy/tap/weightclass
+```
+
+Or from a local checkout:
 
 ```sh
 git clone https://github.com/ictechgy/weightclass.git
@@ -22,9 +28,11 @@ cd weightclass
 python3 -m pip install .
 ```
 
-This installs the `wclass` command. The native Codex and Claude CLIs must
+All three install the `wclass` command. The native Codex and Claude CLIs must
 already be installed and authenticated; weightclass never reads or changes
 their authentication or subscription state.
+
+Releases are cut by pushing a tag; see [RELEASING.md](RELEASING.md).
 
 For reviewable native Codex and Claude Code invocation examples, see
 [Native integrations](docs/integrations.md).
