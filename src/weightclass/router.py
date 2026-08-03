@@ -1,9 +1,13 @@
 """Deterministic route selection for user-reviewable vendor commands."""
 
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Final
 
 from .classification import Tier
+
+NATIVE_FINGERPRINT_VERSION: Final = 1
 
 
 SUPPORTED_VENDORS: Final = frozenset({"claude", "codex"})
@@ -16,9 +20,10 @@ SUPPORTED_VENDORS: Final = frozenset({"claude", "codex"})
 # 프롬프트로 넘기고, --print 에는 응답할 사람이 없다.
 #
 # 이 선택을 "wclass route 로 검토했으니 안전하다"로 정당화하지 말 것. route 와
-# run 은 정책을 각각 따로 읽으므로 그 사이에 정책이 바뀌면 검토한 것과 다른
-# 명령이 실행된다(V1 에는 V2 의 route_fingerprint 같은 결속이 없다). 실제 경계는
-# 정책 파일에 대한 사용자의 통제와, 코드에 고정되어 교체할 수 없는 기본 라우트다.
+# run 은 정책을 각각 따로 읽으므로, --ack-route-fingerprint 로 명시적으로 묶지
+# 않으면 그 사이에 정책이 바뀌어도 검토한 것과 다른 명령이 그대로 실행된다.
+# 항상 적용되는 경계는 정책 파일에 대한 사용자의 통제와, 코드에 고정되어
+# 교체할 수 없는 기본 라우트다.
 CLAUDE_COMMAND_PREFIX: Final = (
     "claude",
     "--print",
@@ -123,6 +128,44 @@ DEFAULT_ROUTES: Final = (
 
 class RouteSelectionError(LookupError):
     """Raised when no policy route supports a request."""
+
+
+def native_route_fingerprint(route: Route, allow_mixed_vendors: bool) -> str:
+    """Bind a rendered review to the selection it rendered.
+
+    route 와 run 은 정책을 각각 따로 읽으므로, 사이에 정책이 바뀌면 검토한 것과
+    다른 명령이 실행된다. run 에 이 지문을 넘기면 실행 직전에 다시 계산해
+    비교하므로, 선택된 라우트·명령·벤더·티어·혼합 허용 여부 중 하나라도
+    달라지면 실행되지 않는다.
+
+    분류된 티어는 따로 넣지 않는다. select_tier_route 가 route.tier 와 같은
+    라우트만 돌려주므로 이미 route 안에 들어 있고, 중복해서 넣으면 그 필드만
+    독립적으로 검증할 수 없는 죽은 항목이 된다.
+
+    묶는 것은 "선택 결과"이지 태스크가 아니다. 태스크를 묶으려면 해시를 남겨야
+    하는데, 이 프로젝트는 태스크의 해시조차 금지한다. 따라서 같은 티어의 다른
+    태스크는 같은 지문을 쓴다. --source-vendor 도 넣지 않는다. 선택에 영향을
+    주지만 결과인 라우트에 이미 반영되어 있고, 넣으면 route 출력만으로는 지문을
+    재계산할 수 없어 동일한 선택이 거부되는 오탐이 생긴다.
+    """
+    semantic_route = {
+        "schema_version": NATIVE_FINGERPRINT_VERSION,
+        "policy": {"allow_mixed_vendors": allow_mixed_vendors},
+        "route": {
+            "id": route.route_id,
+            "vendor": route.vendor,
+            "workflow": route.workflow,
+            "tier": route.tier,
+            "command": list(route.command),
+        },
+    }
+    encoded = json.dumps(
+        semantic_route,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def select_route(routes: tuple[Route, ...], request: RouteRequest) -> Route:

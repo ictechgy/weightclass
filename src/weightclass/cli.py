@@ -4,8 +4,10 @@ import argparse
 import json
 import subprocess
 import sys
+import unicodedata
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Final, Sequence, cast
+from typing import Any, Final, NoReturn, cast
 
 from . import __version__
 from .classification import (
@@ -15,12 +17,13 @@ from .classification import (
     read_task_from_standard_input,
 )
 from .router import (
+    DEFAULT_ROUTES,
+    SUPPORTED_VENDORS,
     Route,
     RouteRequest,
     RouteSelectionError,
     RoutingPolicy,
-    SUPPORTED_VENDORS,
-    DEFAULT_ROUTES,
+    native_route_fingerprint,
     select_route,
     select_tier_route,
 )
@@ -32,7 +35,6 @@ from .v2 import (
     select_api_route,
     validate_api_runtime,
 )
-
 
 EXECUTOR_FAILED_EXIT_CODE: Final = 7
 
@@ -73,7 +75,7 @@ def _report_executor_result(completed_process: subprocess.CompletedProcess[bytes
 class SafeArgumentParser(argparse.ArgumentParser):
     """Avoid including caller-provided values in diagnostics."""
 
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> NoReturn:
         del message
         raise InvalidInputError()
 
@@ -94,7 +96,41 @@ def _require_exact_keys(value: dict[str, Any], expected_keys: set[str]) -> None:
 
 
 def _require_nonempty_string(value: object) -> str:
+    """Require an identifier-like policy value: no whitespace at all."""
     if not isinstance(value, str) or not value or any(character.isspace() for character in value):
+        raise InvalidInputError()
+    return value
+
+
+def _require_command_argument(value: object) -> str:
+    """Require one reviewable argv token.
+
+    명령 인자는 식별자와 규칙이 다르다. 셸을 거치지 않고 argv 로 그대로
+    전달되므로 내부 공백은 위험하지 않고, "/Users/me/My Tools/claude" 같은
+    설치 경로나 여러 단어로 된 플래그 값에는 반드시 필요하다.
+
+    거부 기준은 "검토자가 본 대로 실행되는가"이다. ord 범위를 손으로 나열하면
+    매번 빠진 문자가 나온다(NUL, 그다음 lone surrogate). 대신 두 규칙으로
+    정한다.
+
+    - 유니코드 대분류 C 는 전부 거부한다. 제어문자(Cc, C0/C1), 서식
+      문자(Cf, zero-width space·RTL override·BOM), 서로게이트(Cs),
+      사용자 영역(Co), 미할당(Cn)이 여기 든다. 앞의 둘은 route 출력에
+      드러나지 않아 검토를 무력화하고, 서로게이트는 exec 단계에서
+      UnicodeEncodeError 로 터져 진단 없이 트레이스백을 남긴다.
+    - 공백은 ASCII 스페이스만 허용한다. NBSP 같은 문자는 스페이스처럼 보이지만
+      다른 인자를 만든다. 앞뒤 공백도 경로를 조용히 다른 값으로 만든다.
+    """
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(
+            unicodedata.category(character).startswith("C")
+            or (character.isspace() and character != " ")
+            for character in value
+        )
+    ):
         raise InvalidInputError()
     return value
 
@@ -126,7 +162,7 @@ def _parse_route(value: object) -> Route:
         route_id=route_id,
         vendor=vendor,
         workflow=workflow,
-        command=tuple(_require_nonempty_string(argument) for argument in command),
+        command=tuple(_require_command_argument(argument) for argument in command),
         tier=tier,
     )
 
@@ -199,6 +235,8 @@ def build_parser() -> argparse.ArgumentParser:
         native = subcommands.add_parser(name, allow_abbrev=False, description=description)
         native.add_argument("--policy", type=Path)
         native.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
+        if name == "run":
+            native.add_argument("--ack-route-fingerprint")
 
     render = subcommands.add_parser(
         "render",
@@ -307,7 +345,10 @@ def v2_run_from_standard_input(
             check=False,
             input=task.encode("utf-8"),
         )
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError 는 argv 를 실제로 인코딩하는 단계에서 나온다(NUL, 서로게이트).
+        # 검증기가 이미 막고 있지만, 규칙에 빈틈이 생겨도 트레이스백 대신
+        # 진단으로 닫히도록 두 번째 방어선을 둔다.
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
     return _report_executor_result(completed_process)
@@ -328,7 +369,7 @@ def select_task_route(
     task: str,
     policy_path: Path | None,
     source_vendor: str | None = None,
-) -> tuple[Tier, Route]:
+) -> tuple[Tier, Route, RoutingPolicy]:
     """Classify a task and select its route without retaining task content."""
     tier = classify_task(task)
     policy = (
@@ -336,18 +377,19 @@ def select_task_route(
         if policy_path is not None
         else RoutingPolicy(DEFAULT_ROUTES)
     )
-    return tier, select_tier_route(
+    route = select_tier_route(
         policy.routes,
         tier,
         source_vendor,
         policy.allow_mixed_vendors,
     )
+    return tier, route, policy
 
 
 def route_from_standard_input(policy_path: Path | None, source_vendor: str | None) -> int:
     """Select and render a command without echoing or persisting the task."""
     try:
-        tier, route = select_task_route(
+        tier, route, policy = select_task_route(
             read_task_from_standard_input(), policy_path, source_vendor
         )
     except InvalidTaskError:
@@ -366,16 +408,28 @@ def route_from_standard_input(policy_path: Path | None, source_vendor: str | Non
         "route": route.route_id,
         "tier": tier,
         "vendor": route.vendor,
+        # 이 지문을 wclass run --ack-route-fingerprint 로 넘기면 검토한 선택이
+        # 실행 직전에 다시 확인된다. 넘기지 않으면 구속력은 없다.
+        "route_fingerprint": native_route_fingerprint(route, policy.allow_mixed_vendors),
     }
     print(json.dumps(response))
     return 0
 
 
-def run_from_standard_input(policy_path: Path | None, source_vendor: str | None) -> int:
+def run_from_standard_input(
+    policy_path: Path | None,
+    source_vendor: str | None,
+    acknowledged_fingerprint: str | None = None,
+) -> int:
     """Run a selected native command without a shell or output capture."""
     try:
         task = read_task_from_standard_input()
-        _, route = select_task_route(task, policy_path, source_vendor)
+        _, route, policy = select_task_route(task, policy_path, source_vendor)
+        if acknowledged_fingerprint is not None and acknowledged_fingerprint != (
+            native_route_fingerprint(route, policy.allow_mixed_vendors)
+        ):
+            print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+            return 6
         # text 모드는 로케일 인코딩을 사용하므로 LC_ALL=C 환경에서 비ASCII 태스크가
         # UnicodeEncodeError로 새어 나간다. 자식 출력을 읽지 않으므로 바이트로 전달한다.
         completed_process = subprocess.run(
@@ -392,11 +446,13 @@ def run_from_standard_input(policy_path: Path | None, source_vendor: str | None)
     except RouteSelectionError:
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError 는 argv 를 실제로 인코딩하는 단계에서 나온다(NUL, 서로게이트).
+        # 검증기가 이미 막고 있지만, 규칙에 빈틈이 생겨도 트레이스백 대신
+        # 진단으로 닫히도록 두 번째 방어선을 둔다.
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
     return _report_executor_result(completed_process)
-
 
 
 def render_workflow_route(policy_path: Path, descriptor_path: Path) -> int:
@@ -438,7 +494,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "route":
         return route_from_standard_input(arguments.policy, arguments.source_vendor)
     if arguments.command == "run":
-        return run_from_standard_input(arguments.policy, arguments.source_vendor)
+        return run_from_standard_input(
+            arguments.policy,
+            arguments.source_vendor,
+            arguments.ack_route_fingerprint,
+        )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
     if arguments.api_command == "route":

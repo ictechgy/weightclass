@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 
 def _api_policy(**overrides: object) -> dict[str, object]:
@@ -42,7 +43,7 @@ class V2EgressGateTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -64,6 +65,32 @@ class V2EgressGateTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 3)
         self.assertEqual(json.loads(result.stderr), {"error": "unsupported_route"})
+
+    def test_rejects_a_label_carrying_invisible_characters(self) -> None:
+        """Breaks if a V2 label may hold a character the review descriptor cannot show.
+
+        model 과 effort 는 런타임에 argv 로 전달된다. 서로게이트는 exec 단계에서
+        UnicodeEncodeError 로 터지고, 서식 문자는 검토 출력에 드러나지 않는다.
+        """
+        invisible_labels = (
+            "\ud800",  # lone surrogate
+            "a​b",  # zero-width space
+            "a‮b",  # RTL override
+            "ab",  # C1 control
+            "a b",  # NBSP
+        )
+        for label in invisible_labels:
+            with self.subTest(label=ascii(label)):
+                policy = _api_policy()
+                routes = policy["routes"]
+                assert isinstance(routes, list)
+                routes[0]["model"] = label
+
+                result = self._review(policy, sys.executable)
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+                self.assertNotIn("Traceback", result.stderr)
 
     def test_rejects_a_relative_api_runtime_path(self) -> None:
         """Breaks if a runtime can be resolved through the caller's working directory."""
@@ -96,7 +123,7 @@ class V2EgressGateTests(unittest.TestCase):
             arguments = [
                 sys.executable,
                 "-m",
-                "sar",
+                "weightclass",
                 "v2",
                 "run",
                 "--policy",
@@ -135,7 +162,9 @@ class V2EgressGateTests(unittest.TestCase):
 class V2ExecutorResultTests(unittest.TestCase):
     """V2 도 자식의 종료 상태를 라우터 진단 코드와 섞지 않아야 한다."""
 
-    def _run_acknowledged_route(self, runtime_body: str, task: str = "Fix a typo.") -> subprocess.CompletedProcess[str]:
+    def _run_acknowledged_route(
+        self, runtime_body: str, task: str = "Fix a typo."
+    ) -> subprocess.CompletedProcess[str]:
         """Review and then run a V2 route served by a caller-supplied fake runtime."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
@@ -147,7 +176,7 @@ class V2ExecutorResultTests(unittest.TestCase):
             arguments = [
                 sys.executable,
                 "-m",
-                "sar",
+                "weightclass",
                 "v2",
                 "run",
                 "--policy",
@@ -256,7 +285,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -325,7 +354,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "run",
                     "--policy",
@@ -378,7 +407,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -431,7 +460,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -451,7 +480,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "run",
                     "--policy",
@@ -481,7 +510,7 @@ class V2CommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path = directory / "policy.json"
-            original_policy = {
+            original_policy: dict[str, Any] = {
                 "schema_version": 2,
                 "allow_cross_provider": False,
                 "allow_api": True,
@@ -505,7 +534,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -526,7 +555,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "run",
                     "--policy",
@@ -577,7 +606,7 @@ class V2CommandLineTests(unittest.TestCase):
             common_arguments = [
                 sys.executable,
                 "-m",
-                "sar",
+                "weightclass",
                 "v2",
                 "route",
                 "--policy",
@@ -639,7 +668,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "route",
                     "--policy",
@@ -660,7 +689,7 @@ class V2CommandLineTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "sar",
+                    "weightclass",
                     "v2",
                     "run",
                     "--policy",

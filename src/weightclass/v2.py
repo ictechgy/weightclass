@@ -1,15 +1,15 @@
 """Declarative V2 API routing without credential or network access."""
 
-from dataclasses import asdict, dataclass
 import hashlib
 import json
 import os
+import unicodedata
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final, cast
 
 from .classification import Tier, classify_task
-from .router import RouteSelectionError, SUPPORTED_VENDORS
-
+from .router import SUPPORTED_VENDORS, RouteSelectionError
 
 POLICY_SCHEMA_VERSION: Final = 2
 MAX_POLICY_BYTES: Final = 262_144
@@ -43,12 +43,22 @@ class ApiRoutingPolicy:
 
 
 def _require_label(value: object) -> str:
+    """Require one reviewable policy label.
+
+    model 과 effort 는 런타임에 argv 로 전달되므로 명령 인자와 같은 기준을
+    적용한다. 제어문자와 서식 문자는 검토 출력에 드러나지 않고, 서로게이트는
+    exec 단계에서 UnicodeEncodeError 로 터져 진단 없이 트레이스백을 남긴다.
+    """
     if (
         not isinstance(value, str)
         or not value
         or len(value) > MAX_LABEL_LENGTH
         or value != value.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        or any(
+            unicodedata.category(character).startswith("C")
+            or (character.isspace() and character != " ")
+            for character in value
+        )
     ):
         raise V2InvalidInputError()
     return value
@@ -91,10 +101,9 @@ def _parse_route(value: object) -> ApiRoute:
     if not isinstance(eligible_sources, list) or not eligible_sources:
         raise V2InvalidInputError()
     parsed_sources = tuple(_require_label(source) for source in eligible_sources)
-    if (
-        any(source not in SUPPORTED_VENDORS for source in parsed_sources)
-        or len(set(parsed_sources)) != len(parsed_sources)
-    ):
+    if any(source not in SUPPORTED_VENDORS for source in parsed_sources) or len(
+        set(parsed_sources)
+    ) != len(parsed_sources):
         raise V2InvalidInputError()
     provider = _require_label(value["provider"])
     if provider not in SUPPORTED_PROVIDERS:
@@ -123,7 +132,9 @@ def load_api_policy(path: Path) -> ApiRoutingPolicy:
         raise V2InvalidInputError()
     if not isinstance(policy["schema_version"], int) or isinstance(policy["schema_version"], bool):
         raise V2InvalidInputError()
-    if not isinstance(policy["allow_cross_provider"], bool) or not isinstance(policy["allow_api"], bool):
+    if not isinstance(policy["allow_cross_provider"], bool) or not isinstance(
+        policy["allow_api"], bool
+    ):
         raise V2InvalidInputError()
     routes = policy["routes"]
     if not isinstance(routes, list) or not routes:
