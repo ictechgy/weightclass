@@ -71,22 +71,32 @@ publisher once, on PyPI:
 
 The formula installs the PyPI sdist, so it can only be updated after step 4.
 
-1. Take the checksum of the published source distribution:
+1. Read the canonical source URL and its checksum from PyPI. Homebrew's audit
+   rejects the `/packages/source/w/...` redirect form, so take the hashed URL
+   that PyPI itself reports:
 
    ```sh
    VERSION=0.1.0
-   URL="https://files.pythonhosted.org/packages/source/w/weightclass/weightclass-${VERSION}.tar.gz"
-   curl -fsSL "$URL" | shasum -a 256
+   curl -s "https://pypi.org/pypi/weightclass/${VERSION}/json" | python3 -c '
+   import json, sys
+   for f in json.load(sys.stdin)["urls"]:
+       if f["packagetype"] == "sdist":
+           print("url   :", f["url"])
+           print("sha256:", f["digests"]["sha256"])'
    ```
 
 2. In `ictechgy/homebrew-tap`, update `Formula/weightclass.rb` with the new
    `url` and `sha256`, then commit.
-3. Verify from a clean shell:
+3. Verify before pushing the tap change. `brew audit` and `brew style` only
+   apply tap rules to a file that already sits inside a tap, so copy it in
+   first:
 
    ```sh
-   brew update
-   brew install ictechgy/tap/weightclass
-   brew test weightclass
+   cp packaging/homebrew/weightclass.rb "$(brew --repository ictechgy/tap)/Formula/"
+   brew style ictechgy/tap
+   brew audit --strict --tap=ictechgy/tap weightclass
+   brew install --build-from-source ictechgy/tap/weightclass
+   brew test ictechgy/tap/weightclass
    ```
 
 `packaging/homebrew/weightclass.rb` in this repository is the source of truth
