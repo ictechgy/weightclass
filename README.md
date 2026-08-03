@@ -82,8 +82,11 @@ The built-in routes are intentionally conservative:
 - Claude: `low`, `standard`, and `high` use print mode, no session persistence,
   and efforts `low`, `medium`, and `high`. Permissions are `acceptEdits`,
   because print mode is non-interactive: a permission mode that asks a human
-  has nobody to ask, so every edit is refused while `claude` still exits `0`.
-  Reviewing the command with `wclass route` is the approval step.
+  has nobody to ask, so every edit is refused while `claude` still exits `0` —
+  the router would report success having changed nothing. The built-in Codex
+  routes can already write through `--sandbox workspace-write`, so this keeps
+  the two vendors at one capability rather than letting the vendor, instead of
+  the tier, decide what a task can accomplish.
 
 Neither default route pins a model. Model selection stays your reviewed
 policy's decision, expressed inside that policy's `command`; see
@@ -257,6 +260,15 @@ credential management, background execution, or a bundled provider runtime.
   subscription checker, bundled provider runtime, or unattended multi-agent
   supervisor.
 - Policies must be reviewed before use. Do not place secrets in a policy.
+- `wclass route` is not a binding approval of a later `wclass run`. The two
+  commands read the policy independently, so a policy edited in between yields a
+  command that was never reviewed, and weightclass does not detect it. V2 closes
+  this with `route_fingerprint`; V1 has no equivalent. The real boundary is your
+  control of the policy file, plus the built-in routes, which live in code and
+  cannot be swapped. Treat a policy file the way you treat a shell script.
+- A selected command receives the task on standard input and inherits standard
+  output and error. Whatever it does with the task — including writing it
+  somewhere — is outside weightclass's control, and its exit status is its own.
 
 ## Development verification
 

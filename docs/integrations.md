@@ -52,8 +52,9 @@ printf '%s' 'Add a focused unit test for this formatter.' | \
 With the built-in policy, this starts exactly one foreground `claude --print`
 process with `acceptEdits` permissions and no session persistence. Print mode is
 non-interactive, so a permission mode that prompts a human refuses every edit
-while still exiting `0`; review the rendered command before running it. It does
-not change
+while still exiting `0`. Note that `route` and `run` read the policy separately,
+so reviewing a route does not bind the command a later `run` will execute. It
+does not change
 the configuration or context of an already-running Claude Code session. Use a
 reviewed local policy for model selection; weightclass never probes model
 availability, subscription access, or remaining usage.

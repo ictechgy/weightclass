@@ -11,7 +11,11 @@ SUPPORTED_VENDORS: Final = frozenset({"claude", "codex"})
 # 없어 모든 편집이 거부되고, 그런데도 claude 는 0으로 종료한다. 즉 라우터가
 # 성공을 보고하면서 아무 일도 일어나지 않는다. acceptEdits 는 Codex 기본
 # 라우트의 workspace-write 와 같은 수준으로, 두 벤더가 같은 일을 할 수 있게 한다.
-# 실행 전 wclass route 로 명령을 검토하는 절차가 승인 지점을 대신한다.
+#
+# 이 선택을 "wclass route 로 검토했으니 안전하다"로 정당화하지 말 것. route 와
+# run 은 정책을 각각 따로 읽으므로 그 사이에 정책이 바뀌면 검토한 것과 다른
+# 명령이 실행된다(V1 에는 V2 의 route_fingerprint 같은 결속이 없다). 실제 경계는
+# 정책 파일에 대한 사용자의 통제와, 코드에 고정되어 교체할 수 없는 기본 라우트다.
 CLAUDE_COMMAND_PREFIX: Final = (
     "claude",
     "--print",
