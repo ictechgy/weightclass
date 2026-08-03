@@ -92,6 +92,39 @@ class CommandSurfaceTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
 
 
+class TaskConfidentialityTests(unittest.TestCase):
+    def test_no_subcommand_echoes_any_word_of_the_task(self) -> None:
+        """Breaks if any mode starts placing task content in its output or diagnostics.
+
+        개별 테스트의 assertNotIn 은 애초에 출력에 나올 수 없는 단어를 검사해서
+        공허하게 통과할 수 있다. 여기서는 태스크의 모든 단어를 성공/실패 양쪽
+        스트림 전체에 대해 검사한다.
+        """
+        task = "Zephyrine quokka authorization ledger reconciliation glimmerfast"
+        distinctive_words = [word for word in task.split() if word != "authorization"]
+
+        for arguments in (
+            ["classify"],
+            ["route"],
+            ["route", "--source-vendor", "codex"],
+            ["route", "--policy", "/nonexistent/policy.json"],
+            ["render", "--policy", "/nonexistent/p.json", "--descriptor", "/nonexistent/d.json"],
+        ):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [sys.executable, "-m", "sar", *arguments],
+                    capture_output=True,
+                    check=False,
+                    input=task,
+                    text=True,
+                )
+
+                streams = result.stdout + result.stderr
+                self.assertNotEqual(streams.strip(), "")
+                for word in distinctive_words:
+                    self.assertNotIn(word, streams)
+
+
 class CommandLineTests(unittest.TestCase):
     def test_classifies_a_short_spelling_fix_as_low_effort(self) -> None:
         result = subprocess.run(
@@ -659,6 +692,59 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result.stdout, b"worker-received-task\n")
         self.assertNotIn(b"UnicodeEncodeError", result.stderr)
         self.assertNotIn(b"Traceback", result.stderr)
+
+    def test_runs_only_the_source_vendor_route_when_two_vendors_share_a_tier(self) -> None:
+        """Breaks if cross-vendor containment is enforced for route but not for run."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            workers = {}
+            for vendor in ("codex", "claude"):
+                worker_path = directory / f"{vendor}_worker.py"
+                worker_path.write_text(
+                    "import sys\n"
+                    "sys.stdin.read()\n"
+                    f"print('{vendor}-worker-ran')\n",
+                    encoding="utf-8",
+                )
+                workers[vendor] = worker_path
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": f"{vendor}-low",
+                                "vendor": vendor,
+                                "tier": "low",
+                                "command": [sys.executable, str(workers[vendor])],
+                            }
+                            for vendor in ("codex", "claude")
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "sar",
+                    "run",
+                    "--policy",
+                    str(policy_path),
+                    "--source-vendor",
+                    "claude",
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+        # codex-low 가 먼저 선언되어 있으므로, 벤더 필터가 없으면 그쪽이 실행된다.
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "claude-worker-ran\n")
 
     def test_hides_executor_startup_details_when_a_route_command_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

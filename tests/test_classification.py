@@ -1,6 +1,37 @@
 import unittest
 
-from sar.classification import classify_task
+from sar.classification import (
+    HIGH_TASK_CHARACTERS,
+    LOW_TASK_CHARACTERS,
+    MAX_TASK_CHARACTERS,
+    InvalidTaskError,
+    classify_task,
+)
+
+
+class ThresholdTests(unittest.TestCase):
+    """길이 임계값은 문서화된 계약이므로 경계 양쪽을 모두 고정한다."""
+
+    def test_a_low_signal_stops_reaching_the_low_tier_past_its_length_limit(self) -> None:
+        prefix = "fix typo "
+        at_limit = prefix + "x" * (LOW_TASK_CHARACTERS - len(prefix))
+        past_limit = prefix + "x" * (LOW_TASK_CHARACTERS - len(prefix) + 1)
+
+        self.assertEqual(len(at_limit), LOW_TASK_CHARACTERS)
+        self.assertEqual(classify_task(at_limit), "low")
+        self.assertEqual(classify_task(past_limit), "standard")
+
+    def test_length_alone_escalates_a_signal_free_task_to_high(self) -> None:
+        below_limit = "x" * (HIGH_TASK_CHARACTERS - 1)
+        at_limit = "x" * HIGH_TASK_CHARACTERS
+
+        self.assertEqual(classify_task(below_limit), "standard")
+        self.assertEqual(classify_task(at_limit), "high")
+
+    def test_rejects_a_task_past_the_maximum_character_limit(self) -> None:
+        self.assertEqual(classify_task("x" * MAX_TASK_CHARACTERS), "high")
+        with self.assertRaises(InvalidTaskError):
+            classify_task("x" * (MAX_TASK_CHARACTERS + 1))
 
 
 class ClassificationRegressionTests(unittest.TestCase):
