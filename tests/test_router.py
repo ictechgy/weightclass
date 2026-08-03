@@ -1230,8 +1230,31 @@ class CommandLineTests(unittest.TestCase):
                     text=True,
                 )
 
+            def write_single_vendor_policy(vendor: str) -> None:
+                policy_path.write_text(
+                    json.dumps(
+                        {
+                            "routes": [
+                                {
+                                    "id": "shared-low",
+                                    "vendor": vendor,
+                                    "tier": "low",
+                                    "command": shared_command,
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
             write_policy("codex", allow_mixed_vendors=False)
             baseline = route_fingerprint_for("Fix a typo.")
+
+            # 0. 벤더만 다르다. route id 와 명령은 글자 그대로 같다.
+            write_single_vendor_policy("codex")
+            vendor_baseline = route_fingerprint_for("Fix a typo.")
+            write_single_vendor_policy("claude")
+            other_vendor = run_with("Fix a typo.", vendor_baseline)
 
             # 1. route id 만 다르다. 명령은 글자 그대로 같다.
             write_policy("renamed", allow_mixed_vendors=False)
@@ -1248,6 +1271,7 @@ class CommandLineTests(unittest.TestCase):
             unchanged = run_with("Fix a typo.", baseline)
 
         for label, result in (
+            ("vendor", other_vendor),
             ("route id", renamed_id),
             ("allow_mixed_vendors", flipped_mixing),
             ("tier", other_tier),
