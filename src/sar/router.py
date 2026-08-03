@@ -1,9 +1,14 @@
 """Deterministic route selection for user-reviewable vendor commands."""
 
 from dataclasses import dataclass
+import hashlib
+import json
 from typing import Final
 
 from .classification import Tier
+
+
+NATIVE_FINGERPRINT_VERSION: Final = 1
 
 
 SUPPORTED_VENDORS: Final = frozenset({"claude", "codex"})
@@ -123,6 +128,41 @@ DEFAULT_ROUTES: Final = (
 
 class RouteSelectionError(LookupError):
     """Raised when no policy route supports a request."""
+
+
+def native_route_fingerprint(
+    route: Route,
+    tier: Tier,
+    source_vendor: str | None,
+    allow_mixed_vendors: bool,
+) -> str:
+    """Bind a rendered review to everything that decides what `run` will execute.
+
+    route 와 run 은 정책을 각각 따로 읽으므로, 사이에 정책이 바뀌면 검토한 것과
+    다른 명령이 실행된다. run 에 이 지문을 넘기면 실행 직전에 다시 계산해
+    비교하므로, 선택된 명령·벤더·티어·혼합 허용 여부 중 하나라도 달라지면
+    실행되지 않는다. V2 의 route_fingerprint 와 같은 역할이다.
+    """
+    semantic_route = {
+        "schema_version": NATIVE_FINGERPRINT_VERSION,
+        "tier": tier,
+        "source_vendor": source_vendor,
+        "policy": {"allow_mixed_vendors": allow_mixed_vendors},
+        "route": {
+            "id": route.route_id,
+            "vendor": route.vendor,
+            "workflow": route.workflow,
+            "tier": route.tier,
+            "command": list(route.command),
+        },
+    }
+    encoded = json.dumps(
+        semantic_route,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def select_route(routes: tuple[Route, ...], request: RouteRequest) -> Route:
