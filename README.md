@@ -31,6 +31,22 @@ For reviewable native Codex and Claude Code invocation examples, see
 
 ## Run locally
 
+`wclass --help` lists the whole surface:
+
+```text
+wclass [-h] [--version] {classify,route,run,render,v2} ...
+```
+
+`classify`, `route`, and `run` read the task from standard input. `render`
+prints the command of a policy route named by a workflow descriptor and never
+reads a task. `v2` selects a declarative API route; see
+[V2 API routing](#v2-api-routing-through-an-external-runtime).
+
+Every malformed invocation — an unknown subcommand, a missing argument, a bad
+policy — exits `2` with `{"error": "invalid_input"}` on standard error and
+nothing else, so a caller can parse the failure without scraping usage text.
+Flag names are never abbreviated: `--confirm-api-egress` cannot be shortened.
+
 Inspect a route before running it:
 
 ```sh

@@ -50,6 +50,48 @@ class SelectRouteTests(unittest.TestCase):
         )
 
 
+class CommandSurfaceTests(unittest.TestCase):
+    def test_help_lists_every_reachable_subcommand(self) -> None:
+        """Breaks if a mode becomes undiscoverable from the command line."""
+        result = subprocess.run(
+            [sys.executable, "-m", "sar", "--help"],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for subcommand in ("classify", "route", "run", "render", "v2"):
+            with self.subTest(subcommand=subcommand):
+                self.assertIn(subcommand, result.stdout)
+
+    def test_rejects_an_abbreviated_api_egress_confirmation(self) -> None:
+        """Breaks if an explicit egress gate can be satisfied by a prefix of its flag."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "sar",
+                "v2",
+                "run",
+                "--policy",
+                "policy.json",
+                "--source-vendor",
+                "codex",
+                "--api-runtime",
+                sys.executable,
+                "--c",
+            ],
+            capture_output=True,
+            check=False,
+            input="Fix a typo.",
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+
+
 class CommandLineTests(unittest.TestCase):
     def test_classifies_a_short_spelling_fix_as_low_effort(self) -> None:
         result = subprocess.run(
@@ -681,6 +723,7 @@ class CommandLineTests(unittest.TestCase):
                     sys.executable,
                     "-m",
                     "sar",
+                    "render",
                     "--policy",
                     str(policy_path),
                     "--descriptor",
@@ -730,6 +773,7 @@ class CommandLineTests(unittest.TestCase):
                     sys.executable,
                     "-m",
                     "sar",
+                    "render",
                     "--policy",
                     str(policy_path),
                     "--descriptor",
@@ -780,6 +824,7 @@ class CommandLineTests(unittest.TestCase):
                     sys.executable,
                     "-m",
                     "sar",
+                    "render",
                     "--policy",
                     str(policy_path),
                     "--descriptor",

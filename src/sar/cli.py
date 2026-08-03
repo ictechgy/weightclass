@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence, cast
 
+from . import __version__
 from .classification import (
     InvalidTaskError,
     Tier,
@@ -149,35 +150,69 @@ def load_request(descriptor_path: Path) -> RouteRequest:
     return RouteRequest(vendor=vendor, workflow=_require_nonempty_string(descriptor["workflow"]))
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = SafeArgumentParser(description="Render a supported native workflow command.")
-    parser.add_argument("--policy", required=True, type=Path)
-    parser.add_argument("--descriptor", required=True, type=Path)
-    return parser
-
-
-def build_route_parser() -> argparse.ArgumentParser:
-    parser = SafeArgumentParser(description="Select a command for a task read from stdin.")
-    parser.add_argument("--policy", type=Path)
-    parser.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
-    return parser
-
-
-def build_v2_route_parser() -> argparse.ArgumentParser:
-    """Parse an explicit V2 API route review request."""
-    parser = SafeArgumentParser(description="Review a declarative API route.")
+def _add_api_route_arguments(parser: argparse.ArgumentParser) -> None:
+    """Declare the arguments shared by both V2 API subcommands."""
     parser.add_argument("--policy", required=True, type=Path)
     parser.add_argument("--source-vendor", required=True, choices=sorted(SUPPORTED_VENDORS))
     parser.add_argument("--api-runtime", required=True, type=Path)
-    return parser
 
 
-def build_v2_run_parser() -> argparse.ArgumentParser:
-    """Parse an explicit V2 API execution request."""
-    parser = build_v2_route_parser()
-    parser.description = "Run a reviewed declarative API route."
-    parser.add_argument("--confirm-api-egress", action="store_true")
-    parser.add_argument("--ack-route-fingerprint")
+def build_parser() -> argparse.ArgumentParser:
+    """Build the whole command surface so `--help` lists every reachable mode.
+
+    allow_abbrev를 끈 것은 --confirm-api-egress 같은 명시적 승인 플래그가
+    --c 같은 축약으로 만족되면 안 되기 때문이다.
+    """
+    parser = SafeArgumentParser(
+        prog="wclass",
+        description="Classify a task and select a reviewable vendor command.",
+        allow_abbrev=False,
+    )
+    parser.add_argument("--version", action="version", version=f"weightclass {__version__}")
+    subcommands = parser.add_subparsers(dest="command", required=True)
+
+    subcommands.add_parser(
+        "classify",
+        allow_abbrev=False,
+        description="Print the tier of a task read from standard input.",
+    )
+    for name, description in (
+        ("route", "Select and print a command for a task read from standard input."),
+        ("run", "Select and start a command for a task read from standard input."),
+    ):
+        native = subcommands.add_parser(name, allow_abbrev=False, description=description)
+        native.add_argument("--policy", type=Path)
+        native.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
+
+    render = subcommands.add_parser(
+        "render",
+        allow_abbrev=False,
+        description="Render the command of a policy route named by a workflow descriptor.",
+    )
+    render.add_argument("--policy", required=True, type=Path)
+    render.add_argument("--descriptor", required=True, type=Path)
+
+    api = subcommands.add_parser(
+        "v2",
+        allow_abbrev=False,
+        description="Select a declarative API route served by an external runtime.",
+    )
+    api_subcommands = api.add_subparsers(dest="api_command", required=True)
+    _add_api_route_arguments(
+        api_subcommands.add_parser(
+            "route",
+            allow_abbrev=False,
+            description="Review a declarative API route.",
+        )
+    )
+    api_run = api_subcommands.add_parser(
+        "run",
+        allow_abbrev=False,
+        description="Run a reviewed declarative API route.",
+    )
+    _add_api_route_arguments(api_run)
+    api_run.add_argument("--confirm-api-egress", action="store_true")
+    api_run.add_argument("--ack-route-fingerprint")
     return parser
 
 
@@ -349,52 +384,11 @@ def run_from_standard_input(policy_path: Path | None, source_vendor: str | None)
     return completed_process.returncode
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Classify, route, render, or run a native command from explicit input."""
-    provided_arguments = list(sys.argv[1:] if argv is None else argv)
-    if provided_arguments == ["classify"]:
-        return classify_from_standard_input()
-    if provided_arguments and provided_arguments[0] == "route":
-        try:
-            arguments = build_route_parser().parse_args(provided_arguments[1:])
-        except InvalidInputError:
-            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-            return 2
-        return route_from_standard_input(arguments.policy, arguments.source_vendor)
-    if provided_arguments and provided_arguments[0] == "run":
-        try:
-            arguments = build_route_parser().parse_args(provided_arguments[1:])
-        except InvalidInputError:
-            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-            return 2
-        return run_from_standard_input(arguments.policy, arguments.source_vendor)
-    if len(provided_arguments) >= 2 and provided_arguments[:2] == ["v2", "route"]:
-        try:
-            arguments = build_v2_route_parser().parse_args(provided_arguments[2:])
-        except InvalidInputError:
-            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-            return 2
-        return v2_route_from_standard_input(
-            arguments.policy,
-            arguments.source_vendor,
-            arguments.api_runtime,
-        )
-    if len(provided_arguments) >= 2 and provided_arguments[:2] == ["v2", "run"]:
-        try:
-            arguments = build_v2_run_parser().parse_args(provided_arguments[2:])
-        except InvalidInputError:
-            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-            return 2
-        return v2_run_from_standard_input(
-            arguments.policy,
-            arguments.source_vendor,
-            arguments.api_runtime,
-            arguments.confirm_api_egress,
-            arguments.ack_route_fingerprint,
-        )
+
+def render_workflow_route(policy_path: Path, descriptor_path: Path) -> int:
+    """Render the command of the policy route named by a workflow descriptor."""
     try:
-        arguments = build_parser().parse_args(provided_arguments)
-        route = select_route(load_routes(arguments.policy), load_request(arguments.descriptor))
+        route = select_route(load_routes(policy_path), load_request(descriptor_path))
     except InvalidInputError:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
@@ -403,3 +397,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 3
     print(json.dumps({"command": list(route.command), "route": route.route_id}))
     return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Classify, route, render, or run a native command from explicit input."""
+    try:
+        arguments = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    except InvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+
+    if arguments.command == "classify":
+        return classify_from_standard_input()
+    if arguments.command == "route":
+        return route_from_standard_input(arguments.policy, arguments.source_vendor)
+    if arguments.command == "run":
+        return run_from_standard_input(arguments.policy, arguments.source_vendor)
+    if arguments.command == "render":
+        return render_workflow_route(arguments.policy, arguments.descriptor)
+    if arguments.api_command == "route":
+        return v2_route_from_standard_input(
+            arguments.policy,
+            arguments.source_vendor,
+            arguments.api_runtime,
+        )
+    return v2_run_from_standard_input(
+        arguments.policy,
+        arguments.source_vendor,
+        arguments.api_runtime,
+        arguments.confirm_api_egress,
+        arguments.ack_route_fingerprint,
+    )
