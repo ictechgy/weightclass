@@ -147,6 +147,8 @@ def _required_vendor(
         return None
     if source_vendor is not None:
         return source_vendor
-    # 호출자가 벤더를 밝히지 않은 경우, 정책이 처음 선언한 벤더를 그 정책의
-    # 벤더로 본다. 첫 라우트는 리뷰 가능한 값이므로 선택 결과가 결정적이다.
-    return routes[0].vendor if routes else None
+    # 호출자가 벤더를 밝히지 않은 경우, 정책이 처음 선언한 티어 라우트의 벤더를
+    # 그 정책의 벤더로 본다. 리뷰 가능한 값이므로 선택 결과가 결정적이다.
+    # workflow 라우트는 티어 선택 후보가 아니므로 기준에서 제외한다. 포함하면
+    # workflow 라우트를 먼저 선언한 정책의 모든 티어가 선택 불가능해진다.
+    return next((route.vendor for route in routes if route.tier is not None), None)

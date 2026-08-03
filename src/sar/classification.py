@@ -97,13 +97,25 @@ def read_task_from_standard_input() -> str:
         raise InvalidTaskError() from error
 
 
+# 선행 경계만으로 "reproduction"이 "production"에 걸리는 오분류를 막을 수 있다.
+# 후행까지 경계로 닫으면 "credentials", "payments", "refactoring" 같은 굴절형이
+# 전부 시그널에서 빠져나가므로, 흔한 어미를 경계 앞에서 함께 허용한다.
+_SIGNAL_SUFFIXES: Final = "(?:s|es|d|ed|ing)?"
+# "data loss"는 "data-loss"로도 쓴다. 여러 단어로 된 시그널이 공백 표기에만
+# 걸리면, 하이픈 표기 작업에서는 상위 시그널이 통째로 사라진다.
+_SIGNAL_WORD_SEPARATOR: Final = r"[\s\-]+"
+
+
 def _compile_ascii_signals(signals: frozenset[str]) -> re.Pattern[str]:
     """Compile the ASCII signals of one tier into a single word-boundary pattern."""
     ascii_signals = sorted(
         (signal for signal in signals if signal.isascii()), key=len, reverse=True
     )
-    alternation = "|".join(re.escape(signal) for signal in ascii_signals)
-    return re.compile(rf"\b(?:{alternation})\b")
+    alternation = "|".join(
+        re.escape(signal).replace(r"\ ", " ").replace(" ", _SIGNAL_WORD_SEPARATOR)
+        for signal in ascii_signals
+    )
+    return re.compile(rf"\b(?:{alternation}){_SIGNAL_SUFFIXES}\b")
 
 
 def _select_non_ascii_signals(signals: frozenset[str]) -> frozenset[str]:

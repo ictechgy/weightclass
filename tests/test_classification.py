@@ -1,12 +1,62 @@
 import unittest
 
 from sar.classification import (
+    HIGH_SIGNALS,
     HIGH_TASK_CHARACTERS,
     LOW_TASK_CHARACTERS,
     MAX_TASK_CHARACTERS,
     InvalidTaskError,
     classify_task,
 )
+
+
+class SignalInflectionTests(unittest.TestCase):
+    """굴절형이 시그널에서 빠져나가면 위험한 작업이 싼 티어로 떨어진다."""
+
+    def test_every_ascii_high_signal_survives_its_plural(self) -> None:
+        for signal in sorted(HIGH_SIGNALS):
+            if not signal.isascii():
+                continue
+            with self.subTest(signal=signal):
+                self.assertEqual(classify_task(f"Please review the {signal}s here."), "high")
+
+    def test_an_inflected_high_signal_outranks_an_inflected_low_signal(self) -> None:
+        cases = (
+            "Reformatting the credentials file used by the deploy job.",
+            "Renaming the payments table columns.",
+            "Renaming the columns in the pending migrations.",
+            "Fix the formatting of the authorizations audit log.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classify_task(task), "high")
+
+    def test_a_hyphenated_multi_word_high_signal_still_outranks_a_low_signal(self) -> None:
+        """Breaks if a multi-word signal only matches its space-separated spelling."""
+        cases = (
+            "Reformat the data-loss recovery procedure.",
+            "Rename the race-condition guard.",
+            "Fix the data loss recovery procedure formatting.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classify_task(task), "high")
+
+    def test_common_inflections_of_high_signals_stay_high(self) -> None:
+        cases = (
+            "Rotate the credentials after a suspected leak.",
+            "Review the payments flow.",
+            "Refactoring this module.",
+            "Fix race conditions in the worker pool.",
+            "Review the pending migrations.",
+            "Compare the two architectures.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classify_task(task), "high")
 
 
 class ThresholdTests(unittest.TestCase):

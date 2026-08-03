@@ -65,28 +65,83 @@ class CommandSurfaceTests(unittest.TestCase):
             with self.subTest(subcommand=subcommand):
                 self.assertIn(subcommand, result.stdout)
 
-    def test_rejects_an_abbreviated_api_egress_confirmation(self) -> None:
-        """Breaks if an explicit egress gate can be satisfied by a prefix of its flag."""
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "sar",
-                "v2",
-                "run",
-                "--policy",
-                "policy.json",
-                "--source-vendor",
-                "codex",
-                "--api-runtime",
-                sys.executable,
-                "--c",
-            ],
+    def test_rejects_a_version_query_carrying_extra_arguments(self) -> None:
+        """Breaks if --version exits successfully without validating the rest of argv."""
+        accepted = subprocess.run(
+            [sys.executable, "-m", "sar", "--version"],
             capture_output=True,
             check=False,
-            input="Fix a typo.",
             text=True,
         )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertIn("weightclass", accepted.stdout)
+
+        for extra in (["--definitely-invalid"], ["classify"]):
+            with self.subTest(extra=extra):
+                result = subprocess.run(
+                    [sys.executable, "-m", "sar", "--version", *extra],
+                    capture_output=True,
+                    check=False,
+                    input="",
+                    text=True,
+                )
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+
+    def test_rejects_an_abbreviated_api_egress_confirmation(self) -> None:
+        """Breaks if an explicit egress gate can be satisfied by a prefix of its flag.
+
+        정책과 런타임을 모두 유효하게 준다. 축약이 허용되면 --c 가
+        --confirm-api-egress 로 해석되어 지문 검사(exit 6)까지 진행하므로,
+        가드가 있을 때(exit 2)와 결과가 갈린다.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "api-policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "allow_cross_provider": False,
+                        "allow_api": True,
+                        "routes": [
+                            {
+                                "id": "openai-low-api",
+                                "tier": "low",
+                                "eligible_source_vendors": ["codex"],
+                                "provider": "openai",
+                                "transport": "api",
+                                "model": "opaque-openai-low-model",
+                                "effort": "low",
+                                "intended_recipient": "OpenAI API",
+                                "intended_billing_boundary": "user OpenAI API account",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "sar",
+                    "v2",
+                    "run",
+                    "--policy",
+                    str(policy_path),
+                    "--source-vendor",
+                    "codex",
+                    "--api-runtime",
+                    sys.executable,
+                    "--c",
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
 
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
@@ -103,26 +158,88 @@ class TaskConfidentialityTests(unittest.TestCase):
         task = "Zephyrine quokka authorization ledger reconciliation glimmerfast"
         distinctive_words = [word for word in task.split() if word != "authorization"]
 
-        for arguments in (
-            ["classify"],
-            ["route"],
-            ["route", "--source-vendor", "codex"],
-            ["route", "--policy", "/nonexistent/policy.json"],
-            ["render", "--policy", "/nonexistent/p.json", "--descriptor", "/nonexistent/d.json"],
-        ):
-            with self.subTest(arguments=arguments):
-                result = subprocess.run(
-                    [sys.executable, "-m", "sar", *arguments],
-                    capture_output=True,
-                    check=False,
-                    input=task,
-                    text=True,
-                )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            worker_path = directory / "silent_worker.py"
+            worker_path.write_text(
+                "import sys\nsys.stdin.buffer.read()\nprint('worker-done')\n",
+                encoding="utf-8",
+            )
+            native_policy_path = directory / "policy.json"
+            native_policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": f"codex-{tier}",
+                                "vendor": "codex",
+                                "tier": tier,
+                                "command": [sys.executable, str(worker_path)],
+                            }
+                            for tier in ("low", "standard", "high")
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            api_policy_path = directory / "api-policy.json"
+            api_policy_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "allow_cross_provider": False,
+                        "allow_api": True,
+                        "routes": [
+                            {
+                                "id": "openai-high-api",
+                                "tier": "high",
+                                "eligible_source_vendors": ["codex"],
+                                "provider": "openai",
+                                "transport": "api",
+                                "model": "opaque-openai-high-model",
+                                "effort": "high",
+                                "intended_recipient": "OpenAI API",
+                                "intended_billing_boundary": "user OpenAI API account",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            api_arguments = [
+                "--policy",
+                str(api_policy_path),
+                "--source-vendor",
+                "codex",
+                "--api-runtime",
+                sys.executable,
+            ]
 
-                streams = result.stdout + result.stderr
-                self.assertNotEqual(streams.strip(), "")
-                for word in distinctive_words:
-                    self.assertNotIn(word, streams)
+            for arguments in (
+                ["classify"],
+                ["route"],
+                ["route", "--source-vendor", "codex"],
+                ["route", "--policy", "/nonexistent/policy.json"],
+                ["run", "--policy", str(native_policy_path)],
+                ["run", "--policy", "/nonexistent/policy.json"],
+                ["render", "--policy", "/nonexistent/p.json", "--descriptor", "/nonexistent/d.json"],
+                ["v2", "route", *api_arguments],
+                ["v2", "run", *api_arguments],
+                ["v2", "run", *api_arguments, "--confirm-api-egress"],
+            ):
+                with self.subTest(arguments=arguments):
+                    result = subprocess.run(
+                        [sys.executable, "-m", "sar", *arguments],
+                        capture_output=True,
+                        check=False,
+                        input=task,
+                        text=True,
+                    )
+
+                    streams = result.stdout + result.stderr
+                    self.assertNotEqual(streams.strip(), "")
+                    for word in distinctive_words:
+                        self.assertNotIn(word, streams)
 
 
 class CommandLineTests(unittest.TestCase):
@@ -166,17 +283,26 @@ class CommandLineTests(unittest.TestCase):
                 self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
                 self.assertNotIn(b"Traceback", result.stderr)
 
-    def test_rejects_oversized_stdin_without_buffering_the_whole_stream(self) -> None:
-        """Breaks if the byte bound stops guarding the classifier's character limit."""
-        from sar.classification import MAX_TASK_BYTES
+    def test_rejects_stdin_past_the_byte_bound_before_the_character_limit(self) -> None:
+        """Breaks if the byte bound stops rejecting input the character limit would accept.
+
+        분류는 strip 후의 문자 수로 판단하므로, 공백을 덧붙이면 문자 상한은
+        통과하지만 바이트 상한은 넘는 입력을 만들 수 있다. 이 입력이 통과하면
+        바이트 경계가 사라진 것이다.
+        """
+        from sar.classification import MAX_TASK_BYTES, MAX_TASK_CHARACTERS
+
+        oversized = b"a" * MAX_TASK_CHARACTERS
+        oversized += b" " * (MAX_TASK_BYTES + 1 - len(oversized))
 
         result = subprocess.run(
             [sys.executable, "-m", "sar", "classify"],
             capture_output=True,
             check=False,
-            input=b"a" * (MAX_TASK_BYTES + 1),
+            input=oversized,
         )
 
+        self.assertEqual(len(oversized), MAX_TASK_BYTES + 1)
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
 

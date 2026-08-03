@@ -168,8 +168,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="Classify a task and select a reviewable vendor command.",
         allow_abbrev=False,
     )
-    parser.add_argument("--version", action="version", version=f"weightclass {__version__}")
-    subcommands = parser.add_subparsers(dest="command", required=True)
+    # argparse 내장 version 액션은 argv의 나머지를 검증하기 전에 종료해 버려서
+    # `wclass --version --bogus` 가 0으로 성공한다. 파싱을 끝낸 뒤 직접 처리한다.
+    parser.add_argument("--version", action="store_true")
+    subcommands = parser.add_subparsers(dest="command")
 
     subcommands.add_parser(
         "classify",
@@ -404,6 +406,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         arguments = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
     except InvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+
+    if arguments.version:
+        # 버전 조회는 단독 호출일 때만 유효하다. 서브커맨드와 함께 오면 어느 쪽을
+        # 요청한 것인지 알 수 없으므로 닫는 방향으로 거부한다.
+        if arguments.command is not None:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        print(f"weightclass {__version__}")
+        return 0
+    if arguments.command is None:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
 
