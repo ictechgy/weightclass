@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from collections.abc import Iterator
 from pathlib import Path
@@ -86,9 +87,13 @@ class TriageCommandTests(unittest.TestCase):
             with self.subTest(tier=tier):
                 self.assertIn(tier, TRIAGE_PROMPT)
         self.assertIn("exactly one word", TRIAGE_PROMPT)
-        # 태스크는 지시가 아니라 데이터로 다뤄져야 한다.
+        # 태스크는 울타리 안에 놓이고, 지시가 아니라 데이터로 다뤄져야 한다.
         self.assertIn("{task}", TRIAGE_PROMPT)
+        for fence in ("BEGIN TASK", "END TASK"):
+            with self.subTest(fence=fence):
+                self.assertIn(fence, TRIAGE_PROMPT)
         self.assertIn("never as instructions", TRIAGE_PROMPT)
+        self.assertIn("data to be", TRIAGE_PROMPT)
 
     def test_rejects_an_unsupported_vendor(self) -> None:
         with self.assertRaises(TriageUnavailableError):
@@ -167,9 +172,11 @@ class AskVendorTests(unittest.TestCase):
     def test_a_hung_vendor_does_not_hang_weightclass(self) -> None:
         """Breaks if the timeout stops being armed.
 
-        기존 테스트는 TimeoutExpired 를 mock 으로 던져 핸들러만 검사했다.
-        타임아웃이 실제로 걸리는지는 증명하지 못한다.
+        예외가 났다는 것만으로는 부족하다. 타임아웃을 꺼도 가짜 벤더가 알아서
+        끝나면 결국 같은 예외가 나므로, 느리게 통과할 뿐이다. 경과 시간까지
+        단언해야 타임아웃이 실제로 끊었다는 것이 증명된다.
         """
+        started = time.monotonic()
         with (
             mock.patch("weightclass.triage.TRIAGE_TIMEOUT_SECONDS", 1),
             # exec 로 셸을 대체한다. 그러지 않으면 kill 이 셸만 죽이고 손자
@@ -180,6 +187,9 @@ class AskVendorTests(unittest.TestCase):
             self.assertRaises(TriageUnavailableError),
         ):
             ask_vendor_for_tier("task", "claude")
+
+        # 가짜 벤더는 60초를 잔다. 그보다 한참 전에 끊겼어야 한다.
+        self.assertLess(time.monotonic() - started, 20)
 
     def test_the_timeout_default_stays_short(self) -> None:
         """Breaks if a call the module calls cheap gains an open-ended budget."""
@@ -211,6 +221,45 @@ class ClassifyWithVendorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), '{"tier": "low"}')
+
+    def test_rejects_bad_input_before_spending_a_vendor_call(self) -> None:
+        """Breaks if empty or oversized input can start a billed vendor process.
+
+        검증이 classify_task 안에만 있으면 --ask-vendor 는 분류를 하지 않으므로
+        그 검사를 건너뛴다. 예외를 확인하는 것으로는 부족하고, 벤더가 아예
+        실행되지 않았다는 것까지 봐야 한다.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            sentinel = Path(directory) / "vendor-was-called"
+            with _fake_vendor_on_path(f"touch {sentinel}; printf low") as env:
+                for label, task in {
+                    "empty": "",
+                    "whitespace only": "   \n  ",
+                    "oversized": "x" * 25_000,
+                }.items():
+                    with self.subTest(case=label):
+                        result = subprocess.run(
+                            [
+                                sys.executable,
+                                "-m",
+                                "weightclass",
+                                "classify",
+                                "--source-vendor",
+                                "claude",
+                                "--ask-vendor",
+                            ],
+                            capture_output=True,
+                            check=False,
+                            input=task,
+                            text=True,
+                            env=env,
+                        )
+
+                        self.assertEqual(result.returncode, 2)
+                        self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
+                        self.assertFalse(
+                            sentinel.exists(), "vendor was called for input that must fail closed"
+                        )
 
     def test_requires_a_source_vendor(self) -> None:
         """Breaks if the tool has to guess which vendor to bill."""
