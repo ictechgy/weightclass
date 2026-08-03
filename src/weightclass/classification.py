@@ -72,7 +72,9 @@ HIGH_SIGNAL_NO_INFLECTION_RATIONALE: Final = {
     "database": "databases 는 접미사 규칙으로 유도된다.",
     "payment": "pay 는 'pay attention' 처럼 일상 표현에서 흔해 오탐이 크다.",
     "privacy": "private 는 '이 메서드를 private 으로 바꿔줘' 같은 사소한 작업에서 흔하다.",
-    "production": "produce 는 같은 뜻의 어형이 아니다. '주간 보고서를 produce' 는 어려운 일이 아니다.",
+    "production": (
+        "produce 는 같은 뜻의 어형이 아니다. '주간 보고서를 produce' 는 어려운 일이 아니다."
+    ),
     "race condition": "race 단독은 판단이 갈린다. 측정 후 별도로 결정한다.",
     "refactor": "refactors/refactoring/refactored 는 접미사 규칙으로 유도된다.",
 }

@@ -28,7 +28,7 @@ from .router import (
     select_route,
     select_tier_route,
 )
-from .triage import TriageUnavailableError, ask_vendor_for_tier
+from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
 from .v2 import (
     V2InvalidInputError,
     load_api_policy,
@@ -233,6 +233,8 @@ def build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
     # 로컬 판정이 기본이다. 이 플래그를 줄 때만 벤더 CLI 를 한 번 실행한다.
     classify.add_argument("--ask-vendor", action="store_true")
+    # 판정 명령도 내장 벤더 명령이므로 실행 전에 볼 수 있어야 한다.
+    classify.add_argument("--show-triage-command", action="store_true")
     for name, description in (
         ("route", "Select and print a command for a task read from standard input."),
         ("run", "Select and start a command for a task read from standard input."),
@@ -365,6 +367,7 @@ def v2_run_from_standard_input(
 def classify_from_standard_input(
     source_vendor: str | None = None,
     ask_vendor: bool = False,
+    show_triage_command: bool = False,
 ) -> int:
     """Classify a task read from stdin without echoing or persisting it.
 
@@ -372,9 +375,14 @@ def classify_from_standard_input(
     실행해 난이도를 묻는다. 로컬 키워드 판정은 어휘만 보므로 전문용어 없이
     설명된 어려운 작업을 놓친다.
     """
-    if ask_vendor and source_vendor is None:
+    if (ask_vendor or show_triage_command) and source_vendor is None:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
+    if show_triage_command:
+        assert source_vendor is not None
+        # 태스크를 읽지 않고 벤더도 부르지 않는다. 명령만 보여준다.
+        print(json.dumps(triage_descriptor(source_vendor)))
+        return 0
     try:
         task = read_task_from_standard_input()
         if not ask_vendor:
@@ -543,7 +551,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if arguments.command == "classify":
-        return classify_from_standard_input(arguments.source_vendor, arguments.ask_vendor)
+        return classify_from_standard_input(
+            arguments.source_vendor, arguments.ask_vendor, arguments.show_triage_command
+        )
     if arguments.command == "route":
         return route_from_standard_input(arguments.policy, arguments.source_vendor, arguments.tier)
     if arguments.command == "run":

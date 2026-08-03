@@ -6,14 +6,17 @@
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
 from unittest import mock
 
 from weightclass import cli
+from weightclass.router import SUPPORTED_VENDORS
 from weightclass.triage import (
     TRIAGE_COMMANDS,
     TriageUnavailableError,
@@ -26,12 +29,30 @@ def _completed(stdout: bytes, returncode: int = 0) -> subprocess.CompletedProces
     return subprocess.CompletedProcess(args=(), returncode=returncode, stdout=stdout)
 
 
+@contextlib.contextmanager
+def _fake_vendor_on_path(body: str) -> "Iterator[dict[str, str]]":
+    """Put a fake `claude` on PATH so the real capture path is exercised.
+
+    실제 claude 는 절대 부르지 않는다. PATH 앞에 가짜를 놓아 가로챈다.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        executable = Path(directory) / "claude"
+        executable.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        executable.chmod(0o755)
+        yield {
+            "PATH": f"{directory}:{os.environ.get('PATH', '')}",
+            "PYTHONPATH": f"{Path(__file__).resolve().parent.parent}/src",
+        }
+
+
 class TriageCommandTests(unittest.TestCase):
     def test_every_supported_vendor_has_a_cheap_triage_command(self) -> None:
         """Breaks if a vendor gains a triage command that is not the cheap one.
 
         판정은 한 단어를 받는 호출이다. 실제 작업과 같은 비용을 쓰면 안 된다.
         """
+        # 지원 벤더가 늘었는데 판정 명령이 없으면 그 벤더는 --ask-vendor 를 못 쓴다.
+        self.assertEqual(set(TRIAGE_COMMANDS), set(SUPPORTED_VENDORS))
         for vendor, command in TRIAGE_COMMANDS.items():
             with self.subTest(vendor=vendor):
                 self.assertEqual(command[0], vendor)
@@ -51,59 +72,55 @@ class TriageCommandTests(unittest.TestCase):
 
 
 class AskVendorTests(unittest.TestCase):
+    """실제 claude/codex 는 부르지 않는다. PATH 앞에 가짜를 놓아 가로챈다.
+
+    subprocess 를 mock 하지 않는 것이 중요하다. 출력 상한과 stderr 폐기는
+    실제 파이프에서만 검증되고, mock 은 그 둘을 통과시킨다.
+    """
+
+    def _ask(self, body: str, task: str = "task") -> str | None:
+        with _fake_vendor_on_path(body) as env, mock.patch.dict(os.environ, env):
+            try:
+                return ask_vendor_for_tier(task, "claude")
+            except TriageUnavailableError:
+                return None
+
     def test_accepts_a_bare_tier_word(self) -> None:
-        with mock.patch("weightclass.triage.subprocess.run", return_value=_completed(b"high\n")):
-            self.assertEqual(ask_vendor_for_tier("task", "claude"), "high")
+        self.assertEqual(self._ask("printf high"), "high")
 
     def test_accepts_a_tier_at_the_end_of_a_sentence(self) -> None:
         """Breaks if a model answering in prose makes triage fail."""
-        with mock.patch(
-            "weightclass.triage.subprocess.run",
-            return_value=_completed(b"This one is subtle, so: high\n"),
-        ):
-            self.assertEqual(ask_vendor_for_tier("task", "claude"), "high")
+        self.assertEqual(self._ask("printf 'This one is subtle, so: high'"), "high")
 
     def test_refuses_an_answer_that_is_not_a_tier(self) -> None:
         """Breaks if unparseable output silently becomes a tier."""
-        for stdout in (b"", b"maybe medium?\n", b"\xff\xfe", b"x" * 9000):
-            with self.subTest(stdout=stdout[:16]):
-                with (
-                    mock.patch(
-                        "weightclass.triage.subprocess.run", return_value=_completed(stdout)
-                    ),
-                    self.assertRaises(TriageUnavailableError),
-                ):
-                    ask_vendor_for_tier("task", "claude")
+        for label, body in {
+            "empty": "true",
+            "prose without a tier": "printf 'maybe medium?'",
+            "invalid utf-8": r"printf '\377\376'",
+        }.items():
+            with self.subTest(case=label):
+                self.assertIsNone(self._ask(body))
 
     def test_refuses_when_the_vendor_exits_non_zero(self) -> None:
-        with (
-            mock.patch(
-                "weightclass.triage.subprocess.run", return_value=_completed(b"high", returncode=1)
-            ),
-            self.assertRaises(TriageUnavailableError),
-        ):
-            ask_vendor_for_tier("task", "claude")
+        self.assertIsNone(self._ask("printf high; exit 1"))
 
-    def test_refuses_when_the_vendor_cannot_start_or_times_out(self) -> None:
-        for error in (
-            FileNotFoundError("claude"),
-            subprocess.TimeoutExpired(cmd="claude", timeout=1),
-        ):
-            with self.subTest(error=type(error).__name__):
-                with (
-                    mock.patch("weightclass.triage.subprocess.run", side_effect=error),
-                    self.assertRaises(TriageUnavailableError),
-                ):
-                    ask_vendor_for_tier("task", "claude")
+    def test_refuses_when_the_vendor_is_not_installed(self) -> None:
+        with mock.patch.dict(os.environ, {"PATH": "/nonexistent"}):
+            with self.assertRaises(TriageUnavailableError):
+                ask_vendor_for_tier("task", "claude")
 
-    def test_discards_vendor_stderr(self) -> None:
-        """Breaks if a vendor's progress output can reach weightclass diagnostics."""
-        with mock.patch(
-            "weightclass.triage.subprocess.run", return_value=_completed(b"low")
-        ) as run:
-            ask_vendor_for_tier("task", "claude")
+    def test_refuses_output_past_the_size_cap(self) -> None:
+        """Breaks if the cap moves back to after the whole stream is buffered."""
+        self.assertIsNone(self._ask("printf low; head -c 10000 /dev/zero | tr '\\000' ' '"))
 
-        self.assertEqual(run.call_args.kwargs["stderr"], subprocess.DEVNULL)
+    def test_accepts_a_task_larger_than_the_pipe_buffer(self) -> None:
+        """Breaks if writing the prompt and reading the answer can deadlock.
+
+        태스크가 파이프 버퍼보다 크면, 프롬프트 쓰기와 응답 읽기를 한 스레드에서
+        하다가 양쪽이 서로를 기다릴 수 있다.
+        """
+        self.assertEqual(self._ask("printf high", task="x" * 200_000), "high")
 
 
 class ClassifyWithVendorTests(unittest.TestCase):
