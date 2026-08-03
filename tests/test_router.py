@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -5,7 +7,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from sar import cli
 from sar.router import DEFAULT_ROUTES, Route, RouteRequest, select_route
 
 
@@ -44,6 +48,51 @@ class SelectRouteTests(unittest.TestCase):
             selected_route.command,
             ("codex", "review", "--model", "opaque-model-a"),
         )
+
+
+class ExecutorSpawnFailureTests(unittest.TestCase):
+    """spawn 단계 방어선은 검증기가 이미 막고 있어 CLI 로는 도달할 수 없다.
+
+    검증 규칙에 빈틈이 생기면 그때 이 경로가 트레이스백 대신 진단을 내야 하므로,
+    subprocess 를 직접 실패시켜 단위로 확인한다.
+    """
+
+    def _assert_maps_to_executor_unavailable(self, raised: Exception) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "codex-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": ["/bin/echo", "ok"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            errors = io.StringIO()
+            with (
+                mock.patch("sar.cli.subprocess.run", side_effect=raised),
+                mock.patch("sar.cli.read_task_from_standard_input", return_value="Fix a typo."),
+                contextlib.redirect_stderr(errors),
+            ):
+                exit_code = cli.run_from_standard_input(policy_path, None)
+
+        self.assertEqual(exit_code, 4)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_unavailable"})
+
+    def test_maps_an_argv_encoding_failure_to_a_redacted_diagnostic(self) -> None:
+        """Breaks if a validator gap can reach exec and raise instead of failing closed."""
+        self._assert_maps_to_executor_unavailable(ValueError("embedded null byte"))
+
+    def test_maps_a_missing_executable_to_a_redacted_diagnostic(self) -> None:
+        """Breaks if the pre-existing OSError path stops being handled."""
+        self._assert_maps_to_executor_unavailable(FileNotFoundError("no such file"))
 
 
 class CommandSurfaceTests(unittest.TestCase):
