@@ -170,15 +170,26 @@ _LOW_ASCII_PATTERN: Final = _compile_ascii_signals(LOW_SIGNALS)
 _LOW_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_SIGNALS)
 
 
+def validate_task(task: str) -> str:
+    """Return the normalized task, rejecting input that must not be routed.
+
+    이 검증은 분류와 분리되어 있어야 한다. 티어를 밖에서 받아 분류를 건너뛰는
+    경로(--tier)가 생기면, 검증이 classify_task 안에만 있을 경우 빈 입력이나
+    상한 초과 입력이 그대로 벤더 프로세스로 넘어간다.
+    """
+    normalized_task = task.strip().casefold()
+    if not normalized_task or len(normalized_task) > MAX_TASK_CHARACTERS:
+        raise InvalidTaskError()
+    return normalized_task
+
+
 def classify_task(task: str) -> Tier:
     """Classify a transient task conservatively using documented local rules.
 
     두 티어의 시그널이 함께 잡히면 항상 high가 이긴다. 난이도를 낮게 잡는 쪽이
     비싼 실수이므로 의도적으로 보수적인 우선순위를 둔다.
     """
-    normalized_task = task.strip().casefold()
-    if not normalized_task or len(normalized_task) > MAX_TASK_CHARACTERS:
-        raise InvalidTaskError()
+    normalized_task = validate_task(task)
     if len(normalized_task) >= HIGH_TASK_CHARACTERS or _has_signal(
         normalized_task, _HIGH_ASCII_PATTERN, _HIGH_NON_ASCII_SIGNALS
     ):

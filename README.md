@@ -67,6 +67,7 @@ them:
 | `5` | `api_confirmation_required` — V2 without `--confirm-api-egress`. |
 | `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
 | `7` | `executor_failed` — the command started and exited non-zero. |
+| `8` | `triage_unavailable` — `--ask-vendor` could not obtain a tier. |
 
 Code `1` is not weightclass's; it means the interpreter died on an unhandled
 exception, which is a bug worth reporting.
@@ -120,11 +121,62 @@ for the built-in routes). A tier is never silently served by a second vendor —
 that requires `"allow_mixed_vendors": true`. The `vendor` field is always
 present in `wclass route` output.
 
-Classification is local and deterministic. Security, authentication,
-authorization, data, migration, concurrency, performance, production, and
-architecture signals route to `high`. Short typo, spelling, formatting, and
-rename tasks route to `low`; other valid tasks route to `standard`. Unknown or
-oversized task input fails closed.
+## Classification
+
+By default, classification is local, deterministic, and offline: security,
+authentication, authorization, data, migration, concurrency, performance,
+production, and architecture signals route to `high`; short typo, spelling,
+formatting, and rename tasks route to `low`; other valid tasks route to
+`standard`. Unknown or oversized task input fails closed.
+
+**Keyword matching has a measured ceiling.** On a 40-task benchmark rated
+independently by three raters (unanimous on 39 of 40), the local classifier
+agreed with them 15 times out of 40. The failures are not vocabulary gaps that
+more words would close: people describe hard problems in ordinary language
+("balances sometimes go negative", "the same job runs twice when a pod is
+rescheduled") with no technical term to match.
+
+`--ask-vendor` puts the question to a CLI you already have installed:
+
+```sh
+task='About once a week a customer gets charged twice with the same idempotency key.'
+
+printf '%s' "$task" | wclass classify
+# {"tier": "standard"}
+
+printf '%s' "$task" | wclass classify --source-vendor claude --ask-vendor
+# {"tier": "high", "tier_source": "vendor"}
+```
+
+On the same 40 tasks that scored 15/40 locally, this scored 33/40, and never
+over-rated. It still under-rates 7 of the 15 genuinely hard tasks, so it is
+better, not solved.
+
+This does not make weightclass an API client. It runs one vendor CLI in the
+foreground, exactly as `wclass run` already does; that CLI owns its credentials
+and its network. There is no new key to manage and no new billing account. For
+`wclass run` there is no new destination either — the task was already going to
+that vendor.
+
+The flag is opt-in and `--source-vendor` is required, so weightclass never picks
+a vendor to bill on your behalf. When a vendor cannot produce a tier, the
+command exits `8` with `{"error": "triage_unavailable"}` rather than quietly
+falling back to keyword matching — a wrong route should not look like a right
+one.
+
+`wclass route` and `wclass run` never contact a vendor to classify. Pass the
+tier you obtained instead:
+
+```sh
+tier="$(printf '%s' "$task" | wclass classify --source-vendor claude --ask-vendor \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["tier"])')"
+printf '%s' "$task" | wclass run --source-vendor claude --tier "$tier"
+```
+
+Reusing the tier means the vendor is asked once, not once per command.
+
+`--tier` skips classification but not validation: empty and oversized input
+still fail closed.
 
 Three rules make the outcome predictable:
 
