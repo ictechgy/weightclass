@@ -36,8 +36,10 @@ default and never runs in CI.
   computed over is only 15 items, so that figure has a wide confidence interval.
   Treat a few points of difference as noise; treat 15/40 versus 33/40 as real.
 - **It is no longer sealed.** The figures were measured before the corpus was
-  committed, but anyone tuning the classifier can now read it. A tuned score
-  against this file measures the tuner, not the classifier. If the classifier is
-  changed to chase these numbers, build a fresh corpus and report both.
+  committed, but anyone tuning the classifier can now read it. The original
+  local score was 15/40; a later outcome-pattern refinement re-runs at 17/40.
+  Neither figure is valid evidence of general accuracy for later changes. A
+  tuned score against this file measures the tuner, not the classifier. Build
+  and blind-rate a fresh corpus before making a new accuracy claim.
 - **Recorded vendor tiers are a snapshot.** Models change. `recorded_vendor_tier`
   documents what was measured, not what a rerun will produce.

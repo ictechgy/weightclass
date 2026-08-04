@@ -125,16 +125,23 @@ present in `wclass route` output.
 
 By default, classification is local, deterministic, and offline: security,
 authentication, authorization, data, migration, concurrency, performance,
-production, and architecture signals route to `high`; short typo, spelling,
-formatting, and rename tasks route to `low`; other valid tasks route to
-`standard`. Unknown or oversized task input fails closed.
+production, and architecture signals route to `high`, as do narrowly defined
+high-impact outcomes such as duplicate charges, duplicate work, and balances
+becoming negative. Short typo, spelling, formatting, and rename tasks route to
+`low`; other valid tasks route to `standard`. Outcome patterns require their
+full context, so a request merely to display a negative balance or deliberately
+repeat a test job is not escalated. Unknown or oversized task input fails
+closed.
 
-**Keyword matching has a measured ceiling.** On a 40-task benchmark rated
-independently by three raters (unanimous on 39 of 40), the local classifier
-agreed with them 15 times out of 40. The failures are not vocabulary gaps that
-more words would close: people describe hard problems in ordinary language
-("balances sometimes go negative", "the same job runs twice when a pod is
-rescheduled") with no technical term to match.
+**Keyword matching has a measured ceiling.** Before explicit high-impact
+outcome patterns were added, the local classifier agreed with 15 of 40 tasks on
+a benchmark rated independently by three raters (unanimous on 39 of 40). A
+rerun after that narrow refinement yields 17 of 40, but the corpus is now
+public, so neither figure is valid evidence of general accuracy for later
+changes. The remaining failures are not vocabulary gaps that more words would
+close: people describe hard problems in ordinary language with no technical
+term to match. Build and blind-rate a fresh corpus before making a new accuracy
+claim.
 
 `--ask-vendor` puts the question to a CLI you already have installed:
 
@@ -142,7 +149,7 @@ rescheduled") with no technical term to match.
 task='About once a week a customer gets charged twice with the same idempotency key.'
 
 printf '%s' "$task" | wclass classify
-# {"tier": "standard"}
+# {"tier": "high"}
 
 printf '%s' "$task" | wclass classify --source-vendor claude --ask-vendor
 # {"tier": "high", "tier_source": "vendor"}
