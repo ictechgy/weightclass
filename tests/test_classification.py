@@ -151,6 +151,8 @@ class ClassificationRegressionTests(unittest.TestCase):
             "Show negative balances in red in the dashboard.",
             "Run the report job twice in the integration test to verify idempotency.",
             "Configure the worker to run a report job twice for every input.",
+            "The same job runs twice in an integration test to verify idempotency.",
+            "Workers run twice daily; render the same job title in the dashboard.",
             "음수 잔액의 텍스트 색상을 바꿔줘.",
         )
 

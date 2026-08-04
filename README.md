@@ -149,7 +149,7 @@ claim.
 task='About once a week a customer gets charged twice with the same idempotency key.'
 
 printf '%s' "$task" | wclass classify
-# {"tier": "standard"}
+# {"tier": "high"}
 
 printf '%s' "$task" | wclass classify --source-vendor claude --ask-vendor
 # {"tier": "high", "tier_source": "vendor"}

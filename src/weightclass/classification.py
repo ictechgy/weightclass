@@ -181,10 +181,15 @@ _HIGH_RISK_OUTCOME_PATTERNS: Final = (
         r"\b(?:twice|multiple\s+times|more\s+than\s+once)\b"
     ),
     re.compile(
-        r"\b(?=[\s\S]{0,120}\bsame\s+(?:job|task|worker|request|event)s?\b)"
-        r"(?:same\s+)?(?:job|task|worker|request|event)s?\b.{0,80}"
+        r"\b(?=[\s\S]{0,160}\b(?:sometimes|unexpectedly|after|when|again|"
+        r"duplicate(?:d)?|multiple)\b)(?:"
+        r"same\s+(?:job|task|worker|request|event)s?\b.{0,80}"
         r"\b(?:runs?|executes?|processes?)\b.{0,32}"
-        r"\b(?:twice|multiple\s+times|more\s+than\s+once)\b"
+        r"\b(?:twice|multiple\s+times|more\s+than\s+once)\b|"
+        r"(?:job|task|worker|request|event)s?\b.{0,80}"
+        r"\b(?:runs?|executes?|processes?)\b.{0,32}"
+        r"\bsame\s+(?:job|task|worker|request|event)s?\b.{0,32}"
+        r"\b(?:twice|multiple\s+times|more\s+than\s+once)\b)"
     ),
     re.compile(
         r"\bbalances?\b.{0,80}"
