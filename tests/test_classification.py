@@ -133,6 +133,8 @@ class ClassificationRegressionTests(unittest.TestCase):
         """
         cases = (
             "An account is charged twice after one checkout.",
+            "I was charged twice after checkout.",
+            "My card was charged twice.",
             "Workers run the same job twice after a restart.",
             "Balances sometimes become negative after transfers.",
             "같은 작업이 재시작 뒤에 두 번 실행돼.",

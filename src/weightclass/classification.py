@@ -176,7 +176,7 @@ _LOW_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_SIGNALS)
 # 반복은 standard 에 남긴다. 각 패턴의 오탐 경계는 테스트로 고정한다.
 _HIGH_RISK_OUTCOME_PATTERNS: Final = (
     re.compile(
-        r"\b(?:account|customer|user)s?\b.{0,80}"
+        r"\b(?:account|customer|user|i|(?:my\s+)?cards?)\b.{0,80}"
         r"\b(?:is|are|gets?|got|was|were)?\s*charged\b.{0,32}"
         r"\b(?:twice|multiple\s+times|more\s+than\s+once)\b"
     ),
