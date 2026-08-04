@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-03 by Claude Code_
+_Last updated: 2026-08-04 by Claude Code_
 
 ## Goal
 
@@ -15,8 +15,8 @@ _Last updated: 2026-08-03 by Claude Code_
 - Separate runtime repository: `https://github.com/ictechgy/weightclass-runtime`,
   branch `main`, tracking `origin/main` at commit `fe28566`.
 - Both repositories are public-source ready. Main-repository CI is green on
-  `main`. `weightclass 0.1.0` is published to PyPI and installable through
-  `ictechgy/homebrew-tap`.
+  `main`. `weightclass 0.2.0` is published to PyPI and installable with
+  `brew install ictechgy/tap/weightclass` or `pip install weightclass`.
 - The main worktree has unrelated `.omc/` and `.serena/` directories holding
   local agent state. They are now in `.gitignore`; 172 of these files were
   committed by mistake in `fd1fbc0` and reached `origin/main` before being
@@ -81,6 +81,21 @@ _Last updated: 2026-08-03 by Claude Code_
     route does not bind the command a later `run` executes. That claim was
     retracted and the limitation documented. Claude's reviewer found the stderr
     concatenation defect above.
+- Vendor-CLI triage (0.2.0). The keyword classifier was measured against 40
+  tasks rated by three independent raters (unanimous on 39): it agreed 15 times.
+  Repairing a real inflection defect — `deployment` matched, `deploy` did not,
+  10 of 17 signals affected — moved it to 15/40, i.e. not at all, because the 12
+  misses contain no signal vocabulary at all. People describe hard problems in
+  plain language. Asking an already-installed vendor CLI scored 33/40 with zero
+  over-rating. A pre-registered hybrid ("keyword high wins, else vendor") scored
+  31/40 and was rejected; `max(local, vendor)`, suggested by both reviewers as
+  an injection defence, scored 21/40 and was rejected with that measurement.
+  - `wclass classify --source-vendor X --ask-vendor` is opt-in, terminal, and
+    fails closed with exit `8` rather than reverting to keywords.
+  - `route` and `run` never contact a vendor to classify; they accept `--tier`.
+  - Both triage commands are pinned non-mutating (`--permission-mode plan`,
+    `--sandbox read-only`) because the prompt carries untrusted task text.
+  - The corpus and scorer are committed, so the figures above are reproducible.
 - `weightclass` package metadata exposes the `wclass` command and uses MIT.
 - Main CI installs the package, runs the installed CLI, and runs tests on
   Python 3.10, 3.12, and 3.13.
@@ -94,7 +109,12 @@ _Last updated: 2026-08-03 by Claude Code_
 
 ## Key Files & State
 
-- `README.md`: installation, native/API boundaries, and local usage.
+- `README.md`: installation, classification behaviour and its measured ceiling,
+  native/API boundaries, and local usage.
+- `src/weightclass/triage.py`: asks an installed vendor CLI for a tier. Owns the
+  rubric prompt so it cannot drift into another repository.
+- `tests/eval/`: the 40-task corpus behind the accuracy figures, plus
+  `score.py`, which re-derives them offline.
 - `RELEASING.md`: version/tag policy, PyPI Trusted Publishing setup, and the
   Homebrew formula update procedure.
 - `docs/integrations.md`: safe Codex/Claude invocation snippets.
@@ -133,7 +153,12 @@ _Last updated: 2026-08-03 by Claude Code_
 
 - Ran in the main repository:
   `PYTHONPATH=src python3 -m unittest discover -s tests`
-  - Result: 95 tests passed.
+  - Result: 95 tests passed. No test invokes a real vendor CLI; the triage
+    tests put a fake executable on `PATH` so the real pipe handling is still
+    exercised.
+- Installed `weightclass 0.2.0` from PyPI and from the Homebrew tap in clean
+  environments and ran the documented commands.
+  - Result: both report `weightclass 0.2.0` and behave as documented.
 - Differential-classified 760 generated tasks against `main` to bound the
   classifier change.
   - Result: the only downgrades from `high` are the two intended ones
@@ -182,16 +207,20 @@ _Last updated: 2026-08-03 by Claude Code_
   executable behind the argv; V2 likewise fingerprints the runtime path, not its
   contents; a task of 1,200+ characters is `high` on length alone; a vendor CLI
   that declines work while exiting `0` cannot be detected.
-- A version/tag policy and a release path now exist in `RELEASING.md`:
-  pushing a `v*` tag runs `.github/workflows/release.yml`, which re-runs every
-  gate, refuses a tag that disagrees with `weightclass.__version__`, and uploads
-  to PyPI through Trusted Publishing (no token is stored anywhere). Nothing has
-  been published yet. Two one-time steps remain and are the user's to take:
-  register the PyPI pending publisher (owner `ictechgy`, repo `weightclass`,
-  workflow `release.yml`, environment `pypi`), then push the first tag.
-  `packaging/homebrew/weightclass.rb` is the source of truth for the formula in
-  `ictechgy/homebrew-tap`; it references the PyPI sdist, so it can only be
-  filled in after the first publish.
+- Releasing works end to end and has been exercised twice (0.1.0, 0.2.0).
+  Push a `v*` tag; `.github/workflows/release.yml` re-runs every gate, refuses a
+  tag that disagrees with `weightclass.__version__`, and uploads to PyPI through
+  Trusted Publishing. No token is stored anywhere. Then update
+  `packaging/homebrew/weightclass.rb` with the new sdist URL and sha256 and copy
+  it into `ictechgy/homebrew-tap`. `RELEASING.md` has the exact commands.
+- The vendor triage path under-rates 7 of the 15 genuinely hard tasks in
+  `tests/eval/corpus.json` and never over-rates — a bias toward the cheap tier,
+  which is the dangerous direction. Improving it is prompt work, but tuning
+  against that corpus would measure the tuner: build a fresh corpus first.
+- `HIGH_SIGNAL_NO_INFLECTION_RATIONALE` defers one decision on purpose:
+  whether bare `race` should be a HIGH signal. It over-fires in ordinary
+  English but `race condition` misses "fix the race in the reconnect path".
+  Decide it with a measurement, not by omission.
 - Provider model/effort compatibility and actual API behavior remain
   user/provider dependent; do not test with real credentials without approval.
 
@@ -214,18 +243,16 @@ _Last updated: 2026-08-03 by Claude Code_
 ## Next Steps
 
 1. Inspect the runtime repository's GitHub Actions result for `fe28566`; fix
-   only confirmed clean-install or test failures. The main repository is green.
-   Note the accumulated breaking changes before any release: `wclass route`
-   always emits `vendor` and no longer emits `model`; a policy declaring a
-   `model` field is rejected; omitting `--source-vendor` no longer crosses
-   vendors; the bare `wclass --policy ... --descriptor ...` form moved to
-   `wclass render`; `run`/`v2 run` report child failure as exit `7` instead of
-   passing the child's code through.
+   only confirmed clean-install or test failures. This is the last unexamined
+   CI in the project. It only matters if V2 API routing is used.
 2. Set the runtime repository description, then decide whether to create a
    versioned release. If releasing, build in a clean environment and publish
    checksums per its `RELEASING.md`.
-3. Before any PyPI publication, approve a release/versioning policy and verify
-   package builds without reading credentials or invoking real APIs.
+3. Optional, and previously declined as disproportionate: ask GitHub Support to
+   garbage-collect unreachable objects. A force-push removed 172 accidentally
+   committed local-state files from `main`, but the pre-rewrite commits remain
+   reachable by their old SHAs. They hold no credentials and no conversation
+   text — only local paths, a session title, and UUIDs.
 
 ## Resume Prompt
 
