@@ -171,6 +171,31 @@ _HIGH_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(HIGH_SIGNALS)
 _LOW_ASCII_PATTERN: Final = _compile_ascii_signals(LOW_SIGNALS)
 _LOW_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_SIGNALS)
 
+# 기술 명사가 아니라 이미 발생한 고비용 결과를 말하는 좁은 표현들이다. 단어 하나
+# (예: "negative", "job")만으로는 올리지 않아, 단순한 UI 표시나 의도적인 테스트
+# 반복은 standard 에 남긴다. 각 패턴의 오탐 경계는 테스트로 고정한다.
+_HIGH_RISK_OUTCOME_PATTERNS: Final = (
+    re.compile(
+        r"\b(?:account|customer|user)s?\b.{0,80}"
+        r"\b(?:is|are|gets?|got|was|were)?\s*charged\b.{0,32}"
+        r"\b(?:twice|multiple\s+times|more\s+than\s+once)\b"
+    ),
+    re.compile(
+        r"\b(?=[\s\S]{0,120}\bsame\s+(?:job|task|worker|request|event)s?\b)"
+        r"(?:same\s+)?(?:job|task|worker|request|event)s?\b.{0,80}"
+        r"\b(?:runs?|executes?|processes?)\b.{0,32}"
+        r"\b(?:twice|multiple\s+times|more\s+than\s+once)\b"
+    ),
+    re.compile(
+        r"\bbalances?\b.{0,80}"
+        r"\b(?:is|are|becomes?|became|turns?|turned|ends?|ended|gets?)\b.{0,32}"
+        r"\bnegative\b"
+    ),
+    re.compile(r"같은\s*(?:작업|잡|요청|이벤트).{0,80}(?:두\s*번|중복).{0,40}(?:실행|처리)"),
+    re.compile(r"잔액.{0,40}(?:가끔|종종|때때로|자꾸).{0,40}음수"),
+    re.compile(r"잔액.{0,40}음수.{0,32}(?:되|돼|내려|떨어)"),
+)
+
 
 def validate_task(task: str) -> str:
     """Return the normalized task, rejecting input that must not be routed.
@@ -192,8 +217,10 @@ def classify_task(task: str) -> Tier:
     비싼 실수이므로 의도적으로 보수적인 우선순위를 둔다.
     """
     normalized_task = validate_task(task)
-    if len(normalized_task) >= HIGH_TASK_CHARACTERS or _has_signal(
-        normalized_task, _HIGH_ASCII_PATTERN, _HIGH_NON_ASCII_SIGNALS
+    if (
+        len(normalized_task) >= HIGH_TASK_CHARACTERS
+        or _has_signal(normalized_task, _HIGH_ASCII_PATTERN, _HIGH_NON_ASCII_SIGNALS)
+        or _has_high_risk_outcome(normalized_task)
     ):
         return "high"
     if len(normalized_task) <= LOW_TASK_CHARACTERS and _has_signal(
@@ -212,3 +239,8 @@ def _has_signal(
     if ascii_pattern.search(task):
         return True
     return any(signal in task for signal in non_ascii_signals)
+
+
+def _has_high_risk_outcome(task: str) -> bool:
+    """Report whether a narrowly defined costly outcome is described."""
+    return any(pattern.search(task) for pattern in _HIGH_RISK_OUTCOME_PATTERNS)

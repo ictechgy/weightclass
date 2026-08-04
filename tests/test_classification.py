@@ -123,6 +123,39 @@ class ThresholdTests(unittest.TestCase):
 
 
 class ClassificationRegressionTests(unittest.TestCase):
+    def test_classifies_explicit_high_impact_outcomes_as_high(self) -> None:
+        """Breaks if costly duplicate-work or balance-integrity failures stay standard.
+
+        These cases intentionally describe the harmful outcome without relying on
+        a technology-specific keyword such as ``payment`` or ``concurrency``.
+        Replacing the outcome patterns with ordinary keywords must make this
+        test fail.
+        """
+        cases = (
+            "An account is charged twice after one checkout.",
+            "Workers run the same job twice after a restart.",
+            "Balances sometimes become negative after transfers.",
+            "같은 작업이 재시작 뒤에 두 번 실행돼.",
+            "잔액이 가끔 음수가 돼.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classify_task(task), "high")
+
+    def test_does_not_escalate_mentions_without_a_high_impact_outcome(self) -> None:
+        """Breaks if broad outcome words turn routine presentation work into high."""
+        cases = (
+            "Show negative balances in red in the dashboard.",
+            "Run the report job twice in the integration test to verify idempotency.",
+            "Configure the worker to run a report job twice for every input.",
+            "음수 잔액의 텍스트 색상을 바꿔줘.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classify_task(task), "standard")
+
     def test_classifies_operational_privacy_and_credential_tasks_as_high(self) -> None:
         cases = {
             "Plan a rollback after the failed deployment.": "high",
