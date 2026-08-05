@@ -6,6 +6,7 @@ import json
 import pathlib
 import tempfile
 import unittest
+from collections.abc import Mapping, Sequence
 from unittest import mock
 
 SCORE_PATH = pathlib.Path(__file__).parent / "eval" / "score.py"
@@ -110,9 +111,7 @@ class MetricAggregationTests(unittest.TestCase):
         self.assertEqual(len(metrics["high_recall"]["confidence_interval_95"]), 2)
 
     def test_reports_every_supported_slice_including_empty_slices(self) -> None:
-        records = [
-            {"expected": "low", "predicted": "low", "language": "en", "category": "routine"}
-        ]
+        records = [{"expected": "low", "predicted": "low", "language": "en", "category": "routine"}]
 
         metrics = score.aggregate_metrics(records)
 
@@ -183,9 +182,7 @@ class OfflineOutputTests(unittest.TestCase):
             stdout = io.StringIO()
             stderr = io.StringIO()
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                result = score.main(
-                    ["--corpus", str(corpus), "--candidate", str(candidate_path)]
-                )
+                result = score.main(["--corpus", str(corpus), "--candidate", str(candidate_path)])
 
         report = json.loads(stdout.getvalue())
         self.assertEqual(result, 0)
@@ -208,9 +205,25 @@ class OfflineOutputTests(unittest.TestCase):
         )
         self.assertEqual(report["quality_gate"]["by_language"]["ko"]["total"], 1)
         self.assertEqual(report["quality_gate"]["by_category"]["security"]["total"], 1)
-        self.assertEqual(report["resource_gate"], {**candidate["resource_gate"], "passes": True})
         self.assertEqual(
-            report["supply_chain_gate"], {**candidate["supply_chain_gate"], "passes": True}
+            report["resource_gate"],
+            {
+                "startup_accepted": True,
+                "latency_accepted": True,
+                "memory_accepted": True,
+                "supported_platform_determinism_accepted": True,
+                "passes": True,
+            },
+        )
+        self.assertEqual(
+            report["supply_chain_gate"],
+            {
+                "dependency_pin_reviewed": True,
+                "dependency_audit_accepted": True,
+                "model_download_required": False,
+                "maintenance_cost_accepted": True,
+                "passes": True,
+            },
         )
         self.assertEqual(
             report["privacy_gate"],
@@ -454,9 +467,7 @@ class OfflineOutputTests(unittest.TestCase):
                 ),
                 contextlib.redirect_stderr(stderr),
             ):
-                result = score.main(
-                    ["--corpus", str(corpus_alias), "--candidate", "unused.json"]
-                )
+                result = score.main(["--corpus", str(corpus_alias), "--candidate", "unused.json"])
 
         self.assertEqual(result, 2)
         self.assertIn("public regression fixture", stderr.getvalue())
@@ -570,15 +581,6 @@ class OfflineOutputTests(unittest.TestCase):
                 self.assertNotIn("hidden", output)
 
     def test_candidate_gate_boundaries_and_no_high_case_fail_closed(self) -> None:
-        entries = [
-            {
-                "id": "task-1",
-                "task": "hidden",
-                "consensus": "high",
-                "language": "en",
-                "category": "security",
-            }
-        ]
         records = [
             {
                 "expected": "high",
@@ -596,9 +598,7 @@ class OfflineOutputTests(unittest.TestCase):
         quality["high_tier_recall_min"] = metrics["high_recall"]["confidence_interval_95"][0]
         quality["over_routing_max"] = metrics["over_routing"]["confidence_interval_95"][1]
 
-        report = score.candidate_report(
-            candidate, metrics, baseline_metrics=metrics, corpus_size=1
-        )
+        report = score.candidate_report(candidate, metrics, baseline_metrics=metrics, corpus_size=1)
 
         self.assertTrue(report["quality_gate"]["high_tier_recall"]["passes"])
         self.assertTrue(report["quality_gate"]["over_routing"]["passes"])
@@ -707,9 +707,7 @@ class OfflineOutputTests(unittest.TestCase):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                        result = score.main(
-                            ["--corpus", str(corpus), "--candidate", str(evidence)]
-                        )
+                        result = score.main(["--corpus", str(corpus), "--candidate", str(evidence)])
                     self.assertEqual(result, 0)
                     outputs.append((stdout.getvalue(), stderr.getvalue()))
 
@@ -768,7 +766,7 @@ class OfflineOutputTests(unittest.TestCase):
 
     @staticmethod
     def _run_candidate(
-        entries: list[dict[str, object]], candidate: dict[str, object]
+        entries: Sequence[Mapping[str, object]], candidate: Mapping[str, object]
     ) -> tuple[int, str]:
         with tempfile.TemporaryDirectory() as directory:
             corpus = pathlib.Path(directory) / "blind.json"
@@ -778,9 +776,7 @@ class OfflineOutputTests(unittest.TestCase):
             stdout = io.StringIO()
             stderr = io.StringIO()
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                result = score.main(
-                    ["--corpus", str(corpus), "--candidate", str(candidate_path)]
-                )
+                result = score.main(["--corpus", str(corpus), "--candidate", str(candidate_path)])
         return result, stdout.getvalue() + stderr.getvalue()
 
     def test_supplied_corpus_output_contains_only_aggregate_results(self) -> None:

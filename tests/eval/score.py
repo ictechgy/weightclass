@@ -7,7 +7,7 @@ import pathlib
 import re
 import sys
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "src"))
 
@@ -93,9 +93,7 @@ def _require_boolean_fields(value: object, fields: frozenset[str], label: str) -
     return mapping
 
 
-def validate_candidate(
-    raw: object, *, corpus: Sequence[Mapping[str, Any]]
-) -> dict[str, Any]:
+def validate_candidate(raw: object, *, corpus: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Validate bounded, output-safe candidate predictions and gate metadata."""
     fields = frozenset(
         (
@@ -126,9 +124,7 @@ def validate_candidate(
     corpus_ids = {entry["id"] for entry in corpus}
     seen_ids: set[str] = set()
     for position, prediction in enumerate(predictions):
-        record = _require_exact_fields(
-            prediction, prediction_fields, f"prediction {position}"
-        )
+        record = _require_exact_fields(prediction, prediction_fields, f"prediction {position}")
         identifier = record["id"]
         if not isinstance(identifier, str) or not IDENTIFIER.fullmatch(identifier):
             raise CandidateValidationError(
@@ -325,9 +321,7 @@ def _load_corpus(
     )
 
 
-def _load_candidate(
-    path: pathlib.Path, *, corpus: Sequence[Mapping[str, Any]]
-) -> dict[str, Any]:
+def _load_candidate(path: pathlib.Path, *, corpus: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     try:
         raw = json.loads(
             path.read_text(encoding="utf-8"),
@@ -368,9 +362,7 @@ def candidate_report(
         high_recall["total"] > 0
         and high_recall["confidence_interval_95"][0] >= quality["high_tier_recall_min"]
     )
-    over_passes = (
-        over_routing["confidence_interval_95"][1] <= quality["over_routing_max"]
-    )
+    over_passes = over_routing["confidence_interval_95"][1] <= quality["over_routing_max"]
     quality_passes = (
         high_passes
         and over_passes
@@ -424,7 +416,7 @@ def candidate_report(
         },
         "decision": "go" if quality_passes and resource_passes and supply_chain_passes else "no-go",
     }
-    return _rounded(report)
+    return cast(dict[str, Any], _rounded(report))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -483,9 +475,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             for entry in entries
         ]
         candidate = (
-            _load_candidate(arguments.candidate, corpus=entries)
-            if arguments.candidate
-            else None
+            _load_candidate(arguments.candidate, corpus=entries) if arguments.candidate else None
         )
     except (CorpusValidationError, CandidateValidationError) as error:
         print(f"error: invalid corpus: {error}", file=sys.stderr)
