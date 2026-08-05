@@ -125,7 +125,9 @@ unknown, missing, out-of-order, and label-mismatched records fail closed. IDs
 must be assigned independently of task text; task-derived IDs and task hashes
 are forbidden. `candidate_id` and
 `baseline_id` are reviewed opaque identifiers limited to 1–64 ASCII letters,
-digits, dots, underscores, and hyphens, and they must differ. The candidate
+digits, dots, underscores, and hyphens, and they must differ. The scorer
+validates but does not emit those unverified evaluator labels; record and bind
+them to source revisions only in the independent review record. The candidate
 file has this exact schema; unknown, missing, malformed, or mismatched fields
 are rejected with diagnostics that name only fields or entry positions.
 Duplicate JSON object fields are rejected before schema validation without
@@ -168,16 +170,21 @@ Candidate mode emits one aggregate-only JSON decision record. It scores both
 the supplied candidate predictions and the current deterministic local
 classifier against the same fresh corpus. `baseline_metrics` contains the
 local baseline's aggregate agreement, high-tier recall, over-routing,
-confusion matrix, and fixed slices; `baseline_id` identifies the reviewed
-source revision represented by that measurement. Rates use the same two-sided
-Wilson 95% interval as the ordinary report (`z = 1.96`) and are rounded to six
-decimal places only when serialized. High-tier recall passes when its Wilson
+confusion matrix, and fixed slices. The scorer does not bind the supplied
+`baseline_id` to its checkout, so the independent record must bind the measured
+baseline to the scorer revision and classifier configuration. Rates use the
+same two-sided Wilson 95% interval as the ordinary report (`z = 1.96`) and are
+rounded to six decimal places only when serialized. High-tier recall passes when its Wilson
 lower bound meets `high_tier_recall_min`; a corpus with no expected high-tier
 entries fails that gate. Over-routing passes when its Wilson upper bound does
 not exceed `over_routing_max`. The candidate quality section also contains the
 confusion matrix and every fixed language/category slice. A supported slice
 absent from the corpus is represented by zero totals and the defined
 `[0.0, 0.0]` empty interval rather than being omitted.
+
+The `comparison_gate` reports aggregate candidate-minus-baseline recall and
+over-routing rate deltas plus the number of candidate predictions below the
+local baseline. Its raise-only requirement passes only when that count is zero.
 
 The report records `corpus.evaluator_supplied` as true but
 `corpus.freshness_verified_by_scorer` as false. A local path proves only that a
@@ -186,12 +193,15 @@ known corpus, or claim to verify its provenance. The independent review record
 must establish that it was genuinely fresh and blind.
 
 The decision is `go` only when both quality bounds pass, slices were reviewed,
-there is no unexplained slice regression, every resource field is accepted,
-pinning and dependency audit were reviewed and accepted, no model download is
-required, and maintenance cost is accepted. Resource and supply-chain sections
-each include an explicit aggregate `passes` field. Every other complete record
-is `no-go`; incomplete or ambiguous records fail validation. The public
-regression fixture cannot be used in candidate mode.
+there is no unexplained slice regression, the observed predictions are
+raise-only against the same-corpus local baseline, every resource field is
+accepted, pinning and dependency audit were reviewed and accepted, no model
+download is required, and maintenance cost is accepted. Resource and
+supply-chain sections each include an explicit aggregate `passes` field. Every
+other complete record is `no-go`; incomplete or ambiguous records fail
+validation. Candidate mode rejects the committed public-fixture path and
+resolving aliases before read. It cannot recognize a copied fixture, so the
+independent freshness review remains mandatory.
 
 Decision template:
 
@@ -201,10 +211,12 @@ quality: recall lower bound >= minimum; over-routing upper bound <= maximum;
          slices reviewed; no unexplained slice regression
 resources: startup + latency + memory + platform determinism accepted
 supply chain: pin reviewed + audit accepted + no download + maintenance accepted
-privacy: aggregate-only; no task text or per-task record emitted;
-         scorer does not verify identifier provenance
-comparison: candidate and local baseline measured on the same fresh corpus
-provenance: scorer does not verify corpus freshness; independent review must
+privacy: aggregate-only; no corpus task field or per-task record emitted;
+         candidate and baseline identifiers are not emitted
+comparison: candidate and local baseline measured on the same supplied corpus;
+            zero predictions below baseline; aggregate rate deltas recorded
+provenance: scorer does not verify corpus freshness or bind evaluator labels;
+            independent review must verify and record both
 decision: scorer go only if every machine-readable gate passes; otherwise no-go
 ```
 
@@ -226,8 +238,9 @@ production semantic model or change default routing.
 
 The scorer reads the supplied corpus and, in candidate mode, the supplied
 evidence file, holds their contents in process memory for the run, and emits
-aggregate results only. It does not write task content,
-hashes, predictions per task, caches, or diagnostics containing field values.
+aggregate results only. It does not write task content, hashes, predictions per
+task, caches, diagnostics containing field values, or the unverified candidate
+and baseline identifier values.
 The operator owns the supplied file and must keep it outside the repository.
 This evaluation-only file input does not change the runtime contract: `wclass`
 continues to accept task text transiently on standard input and never persists

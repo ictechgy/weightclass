@@ -181,8 +181,10 @@ The verified durable-goal run completed the roadmap through the triage gate:
 - Phase 4: the current decision-gate branch accepts evaluator-supplied,
   opaque-ID-bound candidate predictions and produces deterministic aggregate
   candidate and same-corpus local-baseline metrics plus resource, supply-chain,
-  privacy, and `go`/`no-go` evidence. A reproducible review template records
-  provenance, predeclared slice and confidence-sufficiency rules, and whether
+  privacy, raise-only comparison, and `go`/`no-go` evidence. It does not emit
+  unverified candidate/baseline identifier values. A reproducible review
+  template binds those identifiers to source revisions, records provenance,
+  predeclared slice and confidence-sufficiency rules, and decides whether
   measured improvement justifies the added cost without adding a production
   model.
 

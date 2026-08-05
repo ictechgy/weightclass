@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-06 02:46 KST by Codex_
+_Last updated: 2026-08-06 03:10 KST by Codex_
 
 ## Goal
 
@@ -56,12 +56,12 @@ _Last updated: 2026-08-06 02:46 KST by Codex_
     evidence fails closed with value-free diagnostics;
   - output includes candidate and same-corpus local-baseline aggregate
     confusion, high-tier recall, over-routing, English/Korean and fixed category
-    slices, Wilson 95% intervals, explicit quality/resource/supply-chain/privacy
-    gates, and `go`/`no-go`;
+    slices, Wilson 95% intervals, an observed raise-only comparison, explicit
+    quality/resource/supply-chain/privacy gates, and `go`/`no-go`;
   - the committed public fixture, including a resolving path alias, is rejected
     before it is read in candidate mode;
-  - reports are deterministic and contain no task text, per-task results,
-    task-derived identifier, or task hash;
+  - reports are deterministic and contain no corpus task field, per-task result,
+    candidate/baseline identifier value, or task hash;
   - reports state that the corpus was evaluator-supplied but do not claim the
     scorer verified freshness; that remains an independent provenance gate;
   - a reproducible human decision record requires provenance, evaluator
@@ -79,7 +79,7 @@ _Last updated: 2026-08-06 02:46 KST by Codex_
 - `tests/eval/score.py`: offline scorer and candidate decision CLI. It is
   evaluation tooling, not installed runtime behavior.
 - `tests/eval/README.md`: fresh blind-corpus and candidate evidence contracts.
-- `tests/test_eval_score.py`: 29 focused evaluation, failure, privacy, and
+- `tests/test_eval_score.py`: 33 focused evaluation, failure, privacy, and
   determinism tests.
 - `src/weightclass/`: unchanged by the current Phase 4 branch.
 
@@ -112,9 +112,9 @@ _Last updated: 2026-08-06 02:46 KST by Codex_
 ## Verification
 
 - Ran: `PYTHONPATH=src python3 -m unittest tests.test_eval_score`
-  - Result: 29 tests passed.
+  - Result: 33 tests passed.
 - Ran: `PYTHONPATH=src python3 -m unittest discover -s tests`
-  - Result: 142 tests passed on local Python 3.14. Existing triage fake-process
+  - Result: 146 tests passed on local Python 3.14. Existing triage fake-process
     tests emitted `ResourceWarning` messages for unclosed streams.
 - Ran: `python3 -m compileall -q src tests`
   - Result: passed.

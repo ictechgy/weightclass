@@ -38,19 +38,20 @@ malformed, duplicated, unknown, out-of-order, or label-mismatched data fails
 closed. The detailed schema is maintained with the scorer in
 [`tests/eval/README.md`](../tests/eval/README.md#offline-phase-4-candidate-decision).
 
-The aggregate output is schema version 1. It contains the candidate and
-baseline IDs; an evaluator-supplied corpus marker, an explicit statement that
-the scorer did not verify freshness, and an entry count; candidate and
-same-corpus local-baseline aggregate high-tier recall, over-routing, confusion
-matrices, and fixed language/category slices; explicit quality, resource,
-supply-chain, and privacy gates; and `go` or `no-go`. It does not contain
-per-entry results or task content. Fresh/blind status is established only by
-the independent provenance review below.
+The aggregate output is schema version 1. It contains an evaluator-supplied
+corpus marker, an explicit statement that the scorer did not verify freshness,
+and an entry count; candidate and same-corpus local-baseline aggregate
+high-tier recall, over-routing, confusion matrices, and fixed
+language/category slices; an aggregate raise-only comparison; explicit
+quality, resource, supply-chain, and privacy gates; and `go` or `no-go`. It does
+not emit the candidate/baseline ID values, per-entry results, or corpus task
+content. Fresh/blind status and identifier-to-revision binding are established
+only by the independent provenance review below.
 
-The machine privacy section confirms that no task text or per-task record was
-emitted and explicitly states that the scorer did not verify identifier
-provenance. The independent reviewer must verify that corpus, candidate, and
-baseline identifiers were assigned without deriving them from task content.
+The machine privacy section confirms that no corpus task field, per-task record,
+or candidate/baseline identifier value was emitted. The independent reviewer
+must still verify that every identifier was assigned without deriving it from
+task content.
 
 High-tier recall is correctly predicted `high` entries divided by expected
 `high` entries. Its gate uses the lower bound and fails when the corpus has no
@@ -75,6 +76,8 @@ evidence_provenance:
   candidate_id: <reviewed opaque identifier>
   candidate_source_revision_or_artifact_version: <non-secret immutable reference>
   baseline_id: <reviewed opaque identifier>
+  baseline_id_bound_to_scorer_revision_and_configuration: yes | no
+  integration_mode: raise-only
   corpus_version_id: <reviewed opaque identifier; never task-derived>
   corpus_fresh_and_blind: yes | no
   corpus_rating_provenance: <roles/process only; no task text>
@@ -107,6 +110,10 @@ observed_aggregate_evidence:
   baseline_high_tier_recall: <count>/<total>, <rate>, 95% CI [<low>, <high>]
   baseline_over_routing: <count>/<total>, <rate>, 95% CI [<low>, <high>]
   baseline_slice_review: <aggregate findings only>
+  candidate_below_baseline_count: <integer; must be zero>
+  raise_only_comparison_gate: pass | fail
+  high_tier_recall_rate_delta_vs_baseline: <aggregate decimal>
+  over_routing_rate_delta_vs_baseline: <aggregate decimal>
   high_tier_recall: <count>/<total>, <rate>, 95% CI [<low>, <high>]
   high_tier_recall_gate: pass | fail
   over_routing: <count>/<total>, <rate>, 95% CI [<low>, <high>]
@@ -140,7 +147,9 @@ supply_chain_review:
 
 privacy_review:
   aggregate_only_report: yes | no
-  task_text_excerpt_hash_or_task_derived_id_emitted: yes | no
+  candidate_and_baseline_identifiers_emitted: yes | no
+  corpus_task_field_or_per_task_record_emitted: yes | no
+  identifiers_independently_verified_not_task_derived: yes | no
   corpus_and_predictions_kept_outside_repository: yes | no
   privacy_gate: pass | fail
 
@@ -158,8 +167,9 @@ provenance is missing; a gate was not declared before evaluation; either Wilson
 bound misses its threshold; the intervals are too wide or otherwise judged
 insufficient under the predeclared rule; any required slice is unreviewed,
 misses its predeclared acceptance rule, or has an unexplained regression; the
-candidate does not demonstrate sufficient improvement over the same-corpus
-local baseline; the corpus is not fresh and blind; or privacy, resource
+candidate has any prediction below the same-corpus local baseline; the
+candidate does not demonstrate sufficient improvement over that baseline; the
+corpus is not fresh and blind; or privacy, resource
 feasibility, or supply-chain review is failed or unresolved. The scorer's `go`
 is necessary but not sufficient when the broader record is incomplete.
 

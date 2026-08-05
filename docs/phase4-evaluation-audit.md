@@ -106,7 +106,8 @@ supply_chain_gate:
   maintenance_cost_accepted: yes | no
 privacy_gate:
   aggregate_only_report: yes | no
-  task_text_or_derived_identifier_emitted: yes | no
+  candidate_and_baseline_identifiers_emitted: yes | no
+  corpus_task_field_or_per_task_record_emitted: yes | no
 decision: go | no-go
 ```
 
@@ -118,13 +119,15 @@ supplied evidence has been evaluated against predeclared gates.
 
 ## Current branch resolution
 
-The uncommitted `feat/offline-semantic-decision-gate` branch addresses the four
+PR #15's `feat/offline-semantic-decision-gate` branch addresses the four
 baseline gaps with an exact candidate schema, aggregate same-corpus candidate
-and local-baseline metrics, structured quality/resource/supply-chain/privacy
-fields, and an explicit machine `go`/`no-go`. It also rejects duplicate JSON
-fields and the public fixture before candidate scoring, and distinguishes
-evaluator-supplied assertions from facts the scorer can verify. In particular,
-the scorer does not claim to verify corpus freshness or identifier provenance.
+and local-baseline metrics, a raise-only comparison gate, structured
+quality/resource/supply-chain/privacy fields, and an explicit machine
+`go`/`no-go`. It also rejects duplicate JSON fields and the public-fixture path
+before candidate scoring, and distinguishes evaluator-supplied assertions from
+facts the scorer can verify. In particular, the scorer does not claim to verify
+corpus freshness or bind evaluator identifiers, and it does not emit those
+identifier values.
 
 This resolves the missing mechanism, not the Phase 4 product decision. With no
 independently supplied candidate, resource, or supply-chain evidence, the

@@ -11,7 +11,7 @@ from typing import Any, cast
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "src"))
 
-from weightclass.classification import classify_task  # noqa: E402
+from weightclass.classification import InvalidTaskError, classify_task, validate_task  # noqa: E402
 
 PUBLIC_CORPUS = pathlib.Path(__file__).with_name("corpus.json")
 TIERS = ("low", "standard", "high")
@@ -134,9 +134,13 @@ def validate_candidate(raw: object, *, corpus: Sequence[Mapping[str, Any]]) -> d
             raise CandidateValidationError(f"prediction {position} id is duplicated")
         if identifier not in corpus_ids:
             raise CandidateValidationError(f"prediction {position} id is unknown")
-        if record["label"] not in TIERS or record["label"] != corpus[position]["consensus"]:
+        if (
+            not isinstance(record["label"], str)
+            or record["label"] not in TIERS
+            or record["label"] != corpus[position]["consensus"]
+        ):
             raise CandidateValidationError(f"prediction {position} label does not match corpus")
-        if record["prediction"] not in TIERS:
+        if not isinstance(record["prediction"], str) or record["prediction"] not in TIERS:
             raise CandidateValidationError(
                 f"prediction {position} prediction must be a supported tier"
             )
@@ -187,14 +191,25 @@ def validate_corpus(
         for field in required:
             if field not in entry:
                 raise CorpusValidationError(f"entry {position}: missing {field}")
-        if not isinstance(entry["task"], str) or not entry["task"].strip():
+        task = entry["task"]
+        if not isinstance(task, str) or not task.strip():
             raise CorpusValidationError(f"entry {position}: task must be non-empty text")
-        if entry["consensus"] not in TIERS:
+        try:
+            validate_task(task)
+        except InvalidTaskError as error:
+            raise CorpusValidationError(
+                f"entry {position}: task is outside classifier limits"
+            ) from error
+        consensus = entry["consensus"]
+        if not isinstance(consensus, str) or consensus not in TIERS:
             raise CorpusValidationError(f"entry {position}: consensus must be a supported tier")
-        if entry["language"] not in LANGUAGES:
+        language = entry["language"]
+        if not isinstance(language, str) or language not in LANGUAGES:
             raise CorpusValidationError(f"entry {position}: language must be a reviewed slice")
-        if require_category and entry.get("category") not in CATEGORIES:
-            raise CorpusValidationError(f"entry {position}: category must be a reviewed slice")
+        if require_category:
+            category = entry.get("category")
+            if not isinstance(category, str) or category not in CATEGORIES:
+                raise CorpusValidationError(f"entry {position}: category must be a reviewed slice")
         if require_id:
             identifier = entry.get("id")
             if not isinstance(identifier, str) or not IDENTIFIER.fullmatch(identifier):
@@ -204,8 +219,12 @@ def validate_corpus(
             if identifier in seen_ids:
                 raise CorpusValidationError(f"entry {position}: id must be unique")
             seen_ids.add(identifier)
-        if require_vendor_tier and entry.get("vendor_tier") not in TIERS:
-            raise CorpusValidationError(f"entry {position}: vendor_tier must be a supported tier")
+        if require_vendor_tier:
+            vendor_tier = entry.get("vendor_tier")
+            if not isinstance(vendor_tier, str) or vendor_tier not in TIERS:
+                raise CorpusValidationError(
+                    f"entry {position}: vendor_tier must be a supported tier"
+                )
         validated.append(entry)
     return validated
 
@@ -353,6 +372,7 @@ def candidate_report(
     *,
     baseline_metrics: Mapping[str, Any],
     corpus_size: int,
+    candidate_below_baseline_count: int,
 ) -> dict[str, Any]:
     """Build an aggregate-only decision record from predeclared candidate gates."""
     quality = candidate["quality_gate"]
@@ -363,6 +383,7 @@ def candidate_report(
         and high_recall["confidence_interval_95"][0] >= quality["high_tier_recall_min"]
     )
     over_passes = over_routing["confidence_interval_95"][1] <= quality["over_routing_max"]
+    raise_only_passes = candidate_below_baseline_count == 0
     quality_passes = (
         high_passes
         and over_passes
@@ -379,8 +400,6 @@ def candidate_report(
     )
     report = {
         "schema_version": 1,
-        "candidate_id": candidate["candidate_id"],
-        "baseline_id": candidate["baseline_id"],
         "baseline_metrics": baseline_metrics,
         "corpus": {
             "entries": corpus_size,
@@ -407,14 +426,29 @@ def candidate_report(
             "unexplained_slice_regression": quality["unexplained_slice_regression"],
             "passes": quality_passes,
         },
+        "comparison_gate": {
+            "candidate_below_baseline_count": candidate_below_baseline_count,
+            "high_tier_recall_rate_delta": (
+                high_recall["rate"] - baseline_metrics["high_recall"]["rate"]
+            ),
+            "over_routing_rate_delta": (
+                over_routing["rate"] - baseline_metrics["over_routing"]["rate"]
+            ),
+            "raise_only_required": True,
+            "passes": raise_only_passes,
+        },
         "resource_gate": {**candidate["resource_gate"], "passes": resource_passes},
         "supply_chain_gate": {**supply_chain, "passes": supply_chain_passes},
         "privacy_gate": {
             "aggregate_only_report": True,
-            "identifier_provenance_verified_by_scorer": False,
-            "task_text_or_per_task_record_emitted": False,
+            "candidate_and_baseline_identifiers_emitted": False,
+            "corpus_task_field_or_per_task_record_emitted": False,
         },
-        "decision": "go" if quality_passes and resource_passes and supply_chain_passes else "no-go",
+        "decision": (
+            "go"
+            if quality_passes and raise_only_passes and resource_passes and supply_chain_passes
+            else "no-go"
+        ),
     }
     return cast(dict[str, Any], _rounded(report))
 
@@ -486,6 +520,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             {**record, "predicted": prediction["prediction"]}
             for record, prediction in zip(records, candidate["predictions"], strict=True)
         ]
+        candidate_below_baseline_count = sum(
+            RANK[candidate_record["predicted"]] < RANK[baseline_record["predicted"]]
+            for candidate_record, baseline_record in zip(candidate_records, records, strict=True)
+        )
         print(
             json.dumps(
                 candidate_report(
@@ -493,6 +531,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     aggregate_metrics(candidate_records),
                     baseline_metrics=aggregate_metrics(records),
                     corpus_size=len(entries),
+                    candidate_below_baseline_count=candidate_below_baseline_count,
                 ),
                 sort_keys=True,
                 separators=(",", ":"),

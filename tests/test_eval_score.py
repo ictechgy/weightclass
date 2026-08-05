@@ -132,14 +132,14 @@ class OfflineOutputTests(unittest.TestCase):
         entries = [
             {
                 "id": "task-1",
-                "task": secret,
+                "task": f"{secret} security",
                 "consensus": "high",
                 "language": "en",
                 "category": "security",
             },
             {
                 "id": "task-2",
-                "task": "another sealed task",
+                "task": "another sealed task typo",
                 "consensus": "low",
                 "language": "ko",
                 "category": "routine",
@@ -187,8 +187,10 @@ class OfflineOutputTests(unittest.TestCase):
         report = json.loads(stdout.getvalue())
         self.assertEqual(result, 0)
         self.assertEqual(stderr.getvalue(), "")
-        self.assertEqual(report["candidate_id"], "semantic-candidate-1")
-        self.assertEqual(report["baseline_id"], "deterministic-baseline-1")
+        self.assertNotIn("candidate_id", report)
+        self.assertNotIn("baseline_id", report)
+        self.assertNotIn("semantic-candidate-1", stdout.getvalue())
+        self.assertNotIn("deterministic-baseline-1", stdout.getvalue())
         self.assertEqual(
             report["corpus"],
             {
@@ -205,6 +207,16 @@ class OfflineOutputTests(unittest.TestCase):
         )
         self.assertEqual(report["quality_gate"]["by_language"]["ko"]["total"], 1)
         self.assertEqual(report["quality_gate"]["by_category"]["security"]["total"], 1)
+        self.assertEqual(
+            report["comparison_gate"],
+            {
+                "candidate_below_baseline_count": 0,
+                "high_tier_recall_rate_delta": 0.0,
+                "over_routing_rate_delta": 0.0,
+                "raise_only_required": True,
+                "passes": True,
+            },
+        )
         self.assertEqual(
             report["resource_gate"],
             {
@@ -229,8 +241,8 @@ class OfflineOutputTests(unittest.TestCase):
             report["privacy_gate"],
             {
                 "aggregate_only_report": True,
-                "identifier_provenance_verified_by_scorer": False,
-                "task_text_or_per_task_record_emitted": False,
+                "candidate_and_baseline_identifiers_emitted": False,
+                "corpus_task_field_or_per_task_record_emitted": False,
             },
         )
         self.assertEqual(report["decision"], "go")
@@ -297,7 +309,9 @@ class OfflineOutputTests(unittest.TestCase):
             },
         )
 
-    def test_candidate_privacy_gate_does_not_claim_to_verify_id_provenance(self) -> None:
+    def test_candidate_privacy_gate_does_not_emit_unverified_identifiers(self) -> None:
+        candidate_sentinel = "SEALED-CANDIDATE-TASK-TEXT"
+        baseline_sentinel = "SEALED-BASELINE-TASK-TEXT"
         entries = [
             {
                 "id": "task-1",
@@ -308,6 +322,8 @@ class OfflineOutputTests(unittest.TestCase):
             }
         ]
         candidate = self._complete_candidate(predictions=[self._prediction()])
+        candidate["candidate_id"] = candidate_sentinel
+        candidate["baseline_id"] = baseline_sentinel
 
         result, output = self._run_candidate(entries, candidate)
 
@@ -317,10 +333,54 @@ class OfflineOutputTests(unittest.TestCase):
             report["privacy_gate"],
             {
                 "aggregate_only_report": True,
-                "identifier_provenance_verified_by_scorer": False,
-                "task_text_or_per_task_record_emitted": False,
+                "candidate_and_baseline_identifiers_emitted": False,
+                "corpus_task_field_or_per_task_record_emitted": False,
             },
         )
+        self.assertNotIn(candidate_sentinel, output)
+        self.assertNotIn(baseline_sentinel, output)
+
+    def test_candidate_rejects_unhashable_metadata_without_a_traceback(self) -> None:
+        base_entry: dict[str, object] = {
+            "id": "task-1",
+            "task": "SEALED-METADATA-TASK",
+            "consensus": "low",
+            "language": "en",
+            "category": "routine",
+        }
+        for field, invalid_value in (
+            ("consensus", []),
+            ("language", []),
+            ("category", {}),
+        ):
+            with self.subTest(field=field):
+                entry = {**base_entry, field: invalid_value}
+                result, output = self._run_candidate(
+                    [entry], self._complete_candidate(predictions=[self._prediction()])
+                )
+                self.assertEqual(result, 2)
+                self.assertNotIn("Traceback", output)
+                self.assertNotIn("SEALED-METADATA-TASK", output)
+
+    def test_candidate_rejects_an_oversized_task_without_a_traceback(self) -> None:
+        sentinel = "SEALED-OVERSIZED-TASK"
+        entries = [
+            {
+                "id": "task-1",
+                "task": sentinel + ("x" * 20_001),
+                "consensus": "low",
+                "language": "en",
+                "category": "routine",
+            }
+        ]
+
+        result, output = self._run_candidate(
+            entries, self._complete_candidate(predictions=[self._prediction()])
+        )
+
+        self.assertEqual(result, 2)
+        self.assertNotIn("Traceback", output)
+        self.assertNotIn(sentinel, output)
 
     def test_candidate_rejects_prediction_count_mismatch_without_task_output(self) -> None:
         secret = "MISMATCHED SEALED TASK"
@@ -393,20 +453,22 @@ class OfflineOutputTests(unittest.TestCase):
         valid_candidate = json.dumps(candidate)
         cases = {
             "corpus": (
-                '[{"id":"task-1","task":"first hidden","task":"second hidden",'
+                '[{"id":"task-1","task":"SEALED-FIRST-VALUE","task":"SEALED-SECOND-VALUE",'
                 '"consensus":"low","language":"en","category":"routine"}]',
                 valid_candidate,
+                ("task", "SEALED-FIRST-VALUE", "SEALED-SECOND-VALUE"),
             ),
             "candidate": (
                 valid_corpus,
                 valid_candidate.replace(
                     '"candidate_id": "candidate-1"',
-                    '"candidate_id": "candidate-1", "candidate_id": "candidate-2"',
+                    '"candidate_id": "SEALED-FIRST-ID", "candidate_id": "SEALED-SECOND-ID"',
                     1,
                 ),
+                ("candidate_id", "SEALED-FIRST-ID", "SEALED-SECOND-ID"),
             ),
         }
-        for name, (corpus_json, candidate_json) in cases.items():
+        for name, (corpus_json, candidate_json, sensitive_values) in cases.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 corpus_path = pathlib.Path(directory) / "blind.json"
                 candidate_path = pathlib.Path(directory) / "candidate.json"
@@ -418,11 +480,11 @@ class OfflineOutputTests(unittest.TestCase):
                     result = score.main(
                         ["--corpus", str(corpus_path), "--candidate", str(candidate_path)]
                     )
-
-            output = stdout.getvalue() + stderr.getvalue()
-            self.assertEqual(result, 2)
-            self.assertIn("duplicate object fields", output)
-            self.assertNotIn("hidden", output)
+                output = stdout.getvalue() + stderr.getvalue()
+                self.assertEqual(result, 2)
+                self.assertIn("duplicate object fields", output)
+                for sensitive_value in sensitive_values:
+                    self.assertNotIn(sensitive_value, output)
 
     def test_candidate_rejects_boolean_schema_version(self) -> None:
         entries = [
@@ -489,37 +551,71 @@ class OfflineOutputTests(unittest.TestCase):
                 "category": "security",
             },
         ]
-        cases = {
-            "not an array": "invalid",
-            "missing record": [self._prediction()],
-            "duplicate id": [self._prediction(), self._prediction(label="high")],
-            "unknown id": [
-                self._prediction(),
-                self._prediction(identifier="task-3", label="high", prediction="high"),
-            ],
-            "label mismatch": [
-                self._prediction(label="high"),
-                self._prediction(identifier="task-2", label="high", prediction="high"),
-            ],
-            "out of order": [
-                self._prediction(identifier="task-2", label="low"),
-                self._prediction(identifier="task-1", label="high", prediction="high"),
-            ],
-            "unsupported tier": [
-                self._prediction(prediction="urgent"),
-                self._prediction(identifier="task-2", label="high", prediction="high"),
-            ],
-            "unknown field": [
-                {**self._prediction(), "task": "must not be accepted"},
-                self._prediction(identifier="task-2", label="high", prediction="high"),
-            ],
+        cases: dict[str, tuple[object, str]] = {
+            "not an array": ("invalid", "predictions must be an array"),
+            "missing record": ([self._prediction()], "prediction count does not match corpus"),
+            "duplicate id": (
+                [self._prediction(), self._prediction(label="high")],
+                "id is duplicated",
+            ),
+            "unknown id": (
+                [
+                    self._prediction(),
+                    self._prediction(identifier="task-3", label="high", prediction="high"),
+                ],
+                "id is unknown",
+            ),
+            "label mismatch": (
+                [
+                    self._prediction(label="high"),
+                    self._prediction(identifier="task-2", label="high", prediction="high"),
+                ],
+                "label does not match corpus",
+            ),
+            "out of order": (
+                [
+                    self._prediction(identifier="task-2", label="low"),
+                    self._prediction(identifier="task-1", label="high", prediction="high"),
+                ],
+                "id is out of order",
+            ),
+            "unsupported tier": (
+                [
+                    self._prediction(prediction="urgent"),
+                    self._prediction(identifier="task-2", label="high", prediction="high"),
+                ],
+                "prediction must be a supported tier",
+            ),
+            "unhashable label": (
+                [
+                    {"id": "task-1", "label": [], "prediction": "low"},
+                    self._prediction(identifier="task-2", label="high", prediction="high"),
+                ],
+                "label does not match corpus",
+            ),
+            "unhashable prediction": (
+                [
+                    {"id": "task-1", "label": "low", "prediction": {}},
+                    self._prediction(identifier="task-2", label="high", prediction="high"),
+                ],
+                "prediction must be a supported tier",
+            ),
+            "unknown field": (
+                [
+                    {**self._prediction(), "task": "must not be accepted"},
+                    self._prediction(identifier="task-2", label="high", prediction="high"),
+                ],
+                "must contain exactly the documented fields",
+            ),
         }
-        for name, predictions in cases.items():
+        for name, (predictions, expected_error) in cases.items():
             with self.subTest(name=name):
                 candidate = self._complete_candidate(predictions=[])
                 candidate["predictions"] = predictions
                 result, output = self._run_candidate(entries, candidate)
                 self.assertEqual(result, 2)
+                self.assertIn(expected_error, output)
+                self.assertNotIn("Traceback", output)
                 self.assertNotIn("hidden", output)
 
     def test_candidate_rejects_duplicate_corpus_identifiers(self) -> None:
@@ -598,7 +694,13 @@ class OfflineOutputTests(unittest.TestCase):
         quality["high_tier_recall_min"] = metrics["high_recall"]["confidence_interval_95"][0]
         quality["over_routing_max"] = metrics["over_routing"]["confidence_interval_95"][1]
 
-        report = score.candidate_report(candidate, metrics, baseline_metrics=metrics, corpus_size=1)
+        report = score.candidate_report(
+            candidate,
+            metrics,
+            baseline_metrics=metrics,
+            corpus_size=1,
+            candidate_below_baseline_count=0,
+        )
 
         self.assertTrue(report["quality_gate"]["high_tier_recall"]["passes"])
         self.assertTrue(report["quality_gate"]["over_routing"]["passes"])
@@ -612,9 +714,70 @@ class OfflineOutputTests(unittest.TestCase):
             no_high_metrics,
             baseline_metrics=no_high_metrics,
             corpus_size=1,
+            candidate_below_baseline_count=0,
         )
         self.assertFalse(no_high_report["quality_gate"]["high_tier_recall"]["passes"])
         self.assertEqual(no_high_report["decision"], "no-go")
+
+    def test_candidate_below_baseline_fails_the_raise_only_gate(self) -> None:
+        metrics = score.aggregate_metrics(
+            [{"expected": "high", "predicted": "high", "language": "en", "category": "security"}]
+        )
+        candidate = self._complete_candidate(
+            predictions=[self._prediction(label="high", prediction="high")]
+        )
+        quality = candidate["quality_gate"]
+        assert isinstance(quality, dict)
+        quality["high_tier_recall_min"] = 0.0
+        quality["over_routing_max"] = 1.0
+
+        report = score.candidate_report(
+            candidate,
+            metrics,
+            baseline_metrics=metrics,
+            corpus_size=1,
+            candidate_below_baseline_count=1,
+        )
+
+        self.assertFalse(report["comparison_gate"]["passes"])
+        self.assertEqual(report["comparison_gate"]["candidate_below_baseline_count"], 1)
+        self.assertEqual(report["decision"], "no-go")
+
+    def test_candidate_cli_counts_a_prediction_below_the_local_baseline(self) -> None:
+        entries = [
+            {
+                "id": "task-1",
+                "task": "security incident",
+                "consensus": "low",
+                "language": "en",
+                "category": "security",
+            },
+            {
+                "id": "task-2",
+                "task": "security migration",
+                "consensus": "high",
+                "language": "ko",
+                "category": "migration",
+            },
+        ]
+        candidate = self._complete_candidate(
+            predictions=[
+                self._prediction(prediction="low"),
+                self._prediction(identifier="task-2", label="high", prediction="high"),
+            ]
+        )
+        quality = candidate["quality_gate"]
+        assert isinstance(quality, dict)
+        quality["high_tier_recall_min"] = 0.0
+        quality["over_routing_max"] = 1.0
+
+        result, output = self._run_candidate(entries, candidate)
+
+        report = json.loads(output)
+        self.assertEqual(result, 0)
+        self.assertEqual(report["comparison_gate"]["candidate_below_baseline_count"], 1)
+        self.assertFalse(report["comparison_gate"]["passes"])
+        self.assertEqual(report["decision"], "no-go")
 
     def test_each_resource_and_supply_chain_field_controls_the_decision(self) -> None:
         metrics = score.aggregate_metrics(
@@ -638,7 +801,11 @@ class OfflineOutputTests(unittest.TestCase):
                     gate[field] = field == "model_download_required"
 
                     report = score.candidate_report(
-                        candidate, metrics, baseline_metrics=metrics, corpus_size=1
+                        candidate,
+                        metrics,
+                        baseline_metrics=metrics,
+                        corpus_size=1,
+                        candidate_below_baseline_count=0,
                     )
 
                     self.assertFalse(report[gate_name]["passes"])
@@ -663,7 +830,11 @@ class OfflineOutputTests(unittest.TestCase):
                 quality[field] = failing_value
 
                 report = score.candidate_report(
-                    candidate, metrics, baseline_metrics=metrics, corpus_size=1
+                    candidate,
+                    metrics,
+                    baseline_metrics=metrics,
+                    corpus_size=1,
+                    candidate_below_baseline_count=0,
                 )
 
                 self.assertFalse(report["quality_gate"]["passes"])
