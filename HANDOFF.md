@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-06 03:53 KST by Codex_
+_Last updated: 2026-08-06 04:15 KST by Codex_
 
 ## Goal
 
@@ -12,15 +12,14 @@ _Last updated: 2026-08-06 03:53 KST by Codex_
 
 ## Current Status
 
-- PR #14 established Phase 4's baseline at
-  `73388587d9d186dcff7e4a5caf815ffff371625f`; use `git rev-parse main
-  origin/main` to confirm the live default-branch revision.
-- `weightclass 0.2.0` remains the published PyPI/Homebrew release; main CI was
-  green through PR #14.
-- Phase 4 delivery is tracked by PR #15 from
-  `feat/offline-semantic-decision-gate`, which was based directly on the PR #14
-  merge. Confirm the checked-out branch and live PR state with `git status`,
-  `git log`, and `gh pr view 15` before resuming.
+- PR #15 merged the Phase 4 offline evaluation gate at
+  `e3c5aeee0f61c79467caeac34b08de2d7a1946b9` after all CI and review gates
+  passed.
+- `weightclass 0.3.0` is published on PyPI from tag `v0.3.0` at
+  `da958f5c1bcf062d7c537774f2ab8e61ee97ec4d`; release workflow run
+  `31038013636` completed successfully.
+- PR #17 updated the repository's canonical Homebrew formula, and tap PR #9
+  published the matching 0.3.0 URL and SHA-256 to `ictechgy/homebrew-tap`.
 - Phase 4 delivery files:
   - `tests/eval/score.py`
   - `tests/test_eval_score.py`
@@ -49,7 +48,7 @@ _Last updated: 2026-08-06 03:53 KST by Codex_
   - risk posture remains explicit and source-vendor pinned;
   - vendor-only/raise-only triage comparisons are evaluator-driven offline
     experiments and do not change default routing.
-- Phase 4 evaluation support is implemented on the current branch:
+- Phase 4 evaluation support is implemented on `main`:
   - `--candidate` accepts an exact, bounded schema with one opaque-ID-bound
     prediction per fresh-corpus record;
   - malformed, incomplete, duplicated, unknown, out-of-order, or label-mismatched
@@ -73,7 +72,7 @@ _Last updated: 2026-08-06 03:53 KST by Codex_
 - `AGENTS.md`: authoritative product, safety, and engineering constraints.
 - `docs/routing-roadmap.md`: routing strategy and Phase 0–4 delivery status.
 - `docs/phase4-evaluation-audit.md`: evidence-backed audit of the PR #14
-  baseline and the four gaps addressed by the current branch.
+  baseline and the four gaps addressed by PR #15.
 - `docs/phase4-go-no-go-template.md`: required review record; incomplete or
   unresolved evidence defaults to `no-go`/`do-not-add`.
 - `tests/eval/score.py`: offline scorer and candidate decision CLI. It is
@@ -85,7 +84,7 @@ _Last updated: 2026-08-06 03:53 KST by Codex_
   procedure.
 - `packaging/homebrew/weightclass.rb`: published-install behavior assertions.
 - `.github/workflows/ci.yml`: supported-version tests and quality/package gate.
-- `src/weightclass/`: unchanged by the current Phase 4 branch.
+- `src/weightclass/`: installed runtime, currently versioned as 0.3.0.
 
 ## Important Context / Decisions
 
@@ -120,7 +119,7 @@ _Last updated: 2026-08-06 03:53 KST by Codex_
 ### Assumptions
 
 - No independent Phase 4 candidate evidence is currently available locally.
-- GitHub delivery actions are authorized for this branch and repository. Force
+- Normal GitHub delivery actions were used for the 0.3.0 release. Force
   operations and production-model adoption remain out of scope.
 
 ## Verification
@@ -143,13 +142,20 @@ _Last updated: 2026-08-06 03:53 KST by Codex_
 - Ran: `ruff check src tests`, `ruff format --check src tests`, and strict
   `mypy` using isolated tool execution.
   - Result: passed after the PR quality-fix commit.
+- Release workflow run `31038013636` passed tag/version, Python 3.10–3.13
+  tests, lint, formatting, types, package build, metadata validation, and PyPI
+  Trusted Publishing.
+- A clean virtual environment installed `weightclass==0.3.0` from public PyPI;
+  `wclass --version` and representative classification checks passed.
+- The Homebrew formula passed scoped style and strict audit checks, upgraded a
+  local source-built install from 0.2.0 to 0.3.0, and passed `brew test` plus a
+  stdin classification check. Whole-tap style still reports one unrelated,
+  pre-existing component-order offense in `Formula/relay.rb`.
 
 ## Blockers & Open Questions
 
 - Phase 4 cannot advance to a production model without independently supplied
   fresh blind-corpus predictions plus resource and supply-chain evidence.
-- If PR #15 is still open, its latest-head CI must pass Ruff, Ruff formatting,
-  mypy, Python 3.10–3.13 tests, build, and distribution checks before merge.
 - Pre-existing triage subprocess `ResourceWarning`s are outside the Phase 4
   diff; address separately rather than mixing them into this change.
 - Existing route fingerprints bind reviewed policy selection, not task content
@@ -194,20 +200,19 @@ _Last updated: 2026-08-06 03:53 KST by Codex_
 
 ## Next Steps
 
-1. Inspect PR #15 and the checked-out branch. If the PR is open, complete any
-   pending CI or review fixes with focused tests and normal commits.
-2. If PR #15 is open, merge only after all required checks and blocking reviews
-   clear; if it is merged, update local `main` from `origin/main` without
-   history rewriting.
-3. Keep the decision `no-go` unless an independent evaluator supplies a fresh
+1. Keep the decision `no-go` unless an independent evaluator supplies a fresh
    sealed corpus, ID-bound candidate predictions, and all required resource and
    supply-chain evidence under predeclared rules.
-4. If such evidence arrives, run only the documented offline scorer and fill
+2. If such evidence arrives, run only the documented offline scorer and fill
    `docs/phase4-go-no-go-template.md` with aggregate, non-sensitive results.
+3. Address the pre-existing triage subprocess `ResourceWarning`s and the
+   unrelated Homebrew `Formula/relay.rb` style offense only in separately
+   scoped changes.
 
 ## Resume Prompt
 
 Open the `subscription-agent-router` repository root, read `HANDOFF.md` and
-`AGENTS.md`, then inspect PR #15 and the checked-out branch/CI state. Preserve
-the `no-go` decision and do not add a production model unless independently
-supplied evidence satisfies every predeclared gate.
+`AGENTS.md`, then confirm local `main` matches `origin/main`. Preserve the
+Phase 4 `no-go` decision and do not add a production model unless independently
+supplied evidence satisfies every predeclared gate. The current public package
+and Homebrew formula version is 0.3.0.
