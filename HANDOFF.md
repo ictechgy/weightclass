@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-06 02:34 KST by Codex_
+_Last updated: 2026-08-06 02:46 KST by Codex_
 
 ## Goal
 
@@ -12,16 +12,15 @@ _Last updated: 2026-08-06 02:34 KST by Codex_
 
 ## Current Status
 
-- `main` and `origin/main` point to
-  `73388587d9d186dcff7e4a5caf815ffff371625f`, merge of PR #14
-  (`feat/routing-policy-foundation`).
+- PR #14 established Phase 4's baseline at
+  `73388587d9d186dcff7e4a5caf815ffff371625f`; use `git rev-parse main
+  origin/main` to confirm the live default-branch revision.
 - `weightclass 0.2.0` remains the published PyPI/Homebrew release; main CI was
   green through PR #14.
-- Current branch: `feat/offline-semantic-decision-gate`, based directly on that
-  merge commit.
-- The user authorized commit, push, PR review/fixes, and normal merge for this
-  branch. Delivery is in progress; confirm the live state with `git status`,
-  `git log`, and `gh pr view` before resuming.
+- Phase 4 delivery is tracked by PR #15 from
+  `feat/offline-semantic-decision-gate`, which was based directly on the PR #14
+  merge. Confirm the checked-out branch and live PR state with `git status`,
+  `git log`, and `gh pr view 15` before resuming.
 - Phase 4 delivery files:
   - `tests/eval/score.py`
   - `tests/test_eval_score.py`
@@ -126,15 +125,16 @@ _Last updated: 2026-08-06 02:34 KST by Codex_
 - Ran the explicit public-fixture regression test red/green:
   - before the resolved-path guard, candidate mode reached `_load_corpus`;
   - after the guard, direct and symlink-alias paths are rejected before read.
-- Ruff and mypy were not available in the local offline cache. Do not claim
-  those checks pass until CI or an approved environment runs them.
+- Ran: `ruff check src tests`, `ruff format --check src tests`, and strict
+  `mypy` using isolated tool execution.
+  - Result: passed after the PR quality-fix commit.
 
 ## Blockers & Open Questions
 
 - Phase 4 cannot advance to a production model without independently supplied
   fresh blind-corpus predictions plus resource and supply-chain evidence.
-- CI must run Ruff, Ruff formatting, mypy, Python 3.10–3.13 tests, build, and
-  distribution checks after a PR is created.
+- If PR #15 is still open, its latest-head CI must pass Ruff, Ruff formatting,
+  mypy, Python 3.10–3.13 tests, build, and distribution checks before merge.
 - Pre-existing triage subprocess `ResourceWarning`s are outside the Phase 4
   diff; address separately rather than mixing them into this change.
 - Existing route fingerprints bind reviewed policy selection, not task content
@@ -177,10 +177,11 @@ _Last updated: 2026-08-06 02:34 KST by Codex_
 
 ## Next Steps
 
-1. Inspect the current branch/PR state, then complete any pending CI or review
-   fixes with focused tests and normal commits.
-2. Merge only after all required checks and blocking reviews clear; then update
-   local `main` from `origin/main` without history rewriting.
+1. Inspect PR #15 and the checked-out branch. If the PR is open, complete any
+   pending CI or review fixes with focused tests and normal commits.
+2. If PR #15 is open, merge only after all required checks and blocking reviews
+   clear; if it is merged, update local `main` from `origin/main` without
+   history rewriting.
 3. Keep the decision `no-go` unless an independent evaluator supplies a fresh
    sealed corpus, ID-bound candidate predictions, and all required resource and
    supply-chain evidence under predeclared rules.
@@ -190,6 +191,6 @@ _Last updated: 2026-08-06 02:34 KST by Codex_
 ## Resume Prompt
 
 Open the `subscription-agent-router` repository root, read `HANDOFF.md` and
-`AGENTS.md`, then inspect the `feat/offline-semantic-decision-gate` branch and
-its PR/CI state. Preserve the `no-go` decision and do not add a production model
-unless independently supplied evidence satisfies every predeclared gate.
+`AGENTS.md`, then inspect PR #15 and the checked-out branch/CI state. Preserve
+the `no-go` decision and do not add a production model unless independently
+supplied evidence satisfies every predeclared gate.
