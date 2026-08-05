@@ -13,13 +13,16 @@ from . import __version__
 from .classification import (
     InvalidTaskError,
     Tier,
+    apply_cautious_posture,
     classify_task,
+    classify_task_with_reason,
     read_task_from_standard_input,
     validate_task,
 )
 from .router import (
     DEFAULT_ROUTES,
     SUPPORTED_VENDORS,
+    Posture,
     Route,
     RouteRequest,
     RouteSelectionError,
@@ -177,10 +180,15 @@ def load_routes(policy_path: Path) -> tuple[Route, ...]:
 def load_routing_policy(policy_path: Path) -> RoutingPolicy:
     """Load routing options and strictly shaped trusted-local routes."""
     policy = _read_json_object(policy_path)
-    if set(policy) not in ({"routes"}, {"routes", "allow_mixed_vendors"}):
+    if not {"routes"} <= set(policy) <= {"routes", "allow_mixed_vendors", "posture"}:
         raise InvalidInputError()
     allow_mixed_vendors = policy.get("allow_mixed_vendors", False)
     if not isinstance(allow_mixed_vendors, bool):
+        raise InvalidInputError()
+    posture = policy.get("posture")
+    if "posture" in policy and (
+        not isinstance(posture, str) or posture not in {"balanced", "cautious"}
+    ):
         raise InvalidInputError()
     routes = policy["routes"]
     if not isinstance(routes, list) or not routes:
@@ -189,7 +197,7 @@ def load_routing_policy(policy_path: Path) -> RoutingPolicy:
     parsed_routes = tuple(_parse_route(route) for route in routes)
     if len({route.route_id for route in parsed_routes}) != len(parsed_routes):
         raise InvalidInputError()
-    return RoutingPolicy(parsed_routes, allow_mixed_vendors)
+    return RoutingPolicy(parsed_routes, allow_mixed_vendors, cast(Posture | None, posture))
 
 
 def load_request(descriptor_path: Path) -> RouteRequest:
@@ -235,6 +243,11 @@ def build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--ask-vendor", action="store_true")
     # 판정 명령도 내장 벤더 명령이므로 실행 전에 볼 수 있어야 한다.
     classify.add_argument("--show-triage-command", action="store_true")
+    classify.add_argument(
+        "--explain",
+        action="store_true",
+        help="Include static reason-code and local policy metadata.",
+    )
     for name, description in (
         ("route", "Select and print a command for a task read from standard input."),
         ("run", "Select and start a command for a task read from standard input."),
@@ -368,6 +381,7 @@ def classify_from_standard_input(
     source_vendor: str | None = None,
     ask_vendor: bool = False,
     show_triage_command: bool = False,
+    explain: bool = False,
 ) -> int:
     """Classify a task read from stdin without echoing or persisting it.
 
@@ -378,6 +392,9 @@ def classify_from_standard_input(
     if (ask_vendor or show_triage_command) and source_vendor is None:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
+    if explain and (ask_vendor or show_triage_command):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
     if show_triage_command:
         assert source_vendor is not None
         # 태스크를 읽지 않고 벤더도 부르지 않는다. 명령만 보여준다.
@@ -386,7 +403,11 @@ def classify_from_standard_input(
     try:
         task = read_task_from_standard_input()
         if not ask_vendor:
-            tier = classify_task(task)
+            if explain:
+                decision = classify_task_with_reason(task)
+                tier = decision.tier
+            else:
+                tier = classify_task(task)
             tier_source = "local"
         else:
             # 티어를 밖에서 받더라도 검증은 건너뛰지 않는다.
@@ -405,7 +426,10 @@ def classify_from_standard_input(
     # 와 .github/workflows/ci.yml 이 {"tier": "low"} 를 정확히 단언하고 있고,
     # formula 는 이미 배포되어 있다. 새 키는 --ask-vendor 를 쓴 경우에만 붙인다.
     response: dict[str, str] = {"tier": tier}
-    if ask_vendor:
+    if explain:
+        response["reason_code"] = decision.reason_code
+        response["policy_version"] = decision.policy_version
+    elif ask_vendor:
         response["tier_source"] = tier_source
     print(json.dumps(response))
     return 0
@@ -416,7 +440,7 @@ def select_task_route(
     policy_path: Path | None,
     source_vendor: str | None = None,
     explicit_tier: Tier | None = None,
-) -> tuple[Tier, Route, RoutingPolicy]:
+) -> tuple[Tier, str, Route, RoutingPolicy]:
     """Classify a task and select its route without retaining task content.
 
     explicit_tier 는 wclass classify 가 이미 낸 판정을 받는 경로다. 분류를
@@ -426,20 +450,28 @@ def select_task_route(
     if explicit_tier is not None:
         validate_task(task)
         tier = explicit_tier
+        reason_code = "explicit.requested_tier"
     else:
-        tier = classify_task(task)
+        decision = classify_task_with_reason(task)
+        reason_code = decision.reason_code
     policy = (
         load_routing_policy(policy_path)
         if policy_path is not None
         else RoutingPolicy(DEFAULT_ROUTES)
     )
+    if explicit_tier is None and policy.posture == "cautious":
+        decision = apply_cautious_posture(decision)
+        tier = decision.tier
+        reason_code = decision.reason_code
+    elif explicit_tier is None:
+        tier = decision.tier
     route = select_tier_route(
         policy.routes,
         tier,
         source_vendor,
         policy.allow_mixed_vendors,
     )
-    return tier, route, policy
+    return tier, reason_code, route, policy
 
 
 def route_from_standard_input(
@@ -449,7 +481,7 @@ def route_from_standard_input(
 ) -> int:
     """Select and render a command without echoing or persisting the task."""
     try:
-        tier, route, policy = select_task_route(
+        tier, reason_code, route, policy = select_task_route(
             read_task_from_standard_input(), policy_path, source_vendor, explicit_tier
         )
     except InvalidTaskError:
@@ -470,8 +502,13 @@ def route_from_standard_input(
         "vendor": route.vendor,
         # 이 지문을 wclass run --ack-route-fingerprint 로 넘기면 검토한 선택이
         # 실행 직전에 다시 확인된다. 넘기지 않으면 구속력은 없다.
-        "route_fingerprint": native_route_fingerprint(route, policy.allow_mixed_vendors),
+        "route_fingerprint": native_route_fingerprint(
+            route, policy.allow_mixed_vendors, policy.posture
+        ),
     }
+    if policy.posture is not None:
+        response["posture"] = policy.posture
+        response["reason_code"] = reason_code
     print(json.dumps(response))
     return 0
 
@@ -485,9 +522,9 @@ def run_from_standard_input(
     """Run a selected native command without a shell or output capture."""
     try:
         task = read_task_from_standard_input()
-        _, route, policy = select_task_route(task, policy_path, source_vendor, explicit_tier)
+        _, _, route, policy = select_task_route(task, policy_path, source_vendor, explicit_tier)
         if acknowledged_fingerprint is not None and acknowledged_fingerprint != (
-            native_route_fingerprint(route, policy.allow_mixed_vendors)
+            native_route_fingerprint(route, policy.allow_mixed_vendors, policy.posture)
         ):
             print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
             return 6
@@ -552,7 +589,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if arguments.command == "classify":
         return classify_from_standard_input(
-            arguments.source_vendor, arguments.ask_vendor, arguments.show_triage_command
+            arguments.source_vendor,
+            arguments.ask_vendor,
+            arguments.show_triage_command,
+            arguments.explain,
         )
     if arguments.command == "route":
         return route_from_standard_input(arguments.policy, arguments.source_vendor, arguments.tier)

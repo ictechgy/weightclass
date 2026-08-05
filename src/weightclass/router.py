@@ -3,11 +3,12 @@
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from .classification import Tier
 
 NATIVE_FINGERPRINT_VERSION: Final = 1
+Posture = Literal["balanced", "cautious"]
 
 
 SUPPORTED_VENDORS: Final = frozenset({"claude", "codex"})
@@ -78,6 +79,7 @@ class RouteRequest:
 class RoutingPolicy:
     routes: tuple[Route, ...]
     allow_mixed_vendors: bool = False
+    posture: Posture | None = None
 
 
 DEFAULT_ROUTES: Final = (
@@ -130,7 +132,11 @@ class RouteSelectionError(LookupError):
     """Raised when no policy route supports a request."""
 
 
-def native_route_fingerprint(route: Route, allow_mixed_vendors: bool) -> str:
+def native_route_fingerprint(
+    route: Route,
+    allow_mixed_vendors: bool,
+    posture: Posture | None = None,
+) -> str:
     """Bind a rendered review to the selection it rendered.
 
     route 와 run 은 정책을 각각 따로 읽으므로, 사이에 정책이 바뀌면 검토한 것과
@@ -148,9 +154,12 @@ def native_route_fingerprint(route: Route, allow_mixed_vendors: bool) -> str:
     주지만 결과인 라우트에 이미 반영되어 있고, 넣으면 route 출력만으로는 지문을
     재계산할 수 없어 동일한 선택이 거부되는 오탐이 생긴다.
     """
+    policy_semantics: dict[str, object] = {"allow_mixed_vendors": allow_mixed_vendors}
+    if posture is not None:
+        policy_semantics["posture"] = posture
     semantic_route = {
         "schema_version": NATIVE_FINGERPRINT_VERSION,
-        "policy": {"allow_mixed_vendors": allow_mixed_vendors},
+        "policy": policy_semantics,
         "route": {
             "id": route.route_id,
             "vendor": route.vendor,

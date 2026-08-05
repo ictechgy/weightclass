@@ -304,6 +304,30 @@ class ClassifyWithVendorTests(unittest.TestCase):
         self.assertEqual(exit_code, 8)
         self.assertEqual(json.loads(errors.getvalue()), {"error": "triage_unavailable"})
 
+    def test_fake_vendor_failure_is_terminal(self) -> None:
+        """Exercise the CLI boundary without invoking an installed vendor."""
+        with _fake_vendor_on_path("printf not-a-tier") as env:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "classify",
+                    "--source-vendor",
+                    "claude",
+                    "--ask-vendor",
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+                env=env,
+            )
+
+        self.assertEqual(result.returncode, 8)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(json.loads(result.stderr), {"error": "triage_unavailable"})
+
     def test_does_not_echo_the_task(self) -> None:
         """Breaks if the triage path starts placing task content in output."""
         errors = io.StringIO()
