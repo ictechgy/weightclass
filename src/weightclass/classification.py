@@ -2,9 +2,28 @@
 
 import re
 import sys
+from dataclasses import dataclass
 from typing import Final, Literal
 
 Tier = Literal["low", "standard", "high"]
+ReasonCode = Literal[
+    "high.length_floor",
+    "high.risk_floor",
+    "high.harmful_outcome",
+    "high.cautious_ambiguity",
+    "low.mechanical",
+    "standard.not_clearly_mechanical",
+]
+CLASSIFICATION_POLICY_VERSION: Final = "1"
+
+
+@dataclass(frozen=True)
+class ClassificationDecision:
+    """Privacy-safe result from the versioned local classification policy."""
+
+    tier: Tier
+    reason_code: ReasonCode
+    policy_version: str = CLASSIFICATION_POLICY_VERSION
 
 HIGH_SIGNALS: Final = frozenset(
     {
@@ -39,6 +58,25 @@ HIGH_SIGNALS: Final = frozenset(
         "인증",
         "결제",
         "리팩토링",
+    }
+)
+# Narrow security failure classes that impose a high floor even when a task does
+# not use the broader HIGH_SIGNALS vocabulary. Keep these phrases reviewable:
+# matching fragments or returning the matched phrase would violate the transient
+# task-text contract.
+HIGH_RISK_FLOOR_SIGNALS: Final = frozenset(
+    {
+        "account enumeration",
+        "password enumeration",
+        "sql injection",
+        "unauthenticated",
+        "xss",
+        "계정 열거",
+        "비인증",
+        "에스큐엘 인젝션",
+        "인증되지 않은",
+        "크로스 사이트 스크립팅",
+        "sql 인젝션",
     }
 )
 # 접미사 규칙으로 유도할 수 없는 어형. HIGH_SIGNALS 는 명사형만 담고 있어서
@@ -168,6 +206,10 @@ _HIGH_ASCII_PATTERN: Final = _compile_ascii_signals(
     HIGH_SIGNALS.union(*HIGH_SIGNAL_INFLECTIONS.values())
 )
 _HIGH_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(HIGH_SIGNALS)
+_HIGH_RISK_FLOOR_ASCII_PATTERN: Final = _compile_ascii_signals(HIGH_RISK_FLOOR_SIGNALS)
+_HIGH_RISK_FLOOR_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(
+    HIGH_RISK_FLOOR_SIGNALS
+)
 _LOW_ASCII_PATTERN: Final = _compile_ascii_signals(LOW_SIGNALS)
 _LOW_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_SIGNALS)
 
@@ -221,18 +263,34 @@ def classify_task(task: str) -> Tier:
     두 티어의 시그널이 함께 잡히면 항상 high가 이긴다. 난이도를 낮게 잡는 쪽이
     비싼 실수이므로 의도적으로 보수적인 우선순위를 둔다.
     """
+    return classify_task_with_reason(task).tier
+
+
+def classify_task_with_reason(task: str) -> ClassificationDecision:
+    """Return a versioned decision containing no task-derived content."""
     normalized_task = validate_task(task)
-    if (
-        len(normalized_task) >= HIGH_TASK_CHARACTERS
-        or _has_signal(normalized_task, _HIGH_ASCII_PATTERN, _HIGH_NON_ASCII_SIGNALS)
-        or _has_high_risk_outcome(normalized_task)
-    ):
-        return "high"
+    if len(normalized_task) >= HIGH_TASK_CHARACTERS:
+        return ClassificationDecision("high", "high.length_floor")
+    if _has_signal(
+        normalized_task,
+        _HIGH_RISK_FLOOR_ASCII_PATTERN,
+        _HIGH_RISK_FLOOR_NON_ASCII_SIGNALS,
+    ) or _has_signal(normalized_task, _HIGH_ASCII_PATTERN, _HIGH_NON_ASCII_SIGNALS):
+        return ClassificationDecision("high", "high.risk_floor")
+    if _has_high_risk_outcome(normalized_task):
+        return ClassificationDecision("high", "high.harmful_outcome")
     if len(normalized_task) <= LOW_TASK_CHARACTERS and _has_signal(
         normalized_task, _LOW_ASCII_PATTERN, _LOW_NON_ASCII_SIGNALS
     ):
-        return "low"
-    return "standard"
+        return ClassificationDecision("low", "low.mechanical")
+    return ClassificationDecision("standard", "standard.not_clearly_mechanical")
+
+
+def apply_cautious_posture(decision: ClassificationDecision) -> ClassificationDecision:
+    """Raise an ambiguous standard decision without changing any other tier."""
+    if decision.tier == "standard":
+        return ClassificationDecision("high", "high.cautious_ambiguity")
+    return decision
 
 
 def _has_signal(

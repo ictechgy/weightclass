@@ -133,6 +133,20 @@ full context, so a request merely to display a negative balance or deliberately
 repeat a test job is not escalated. Unknown or oversized task input fails
 closed.
 
+Add `--explain` to a local classification to include its versioned static
+reason code:
+
+```sh
+printf '%s' 'Fix a spelling typo.' | wclass classify --explain
+# {"tier": "low", "reason_code": "low.mechanical", "policy_version": "1"}
+```
+
+The explanation contains policy metadata only: it never includes task text,
+task hashes, matched fragments, credentials, or provider output. It is not
+available with `--ask-vendor` or `--show-triage-command`, because those are not
+local tier decisions. Without `--explain`, the existing JSON output is
+unchanged.
+
 **Keyword matching has a measured ceiling.** Before explicit high-impact
 outcome patterns were added, the local classifier agreed with 15 of 40 tasks on
 a benchmark rated independently by three raters (unanimous on 39 of 40). A
@@ -175,6 +189,15 @@ a vendor to bill on your behalf. When a vendor cannot produce a tier, the
 command exits `8` with `{"error": "triage_unavailable"}` rather than quietly
 falling back to keyword matching — a wrong route should not look like a right
 one.
+
+Vendor triage remains an opt-in experiment, not a default. Any proposed
+vendor-only or raise-only composition must first beat the pre-registered
+baseline on a fresh independently rated blind corpus using the offline
+comparison workflow in `tests/eval/README.md`; the public fixture is regression
+data, not acceptance evidence. A future local semantic model is likewise an
+opt-in experiment until it passes that gate and its dependency, determinism,
+and resource costs are separately accepted. Neither experiment weakens the
+offline local default or terminal triage failure.
 
 `wclass route` and `wclass run` never contact a vendor to classify. Pass the
 tier you obtained instead:
@@ -231,6 +254,7 @@ available to you.
 ```json
 {
   "allow_mixed_vendors": false,
+  "posture": "balanced",
   "routes": [
     {
       "id": "codex-low",
@@ -247,6 +271,15 @@ available to you.
   ]
 }
 ```
+
+`posture` is optional and defaults to `balanced`, preserving the documented
+local classification. An explicitly reviewed `"posture": "cautious"` raises
+only an otherwise `standard` local decision to `high`; it does not change
+`low` or already-`high` decisions, override `--tier`, switch vendors, inspect
+model labels, or infer subscription availability. When posture is explicit,
+`wclass route` renders both `posture` and a static `reason_code`. Any other
+posture value or shape fails closed with the redacted `invalid_input`
+diagnostic.
 
 The `command` tokens are opaque policy values. weightclass validates their shape
 but does not assert vendor CLI semantics or subscription access. Always run
@@ -267,9 +300,8 @@ whitespace. The same rule applies to V2's `model` and `effort` labels.
 ## Bind a run to the selection you reviewed
 
 `wclass route` prints a `route_fingerprint` over the selected route id, vendor,
-command, tier, and the policy's `allow_mixed_vendors` setting — every field the
-descriptor itself shows, so you can recompute it from what you read. Pass it
-back to bind the run to that selection:
+command, tier, the policy's `allow_mixed_vendors` setting, and an explicitly
+declared posture. Pass it back to bind the run to that selection:
 
 ```sh
 task='Review this authorization change.'

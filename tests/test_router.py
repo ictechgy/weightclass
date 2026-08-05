@@ -321,6 +321,117 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout), {"tier": "low"})
         self.assertNotIn("spelling", result.stdout)
 
+    def test_explains_a_local_classification_with_static_policy_metadata(self) -> None:
+        task = "Fix a spelling typo in sentinel-private-heading-9482."
+
+        result = subprocess.run(
+            [sys.executable, "-m", "weightclass", "classify", "--explain"],
+            capture_output=True,
+            check=False,
+            input=task,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "tier": "low",
+                "reason_code": "low.mechanical",
+                "policy_version": "1",
+            },
+        )
+        self.assertNotIn("sentinel-private-heading-9482", result.stdout)
+        self.assertNotIn("spelling", result.stdout)
+
+    def test_rejects_vendor_explanation_as_not_a_local_policy_decision(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "classify",
+                "--source-vendor",
+                "codex",
+                "--ask-vendor",
+                "--explain",
+            ],
+            capture_output=True,
+            check=False,
+            input="sentinel-private-task-5721",
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+        self.assertNotIn("sentinel-private-task-5721", result.stderr)
+
+    def test_explanation_rejects_an_empty_task_with_a_redacted_diagnostic(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "weightclass", "classify", "--explain"],
+            capture_output=True,
+            check=False,
+            input="",
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
+        self.assertEqual(result.stdout, "")
+
+    def test_default_outputs_remain_byte_for_byte_compatible_without_explain(self) -> None:
+        classify = subprocess.run(
+            [sys.executable, "-m", "weightclass", "classify"],
+            capture_output=True,
+            check=False,
+            input="Fix the typo.",
+            text=True,
+        )
+        route = subprocess.run(
+            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
+            capture_output=True,
+            check=False,
+            input="Fix the typo.",
+            text=True,
+        )
+
+        self.assertEqual(classify.stdout, '{"tier": "low"}\n')
+        self.assertEqual(
+            route.stdout,
+            '{"command": ["codex", "exec", "--ephemeral", "--sandbox", "workspace-write", "-c", '
+            '"model_reasoning_effort=low", "-"], "route": "codex-low", "tier": "low", '
+            '"vendor": "codex", "route_fingerprint": '
+            f'"{json.loads(route.stdout)["route_fingerprint"]}"}}\n',
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory, "policy.json")
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "quiet-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": [sys.executable, "-c", "pass"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run = subprocess.run(
+                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Fix the typo.",
+                text=True,
+            )
+
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.stdout, "")
+        self.assertEqual(run.stderr, "")
+
     def test_rejects_an_empty_task_with_a_redacted_diagnostic(self) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "weightclass", "classify"],
@@ -429,6 +540,259 @@ class CommandLineTests(unittest.TestCase):
             },
         )
         self.assertNotIn("authorization", result.stdout)
+
+    def test_cautious_policy_raises_only_an_ambiguous_standard_route(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy = {
+                "posture": "balanced",
+                "routes": [
+                    {
+                        "id": f"codex-{tier}",
+                        "vendor": "codex",
+                        "tier": tier,
+                        "command": ["codex", tier],
+                    }
+                    for tier in ("low", "standard", "high")
+                ],
+            }
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+            balanced = subprocess.run(
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Implement the requested feature.",
+                text=True,
+            )
+            policy["posture"] = "cautious"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            cautious = subprocess.run(
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Implement the requested feature.",
+                text=True,
+            )
+
+        self.assertEqual(balanced.returncode, 0, balanced.stderr)
+        self.assertEqual(cautious.returncode, 0, cautious.stderr)
+        self.assertEqual(json.loads(balanced.stdout)["tier"], "standard")
+        self.assertEqual(json.loads(cautious.stdout)["tier"], "high")
+        self.assertEqual(json.loads(cautious.stdout)["vendor"], "codex")
+        self.assertEqual(json.loads(cautious.stdout)["posture"], "cautious")
+        self.assertEqual(
+            json.loads(cautious.stdout)["reason_code"], "high.cautious_ambiguity"
+        )
+
+    def test_cautious_policy_does_not_raise_a_mechanical_low_route(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "posture": "cautious",
+                        "routes": [
+                            {
+                                "id": "codex-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": ["codex", "opaque-model-label"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Fix the typo.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = json.loads(result.stdout)
+        self.assertEqual((rendered["tier"], rendered["vendor"]), ("low", "codex"))
+        self.assertEqual(rendered["command"], ["codex", "opaque-model-label"])
+
+    def test_cautious_raise_never_crosses_the_source_vendor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "posture": "cautious",
+                        "routes": [
+                            {
+                                "id": "codex-standard",
+                                "vendor": "codex",
+                                "tier": "standard",
+                                "command": ["codex", "standard"],
+                            },
+                            {
+                                "id": "claude-high",
+                                "vendor": "claude",
+                                "tier": "high",
+                                "command": ["claude", "high"],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--policy",
+                    str(policy_path),
+                    "--source-vendor",
+                    "codex",
+                ],
+                capture_output=True,
+                check=False,
+                input="Implement the requested feature.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(json.loads(result.stderr), {"error": "unsupported_route"})
+
+    def test_explicit_tier_is_not_changed_by_cautious_posture(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "posture": "cautious",
+                        "routes": [
+                            {
+                                "id": "codex-standard",
+                                "vendor": "codex",
+                                "tier": "standard",
+                                "command": ["codex", "standard"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--policy",
+                    str(policy_path),
+                    "--tier",
+                    "standard",
+                ],
+                capture_output=True,
+                check=False,
+                input="Implement the requested feature.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = json.loads(result.stdout)
+        self.assertEqual(rendered["tier"], "standard")
+        self.assertEqual(rendered["reason_code"], "explicit.requested_tier")
+
+    def test_rejects_unsupported_or_malformed_posture_without_echoing_it(self) -> None:
+        sentinel = "sentinel-secret-posture-9237"
+        invalid_postures: tuple[object, ...] = (sentinel, True, None, {"mode": "cautious"})
+        for position, posture in enumerate(invalid_postures):
+            with self.subTest(position=position), tempfile.TemporaryDirectory() as directory:
+                policy_path = Path(directory) / "policy.json"
+                policy_path.write_text(
+                    json.dumps(
+                        {
+                            "posture": posture,
+                            "routes": [
+                                {
+                                    "id": "codex-high",
+                                    "vendor": "codex",
+                                    "tier": "high",
+                                    "command": ["codex", "high"],
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                    capture_output=True,
+                    check=False,
+                    input="Review authorization.",
+                    text=True,
+                )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+            self.assertNotIn(sentinel, result.stderr)
+
+    def test_native_fingerprint_binds_posture_even_when_selection_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy = {
+                "posture": "balanced",
+                "routes": [
+                    {
+                        "id": "codex-high",
+                        "vendor": "codex",
+                        "tier": "high",
+                        "command": ["codex", "high"],
+                    }
+                ],
+            }
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            balanced = subprocess.run(
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Review authorization.",
+                text=True,
+            )
+            policy["posture"] = "cautious"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            cautious = subprocess.run(
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                capture_output=True,
+                check=False,
+                input="Review authorization.",
+                text=True,
+            )
+            rejected = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "run",
+                    "--policy",
+                    str(policy_path),
+                    "--ack-route-fingerprint",
+                    json.loads(balanced.stdout)["route_fingerprint"],
+                ],
+                capture_output=True,
+                check=False,
+                input="Review authorization.",
+                text=True,
+            )
+
+        self.assertEqual(balanced.returncode, 0, balanced.stderr)
+        self.assertEqual(cautious.returncode, 0, cautious.stderr)
+        self.assertNotEqual(
+            json.loads(balanced.stdout)["route_fingerprint"],
+            json.loads(cautious.stdout)["route_fingerprint"],
+        )
+        self.assertEqual(rejected.returncode, 6)
+        self.assertEqual(json.loads(rejected.stderr), {"error": "route_fingerprint_mismatch"})
 
     def test_pins_the_vendor_to_the_first_tier_route_not_the_first_route(self) -> None:
         """Breaks if a leading workflow route makes every tier route unselectable.

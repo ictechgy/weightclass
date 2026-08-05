@@ -73,6 +73,10 @@ printf '%s' 'Review this authorization change.' | \
 
 `allow_mixed_vendors` is `false` by default. Set it to `true` only in a
 reviewed policy when intentionally allowing a task to leave its source vendor.
+The optional `posture` is `balanced` by default. A reviewed `cautious` posture
+raises ambiguous local `standard` decisions to `high` while retaining the same
+source-vendor filter and opaque policy commands. The route review displays the
+explicit posture and static reason code, and its fingerprint binds the posture.
 For API routes, use `wclass v2 route` followed by the explicit egress
 acknowledgement described in the main README; native integration commands never
 read API credentials.

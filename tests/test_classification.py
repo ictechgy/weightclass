@@ -1,5 +1,7 @@
 import unittest
+from dataclasses import asdict
 
+import weightclass.classification as classification
 from weightclass.classification import (
     HIGH_SIGNAL_INFLECTIONS,
     HIGH_SIGNAL_NO_INFLECTION_RATIONALE,
@@ -10,6 +12,86 @@ from weightclass.classification import (
     InvalidTaskError,
     classify_task,
 )
+
+
+class ClassificationPolicyContractTests(unittest.TestCase):
+    def test_policy_exposes_a_versioned_decision_without_changing_legacy_results(self) -> None:
+        """Breaks if policy metadata is absent or leaks into classify_task results."""
+        classify_with_reason = getattr(classification, "classify_task_with_reason", None)
+
+        self.assertTrue(callable(classify_with_reason))
+        self.assertEqual(getattr(classification, "CLASSIFICATION_POLICY_VERSION", None), "1")
+        self.assertIsInstance(classification.classify_task("Fix the typo."), str)
+
+    def test_risk_floors_have_static_english_and_korean_reason_codes(self) -> None:
+        """Breaks if a risk floor loses its category or returns matched task text."""
+        cases = (
+            ("Review the security boundary.", "high.risk_floor"),
+            ("보안 경계를 검토해줘.", "high.risk_floor"),
+            ("Prevent stored XSS in the account-settings form.", "high.risk_floor"),
+            ("검색 엔드포인트의 SQL 인젝션을 수정해줘.", "high.risk_floor"),
+            ("Stop unauthenticated users from reading invoices.", "high.risk_floor"),
+            ("Prevent password enumeration in the reset flow.", "high.risk_floor"),
+            ("비밀번호 재설정 흐름의 계정 열거를 막아줘.", "high.risk_floor"),
+            ("An account is charged twice after checkout.", "high.harmful_outcome"),
+            ("같은 작업이 재시작 뒤에 두 번 실행돼.", "high.harmful_outcome"),
+            ("x" * HIGH_TASK_CHARACTERS, "high.length_floor"),
+        )
+
+        for task, expected_reason in cases:
+            with self.subTest(reason=expected_reason):
+                decision = classification.classify_task_with_reason(task)
+                self.assertEqual((decision.tier, decision.reason_code), ("high", expected_reason))
+
+    def test_mechanical_and_low_confidence_boundaries_have_static_reason_codes(self) -> None:
+        """Breaks if low expands beyond mechanical work or ambiguity loses its code."""
+        cases = (
+            ("Fix the typo.", "low", "low.mechanical"),
+            ("오타만 고쳐줘.", "low", "low.mechanical"),
+            ("Update this helper.", "standard", "standard.not_clearly_mechanical"),
+            ("이 도우미 함수를 수정해줘.", "standard", "standard.not_clearly_mechanical"),
+            (
+                "fix typo " + "x" * (LOW_TASK_CHARACTERS - len("fix typo ") + 1),
+                "standard",
+                "standard.not_clearly_mechanical",
+            ),
+        )
+
+        for task, expected_tier, expected_reason in cases:
+            with self.subTest(tier=expected_tier, reason=expected_reason):
+                decision = classification.classify_task_with_reason(task)
+                self.assertEqual(
+                    (decision.tier, decision.reason_code),
+                    (expected_tier, expected_reason),
+                )
+
+    def test_risk_floor_phrases_do_not_expand_to_neighboring_routine_words(self) -> None:
+        """Breaks if risk-floor matching becomes substring based or overly broad."""
+        cases = (
+            "List signed-in users in the admin table.",
+            "Enumerate the account rows in this unit test.",
+            "Format the SQL example in the documentation.",
+            "로그인한 사용자 목록의 문장부호를 고쳐줘.",
+        )
+
+        for position, task in enumerate(cases):
+            with self.subTest(position=position):
+                self.assertNotEqual(classification.classify_task(task), "high")
+
+    def test_decision_contains_only_static_policy_metadata(self) -> None:
+        """Breaks if task text, a hash, or a matched excerpt enters the decision."""
+        unique_task = "Fix the typo in sentinel-private-input-9482."
+
+        decision = asdict(classification.classify_task_with_reason(unique_task))
+
+        self.assertEqual(
+            decision,
+            {
+                "tier": "low",
+                "reason_code": "low.mechanical",
+                "policy_version": "1",
+            },
+        )
 
 
 class SignalInflectionTests(unittest.TestCase):
