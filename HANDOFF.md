@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-06 03:47 KST by Codex_
+_Last updated: 2026-08-06 03:53 KST by Codex_
 
 ## Goal
 
@@ -79,7 +79,7 @@ _Last updated: 2026-08-06 03:47 KST by Codex_
 - `tests/eval/score.py`: offline scorer and candidate decision CLI. It is
   evaluation tooling, not installed runtime behavior.
 - `tests/eval/README.md`: fresh blind-corpus and candidate evidence contracts.
-- `tests/test_eval_score.py`: 36 focused evaluation, failure, privacy, and
+- `tests/test_eval_score.py`: 37 focused evaluation, failure, privacy, and
   determinism tests.
 - `RELEASING.md`: tag/version policy, Trusted Publishing, and Homebrew update
   procedure.
@@ -126,9 +126,9 @@ _Last updated: 2026-08-06 03:47 KST by Codex_
 ## Verification
 
 - Ran: `PYTHONPATH=src python3 -m unittest tests.test_eval_score`
-  - Result: 36 tests passed.
+  - Result: 37 tests passed.
 - Ran: `PYTHONPATH=src python3 -m unittest discover -s tests`
-  - Result: 149 tests passed on local Python 3.14. Existing triage fake-process
+  - Result: 150 tests passed on local Python 3.14. Existing triage fake-process
     tests emitted `ResourceWarning` messages for unclosed streams.
 - Ran: `python3 -m compileall -q src tests`
   - Result: passed.

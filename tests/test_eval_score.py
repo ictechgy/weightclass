@@ -588,7 +588,7 @@ class OfflineOutputTests(unittest.TestCase):
             "duplicate id": (
                 [self._prediction(), self._prediction()],
                 "id is duplicated",
-                (),
+                ("task-1",),
             ),
             "unknown id": (
                 [
@@ -612,7 +612,7 @@ class OfflineOutputTests(unittest.TestCase):
                     self._prediction(identifier="task-1", prediction="high"),
                 ],
                 "id is out of order",
-                (),
+                ("task-1", "task-2"),
             ),
             "unsupported tier": (
                 [
@@ -682,7 +682,36 @@ class OfflineOutputTests(unittest.TestCase):
 
         self.assertEqual(result, 2)
         self.assertIn("id must be unique", output)
+        self.assertNotIn("same-id", output)
         self.assertNotIn("hidden task", output)
+
+    def test_candidate_identifier_character_and_length_boundaries(self) -> None:
+        entries = [
+            {
+                "id": "task-1",
+                "task": "hidden",
+                "consensus": "low",
+                "language": "en",
+                "category": "routine",
+            }
+        ]
+        valid = self._complete_candidate(predictions=[self._prediction()])
+        valid["candidate_id"] = "a" + "." * 63
+        valid["baseline_id"] = "b"
+
+        result, output = self._run_candidate(entries, valid)
+
+        self.assertEqual(result, 0)
+        self.assertNotIn(str(valid["candidate_id"]), output)
+
+        for identifier in (".leading-punctuation", "a" * 65):
+            with self.subTest(identifier_shape=len(identifier)):
+                invalid = self._complete_candidate(predictions=[self._prediction()])
+                invalid["candidate_id"] = identifier
+                result, output = self._run_candidate(entries, invalid)
+                self.assertEqual(result, 2)
+                self.assertIn("candidate_id", output)
+                self.assertNotIn(identifier, output)
 
     def test_candidate_rejects_incomplete_or_malformed_gate_evidence(self) -> None:
         corpus = [

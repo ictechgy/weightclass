@@ -122,11 +122,11 @@ PYTHONPATH=src python3 tests/eval/score.py \
 order. Each record repeats the corpus's reviewed opaque `id` and consensus
 `label`, then supplies one `low`, `standard`, or `high` `prediction`. Duplicate,
 unknown, missing, out-of-order, and label-mismatched records fail closed. Every
-record, candidate, and baseline ID is limited to 1–64 ASCII letters, digits,
-dots, underscores, and hyphens. IDs must be assigned independently of task
-text; task-derived IDs and task hashes are forbidden, and the independent
-reviewer—not the scorer—verifies that provenance. `candidate_id` and
-`baseline_id` must differ. The scorer
+record, candidate, and baseline ID is 1–64 ASCII characters: the first must be
+a letter or digit, and the remainder may also contain dots, underscores, and
+hyphens. IDs must be assigned independently of task text; task-derived IDs and
+task hashes are forbidden, and the independent reviewer—not the scorer—verifies
+that provenance. `candidate_id` and `baseline_id` must differ. The scorer
 validates but does not emit those unverified evaluator labels; record and bind
 them to source revisions only in the independent review record. The candidate
 file has this exact schema; unknown, missing, malformed, or mismatched fields
