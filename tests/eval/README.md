@@ -121,11 +121,12 @@ PYTHONPATH=src python3 tests/eval/score.py \
 `predictions` must have exactly one record for each corpus entry, in corpus
 order. Each record repeats the corpus's reviewed opaque `id` and consensus
 `label`, then supplies one `low`, `standard`, or `high` `prediction`. Duplicate,
-unknown, missing, out-of-order, and label-mismatched records fail closed. IDs
-must be assigned independently of task text; task-derived IDs and task hashes
-are forbidden. `candidate_id` and
-`baseline_id` are reviewed opaque identifiers limited to 1–64 ASCII letters,
-digits, dots, underscores, and hyphens, and they must differ. The scorer
+unknown, missing, out-of-order, and label-mismatched records fail closed. Every
+record, candidate, and baseline ID is limited to 1–64 ASCII letters, digits,
+dots, underscores, and hyphens. IDs must be assigned independently of task
+text; task-derived IDs and task hashes are forbidden, and the independent
+reviewer—not the scorer—verifies that provenance. `candidate_id` and
+`baseline_id` must differ. The scorer
 validates but does not emit those unverified evaluator labels; record and bind
 them to source revisions only in the independent review record. The candidate
 file has this exact schema; unknown, missing, malformed, or mismatched fields
@@ -165,6 +166,10 @@ including their names or values in diagnostics. The accepted object is:
   }
 }
 ```
+
+The only accepted interval-rule literals are `lower-bound` for high-tier
+recall and `upper-bound` for over-routing. Any other value is rejected before
+scoring with a value-free diagnostic.
 
 Candidate mode emits one aggregate-only JSON decision record. It scores both
 the supplied candidate predictions and the current deterministic local

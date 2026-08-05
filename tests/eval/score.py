@@ -151,7 +151,9 @@ def validate_candidate(raw: object, *, corpus: Sequence[Mapping[str, Any]]) -> d
     quality = _require_exact_fields(candidate["quality_gate"], QUALITY_FIELDS, "quality_gate")
     for field in ("high_tier_recall_min", "over_routing_max"):
         threshold = quality[field]
-        if type(threshold) not in (int, float) or not math.isfinite(threshold):
+        if type(threshold) not in (int, float) or (
+            isinstance(threshold, float) and not math.isfinite(threshold)
+        ):
             raise CandidateValidationError(f"quality_gate {field} must be a finite number")
         if not 0 <= threshold <= 1:
             raise CandidateValidationError(f"quality_gate {field} must be between zero and one")
@@ -330,7 +332,7 @@ def _load_corpus(
         )
     except DuplicateJsonFieldError as error:
         raise CorpusValidationError("corpus contains duplicate object fields") from error
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    except (OSError, ValueError) as error:
         raise CorpusValidationError("could not read corpus as UTF-8 JSON") from error
     return validate_corpus(
         raw,
@@ -348,7 +350,7 @@ def _load_candidate(path: pathlib.Path, *, corpus: Sequence[Mapping[str, Any]]) 
         )
     except DuplicateJsonFieldError as error:
         raise CandidateValidationError("candidate contains duplicate object fields") from error
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    except (OSError, ValueError) as error:
         raise CandidateValidationError("could not read candidate as UTF-8 JSON") from error
     return validate_candidate(raw, corpus=corpus)
 

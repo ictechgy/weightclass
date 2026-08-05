@@ -569,20 +569,24 @@ class OfflineOutputTests(unittest.TestCase):
             {
                 "id": "task-2",
                 "task": "also hidden",
-                "consensus": "high",
+                "consensus": "low",
                 "language": "ko",
                 "category": "security",
             },
         ]
         cases: dict[str, tuple[object, str, tuple[str, ...]]] = {
-            "not an array": ("invalid", "predictions must be an array", ()),
+            "not an array": (
+                "SEALED-NOT-AN-ARRAY",
+                "predictions must be an array",
+                ("SEALED-NOT-AN-ARRAY",),
+            ),
             "missing record": (
                 [self._prediction()],
                 "prediction count does not match corpus",
                 (),
             ),
             "duplicate id": (
-                [self._prediction(), self._prediction(label="high")],
+                [self._prediction(), self._prediction()],
                 "id is duplicated",
                 (),
             ),
@@ -592,7 +596,7 @@ class OfflineOutputTests(unittest.TestCase):
                     self._prediction(identifier="task-3", label="high", prediction="high"),
                 ],
                 "id is unknown",
-                (),
+                ("task-3",),
             ),
             "label mismatch": (
                 [
@@ -604,8 +608,8 @@ class OfflineOutputTests(unittest.TestCase):
             ),
             "out of order": (
                 [
-                    self._prediction(identifier="task-2", label="low"),
-                    self._prediction(identifier="task-1", label="high", prediction="high"),
+                    self._prediction(identifier="task-2"),
+                    self._prediction(identifier="task-1", prediction="high"),
                 ],
                 "id is out of order",
                 (),
@@ -690,28 +694,105 @@ class OfflineOutputTests(unittest.TestCase):
                 "category": "routine",
             }
         ]
-        cases = {}
+        cases: dict[str, tuple[dict[str, object], str, tuple[str, ...]]] = {}
         missing_field = self._complete_candidate(predictions=[self._prediction()])
         del missing_field["resource_gate"]
-        cases["missing top-level field"] = missing_field
+        cases["missing top-level field"] = (
+            missing_field,
+            "candidate must contain exactly the documented fields",
+            (),
+        )
         invalid_threshold = self._complete_candidate(predictions=[self._prediction()])
         assert isinstance(invalid_threshold["quality_gate"], dict)
         invalid_threshold["quality_gate"]["over_routing_max"] = float("nan")
-        cases["non-finite threshold"] = invalid_threshold
+        cases["non-finite threshold"] = (
+            invalid_threshold,
+            "quality_gate over_routing_max must be a finite number",
+            (),
+        )
         invalid_boolean = self._complete_candidate(predictions=[self._prediction()])
         assert isinstance(invalid_boolean["resource_gate"], dict)
         invalid_boolean["resource_gate"]["startup_accepted"] = 1
-        cases["non-boolean evidence"] = invalid_boolean
+        cases["non-boolean evidence"] = (
+            invalid_boolean,
+            "resource_gate fields must be booleans",
+            (),
+        )
         invalid_rule = self._complete_candidate(predictions=[self._prediction()])
         assert isinstance(invalid_rule["quality_gate"], dict)
         invalid_rule["quality_gate"]["high_tier_recall_ci_rule"] = "point-estimate"
-        cases["unsupported interval rule"] = invalid_rule
+        cases["unsupported interval rule"] = (
+            invalid_rule,
+            "high_tier_recall_ci_rule must be lower-bound",
+            ("point-estimate",),
+        )
 
-        for name, candidate in cases.items():
+        for name, (candidate, expected_error, sensitive_values) in cases.items():
             with self.subTest(name=name):
                 result, output = self._run_candidate(corpus, candidate)
                 self.assertEqual(result, 2)
+                self.assertIn(expected_error, output)
+                self.assertNotIn("Traceback", output)
                 self.assertNotIn("hidden", output)
+                for sensitive_value in sensitive_values:
+                    self.assertNotIn(sensitive_value, output)
+
+    def test_candidate_rejects_a_parsed_huge_threshold_without_a_traceback(self) -> None:
+        entries = [
+            {
+                "id": "task-1",
+                "task": "hidden",
+                "consensus": "low",
+                "language": "en",
+                "category": "routine",
+            }
+        ]
+        candidate = self._complete_candidate(predictions=[self._prediction()])
+        quality = candidate["quality_gate"]
+        assert isinstance(quality, dict)
+        quality["over_routing_max"] = 10**4000
+
+        result, output = self._run_candidate(entries, candidate)
+
+        self.assertEqual(result, 2)
+        self.assertIn("over_routing_max", output)
+        self.assertNotIn("Traceback", output)
+        self.assertNotIn("hidden", output)
+
+    def test_candidate_rejects_a_json_integer_over_the_parser_limit(self) -> None:
+        entries = [
+            {
+                "id": "task-1",
+                "task": "hidden",
+                "consensus": "low",
+                "language": "en",
+                "category": "routine",
+            }
+        ]
+        candidate = self._complete_candidate(predictions=[self._prediction()])
+        candidate_json = json.dumps(candidate).replace(
+            '"over_routing_max": 0.1',
+            f'"over_routing_max": {"9" * 5000}',
+            1,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            corpus_path = root / "blind.json"
+            candidate_path = root / "candidate.json"
+            corpus_path.write_text(json.dumps(entries), encoding="utf-8")
+            candidate_path.write_text(candidate_json, encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                result = score.main(
+                    ["--corpus", str(corpus_path), "--candidate", str(candidate_path)]
+                )
+        output = stdout.getvalue() + stderr.getvalue()
+
+        self.assertEqual(result, 2)
+        self.assertIn("could not read candidate", output)
+        self.assertNotIn("Traceback", output)
+        self.assertNotIn("hidden", output)
 
     def test_candidate_gate_boundaries_and_no_high_case_fail_closed(self) -> None:
         records = [

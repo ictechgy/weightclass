@@ -85,35 +85,36 @@ but a decision is not `go` unless every predeclared field is present and passes:
 
 ```text
 candidate_id: <reviewed opaque identifier>
-fresh_corpus: yes | no
+fresh_corpus: yes (required)
 baseline_id: <reviewed opaque identifier>
 quality_gate:
   high_tier_recall_threshold: <predeclared value and CI rule>
   high_tier_recall_observed: <aggregate estimate and 95% CI>
   over_routing_limit: <predeclared value and CI rule>
   over_routing_observed: <aggregate estimate and 95% CI>
-  slices_reviewed: yes | no
-  unexplained_slice_regression: yes | no
+  slices_reviewed: yes (required)
+  unexplained_slice_regression: no (required)
 resource_gate:
-  startup_accepted: yes | no
-  latency_accepted: yes | no
-  memory_accepted: yes | no
-  supported_platform_determinism_accepted: yes | no
+  startup_accepted: yes (required)
+  latency_accepted: yes (required)
+  memory_accepted: yes (required)
+  supported_platform_determinism_accepted: yes (required)
 supply_chain_gate:
-  dependency_pin_reviewed: yes | no
-  dependency_audit_accepted: yes | no
-  model_download_required: yes | no
-  maintenance_cost_accepted: yes | no
+  dependency_pin_reviewed: yes (required)
+  dependency_audit_accepted: yes (required)
+  model_download_required: no (required)
+  maintenance_cost_accepted: yes (required)
 privacy_gate:
-  aggregate_only_report: yes | no
-  candidate_and_baseline_identifiers_emitted: yes | no
-  corpus_task_field_or_per_task_record_emitted: yes | no
+  aggregate_only_report: yes (required)
+  candidate_and_baseline_identifiers_emitted: no (required)
+  corpus_task_field_or_per_task_record_emitted: no (required)
 decision: go | no-go
 ```
 
-Default to `no-go` for a missing field, a failed quality/resource/supply-chain/
-privacy gate, any required model download, or evidence derived only from the
-public regression fixture. At this baseline the Phase 4 decision is **no-go**:
+Default to `no-go` for a missing field, `fresh_corpus: no`, a failed
+quality/resource/supply-chain/privacy gate, any required model download, or
+evidence derived only from the public regression fixture. At this baseline the
+Phase 4 decision is **no-go**:
 G1–G4 prevent a complete, privacy-safe decision record, and no independently
 supplied evidence has been evaluated against predeclared gates.
 

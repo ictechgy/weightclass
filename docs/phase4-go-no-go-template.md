@@ -169,6 +169,7 @@ insufficient under the predeclared rule; any required slice is unreviewed,
 misses its predeclared acceptance rule, or has an unexplained regression; the
 candidate has any prediction below the same-corpus local baseline; the
 candidate does not demonstrate sufficient improvement over that baseline; the
+measured improvement does not justify the added cost; the
 corpus is not fresh and blind; or privacy, resource
 feasibility, or supply-chain review is failed or unresolved. The scorer's `go`
 is necessary but not sufficient when the broader record is incomplete.

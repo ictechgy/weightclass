@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-06 03:27 KST by Codex_
+_Last updated: 2026-08-06 03:47 KST by Codex_
 
 ## Goal
 
@@ -79,8 +79,12 @@ _Last updated: 2026-08-06 03:27 KST by Codex_
 - `tests/eval/score.py`: offline scorer and candidate decision CLI. It is
   evaluation tooling, not installed runtime behavior.
 - `tests/eval/README.md`: fresh blind-corpus and candidate evidence contracts.
-- `tests/test_eval_score.py`: 34 focused evaluation, failure, privacy, and
+- `tests/test_eval_score.py`: 36 focused evaluation, failure, privacy, and
   determinism tests.
+- `RELEASING.md`: tag/version policy, Trusted Publishing, and Homebrew update
+  procedure.
+- `packaging/homebrew/weightclass.rb`: published-install behavior assertions.
+- `.github/workflows/ci.yml`: supported-version tests and quality/package gate.
 - `src/weightclass/`: unchanged by the current Phase 4 branch.
 
 ## Important Context / Decisions
@@ -109,6 +113,9 @@ _Last updated: 2026-08-06 03:27 KST by Codex_
   route fingerprint. The main tool never handles provider credentials or HTTP;
   credentials remain external-runtime environment concerns. Never access
   `.env`, keychain, auth, or shell-profile files without explicit approval.
+- Vendor triage commands remain non-mutating (`plan`/read-only) because they
+  receive untrusted task text. Do not relax those pins without a separate
+  security review.
 
 ### Assumptions
 
@@ -119,9 +126,9 @@ _Last updated: 2026-08-06 03:27 KST by Codex_
 ## Verification
 
 - Ran: `PYTHONPATH=src python3 -m unittest tests.test_eval_score`
-  - Result: 34 tests passed.
+  - Result: 36 tests passed.
 - Ran: `PYTHONPATH=src python3 -m unittest discover -s tests`
-  - Result: 147 tests passed on local Python 3.14. Existing triage fake-process
+  - Result: 149 tests passed on local Python 3.14. Existing triage fake-process
     tests emitted `ResourceWarning` messages for unclosed streams.
 - Ran: `python3 -m compileall -q src tests`
   - Result: passed.
@@ -179,6 +186,8 @@ _Last updated: 2026-08-06 03:27 KST by Codex_
   hardlink, or copy as fresh evidence.
 - Do not add a semantic dependency, model download, benchmark claim, vendor
   invocation, or runtime routing change while the decision is `no-go`.
+- Stage only explicit reviewed paths; do not use an unscoped `git add -A` in
+  this public repository.
 - An `ultragoal retry` did not carry the verification reason into the next
   worker prompt in this run; the narrow public-fixture guard was completed and
   red/green verified directly instead of repeating that retry.
