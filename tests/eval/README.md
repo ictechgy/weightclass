@@ -55,7 +55,8 @@ Use a fresh synthetic corpus for evidence about a classifier change:
    `reliability`, `performance`, `migration`, or `routine`. Restricting slice
    labels prevents malformed metadata from carrying task text into the
    aggregate report. An `index` and independent `ratings` may be included for
-   auditability.
+   auditability. Candidate-decision mode additionally requires a reviewed
+   opaque `id` that was assigned independently of task text.
 5. Score it locally, from a clean checkout, without vendor credentials or
    network access:
 
@@ -104,10 +105,128 @@ quietly becomes the local result. This experiment adds no credentials, HTTP
 client, task persistence, retry supervisor, or automatic cross-vendor route.
 The source vendor remains explicit for collection and for any later execution.
 
+## Offline Phase 4 candidate decision
+
+An evaluator may score a frozen candidate without adding it to `weightclass` or
+letting the scorer run it. Keep the fresh sealed corpus outside the repository
+and supply a second local JSON file containing identifier-bound predictions and
+predeclared gate evidence:
+
+```sh
+PYTHONPATH=src python3 tests/eval/score.py \
+  --corpus /path/to/sealed-corpus.json \
+  --candidate /path/to/candidate-evidence.json
+```
+
+`predictions` must have exactly one record for each corpus entry, in corpus
+order. Each record repeats the corpus's reviewed opaque `id` and consensus
+`label`, then supplies one `low`, `standard`, or `high` `prediction`. Duplicate,
+unknown, missing, out-of-order, and label-mismatched records fail closed. IDs
+must be assigned independently of task text; task-derived IDs and task hashes
+are forbidden. `candidate_id` and
+`baseline_id` are reviewed opaque identifiers limited to 1–64 ASCII letters,
+digits, dots, underscores, and hyphens, and they must differ. The candidate
+file has this exact schema; unknown, missing, malformed, or mismatched fields
+are rejected with diagnostics that name only fields or entry positions.
+Duplicate JSON object fields are rejected before schema validation without
+including their names or values in diagnostics. The accepted object is:
+
+```json
+{
+  "schema_version": 1,
+  "candidate_id": "candidate-1",
+  "baseline_id": "deterministic-baseline-1",
+  "predictions": [
+    {"id": "task-001", "label": "high", "prediction": "high"},
+    {"id": "task-002", "label": "standard", "prediction": "standard"},
+    {"id": "task-003", "label": "low", "prediction": "low"}
+  ],
+  "quality_gate": {
+    "high_tier_recall_min": 0.9,
+    "high_tier_recall_ci_rule": "lower-bound",
+    "over_routing_max": 0.1,
+    "over_routing_ci_rule": "upper-bound",
+    "slices_reviewed": true,
+    "unexplained_slice_regression": false
+  },
+  "resource_gate": {
+    "startup_accepted": true,
+    "latency_accepted": true,
+    "memory_accepted": true,
+    "supported_platform_determinism_accepted": true
+  },
+  "supply_chain_gate": {
+    "dependency_pin_reviewed": true,
+    "dependency_audit_accepted": true,
+    "model_download_required": false,
+    "maintenance_cost_accepted": true
+  }
+}
+```
+
+Candidate mode emits one aggregate-only JSON decision record. It scores both
+the supplied candidate predictions and the current deterministic local
+classifier against the same fresh corpus. `baseline_metrics` contains the
+local baseline's aggregate agreement, high-tier recall, over-routing,
+confusion matrix, and fixed slices; `baseline_id` identifies the reviewed
+source revision represented by that measurement. Rates use the same two-sided
+Wilson 95% interval as the ordinary report (`z = 1.96`) and are rounded to six
+decimal places only when serialized. High-tier recall passes when its Wilson
+lower bound meets `high_tier_recall_min`; a corpus with no expected high-tier
+entries fails that gate. Over-routing passes when its Wilson upper bound does
+not exceed `over_routing_max`. The candidate quality section also contains the
+confusion matrix and every fixed language/category slice. A supported slice
+absent from the corpus is represented by zero totals and the defined
+`[0.0, 0.0]` empty interval rather than being omitted.
+
+The report records `corpus.evaluator_supplied` as true but
+`corpus.freshness_verified_by_scorer` as false. A local path proves only that a
+file was supplied; the scorer deliberately does not hash it, compare it with a
+known corpus, or claim to verify its provenance. The independent review record
+must establish that it was genuinely fresh and blind.
+
+The decision is `go` only when both quality bounds pass, slices were reviewed,
+there is no unexplained slice regression, every resource field is accepted,
+pinning and dependency audit were reviewed and accepted, no model download is
+required, and maintenance cost is accepted. Resource and supply-chain sections
+each include an explicit aggregate `passes` field. Every other complete record
+is `no-go`; incomplete or ambiguous records fail validation. The public
+regression fixture cannot be used in candidate mode.
+
+Decision template:
+
+```text
+candidate_id + baseline_id + evaluator-supplied corpus count
+quality: recall lower bound >= minimum; over-routing upper bound <= maximum;
+         slices reviewed; no unexplained slice regression
+resources: startup + latency + memory + platform determinism accepted
+supply chain: pin reviewed + audit accepted + no download + maintenance accepted
+privacy: aggregate-only; no task text or per-task record emitted;
+         scorer does not verify identifier provenance
+comparison: candidate and local baseline measured on the same fresh corpus
+provenance: scorer does not verify corpus freshness; independent review must
+decision: scorer go only if every machine-readable gate passes; otherwise no-go
+```
+
+For the reproducible review record—including evidence provenance, evaluator
+role, corpus and scorer versions, commands used, confidence sufficiency, and
+pass/fail rationale—complete
+[`docs/phase4-go-no-go-template.md`](../../docs/phase4-go-no-go-template.md).
+The default is `no-go` when that record is incomplete or does not demonstrate
+sufficient improvement over `baseline_metrics`, even if the scorer emits `go`
+for the supplied machine-readable gates.
+
+The scorer reads only the two explicit local files. It does not access
+credentials, invoke a provider or candidate runtime, make HTTP requests,
+download a model, retry, supervise background work, select a vendor, infer an
+entitlement, or write router/vendor configuration. This gate does not add a
+production semantic model or change default routing.
+
 ### No-retention boundary
 
-The scorer reads one supplied file, holds its contents in process memory for
-the run, and emits aggregate results only. It does not write task content,
+The scorer reads the supplied corpus and, in candidate mode, the supplied
+evidence file, holds their contents in process memory for the run, and emits
+aggregate results only. It does not write task content,
 hashes, predictions per task, caches, or diagnostics containing field values.
 The operator owns the supplied file and must keep it outside the repository.
 This evaluation-only file input does not change the runtime contract: `wclass`
