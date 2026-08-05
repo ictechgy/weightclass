@@ -173,6 +173,13 @@ corpus is not fresh and blind; or privacy, resource
 feasibility, or supply-chain review is failed or unresolved. The scorer's `go`
 is necessary but not sufficient when the broader record is incomplete.
 
+The completed record must also be internally consistent. The baseline binding,
+evaluator independence, non-task-derived identifier verification, and
+outside-repository custody fields must be `yes`; `aggregate_only_report` must
+be `yes`; and both emitted-content fields must be `no`. Any opposite answer or
+any `pass`/`go` value that contradicts those answers forces `no-go` and
+`do-not-add`.
+
 A production model dependency may be considered in a separate reviewed change
 only after independently supplied evidence satisfies every predeclared quality,
 slice, confidence-interval, privacy, resource, and supply-chain gate. Until such

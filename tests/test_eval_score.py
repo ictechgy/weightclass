@@ -534,6 +534,29 @@ class OfflineOutputTests(unittest.TestCase):
         self.assertEqual(result, 2)
         self.assertIn("public regression fixture", stderr.getvalue())
 
+    def test_candidate_rejects_a_public_fixture_hardlink_before_reading_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            corpus_hardlink = pathlib.Path(directory) / "corpus-hardlink.json"
+            try:
+                corpus_hardlink.hardlink_to(score.PUBLIC_CORPUS.resolve())
+            except OSError as error:
+                self.skipTest(f"hardlinks unavailable: {error.__class__.__name__}")
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    score,
+                    "_load_corpus",
+                    side_effect=AssertionError("public fixture was read"),
+                ),
+                contextlib.redirect_stderr(stderr),
+            ):
+                result = score.main(
+                    ["--corpus", str(corpus_hardlink), "--candidate", "unused.json"]
+                )
+
+        self.assertEqual(result, 2)
+        self.assertIn("public regression fixture", stderr.getvalue())
+
     def test_candidate_rejects_malformed_and_unmatched_prediction_records(self) -> None:
         entries = [
             {
@@ -551,12 +574,17 @@ class OfflineOutputTests(unittest.TestCase):
                 "category": "security",
             },
         ]
-        cases: dict[str, tuple[object, str]] = {
-            "not an array": ("invalid", "predictions must be an array"),
-            "missing record": ([self._prediction()], "prediction count does not match corpus"),
+        cases: dict[str, tuple[object, str, tuple[str, ...]]] = {
+            "not an array": ("invalid", "predictions must be an array", ()),
+            "missing record": (
+                [self._prediction()],
+                "prediction count does not match corpus",
+                (),
+            ),
             "duplicate id": (
                 [self._prediction(), self._prediction(label="high")],
                 "id is duplicated",
+                (),
             ),
             "unknown id": (
                 [
@@ -564,6 +592,7 @@ class OfflineOutputTests(unittest.TestCase):
                     self._prediction(identifier="task-3", label="high", prediction="high"),
                 ],
                 "id is unknown",
+                (),
             ),
             "label mismatch": (
                 [
@@ -571,6 +600,7 @@ class OfflineOutputTests(unittest.TestCase):
                     self._prediction(identifier="task-2", label="high", prediction="high"),
                 ],
                 "label does not match corpus",
+                (),
             ),
             "out of order": (
                 [
@@ -578,6 +608,7 @@ class OfflineOutputTests(unittest.TestCase):
                     self._prediction(identifier="task-1", label="high", prediction="high"),
                 ],
                 "id is out of order",
+                (),
             ),
             "unsupported tier": (
                 [
@@ -585,6 +616,7 @@ class OfflineOutputTests(unittest.TestCase):
                     self._prediction(identifier="task-2", label="high", prediction="high"),
                 ],
                 "prediction must be a supported tier",
+                ("urgent",),
             ),
             "unhashable label": (
                 [
@@ -592,6 +624,7 @@ class OfflineOutputTests(unittest.TestCase):
                     self._prediction(identifier="task-2", label="high", prediction="high"),
                 ],
                 "label does not match corpus",
+                (),
             ),
             "unhashable prediction": (
                 [
@@ -599,6 +632,7 @@ class OfflineOutputTests(unittest.TestCase):
                     self._prediction(identifier="task-2", label="high", prediction="high"),
                 ],
                 "prediction must be a supported tier",
+                (),
             ),
             "unknown field": (
                 [
@@ -606,9 +640,10 @@ class OfflineOutputTests(unittest.TestCase):
                     self._prediction(identifier="task-2", label="high", prediction="high"),
                 ],
                 "must contain exactly the documented fields",
+                ("must not be accepted",),
             ),
         }
-        for name, (predictions, expected_error) in cases.items():
+        for name, (predictions, expected_error, sensitive_values) in cases.items():
             with self.subTest(name=name):
                 candidate = self._complete_candidate(predictions=[])
                 candidate["predictions"] = predictions
@@ -617,6 +652,8 @@ class OfflineOutputTests(unittest.TestCase):
                 self.assertIn(expected_error, output)
                 self.assertNotIn("Traceback", output)
                 self.assertNotIn("hidden", output)
+                for sensitive_value in sensitive_values:
+                    self.assertNotIn(sensitive_value, output)
 
     def test_candidate_rejects_duplicate_corpus_identifiers(self) -> None:
         entries = [

@@ -199,9 +199,10 @@ accepted, pinning and dependency audit were reviewed and accepted, no model
 download is required, and maintenance cost is accepted. Resource and
 supply-chain sections each include an explicit aggregate `passes` field. Every
 other complete record is `no-go`; incomplete or ambiguous records fail
-validation. Candidate mode rejects the committed public-fixture path and
-resolving aliases before read. It cannot recognize a copied fixture, so the
-independent freshness review remains mandatory.
+validation. Candidate mode rejects the committed public fixture and aliases
+with the same filesystem identity, including symlinks and hardlinks, before
+read. It cannot recognize a copied fixture, so the independent freshness
+review remains mandatory.
 
 Decision template:
 

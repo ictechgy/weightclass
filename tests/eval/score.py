@@ -486,7 +486,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.candidate:
             try:
-                is_public_fixture = path.resolve() == PUBLIC_CORPUS.resolve()
+                is_public_fixture = path.samefile(PUBLIC_CORPUS)
             except (OSError, RuntimeError) as error:
                 raise CorpusValidationError("could not validate corpus path") from error
             if is_public_fixture:

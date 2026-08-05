@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-06 03:10 KST by Codex_
+_Last updated: 2026-08-06 03:27 KST by Codex_
 
 ## Goal
 
@@ -58,8 +58,8 @@ _Last updated: 2026-08-06 03:10 KST by Codex_
     confusion, high-tier recall, over-routing, English/Korean and fixed category
     slices, Wilson 95% intervals, an observed raise-only comparison, explicit
     quality/resource/supply-chain/privacy gates, and `go`/`no-go`;
-  - the committed public fixture, including a resolving path alias, is rejected
-    before it is read in candidate mode;
+  - the committed public fixture, including symlink and hardlink aliases, is
+    rejected before it is read in candidate mode;
   - reports are deterministic and contain no corpus task field, per-task result,
     candidate/baseline identifier value, or task hash;
   - reports state that the corpus was evaluator-supplied but do not claim the
@@ -79,7 +79,7 @@ _Last updated: 2026-08-06 03:10 KST by Codex_
 - `tests/eval/score.py`: offline scorer and candidate decision CLI. It is
   evaluation tooling, not installed runtime behavior.
 - `tests/eval/README.md`: fresh blind-corpus and candidate evidence contracts.
-- `tests/test_eval_score.py`: 33 focused evaluation, failure, privacy, and
+- `tests/test_eval_score.py`: 34 focused evaluation, failure, privacy, and
   determinism tests.
 - `src/weightclass/`: unchanged by the current Phase 4 branch.
 
@@ -102,6 +102,13 @@ _Last updated: 2026-08-06 03:10 KST by Codex_
 - Native routing stays with its explicit source vendor unless a reviewed policy
   opts into `allow_mixed_vendors`. Model labels and subscription availability
   remain opaque user configuration.
+- Preserve byte-for-byte default `wclass classify` and route output unless a
+  separately reviewed compatibility change updates the CI, published Homebrew
+  assertions, and downstream contract together.
+- V2 execution requires both `--confirm-api-egress` and the exact reviewed
+  route fingerprint. The main tool never handles provider credentials or HTTP;
+  credentials remain external-runtime environment concerns. Never access
+  `.env`, keychain, auth, or shell-profile files without explicit approval.
 
 ### Assumptions
 
@@ -112,9 +119,9 @@ _Last updated: 2026-08-06 03:10 KST by Codex_
 ## Verification
 
 - Ran: `PYTHONPATH=src python3 -m unittest tests.test_eval_score`
-  - Result: 33 tests passed.
+  - Result: 34 tests passed.
 - Ran: `PYTHONPATH=src python3 -m unittest discover -s tests`
-  - Result: 146 tests passed on local Python 3.14. Existing triage fake-process
+  - Result: 147 tests passed on local Python 3.14. Existing triage fake-process
     tests emitted `ResourceWarning` messages for unclosed streams.
 - Ran: `python3 -m compileall -q src tests`
   - Result: passed.
@@ -123,8 +130,9 @@ _Last updated: 2026-08-06 03:10 KST by Codex_
 - Ran: `uv build --offline --out-dir <temporary-directory>`
   - Result: source distribution and wheel built successfully.
 - Ran the explicit public-fixture regression test red/green:
-  - before the resolved-path guard, candidate mode reached `_load_corpus`;
-  - after the guard, direct and symlink-alias paths are rejected before read.
+  - before the filesystem-identity guard, a hardlink reached `_load_corpus`;
+  - after the guard, direct, symlink, and hardlink paths are rejected before
+    read.
 - Ran: `ruff check src tests`, `ruff format --check src tests`, and strict
   `mypy` using isolated tool execution.
   - Result: passed after the PR quality-fix commit.
@@ -155,8 +163,8 @@ _Last updated: 2026-08-06 03:10 KST by Codex_
 - Wilson bounds and explicit empty-slice records make small or missing samples
   visible and fail closed.
 - A test that patched `_load_corpus` exposed that merely failing on missing IDs
-  still read the public fixture; resolved-path rejection now enforces the
-  documented pre-read boundary.
+  still read the public fixture; filesystem-identity rejection now enforces the
+  documented pre-read boundary for direct paths, symlinks, and hardlinks.
 - Output distinguishes what the scorer observed from what an independent
   reviewer must establish: corpus freshness and identifier provenance are not
   falsely marked as scorer-verified.
@@ -167,8 +175,8 @@ _Last updated: 2026-08-06 03:10 KST by Codex_
 - Do not produce or commit synthetic “passing” candidate evidence to move the
   gate. Evidence must come from an independent evaluator after thresholds are
   frozen.
-- Do not use the public regression fixture through an alternate path or symlink
-  as fresh evidence.
+- Do not use the public regression fixture through an alternate path, symlink,
+  hardlink, or copy as fresh evidence.
 - Do not add a semantic dependency, model download, benchmark claim, vendor
   invocation, or runtime routing change while the decision is `no-go`.
 - An `ultragoal retry` did not carry the verification reason into the next
