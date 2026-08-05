@@ -159,9 +159,7 @@ class OfflineOutputTests(unittest.TestCase):
                 contextlib.redirect_stdout(stdout),
                 contextlib.redirect_stderr(stderr),
             ):
-                result = score.main(
-                    ["--corpus", str(corpus), "--compare-triage"]
-                )
+                result = score.main(["--corpus", str(corpus), "--compare-triage"])
 
         output = stdout.getvalue() + stderr.getvalue()
         self.assertEqual(result, 0)

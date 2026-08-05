@@ -25,6 +25,7 @@ class ClassificationDecision:
     reason_code: ReasonCode
     policy_version: str = CLASSIFICATION_POLICY_VERSION
 
+
 HIGH_SIGNALS: Final = frozenset(
     {
         "architecture",
@@ -207,9 +208,7 @@ _HIGH_ASCII_PATTERN: Final = _compile_ascii_signals(
 )
 _HIGH_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(HIGH_SIGNALS)
 _HIGH_RISK_FLOOR_ASCII_PATTERN: Final = _compile_ascii_signals(HIGH_RISK_FLOOR_SIGNALS)
-_HIGH_RISK_FLOOR_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(
-    HIGH_RISK_FLOOR_SIGNALS
-)
+_HIGH_RISK_FLOOR_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(HIGH_RISK_FLOOR_SIGNALS)
 _LOW_ASCII_PATTERN: Final = _compile_ascii_signals(LOW_SIGNALS)
 _LOW_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_SIGNALS)
 

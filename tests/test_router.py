@@ -581,9 +581,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(json.loads(cautious.stdout)["tier"], "high")
         self.assertEqual(json.loads(cautious.stdout)["vendor"], "codex")
         self.assertEqual(json.loads(cautious.stdout)["posture"], "cautious")
-        self.assertEqual(
-            json.loads(cautious.stdout)["reason_code"], "high.cautious_ambiguity"
-        )
+        self.assertEqual(json.loads(cautious.stdout)["reason_code"], "high.cautious_ambiguity")
 
     def test_cautious_policy_does_not_raise_a_mechanical_low_route(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

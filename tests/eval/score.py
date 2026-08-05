@@ -60,9 +60,7 @@ def validate_corpus(
         if require_category and entry.get("category") not in CATEGORIES:
             raise CorpusValidationError(f"entry {position}: category must be a reviewed slice")
         if require_vendor_tier and entry.get("vendor_tier") not in TIERS:
-            raise CorpusValidationError(
-                f"entry {position}: vendor_tier must be a supported tier"
-            )
+            raise CorpusValidationError(f"entry {position}: vendor_tier must be a supported tier")
         validated.append(entry)
     return validated
 
@@ -123,20 +121,20 @@ def aggregate_metrics(records: Sequence[Mapping[str, str]]) -> dict[str, Any]:
 def _format_rate(metric: Mapping[str, Any]) -> str:
     low, high = metric["confidence_interval_95"]
     return (
-        f'{metric["count"]}/{metric["total"]} ({metric["rate"] * 100:.1f}%; '
+        f"{metric['count']}/{metric['total']} ({metric['rate'] * 100:.1f}%; "
         f"95% CI {low * 100:.1f}–{high * 100:.1f}%)"
     )
 
 
 def render_report(label: str, metrics: Mapping[str, Any]) -> None:
     print(label)
-    print(f'  agreement        {_format_rate(metrics["agreement"])}')
-    print(f'  high-tier recall {_format_rate(metrics["high_recall"])}')
-    print(f'  over-routing     {_format_rate(metrics["over_routing"])}')
+    print(f"  agreement        {_format_rate(metrics['agreement'])}")
+    print(f"  high-tier recall {_format_rate(metrics['high_recall'])}")
+    print(f"  over-routing     {_format_rate(metrics['over_routing'])}")
     print("  confusion matrix (expected rows, predicted columns: low standard high)")
     for expected in TIERS:
         row = metrics["confusion_matrix"][expected]
-        print(f'    {expected:<8} {row["low"]} {row["standard"]} {row["high"]}')
+        print(f"    {expected:<8} {row['low']} {row['standard']} {row['high']}")
     for heading, key in (("language slices", "by_language"), ("category slices", "by_category")):
         print(f"  {heading}")
         slices = metrics[key]
@@ -147,7 +145,7 @@ def render_report(label: str, metrics: Mapping[str, Any]) -> None:
             high_recall = summary["high_recall"]["rate"] * 100
             over_routing = summary["over_routing"]["rate"] * 100
             print(
-                f'    {name}: n={summary["total"]}, agreement={agreement:.1f}%, '
+                f"    {name}: n={summary['total']}, agreement={agreement:.1f}%, "
                 f"high-recall={high_recall:.1f}%, over-routing={over_routing:.1f}%"
             )
 
@@ -218,9 +216,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise_only_records = [
             {
                 **record,
-                "predicted": max(
-                    (record["predicted"], entry["vendor_tier"]), key=RANK.__getitem__
-                ),
+                "predicted": max((record["predicted"], entry["vendor_tier"]), key=RANK.__getitem__),
             }
             for record, entry in zip(records, entries, strict=True)
         ]
