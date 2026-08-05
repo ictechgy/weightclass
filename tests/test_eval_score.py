@@ -7,7 +7,6 @@ import tempfile
 import unittest
 from unittest import mock
 
-
 SCORE_PATH = pathlib.Path(__file__).parent / "eval" / "score.py"
 SPEC = importlib.util.spec_from_file_location("eval_score", SCORE_PATH)
 assert SPEC is not None and SPEC.loader is not None

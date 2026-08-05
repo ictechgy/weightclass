@@ -21,8 +21,8 @@ from .classification import (
 )
 from .router import (
     DEFAULT_ROUTES,
-    Posture,
     SUPPORTED_VENDORS,
+    Posture,
     Route,
     RouteRequest,
     RouteSelectionError,
