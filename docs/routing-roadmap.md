@@ -159,7 +159,7 @@ deterministic policy engine.
 5. Record aggregate evaluation results and confidence limits without storing
    runtime task content.
 
-## Delivery status (2026-08-05)
+## Delivery status (2026-08-06)
 
 The initial direction came from a partial, three-track brainstorming quorum
 (Codex, Claude, Antigravity). A Planner–Architect–Critic `ralplan` worker
@@ -178,7 +178,17 @@ The verified durable-goal run completed the roadmap through the triage gate:
 - Phase 3: vendor-only and raise-only comparisons are offline, opt-in
   experiments over evaluator-supplied blind evidence; they do not change the
   runtime default or invoke a vendor CLI.
+- Phase 4: the current decision-gate branch accepts evaluator-supplied,
+  opaque-ID-bound candidate predictions and produces deterministic aggregate
+  candidate and same-corpus local-baseline metrics plus resource, supply-chain,
+  privacy, raise-only comparison, and `go`/`no-go` evidence. It does not emit
+  unverified candidate/baseline identifier values. A reproducible review
+  template binds those identifiers to source revisions, records provenance,
+  predeclared slice and confidence-sufficiency rules, and decides whether
+  measured improvement justifies the added cost without adding a production
+  model.
 
-Phase 4 remains a no-go decision until a separately approved blind-corpus
-evaluation demonstrates that an offline semantic model justifies its added
-dependency, resource, and supply-chain costs.
+Phase 4 remains a **no-go** decision because no independently supplied
+blind-corpus candidate evidence has satisfied that gate. The deterministic
+policy engine remains the production path until measured improvement justifies
+the dependency, resource, maintenance, and supply-chain costs.
