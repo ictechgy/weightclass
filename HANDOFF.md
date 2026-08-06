@@ -11,15 +11,18 @@ user-provided model labels, and the no-retention boundary.
 
 ## Repository state
 
-- Branch: local `main` at `b764f83` plus an uncommitted 0.4.0 hardening change.
-- Published PyPI and Homebrew version: 0.3.0.
-- Source version prepared by this change: 0.4.0.
-- Do not update `packaging/homebrew/weightclass.rb` until an authorized release
-  produces the final artifact URL and SHA-256.
+- PR #19 delivered routing hardening and version 0.4.0 at merge commit
+  `786824cc74819e3bd8b254b615c3beb21f2fdd32`.
+- Tag `v0.4.0` published PyPI version 0.4.0 through Release workflow run
+  `31076506680`.
+- PR #20 updated the canonical Homebrew formula at `7da697e`; tap PR #10
+  published the identical formula at `36134c4` in `ictechgy/homebrew-tap`.
+- Published PyPI, canonical formula, tap formula, and local Homebrew installation
+  are all version 0.4.0.
 - Phase 4 local semantic-model adoption remains **no-go**. No independent fresh
   blind-corpus, resource, or supply-chain evidence has satisfied the gate.
 
-## Current hardening change
+## Delivered hardening
 
 ### P0 — optional vendor triage boundary
 
@@ -29,7 +32,9 @@ user-provided model labels, and the no-retention boundary.
 - The child starts in an empty private working directory and a new POSIX session.
   Nonblocking stdin/stdout exchange is bounded; timeout, oversized output, and
   successful-leader cleanup terminate the captured process group before one
-  final reap. Parent pipes and selectors are closed deterministically.
+  final reap. Linux/current macOS use `waitid`; macOS Python 3.10 uses a
+  non-reaping kqueue process-exit observer. Parent pipes, selectors, and kqueues
+  are closed deterministically.
 - The parser accepts only the complete decoded lowercase value `low`,
   `standard`, or `high`; prose, multiple tokens, uppercase, invalid UTF-8, and
   embedded NUL fail closed.
@@ -66,21 +71,27 @@ user-provided model labels, and the no-retention boundary.
   and JSON-input boundary jobs. Release verification compares source version,
   installed metadata, and `wclass --version`.
 - `README.md`, `RELEASING.md`, `tests/eval/README.md`, and
-  `docs/routing-roadmap.md` describe the new boundaries and pending 0.4.0 state.
+  `docs/routing-roadmap.md` describe the new boundaries and 0.4.0 delivery.
 
 ## Verification evidence
 
-- `PYTHONPATH=src python3 -W error::ResourceWarning -m unittest discover -s tests`
-  — 177 tests passed.
-- `python3 -m compileall -q src tests`, offline Ruff check/format, mypy, and
-  `git diff --check` — passed.
-- `uv build --offline` — built the 0.4.0 sdist and universal wheel.
-- A clean temporary virtual environment installed the wheel with `--no-index`;
-  `wclass --version`, installed metadata, wheel metadata, and byte-exact default
-  classification output all reported 0.4.0/the expected result.
-- `twine check --strict` was not run: `twine` is absent from the offline tool
-  cache. No network installation was attempted. CI/release retains the strict
-  Twine gate.
+- Python 3.10.20 and the current local Python each passed all 177 tests with
+  `ResourceWarning` promoted to an error.
+- `compileall`, Ruff check/format, native and Linux-targeted mypy, workflow YAML,
+  and `git diff --check` passed locally.
+- Local release artifacts passed `twine check --strict`, clean no-index wheel
+  installation, source/metadata/CLI version equality, and byte-exact default
+  classification smoke tests.
+- PR #19 and PR #20 each passed 14 CI checks. Merge commit `786824c` passed main
+  CI run `31076433696`, including Python 3.10–3.13 and macOS 3.10/3.13 jobs.
+- Release run `31076506680` passed tag/version, tests, lint, formatting, types,
+  build, strict Twine metadata, macOS boundaries, and PyPI Trusted Publishing.
+- A clean public-index environment installed `weightclass==0.4.0` and passed
+  CLI/metadata/default-output checks. The public sdist SHA-256 is
+  `46f2d6b76385fc9585542310497227b0eb329d2fed309382b9d15caaac6389c0`.
+- `brew style ictechgy/tap/weightclass`, strict tap audit, source upgrade from
+  0.3.0 to 0.4.0, `brew test`, and installed CLI smoke checks passed before tap
+  PR #10 merged.
 
 Reproduction commands:
 
@@ -113,14 +124,17 @@ they are outside the repository and are not release artifacts.
 
 ## Next safe action
 
-1. Review the complete diff for value-bearing errors, task leakage, and workflow
-   syntax; fix only demonstrated issues.
-2. Commit/PR only when explicitly requested. Release/tag/publish and Homebrew
-   formula changes require separate authorization and final artifact metadata.
+1. Keep Phase 4 at no-go unless independent predeclared evidence satisfies every
+   quality, resource, privacy, and supply-chain gate.
+2. Before the next release, address the upstream `actions/setup-python` Node 20
+   deprecation warning by updating only to a reviewed pinned action commit.
+3. Re-run the full local and macOS boundary gates for every routing behavior
+   change; do not weaken the Codex-triage fail-closed contract without a newly
+   documented all-tools-disabled vendor boundary.
 
 ## Resume prompt
 
-Read `HANDOFF.md` and `AGENTS.md`, inspect the uncommitted 0.4.0 hardening diff,
-and preserve the Codex-triage fail-closed decision, native source-vendor routing,
-transient-task boundary, and Phase 4 no-go. Re-run final verification after any
-change. Do not release or modify the 0.3.0 Homebrew formula without authorization.
+Read `HANDOFF.md` and `AGENTS.md`. The published package and Homebrew formula are
+0.4.0. Preserve the Codex-triage fail-closed decision, native source-vendor
+routing, transient-task boundary, and Phase 4 no-go. Re-run final verification
+after any change; release, tag, and external publishing remain explicit actions.

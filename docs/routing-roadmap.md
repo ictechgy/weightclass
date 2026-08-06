@@ -193,16 +193,17 @@ blind-corpus candidate evidence has satisfied that gate. The deterministic
 policy engine remains the production path until measured improvement justifies
 the dependency, resource, maintenance, and supply-chain costs.
 
-### 0.4 hardening preparation
+### 0.4 hardening delivery
 
-The post-0.3 review priorities are implemented locally but are not yet released:
+The post-0.3 review priorities shipped in weightclass 0.4.0:
 
 - P0: Claude triage now requests safe mode, no tools/MCP, no local setting
   sources, no persistence, and an empty private working directory. Its bounded
   POSIX runner tears down the complete process group and accepts only one exact
-  lowercase tier. Codex triage fails closed because its documented CLI contract
-  does not currently provide an all-tools-disabled mode; native Codex routing is
-  unaffected.
+  lowercase tier. It observes exit without reaping through `waitid` or the
+  macOS Python 3.10 kqueue fallback. Codex triage fails closed because its
+  documented CLI contract does not currently provide an all-tools-disabled
+  mode; native Codex routing is unaffected.
 - P1: all installed-runtime policy and descriptor readers share a bounded,
   duplicate-key-safe, regular-file JSON loader. Static inputs are validated
   before transient task stdin is read. High-tier explanations distinguish
@@ -214,6 +215,7 @@ The post-0.3 review priorities are implemented locally but are not yet released:
   against the installed CLI, and macOS Python 3.10/3.13 process/JSON boundary
   tests block CI and publishing.
 
-The source version is prepared as 0.4.0. The committed Homebrew formula remains
-at the already-published 0.3.0 until an authorized release supplies the final
-artifact URL and digest.
+Version 0.4.0 was published to PyPI through Trusted Publishing from tag
+`v0.4.0`. The canonical formula and `ictechgy/homebrew-tap` both use the
+published sdist URL and verified SHA-256, and a source upgrade plus formula test
+passed locally.
