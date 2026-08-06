@@ -467,6 +467,48 @@ This command validates shape and hashes the local executable; it does not prove
 that the evidence is independent and does not qualify the runtime. Review and a
 source change to the package registry are still required.
 
+Repository maintainers can produce that evidence through the bounded external
+driver contract:
+
+```sh
+PYTHONPATH=src python3 -m weightclass.delegation_conformance \
+  --driver /absolute/reviewed/adapter-conformance-driver \
+  --runtime /absolute/runtime \
+  --runtime-build-id 'opaque runtime build' \
+  --adapter-id claude-native-v1 \
+  --vendor-family claude
+```
+
+The runner creates a new private workspace for each of the 67 predeclared
+cases, never reads task stdin, and starts the driver with exactly:
+
+```text
+/absolute/reviewed/adapter-conformance-driver \
+  --weightclass-conformance-driver 1
+```
+
+Each case has a fixed 60-second deadline and a 4,096-byte stdout limit; driver
+stderr is discarded. The driver process starts in a new session. A nonzero
+exit, malformed or mismatched response, timeout, oversized output, or a live
+same-process-group descendant records that case as failed, then the runner
+cleans the group. An interrupt also cleans the active group and returns exit
+`130` with a redacted diagnostic. Driver and runtime environment variables are
+inherited, so a real driver may still cause vendor authentication, network,
+quota, and billing effects; invoke it only after reviewing both artifacts and
+the exact command.
+
+The runner hashes the executable before and after all cases and evidence schema
+2 carries that exact size and SHA-256. Candidate construction rechecks the
+current executable against those observed bytes, so a post-suite replacement
+cannot inherit the earlier passing matrix.
+
+No real Claude-family or Codex-family conformance driver is shipped. The test
+fixture merely pressure-tests the runner and can trivially claim success
+without using the runtime. Evidence from an arbitrary `--driver` is therefore
+untrusted, and escaped sessions or process groups remain a driver-side
+conformance concern. The package registry stays empty until source-reviewed,
+adapter-specific drivers independently establish every required observation.
+
 The exact schema, permission modes, retention rules, byte representations,
 process-lifecycle boundary, and P0.5/P1/P2 gates are documented in the
 [Claude and Codex delegation roadmap](docs/delegation-roadmap.md).

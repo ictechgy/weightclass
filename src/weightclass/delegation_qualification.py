@@ -31,9 +31,9 @@ from .delegation_types import Category, PlatformContract, RoleName, VendorFamily
 from .json_input import JsonInputError, load_json_object
 
 REGISTRY_SCHEMA_VERSION: Final = 1
-EVIDENCE_SCHEMA_VERSION: Final = 1
+EVIDENCE_SCHEMA_VERSION: Final = 2
 RECORD_SCHEMA_VERSION: Final = 1
-CURRENT_SUITE_REVISION: Final = "delegation-conformance-v1"
+CURRENT_SUITE_REVISION: Final = "delegation-conformance-v2"
 MAX_REGISTRY_BYTES: Final = 4_194_304
 MAX_EVIDENCE_BYTES: Final = 262_144
 MAX_ARTIFACT_SIZE_BYTES: Final = 1_073_741_824
@@ -256,6 +256,8 @@ def _parse_scenario_results(value: object) -> tuple[QualificationScenario, ...]:
 
 def _normalized_evidence(
     *,
+    artifact_sha256: str,
+    artifact_size_bytes: int,
     suite_revision: str,
     runtime_build_id: str,
     platform: PlatformContract,
@@ -267,6 +269,8 @@ def _normalized_evidence(
 ) -> dict[str, object]:
     return {
         "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,
+        "artifact_sha256": artifact_sha256,
+        "artifact_size_bytes": artifact_size_bytes,
         "suite_revision": suite_revision,
         "runtime_build_id": runtime_build_id,
         "platform": asdict(platform),
@@ -283,6 +287,8 @@ def _parse_evidence(value: object) -> dict[str, object]:
         value,
         {
             "evidence_schema_version",
+            "artifact_sha256",
+            "artifact_size_bytes",
             "suite_revision",
             "runtime_build_id",
             "platform",
@@ -294,7 +300,11 @@ def _parse_evidence(value: object) -> dict[str, object]:
         },
     )
     if (
-        _require_integer(evidence["evidence_schema_version"], minimum=1, maximum=1)
+        _require_integer(
+            evidence["evidence_schema_version"],
+            minimum=EVIDENCE_SCHEMA_VERSION,
+            maximum=EVIDENCE_SCHEMA_VERSION,
+        )
         != EVIDENCE_SCHEMA_VERSION
     ):
         raise QualificationInvalidInputError()
@@ -310,6 +320,10 @@ def _parse_evidence(value: object) -> dict[str, object]:
     if vendor_family not in VENDORS:
         raise QualificationInvalidInputError()
     return _normalized_evidence(
+        artifact_sha256=_require_sha256(evidence["artifact_sha256"]),
+        artifact_size_bytes=_require_integer(
+            evidence["artifact_size_bytes"], minimum=1, maximum=MAX_ARTIFACT_SIZE_BYTES
+        ),
         suite_revision=suite_revision,
         runtime_build_id=_require_build_id(evidence["runtime_build_id"]),
         platform=_require_platform(evidence["platform"]),
@@ -387,15 +401,18 @@ def build_qualification_candidate(evidence: object, runtime_path: Path) -> dict[
     the package-owned registry.
     """
     normalized = _parse_evidence(evidence)
-    try:
-        artifact_size_bytes, artifact_sha256 = _artifact_identity(runtime_path)
-    except _ArtifactReadError:
-        raise QualificationInvalidInputError() from None
+    expected_size = cast(int, normalized["artifact_size_bytes"])
+    artifact_size_bytes, artifact_sha256 = qualification_artifact_identity(
+        runtime_path,
+        expected_size=expected_size,
+    )
+    if artifact_size_bytes != expected_size or artifact_sha256 != normalized["artifact_sha256"]:
+        raise QualificationInvalidInputError()
     evidence_sha256 = hashlib.sha256(canonical_json_bytes(normalized)).hexdigest()
     return {
         "record_schema_version": RECORD_SCHEMA_VERSION,
-        "artifact_sha256": artifact_sha256,
-        "artifact_size_bytes": artifact_size_bytes,
+        "artifact_sha256": normalized["artifact_sha256"],
+        "artifact_size_bytes": normalized["artifact_size_bytes"],
         "runtime_build_id": normalized["runtime_build_id"],
         "platform": normalized["platform"],
         "protocol_version": normalized["protocol_version"],
@@ -413,6 +430,18 @@ def load_conformance_evidence(path: Path) -> dict[str, Any]:
     try:
         return load_json_object(path, max_bytes=MAX_EVIDENCE_BYTES)
     except (JsonInputError, RecursionError):
+        raise QualificationInvalidInputError() from None
+
+
+def qualification_artifact_identity(
+    runtime_path: Path,
+    *,
+    expected_size: int | None = None,
+) -> tuple[int, str]:
+    """Return bounded executable identity for evidence and candidate binding."""
+    try:
+        return _artifact_identity(runtime_path, expected_size=expected_size)
+    except _ArtifactReadError:
         raise QualificationInvalidInputError() from None
 
 
@@ -451,11 +480,17 @@ def _parse_record(value: object, suite_revision: str) -> QualificationRecord:
     if vendor_family not in VENDORS:
         raise QualificationInvalidInputError()
     runtime_build_id = _require_build_id(record["runtime_build_id"])
+    artifact_sha256 = _require_sha256(record["artifact_sha256"])
+    artifact_size_bytes = _require_integer(
+        record["artifact_size_bytes"], minimum=1, maximum=MAX_ARTIFACT_SIZE_BYTES
+    )
     platform = _require_platform(record["platform"])
     adapter_id = _require_identifier(record["adapter_id"])
     result_matrix = _parse_result_matrix(record["result_matrix"])
     scenario_results = _parse_scenario_results(record["scenario_results"])
     normalized = _normalized_evidence(
+        artifact_sha256=artifact_sha256,
+        artifact_size_bytes=artifact_size_bytes,
         suite_revision=record_suite_revision,
         runtime_build_id=runtime_build_id,
         platform=platform,
@@ -469,10 +504,8 @@ def _parse_record(value: object, suite_revision: str) -> QualificationRecord:
     if evidence_sha256 != hashlib.sha256(canonical_json_bytes(normalized)).hexdigest():
         raise QualificationInvalidInputError()
     return QualificationRecord(
-        artifact_sha256=_require_sha256(record["artifact_sha256"]),
-        artifact_size_bytes=_require_integer(
-            record["artifact_size_bytes"], minimum=1, maximum=MAX_ARTIFACT_SIZE_BYTES
-        ),
+        artifact_sha256=artifact_sha256,
+        artifact_size_bytes=artifact_size_bytes,
         runtime_build_id=runtime_build_id,
         platform=platform,
         protocol_version=protocol_version,

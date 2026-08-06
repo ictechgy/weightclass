@@ -14,6 +14,7 @@ The public surface is isolated from native routing and V2 API routing:
 wclass delegate route  -> offline descriptor compiler
 wclass delegate run    -> one trusted external runtime (P0.5, not P0)
 wclass delegate qualification-candidate -> untrusted P1 record candidate
+python -m weightclass.delegation_conformance -> maintainer evidence runner
 ```
 
 The external runtime, not weightclass, owns role-process creation, provider
@@ -227,7 +228,7 @@ Every P1 object has exactly the listed keys:
 | --- | --- |
 | Registry | `registry_schema_version`, `suite_revision`, `records` |
 | Record | `record_schema_version`, `artifact_sha256`, `artifact_size_bytes`, `runtime_build_id`, `platform`, `protocol_version`, `suite_revision`, `adapter_id`, `vendor_family`, `conformance_evidence_sha256`, `result_matrix`, `scenario_results` |
-| Evidence | `evidence_schema_version`, `suite_revision`, `runtime_build_id`, `platform`, `protocol_version`, `adapter_id`, `vendor_family`, `result_matrix`, `scenario_results` |
+| Evidence | `evidence_schema_version`, `artifact_sha256`, `artifact_size_bytes`, `suite_revision`, `runtime_build_id`, `platform`, `protocol_version`, `adapter_id`, `vendor_family`, `result_matrix`, `scenario_results` |
 | Observation | `role`, `category`, `action`, `mode`, `passed` |
 | Scenario result | `id`, `passed` |
 
@@ -257,6 +258,39 @@ shape and hashes one local regular executable. Its output is explicitly
 untrusted: it neither establishes independent collection nor edits the package
 registry. An independent adapter-specific harness, human review, and a source
 change are required before any record can ship.
+
+The maintainer runner defines 67 fixed black-box cases and invokes a separately
+reviewed adapter-specific driver once per case. The executable contract is:
+
+```text
+driver --weightclass-conformance-driver 1
+```
+
+The driver receives one bounded canonical JSON request on stdin with exact keys
+`case`, `case_id`, `driver_protocol_version`, `runtime_path`, and
+`workspace_path`. It may return only `case_id` and boolean `passed`. The runner
+requires the response ID to equal the request, caps stdout at 4,096 bytes,
+discards stderr, applies a fixed 60-second deadline, and treats nonzero exit,
+malformed output, timeout, or a surviving same-process-group descendant as a
+failed case. Every case uses a separate private temporary workspace, and the
+driver process group is killed when cleanup is required. An interrupt cleans
+the active group and exits `130` without a traceback.
+
+Evidence schema 2 binds the runtime size and SHA-256 observed immediately
+before the suite. The runner hashes the runtime again after all cases and marks
+`artifact_integrity_and_substitution` failed if the identity changed or became
+unreadable. Candidate construction independently reopens the runtime and
+requires the same size and digest. This closes the simple
+test-artifact-then-replace-before-candidate gap, while path-based driver/runtime
+execution still has the documented in-run replacement race.
+
+This is an evidence-collection boundary, not an attestation mechanism. An
+arbitrary driver can return `passed: true` without invoking the runtime, can
+inherit vendor credentials and cause network/billing effects, or can move a
+descendant into another session. Independent qualification therefore requires
+source-reviewed Claude- and Codex-specific drivers that externally observe the
+required effects and leakage. None are shipped yet, and the test fixture must
+never be used for a package record.
 
 At run time, qualified mode opens the path without following a final symlink,
 checks regular-file and executable status, reads a bounded artifact through the

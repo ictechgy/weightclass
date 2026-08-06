@@ -135,6 +135,18 @@ evidence document and hashes a local executable for package-maintainer review.
 It neither updates the registry nor proves that the supplied evidence was
 independently collected.
 
+The repository-maintainer runner is available as
+`python -m weightclass.delegation_conformance`. It executes a separately
+reviewed driver once per predeclared case with fixed protocol argv, a private
+temporary workspace, bounded stdout, a fixed deadline, and process-group
+cleanup. It reads no task stdin and emits only the complete task-free evidence
+shape. Evidence schema 2 includes the runtime size and SHA-256 observed before
+the suite; the runner rechecks them after all cases, and candidate construction
+rechecks the current artifact again. The driver inherits the environment and
+owns any runtime/vendor process, authentication, network, quota, or billing
+effects. No Claude or Codex driver is currently shipped; the test-only fake
+driver is not qualification evidence.
+
 See [the delegation roadmap](delegation-roadmap.md) for the strict schema and
 the exact-artifact qualification gate. Do not put
 task content, credentials, recipient data, or billing identifiers into a role

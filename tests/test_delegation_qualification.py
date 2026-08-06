@@ -28,7 +28,7 @@ from weightclass.delegation_schema import (
     load_delegation_policy,
 )
 
-SUITE_REVISION = "delegation-conformance-v1"
+SUITE_REVISION = "delegation-conformance-v2"
 REQUIRED_SCENARIOS = (
     "action_attribution",
     "artifact_integrity_and_substitution",
@@ -49,6 +49,7 @@ REQUIRED_SCENARIOS = (
 def _evidence(
     vendor: str = "claude",
     runtime_build_id: str = "opaque-runtime-build",
+    artifact_contents: bytes = b"qualified-runtime-v1\n",
 ) -> dict[str, object]:
     observations = [
         {
@@ -64,7 +65,9 @@ def _evidence(
         for mode in ("allow", "deny")
     ]
     return {
-        "evidence_schema_version": 1,
+        "evidence_schema_version": 2,
+        "artifact_sha256": hashlib.sha256(artifact_contents).hexdigest(),
+        "artifact_size_bytes": len(artifact_contents),
         "suite_revision": SUITE_REVISION,
         "runtime_build_id": runtime_build_id,
         "platform": {
@@ -212,8 +215,11 @@ class QualificationCandidateTests(unittest.TestCase):
 class QualificationRegistryTests(unittest.TestCase):
     def _candidate(self, directory: Path, vendor: str = "claude") -> dict[str, object]:
         runtime_path = directory / f"{vendor}-runtime"
-        _write_executable(runtime_path, f"{vendor}-runtime\n".encode())
-        return build_qualification_candidate(_evidence(vendor), runtime_path)
+        contents = f"{vendor}-runtime\n".encode()
+        _write_executable(runtime_path, contents)
+        return build_qualification_candidate(
+            _evidence(vendor, artifact_contents=contents), runtime_path
+        )
 
     def _load_value(self, directory: Path, value: dict[str, object]) -> QualificationRegistry:
         registry_path = directory / "registry.json"

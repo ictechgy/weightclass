@@ -100,6 +100,25 @@ user-provided model labels, and the no-retention boundary.
   candidate CLI stdin independence, and changed/non-executable artifacts.
   Runtime integration tests confirm an empty registry and changed artifact both
   stop before task access.
+- `src/weightclass/delegation_conformance.py` is a maintainer-only evidence
+  runner, invoked with `python -m weightclass.delegation_conformance`. It owns a
+  separately declared copy of the 54 permission cases and 13 scenarios, creates
+  one private temporary workspace per case, and invokes an external reviewed
+  driver with fixed protocol argv. Driver stdin/stdout, case deadline, output
+  size, response ID, exit status, and same-process-group cleanup are bounded and
+  fail closed; SIGINT cleans the active group and returns redacted exit `130`.
+  Evidence schema 2 binds the runtime size/SHA-256 observed before the suite;
+  the runner rechecks it after all cases and candidate construction rechecks the
+  current bytes. The runner reads no task stdin and never edits the registry.
+- The runner is not an attestation mechanism. Drivers inherit the environment
+  and own runtime/vendor authentication, network, quota, billing, and external
+  observation. A driver can lie or escape its process group. No real Claude or
+  Codex conformance driver is shipped; the test fixture exercises only runner
+  defenses and must never support a package qualification record.
+- `tests/test_delegation_conformance.py` uses real subprocesses to cover all-pass
+  candidate compatibility, explicit failure, case-ID spoofing, oversized valid
+  JSON, fixed case timeout, same-process-group leakage detection, cleanup, and
+  stdin independence. The package registry remains empty in the success test.
 
 ## Delivered hardening
 
@@ -154,7 +173,8 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
-- The P1 foundation passed all 213 tests under Python 3.10.20 and Python
+- The P1 qualification and conformance-runner foundation passed all 221 tests
+  under Python 3.10.20 and Python
   3.14.6 with `ResourceWarning` promoted to an error. Both interpreters passed
   `compileall`; Ruff check/format, strict mypy, and `git diff --check` passed.
   An offline sdist/wheel build included the qualification module, empty package
@@ -221,10 +241,12 @@ they are outside the repository and are not release artifacts.
 1. Do not advertise real Claude/Codex delegation from P0.5. It proves only the
    weightclass-to-runtime boundary; a user-supplied runtime can lie with exit
    zero, leave descendants, or ignore the descriptor.
-2. Build genuinely independent adapter-specific conformance harnesses for
-   Claude-family and Codex-family runtimes. Do not add a package qualification
-   record until a reviewed exact artifact passes the complete predeclared
-   matrix and scenario suite; candidate generation alone is not evidence.
+2. Implement and source-review genuine Claude-family and Codex-family
+   adapter-specific conformance drivers against an exact runtime artifact.
+   Their probes must externally establish effects instead of merely returning
+   `passed: true`. Do not add a package record until the complete predeclared
+   suite passes under a reviewed driver; runner or candidate output alone is
+   not evidence.
 3. Keep Phase 4 at no-go unless independent predeclared evidence satisfies every
    quality, resource, privacy, and supply-chain gate.
 4. Before the next release, address the upstream `actions/setup-python` Node 20
@@ -238,8 +260,10 @@ they are outside the repository and are not release artifacts.
 Read `HANDOFF.md` and `AGENTS.md`. The published package and Homebrew formula are
 0.4.0. The working tree contains unreleased delegation P0/P0.5 and an empty P1
 qualification registry. P0.5 starts one explicitly trusted user runtime; P1
-adds opt-in exact-artifact gates but qualifies no Claude/Codex adapter. Do not
-describe candidate generation as independent evidence or proven delegation.
+adds opt-in exact-artifact gates and a bounded maintainer evidence runner but
+qualifies no Claude/Codex adapter and ships no real conformance driver. Do not
+describe runner or candidate output as independent evidence or proven
+delegation.
 Preserve the Codex-triage fail-closed decision, native source-vendor routing,
 transient-task boundary, and Phase 4 no-go. Re-run final verification after any
 change; release, tag, and external publishing remain explicit actions.
