@@ -96,12 +96,31 @@ wclass delegate route \
   --tier standard
 ```
 
-This P0 command reads no task standard input and does not inspect or execute the
-runtime path. Its `declared_enforcement` descriptor reports only that the
+The route command reads no task standard input and does not inspect or execute
+the runtime path. Its `declared_enforcement` descriptor reports only that the
 policy and offline capability declaration are schema-compatible. It is not a
 runtime handshake, proof of delegation, or semantic-authorship claim.
 
+After review, P0.5 can start one user-supplied trusted runtime:
+
+```sh
+printf '%s' 'Apply the reviewed change.' | \
+  wclass delegate run \
+  --policy delegation-policy.json \
+  --runtime-manifest runtime-manifest.json \
+  --delegation-runtime /absolute/reviewed/runtime \
+  --source-vendor claude \
+  --tier standard \
+  --confirm-trusted-delegation-runtime \
+  --ack-route-fingerprint 'sha256:copied-from-route'
+```
+
+The runtime receives the exact canonical descriptor and transient task through
+the WCD1 stdin frame and owns all Claude/Codex process creation, authentication,
+network, billing, permissions, review, integration, descendant cleanup, and
+output. weightclass bundles no runtime and cannot detect a dishonest zero exit.
+
 See [the delegation roadmap](delegation-roadmap.md) for the strict schema and
-the later trusted-runtime and exact-artifact qualification gates. Do not put
+the exact-artifact qualification gate. Do not put
 task content, credentials, recipient data, or billing identifiers into a role
 profile or runtime manifest.

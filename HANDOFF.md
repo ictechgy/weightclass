@@ -11,11 +11,12 @@ user-provided model labels, and the no-retention boundary.
 
 ## Repository state
 
-- The current unreleased working tree adds the P0 offline role-delegation
-  compiler. `wclass delegate route` compiles strict Claude- or Codex-native
-  planner/worker/reviewer policy into a self-contained descriptor without
-  reading task stdin or inspecting the declared runtime path. P0 does not add
-  `delegate run` or execute any orchestration runtime.
+- The current unreleased work adds P0/P0.5 role delegation. The offline
+  `wclass delegate route` command compiles strict Claude- or Codex-native
+  planner/worker/reviewer policy
+  offline. `wclass delegate run` can start exactly one reviewed user-supplied
+  runtime after explicit trust confirmation and exact fingerprint
+  acknowledgement. No Claude/Codex adapter runtime is bundled or qualified.
 - PR #19 delivered routing hardening and version 0.4.0 at merge commit
   `786824cc74819e3bd8b254b615c3beb21f2fdd32`.
 - Tag `v0.4.0` published PyPI version 0.4.0 through Release workflow run
@@ -27,7 +28,7 @@ user-provided model labels, and the no-retention boundary.
 - Phase 4 local semantic-model adoption remains **no-go**. No independent fresh
   blind-corpus, resource, or supply-chain evidence has satisfied the gate.
 
-## Unreleased delegation P0
+## Unreleased delegation P0/P0.5
 
 - `src/weightclass/delegation_types.py`, `delegation_schema.py`, and
   `delegation_compile.py` isolate the new schema and pure compiler from native
@@ -41,6 +42,17 @@ user-provided model labels, and the no-retention boundary.
   must be empty; model and effort labels remain opaque user configuration.
 - `assurance` is only `declared_enforcement`. The offline manifest is not a
   handshake or enforcement proof, and P0 never claims semantic authorship.
+- `src/weightclass/delegation_protocol.py` builds one bounded WCD1 frame before
+  spawn. `delegation_runtime.py` verifies the exact path is currently a regular
+  executable, starts it once with fixed protocol argv, handles partial and
+  interrupted writes, inherits environment/stdout/stderr, and waits for the
+  direct child.
+- Confirmation and fingerprint mismatch exit before runtime or task access;
+  runtime unavailability exits before task stdin is read. Post-spawn framing
+  failure uses fingerprinted grace intervals and the direct-child sequence
+  `close -> wait -> terminate -> wait -> kill -> reap`, then returns redacted
+  exit `7`. Normal runtime deadline, descendants, role enforcement, review,
+  integration, provider access, and output remain external-runtime duties.
 - The 13 final RALPLAN contract objections and the P0.5/P1/P2 gates are recorded
   in `docs/delegation-roadmap.md`. The five-round RALPLAN run itself ended at
   `max_rounds`/`ITERATE`; the roadmap incorporates its mandatory repairs but
@@ -50,6 +62,11 @@ user-provided model labels, and the no-retention boundary.
   ambiguity, source-vendor pinning, crossed-boundary rejection, mode-specific
   primitives, integer validation, platform uniqueness, lexical paths, task
   privacy, and Python 3.10 deep-JSON failure redaction.
+- `tests/test_delegation_runtime.py` and its test-only fake runtime cover exact
+  frame/argv/task delivery, confirmation and acknowledgement precedence,
+  unavailable-runtime precedence, invalid task, inherited output, one spawn,
+  runtime nonzero mapping, partial/interrupted writes, EPIPE, and finite
+  direct-child reap. The fake is not a production adapter or qualification.
 
 ## Delivered hardening
 
@@ -104,11 +121,12 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
-- The unreleased delegation P0 passed all 190 tests under Python 3.10.20 and
-  Python 3.14.6 with `ResourceWarning` promoted to an error. Both interpreters
-  passed `compileall`, and `git diff --check` passed. Ruff and mypy were not
-  available in the local executable set or uv's offline cache, so those two
-  gates remain outstanding; no network installation was attempted.
+- The unreleased delegation P0/P0.5 passed all 200 tests under Python 3.10.20
+  and Python 3.14.6 with `ResourceWarning` promoted to an error. Both
+  interpreters passed `compileall`; Ruff check/format, strict mypy, and
+  `git diff --check` passed. Ruff and mypy were downloaded from PyPI only for
+  local verification after user approval; no repository or task data was sent
+  to a provider runtime.
 - Python 3.10.20 and the current local Python each passed all 177 tests with
   `ResourceWarning` promoted to an error.
 - `compileall`, Ruff check/format, native and Linux-targeted mypy, workflow YAML,
@@ -158,12 +176,14 @@ they are outside the repository and are not release artifacts.
 
 ## Next safe action
 
-1. Run Ruff check/format and mypy in a reviewed environment where the pinned
-   tools are already available, then review and commit the isolated P0 change.
-2. Do not start P0.5 runtime execution until P0 is accepted. P0.5 must begin
-   with fake-runtime protocol tests for framing, partial writes, `EINTR`,
-   `EPIPE`, finite direct-child cleanup, reviewer rejection, artifact
-   substitution, premature success, output ownership, and descendant leakage.
+1. Do not advertise real Claude/Codex delegation from P0.5. It proves only the
+   weightclass-to-runtime boundary; a user-supplied runtime can lie with exit
+   zero, leave descendants, or ignore the descriptor.
+2. Before P1, define an independent conformance harness and package-owned
+   qualification record that bind exact artifact digest/build/platform/
+   protocol/suite/adapter identity. Cover every role/category/action/mode,
+   attribution, stage ordering, reviewer rejection, artifact substitution,
+   integration commands, deadlines, and descendant leakage.
 3. Keep Phase 4 at no-go unless independent predeclared evidence satisfies every
    quality, resource, privacy, and supply-chain gate.
 4. Before the next release, address the upstream `actions/setup-python` Node 20
@@ -175,9 +195,9 @@ they are outside the repository and are not release artifacts.
 ## Resume prompt
 
 Read `HANDOFF.md` and `AGENTS.md`. The published package and Homebrew formula are
-0.4.0. The working tree contains an unreleased offline-only delegation P0;
-finish its outstanding Ruff/mypy gates before review, and do not add runtime
-execution without the documented P0.5 test boundary. Preserve the Codex-triage
-fail-closed decision, native source-vendor routing, transient-task boundary, and
-Phase 4 no-go. Re-run final verification after any change; release, tag, and
-external publishing remain explicit actions.
+0.4.0. The working tree contains unreleased delegation P0/P0.5. P0.5 starts one
+explicitly trusted user runtime but bundles and qualifies no Claude/Codex
+adapter; do not describe it as proven delegation. Preserve the Codex-triage
+fail-closed decision, native source-vendor routing, transient-task boundary,
+and Phase 4 no-go. Re-run final verification after any change; release, tag,
+and external publishing remain explicit actions.

@@ -11,10 +11,10 @@ route can start a separately installed API runtime after explicit review and
 egress acknowledgement; weightclass never reads API credentials or makes
 provider network requests itself.
 
-The P0 `delegate route` surface can also compile a Claude- or Codex-native
-planner/worker/reviewer policy into one offline review descriptor. P0 does not
-start an orchestration runtime; its manifest is a declaration, not proof that
-the named runtime enforces delegation.
+The `delegate` surface can also compile a Claude- or Codex-native
+planner/worker/reviewer policy into one offline review descriptor. P0.5 may
+start one explicitly trusted user-supplied orchestration runtime after review;
+its manifest remains a declaration, not proof that it enforces delegation.
 
 ## Install
 
@@ -55,7 +55,8 @@ prints the command of a policy route named by a workflow descriptor and never
 reads a task. `v2` selects a declarative API route; see
 [V2 API routing](#v2-api-routing-through-an-external-runtime).
 `delegate route` reads only its policy and manifest and does not consume task
-standard input or inspect the supplied runtime path.
+standard input or inspect the supplied runtime path. `delegate run` reads the
+task only after confirmation, fingerprint, and runtime-availability gates.
 
 Every malformed invocation — an unknown subcommand, a missing argument, a bad
 policy — exits `2` with `{"error": "invalid_input"}` on standard error and
@@ -71,7 +72,7 @@ them:
 | `2` | `invalid_task` or `invalid_input`. |
 | `3` | `unsupported_route` — no policy route matched. |
 | `4` | `executor_unavailable` — the command could not be started. |
-| `5` | `api_confirmation_required` — V2 without `--confirm-api-egress`. |
+| `5` | `api_confirmation_required` or `delegation_confirmation_required`. |
 | `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
 | `7` | `executor_failed` — the command started and exited non-zero. |
 | `8` | `triage_unavailable` — `--ask-vendor` could not obtain a tier. |
@@ -374,7 +375,7 @@ the vendor filter is applied before tier selection — including when
 `--source-vendor` is omitted, in which case the vendor of the first declared
 tier route is used.
 
-## Offline role-delegation review
+## Reviewed role delegation
 
 P0 adds a compatibility-isolated review command:
 
@@ -394,12 +395,47 @@ use the same role/action/stage contract, while protocol 1 requires every role
 to match `--source-vendor` and use the native transport. Model and effort
 labels remain opaque policy values.
 
-The runtime path may be nonexistent in P0: route compilation validates it
+The runtime path may be nonexistent during review: route compilation validates it
 lexically but never resolves, stats, opens, hashes, or executes it. The output
 therefore says `declared_enforcement`; it does not say the runtime exists, that
-it delegated work, or that any named model authored an artifact. The future
-`delegate run` command is reserved for the later trusted-runtime phase and is
-not available in P0.
+it delegated work, or that any named model authored an artifact.
+
+To run, copy the exact fingerprint and provide both execution gates:
+
+```sh
+printf '%s' 'Apply the reviewed change.' | \
+  wclass delegate run \
+  --policy delegation-policy.json \
+  --runtime-manifest runtime-manifest.json \
+  --delegation-runtime /absolute/reviewed/runtime \
+  --source-vendor codex \
+  --tier standard \
+  --confirm-trusted-delegation-runtime \
+  --ack-route-fingerprint 'sha256:copied-from-route'
+```
+
+`delegate run` recompiles without printing, checks confirmation and the exact
+fingerprint, verifies that the reviewed path is currently a regular executable,
+then reads and validates task stdin. It constructs the complete bounded WCD1
+frame before spawning exactly one foreground process:
+
+```text
+/absolute/reviewed/runtime --weightclass-delegation-protocol 1
+```
+
+The canonical review descriptor and UTF-8 task are sent on the child's standard
+input. Its stdout/stderr and environment are inherited. weightclass does not
+capture, parse, redact, limit, or retain runtime output. Runtime nonzero and
+post-spawn framing failure map to exit `7`; framing failure triggers the
+fingerprinted direct-child `close -> wait -> terminate -> wait -> kill -> reap`
+sequence. weightclass does not enumerate descendants.
+
+P0.5 includes no bundled Claude/Codex orchestrator. The user-supplied runtime
+owns vendor authentication, network and billing behavior, role processes,
+permission enforcement, review, integration, its deadline, descendants, and
+output. A dishonest runtime can exit zero without doing those things, so the
+descriptor remains `declared_enforcement`; stronger claims require P1
+exact-artifact qualification.
 
 The exact schema, permission modes, retention rules, byte representations,
 process-lifecycle boundary, and P0.5/P1/P2 gates are documented in the
@@ -481,8 +517,9 @@ credential management, background execution, or a bundled provider runtime.
 - No persistence: weightclass writes no router artifacts or vendor
   configuration.
 - Task text is read only from standard input, held in memory to classify and
-  pass to the selected child process, then discarded. weightclass never logs,
-  stores, echoes, or places it in diagnostics.
+  pass to the selected child process, then discarded. `delegate route` does not
+  read it; `delegate run` reads it only after its static execution gates.
+  weightclass never logs, stores, echoes, hashes, or places it in diagnostics.
 - weightclass never reads credentials, subscription balances, pricing, cookies,
   or vendor configuration. It does not capture or process vendor output. V2
   does not issue provider HTTP requests; a separately installed runtime may do

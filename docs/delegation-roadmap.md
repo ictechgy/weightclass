@@ -196,13 +196,20 @@ modules. It migrates or persists no state.
 
 ## P0.5 — trusted same-vendor runtime
 
-Add `delegate run` only after P0 is stable. It must require both
+Status: implemented locally with a test-only fake runtime; no Claude/Codex
+adapter runtime is bundled or qualified.
+
+`delegate run` requires both
 `--confirm-trusted-delegation-runtime` and the exact reviewed fingerprint, read
 the bounded task only after those static gates, build the complete WCD1 frame
-before spawn, and start exactly one foreground external runtime. A fake runtime
-must cover partial writes, `EINTR`, `EPIPE`, truncation, oversize, invalid UTF-8,
-review rejection, premature success, deadline failure, action-attribution
-failure, integration substitution, and cleanup failure.
+before spawn, and start exactly one foreground external runtime. The current
+fake runtime covers exact argv/frame/task delivery, partial writes, interrupted
+writes, `EPIPE`, direct-child cleanup/reap, invalid task, runtime nonzero,
+inherited output, and pre-task gate precedence. Runtime-side conformance cases
+such as reviewer rejection, premature success, deadline failure,
+action-attribution failure, integration substitution, descendant leakage, and
+malformed inbound frames remain P1 suite work because production weightclass
+does not parse runtime stage evidence.
 
 This phase remains `declared_enforcement`: weightclass observes only the direct
 child's final exit or signal and cannot detect a dishonest zero exit.
