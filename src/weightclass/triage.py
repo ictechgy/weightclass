@@ -127,13 +127,16 @@ def _open_leader_exit_queue(pid: int) -> Any | None:
         return None
     exit_queue: Any | None = None
     try:
-        exit_queue = select.kqueue()
-        event = select.kevent(
+        select_features = vars(select)
+        kqueue_factory = select_features["kqueue"]
+        kevent_factory = select_features["kevent"]
+        event = kevent_factory(
             pid,
-            filter=select.KQ_FILTER_PROC,
-            flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-            fflags=select.KQ_NOTE_EXIT,
+            filter=select_features["KQ_FILTER_PROC"],
+            flags=select_features["KQ_EV_ADD"] | select_features["KQ_EV_ONESHOT"],
+            fflags=select_features["KQ_NOTE_EXIT"],
         )
+        exit_queue = kqueue_factory()
         exit_queue.control([event], 0, 0)
     except (OSError, ValueError):
         if exit_queue is not None:
