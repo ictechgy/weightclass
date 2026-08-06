@@ -81,11 +81,13 @@ opt-in experiment until it independently passes this gate; it must not replace
 the deterministic local default merely because it improves the public fixture.
 
 After the candidate and thresholds are frozen, an authorized evaluator may use
-the existing explicit `wclass classify --source-vendor VENDOR --ask-vendor`
-boundary to obtain one tier for each sealed task. That separate collection step
-owns any vendor access and requires separate approval. Add those results as a
-`vendor_tier` field in the evaluator-owned temporary corpus, then compare the
-three pre-registered candidates entirely offline:
+the explicit `wclass classify --source-vendor claude --ask-vendor` boundary to
+obtain one tier for each sealed task. That separate collection step owns vendor
+access, disclosure, and quota/billing, and requires separate approval. The
+Codex adapter currently fails closed because Codex has no documented
+all-tools-disabled CLI contract. Add authorized results as a `vendor_tier`
+field in the evaluator-owned temporary corpus, then compare the three
+pre-registered candidates entirely offline:
 
 ```sh
 PYTHONPATH=src python3 tests/eval/score.py \
@@ -102,8 +104,9 @@ review of confidence intervals and every language/category slice.
 Vendor failure remains terminal: unavailable, timed-out, oversized, malformed,
 or non-zero vendor output exits `8` with only `triage_unavailable`; it never
 quietly becomes the local result. This experiment adds no credentials, HTTP
-client, task persistence, retry supervisor, or automatic cross-vendor route.
-The source vendor remains explicit for collection and for any later execution.
+client, task persistence, retry supervisor, or automatic cross-vendor route to
+weightclass. The external CLI still owns its authentication and network. The
+source vendor remains explicit for collection and for any later execution.
 
 ## Offline Phase 4 candidate decision
 

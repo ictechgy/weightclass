@@ -9,7 +9,7 @@ publishes on a merge to `main`.
 
 ## Version policy
 
-- The version lives in exactly one place, `src/weightclass/__version__`.
+- The version lives in exactly one place, `src/weightclass/__init__.py`.
   `pyproject.toml` reads it through `[tool.setuptools.dynamic]`.
 - Tags are `v<version>`, e.g. `v0.1.0`. The release workflow refuses to publish
   when the tag and the declared version disagree, because PyPI never lets a
@@ -44,10 +44,15 @@ publisher once, on PyPI:
 2. Confirm `main` is green and reproduce the gates locally:
 
    ```sh
-   PYTHONPATH=src python3 -m unittest discover -s tests
+   PYTHONPATH=src python3 -W error::ResourceWarning -m unittest discover -s tests
    ruff check src tests && ruff format --check src tests && mypy
    python3 -m build && twine check --strict dist/*
    ```
+
+   The release is also blocked unless CI's macOS Python 3.10 and 3.13 triage
+   process-group/FIFO boundary jobs pass. After building, verify the wheel's
+   metadata version and an installed `wclass --version` against
+   `weightclass.__version__`.
 
 3. Tag the merged commit and push the tag:
 

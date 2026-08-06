@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from weightclass import cli
@@ -135,6 +136,39 @@ class CommandSurfaceTests(unittest.TestCase):
 
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+
+    def test_unexpected_parser_state_fails_closed_without_v2_dispatch(self) -> None:
+        """Breaks if an unknown command implicitly falls through to a V2 handler."""
+        arguments = SimpleNamespace(
+            version=False,
+            command="future-command",
+            api_command="route",
+            policy=None,
+            source_vendor=None,
+            api_runtime=None,
+        )
+        v2_was_called = False
+
+        def unexpected_v2_call(*_arguments: object) -> int:
+            nonlocal v2_was_called
+            v2_was_called = True
+            return 91
+
+        parser = SimpleNamespace(parse_args=lambda _arguments: arguments)
+        errors = io.StringIO()
+        with (
+            mock.patch("weightclass.cli.build_parser", return_value=parser),
+            mock.patch(
+                "weightclass.cli.v2_route_from_standard_input",
+                side_effect=unexpected_v2_call,
+            ),
+            contextlib.redirect_stderr(errors),
+        ):
+            exit_code = cli.main([])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "invalid_input"})
+        self.assertFalse(v2_was_called)
 
     def test_rejects_an_abbreviated_api_egress_confirmation(self) -> None:
         """Breaks if an explicit egress gate can be satisfied by a prefix of its flag.
@@ -296,6 +330,62 @@ class TaskConfidentialityTests(unittest.TestCase):
 
 
 class CommandLineTests(unittest.TestCase):
+    def test_reason_only_changes_do_not_change_the_reviewed_route_fingerprint(self) -> None:
+        """Breaks if explanation metadata becomes an undocumented fingerprint input."""
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "posture": "balanced",
+                        "routes": [
+                            {
+                                "id": "codex-high",
+                                "vendor": "codex",
+                                "tier": "high",
+                                "command": ["codex", "exec"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            base = [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "route",
+                "--policy",
+                str(policy_path),
+                "--source-vendor",
+                "codex",
+            ]
+            classified = subprocess.run(
+                base,
+                capture_output=True,
+                check=False,
+                input="Review the security boundary.",
+                text=True,
+            )
+            explicit = subprocess.run(
+                [*base, "--tier", "high"],
+                capture_output=True,
+                check=False,
+                input="Review the security boundary.",
+                text=True,
+            )
+
+        self.assertEqual(classified.returncode, 0, classified.stderr)
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        classified_route = json.loads(classified.stdout)
+        explicit_route = json.loads(explicit.stdout)
+        self.assertEqual(classified_route["reason_code"], "high.complexity_signal")
+        self.assertEqual(explicit_route["reason_code"], "explicit.requested_tier")
+        self.assertEqual(
+            classified_route["route_fingerprint"],
+            explicit_route["route_fingerprint"],
+        )
+
     def _rendered_route(self, result: "subprocess.CompletedProcess[str]") -> dict[str, object]:
         """Parse a `wclass route` descriptor, checking and removing its fingerprint.
 
@@ -338,7 +428,7 @@ class CommandLineTests(unittest.TestCase):
             {
                 "tier": "low",
                 "reason_code": "low.mechanical",
-                "policy_version": "1",
+                "policy_version": "2",
             },
         )
         self.assertNotIn("sentinel-private-heading-9482", result.stdout)

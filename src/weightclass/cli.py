@@ -19,6 +19,7 @@ from .classification import (
     read_task_from_standard_input,
     validate_task,
 )
+from .json_input import JsonInputError, load_json_object
 from .router import (
     DEFAULT_ROUTES,
     SUPPORTED_VENDORS,
@@ -42,6 +43,8 @@ from .v2 import (
 )
 
 EXECUTOR_FAILED_EXIT_CODE: Final = 7
+MAX_NATIVE_POLICY_BYTES: Final = 262_144
+MAX_NATIVE_DESCRIPTOR_BYTES: Final = 262_144
 
 
 class InvalidInputError(ValueError):
@@ -85,14 +88,11 @@ class SafeArgumentParser(argparse.ArgumentParser):
         raise InvalidInputError()
 
 
-def _read_json_object(path: Path) -> dict[str, Any]:
+def _read_json_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise InvalidInputError() from error
-    if not isinstance(value, dict):
-        raise InvalidInputError()
-    return value
+        return load_json_object(path, max_bytes=max_bytes)
+    except JsonInputError:
+        raise InvalidInputError() from None
 
 
 def _require_exact_keys(value: dict[str, Any], expected_keys: set[str]) -> None:
@@ -179,7 +179,7 @@ def load_routes(policy_path: Path) -> tuple[Route, ...]:
 
 def load_routing_policy(policy_path: Path) -> RoutingPolicy:
     """Load routing options and strictly shaped trusted-local routes."""
-    policy = _read_json_object(policy_path)
+    policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
     if not {"routes"} <= set(policy) <= {"routes", "allow_mixed_vendors", "posture"}:
         raise InvalidInputError()
     allow_mixed_vendors = policy.get("allow_mixed_vendors", False)
@@ -202,7 +202,7 @@ def load_routing_policy(policy_path: Path) -> RoutingPolicy:
 
 def load_request(descriptor_path: Path) -> RouteRequest:
     """Load a redacted descriptor without task content or credentials."""
-    descriptor = _read_json_object(descriptor_path)
+    descriptor = _read_json_object(descriptor_path, max_bytes=MAX_NATIVE_DESCRIPTOR_BYTES)
     _require_exact_keys(descriptor, {"vendor", "workflow"})
     vendor = _require_nonempty_string(descriptor["vendor"])
     if vendor not in SUPPORTED_VENDORS:
@@ -301,8 +301,8 @@ def v2_route_from_standard_input(
     """Render an API review descriptor without sending data to a provider."""
     try:
         runtime_path = validate_api_runtime(runtime_path)
-        task = read_task_from_standard_input()
         policy = load_api_policy(policy_path)
+        task = read_task_from_standard_input()
         tier, route = select_api_route(task, policy, source_vendor)
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
@@ -327,8 +327,8 @@ def v2_run_from_standard_input(
     """Start one acknowledged external API runtime without handling credentials."""
     try:
         runtime_path = validate_api_runtime(runtime_path)
-        task = read_task_from_standard_input()
         policy = load_api_policy(policy_path)
+        task = read_task_from_standard_input()
         tier, route = select_api_route(task, policy, source_vendor)
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
@@ -437,7 +437,7 @@ def classify_from_standard_input(
 
 def select_task_route(
     task: str,
-    policy_path: Path | None,
+    policy: RoutingPolicy,
     source_vendor: str | None = None,
     explicit_tier: Tier | None = None,
 ) -> tuple[Tier, str, Route, RoutingPolicy]:
@@ -454,11 +454,6 @@ def select_task_route(
     else:
         decision = classify_task_with_reason(task)
         reason_code = decision.reason_code
-    policy = (
-        load_routing_policy(policy_path)
-        if policy_path is not None
-        else RoutingPolicy(DEFAULT_ROUTES)
-    )
     if explicit_tier is None and policy.posture == "cautious":
         decision = apply_cautious_posture(decision)
         tier = decision.tier
@@ -481,8 +476,13 @@ def route_from_standard_input(
 ) -> int:
     """Select and render a command without echoing or persisting the task."""
     try:
+        policy = (
+            load_routing_policy(policy_path)
+            if policy_path is not None
+            else RoutingPolicy(DEFAULT_ROUTES)
+        )
         tier, reason_code, route, policy = select_task_route(
-            read_task_from_standard_input(), policy_path, source_vendor, explicit_tier
+            read_task_from_standard_input(), policy, source_vendor, explicit_tier
         )
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
@@ -521,8 +521,13 @@ def run_from_standard_input(
 ) -> int:
     """Run a selected native command without a shell or output capture."""
     try:
+        policy = (
+            load_routing_policy(policy_path)
+            if policy_path is not None
+            else RoutingPolicy(DEFAULT_ROUTES)
+        )
         task = read_task_from_standard_input()
-        _, _, route, policy = select_task_route(task, policy_path, source_vendor, explicit_tier)
+        _, _, route, policy = select_task_route(task, policy, source_vendor, explicit_tier)
         if acknowledged_fingerprint is not None and acknowledged_fingerprint != (
             native_route_fingerprint(route, policy.allow_mixed_vendors, policy.posture)
         ):
@@ -605,16 +610,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
-    if arguments.api_command == "route":
+    if arguments.command == "v2" and arguments.api_command == "route":
         return v2_route_from_standard_input(
             arguments.policy,
             arguments.source_vendor,
             arguments.api_runtime,
         )
-    return v2_run_from_standard_input(
-        arguments.policy,
-        arguments.source_vendor,
-        arguments.api_runtime,
-        arguments.confirm_api_egress,
-        arguments.ack_route_fingerprint,
-    )
+    if arguments.command == "v2" and arguments.api_command == "run":
+        return v2_run_from_standard_input(
+            arguments.policy,
+            arguments.source_vendor,
+            arguments.api_runtime,
+            arguments.confirm_api_egress,
+            arguments.ack_route_fingerprint,
+        )
+    print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+    return 2

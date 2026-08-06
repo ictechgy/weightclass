@@ -7,6 +7,9 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from weightclass.router import SUPPORTED_VENDORS
+from weightclass.v2 import SOURCE_PROVIDER
+
 
 def _api_policy(**overrides: object) -> dict[str, object]:
     """Build a minimal single-route V2 policy for one test."""
@@ -30,6 +33,12 @@ def _api_policy(**overrides: object) -> dict[str, object]:
     }
     policy.update(overrides)
     return policy
+
+
+class ProviderMappingInvariantTests(unittest.TestCase):
+    def test_every_source_vendor_has_one_explicit_provider_family(self) -> None:
+        """Breaks if a new vendor bypasses the default cross-provider guard."""
+        self.assertEqual(set(SOURCE_PROVIDER), set(SUPPORTED_VENDORS))
 
 
 class V2EgressGateTests(unittest.TestCase):
