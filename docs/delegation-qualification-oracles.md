@@ -58,6 +58,19 @@ because a filesystem or command effect does not independently establish the
 claimed role, category, and action attribution. Scenario-specific blockers
 distinguish runtime telemetry, launch identity, and OS-supervisor gaps.
 
+## Protocol-v2 indistinguishability regression
+
+The test-only v2 driver exercises four fixed modes for one fixed permission
+case: invoke the fixed sentinel runtime, skip it, forge the sentinel's constant
+marker, or self-attest without invoking it. The outside test observes only
+`marker_present` or `marker_absent`; it does not call either marker authentic.
+
+All four modes produce the same complete v2 evidence and qualification
+candidate even though the marker observations differ. This demonstrates only
+that protocol v2 does not encode an independent runtime-invocation
+observation. It does not allege driver or vendor misconduct, and neither the
+sentinel nor fake driver may support a package qualification record.
+
 ## Eligibility boundary
 
 The claim map is neither evidence nor a registry candidate. It cannot change
@@ -66,13 +79,12 @@ package registry. A future claim becomes eligible only through a separately
 reviewed protocol revision with an implemented independent oracle and negative
 control.
 
-The next safe implementation increment is a test-only v2
-indistinguishability regression followed by a non-public synthetic probe
-kernel. Probe self-tests must use separate IDs rather than weakening any of the
-67 qualification claims. Initially they may establish only runner-direct
-facts. Runtime telemetry remains untrusted, and path-based execution must be
-reported as `TOCTOU-UNRESOLVED` until verified-object or reviewed immutable
-launch binding exists.
+The next safe implementation increment is a non-public synthetic probe kernel.
+Probe self-tests must use separate IDs rather than weakening any of the 67
+qualification claims. Initially they may establish only runner-direct facts.
+Runtime telemetry remains untrusted, and path-based execution must be reported
+as `TOCTOU-UNRESOLVED` until verified-object or reviewed immutable launch
+binding exists.
 
 No vendor CLI, credentials, network access, billing event, production runtime,
 qualification record, or delegation advertisement belongs in that increment.

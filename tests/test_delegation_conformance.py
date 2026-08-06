@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 from weightclass.delegation_conformance import run_conformance
@@ -19,6 +20,7 @@ from weightclass.delegation_qualification import (
 )
 
 FAKE_DRIVER = Path(__file__).parent / "fixtures" / "fake_conformance_driver.py"
+FIXED_SENTINEL_RUNTIME = Path(__file__).parent / "fixtures" / "fixed_conformance_sentinel.py"
 
 
 def _write_executable(path: Path, contents: bytes) -> None:
@@ -68,6 +70,62 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             timeout=15,
         )
         return result, runtime_path
+
+    def _run_indistinguishability_mode(
+        self,
+        mode: str,
+    ) -> tuple[dict[str, object], dict[str, object], bool]:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            runtime_path = directory / "runtime"
+            _write_executable(runtime_path, FIXED_SENTINEL_RUNTIME.read_bytes())
+            environment = os.environ.copy()
+            environment["WEIGHTCLASS_FAKE_CONFORMANCE_MODE"] = mode
+            environment["WEIGHTCLASS_FAKE_CONFORMANCE_TARGET"] = (
+                "matrix/orchestrator/implementation/workspace_read/allow"
+            )
+            result = subprocess.run(
+                self._arguments(runtime_path),
+                capture_output=True,
+                check=False,
+                env=environment,
+                text=True,
+                timeout=20,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stderr, "")
+            parsed: object = json.loads(result.stdout)
+            self.assertIsInstance(parsed, dict)
+            evidence = cast(dict[str, object], parsed)
+            candidate = build_qualification_candidate(evidence, runtime_path)
+            marker_present = runtime_path.with_suffix(".marker").is_file()
+        return evidence, candidate, marker_present
+
+    def test_v2_cannot_distinguish_runtime_invocation_skip_forgery_or_self_attestation(
+        self,
+    ) -> None:
+        """Breaks if this known v2 observability gap is hidden or misstated."""
+        self.assertTrue(FIXED_SENTINEL_RUNTIME.is_file())
+        modes = (
+            ("invoke-runtime", True),
+            ("skip-runtime", False),
+            ("forge-runtime-marker", True),
+            ("self-attest", False),
+        )
+        evidence_documents: list[dict[str, object]] = []
+        candidates: list[dict[str, object]] = []
+        marker_observations: list[bool] = []
+
+        for mode, _ in modes:
+            evidence, candidate, marker_present = self._run_indistinguishability_mode(mode)
+            evidence_documents.append(evidence)
+            candidates.append(candidate)
+            marker_observations.append(marker_present)
+
+        self.assertEqual(marker_observations, [expected for _, expected in modes])
+        self.assertTrue(all(evidence == evidence_documents[0] for evidence in evidence_documents))
+        self.assertTrue(all(candidate == candidates[0] for candidate in candidates))
+        self.assertEqual(load_packaged_qualification_registry().records, ())
 
     def test_full_run_emits_candidate_compatible_evidence_without_reading_stdin(self) -> None:
         """Breaks if the runner skips cases, consumes a task, or changes the evidence schema."""

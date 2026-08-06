@@ -118,7 +118,11 @@ user-provided model labels, and the no-retention boundary.
 - `tests/test_delegation_conformance.py` uses real subprocesses to cover all-pass
   candidate compatibility, explicit failure, case-ID spoofing, oversized valid
   JSON, fixed case timeout, same-process-group leakage detection, cleanup, and
-  stdin independence. The package registry remains empty in the success test.
+  stdin independence. Its v2 indistinguishability regression compares fixed
+  runtime-invoked, runtime-skipped, marker-forged, and self-attested modes.
+  Marker presence differs while complete evidence and candidates remain
+  identical; this proves only v2 observer blindness, not authentic invocation
+  or misconduct. The package registry remains empty in every success test.
 - `tests/fixtures/delegation_claim_map_v3.json` is a test-only executable claim
   inventory, not evidence. `tests/test_delegation_claim_map_v3.py` reconciles
   its 54 permission and 13 scenario IDs with both production catalogs, enforces
@@ -182,15 +186,16 @@ user-provided model labels, and the no-retention boundary.
 ## Verification evidence
 
 - The P1 qualification, conformance-runner, and blocked claim-map foundation
-  passed all 226 tests
+  passed all 227 tests
   under Python 3.10.20 and Python
   3.14.6 with `ResourceWarning` promoted to an error. Both interpreters passed
   `compileall`; Ruff check/format, strict mypy, and `git diff --check` passed.
   An offline sdist/wheel build included the qualification module, empty package
-  registry, and typing marker. The claim map remained outside the wheel, while
-  its validator and JSON fixture were present together in the sdist and passed
-  there. A clean no-index wheel install loaded the empty registry and exposed
-  the candidate CLI. Build artifacts remained under a temporary directory.
+  registry, and typing marker. Test fixtures and evaluation assets remained
+  outside the wheel but were included through extension-bounded sdist rules;
+  the extracted sdist passed all 227 tests without caches or bytecode. A clean
+  no-index wheel install loaded the empty registry and exposed the candidate
+  CLI. Build artifacts remained under a temporary directory.
 - The unreleased delegation P0/P0.5 passed all 200 tests under Python 3.10.20
   and Python 3.14.6 with `ResourceWarning` promoted to an error. Both
   interpreters passed `compileall`; Ruff check/format, strict mypy, and
@@ -251,12 +256,12 @@ they are outside the repository and are not release artifacts.
 1. Do not advertise real Claude/Codex delegation from P0.5. It proves only the
    weightclass-to-runtime boundary; a user-supplied runtime can lie with exit
    zero, leave descendants, or ignore the descriptor.
-2. Add a narrowly worded v2 indistinguishability regression, then design a
-   non-public synthetic probe-protocol kernel using separate self-test IDs and
-   only runner-direct verdicts. Runtime event telemetry is not independent
-   evidence, and path execution remains `TOCTOU-UNRESOLVED`. Do not implement a
-   Claude/Codex driver or add a package record until an exact claim has an
-   independent oracle, negative control, identity closure, and platform gate.
+2. Design a non-public synthetic probe-protocol kernel using separate self-test
+   IDs and only runner-direct verdicts. Runtime event telemetry is not
+   independent evidence, and path execution remains `TOCTOU-UNRESOLVED`. Do not
+   implement a Claude/Codex driver or add a package record until an exact claim
+   has an independent oracle, negative control, identity closure, and platform
+   gate.
 3. Keep Phase 4 at no-go unless independent predeclared evidence satisfies every
    quality, resource, privacy, and supply-chain gate.
 4. Before the next release, address the upstream `actions/setup-python` Node 20

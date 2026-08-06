@@ -302,6 +302,13 @@ The inventory is outside package data and is rejected as both v2 evidence and
 registry input. It must not be described as qualification-v3 evidence or as a
 vendor feasibility result.
 
+A test-only v2 indistinguishability regression now compares four fixed modes:
+sentinel runtime invocation, runtime skip, constant-marker forgery, and
+self-attestation. Marker presence differs, but every mode produces identical
+v2 evidence and candidate output. This proves only that v2 lacks an independent
+runtime-invocation observation. It does not make a marker authentic, allege
+misconduct, or qualify the sentinel or fake driver.
+
 At run time, qualified mode opens the path without following a final symlink,
 checks regular-file and executable status, reads a bounded artifact through the
 opened descriptor, compares exact size and SHA-256, and checks for concurrent

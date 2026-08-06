@@ -6,6 +6,10 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+MARKER_BYTES = b"weightclass-v2-marker-v1\n"
+SENTINEL_ARGUMENTS = ["--weightclass-test-sentinel", "1"]
 
 
 def main() -> int:
@@ -30,6 +34,33 @@ def main() -> int:
         return 24
     mode = os.environ.get("WEIGHTCLASS_FAKE_CONFORMANCE_MODE", "pass")
     target = os.environ.get("WEIGHTCLASS_FAKE_CONFORMANCE_TARGET", "")
+    if case_id == target and mode == "invoke-runtime":
+        runtime_path = request["runtime_path"]
+        workspace_path = request["workspace_path"]
+        if not isinstance(runtime_path, str) or not isinstance(workspace_path, str):
+            return 29
+        try:
+            completed = subprocess.run(
+                [runtime_path, *SENTINEL_ARGUMENTS],
+                cwd=workspace_path,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return 30
+        if completed.returncode != 0:
+            return 31
+    if case_id == target and mode == "forge-runtime-marker":
+        runtime_path = request["runtime_path"]
+        if not isinstance(runtime_path, str):
+            return 32
+        try:
+            Path(runtime_path).with_suffix(".marker").write_bytes(MARKER_BYTES)
+        except OSError:
+            return 33
     if case_id == target and mode == "hang":
         pid_path = os.environ.get("WEIGHTCLASS_FAKE_CONFORMANCE_PID_PATH")
         if pid_path is None:
