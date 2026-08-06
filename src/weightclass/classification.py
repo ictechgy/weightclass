@@ -9,12 +9,13 @@ Tier = Literal["low", "standard", "high"]
 ReasonCode = Literal[
     "high.length_floor",
     "high.risk_floor",
+    "high.complexity_signal",
     "high.harmful_outcome",
     "high.cautious_ambiguity",
     "low.mechanical",
     "standard.not_clearly_mechanical",
 ]
-CLASSIFICATION_POLICY_VERSION: Final = "1"
+CLASSIFICATION_POLICY_VERSION: Final = "2"
 
 
 @dataclass(frozen=True)
@@ -217,30 +218,41 @@ _LOW_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_SIGNALS)
 # 반복은 standard 에 남긴다. 각 패턴의 오탐 경계는 테스트로 고정한다.
 _HIGH_RISK_OUTCOME_PATTERNS: Final = (
     re.compile(
-        r"\b(?:account|customer|user|i|(?:my\s+)?cards?)\b.{0,80}"
-        r"\b(?:is|are|gets?|got|was|were)?\s*charged\b.{0,32}"
+        r"\b(?:account|customer|user|i|(?:my\s+)?cards?)\b[\s\S]{0,80}"
+        r"\b(?:is|are|gets?|got|was|were)?\s*charged\b[\s\S]{0,32}"
         r"\b(?:twice|multiple\s+times|more\s+than\s+once)\b"
     ),
     re.compile(
-        r"\b(?=[\s\S]{0,160}\b(?:sometimes|unexpectedly|after|again|"
-        r"duplicate(?:d)?|multiple)\b)(?:"
-        r"same\s+(?:job|task|worker|request|event)s?\b.{0,80}"
-        r"\b(?:runs?|executes?|processes?)\b.{0,32}"
-        r"\b(?:twice|multiple\s+times|more\s+than\s+once)\b|"
-        r"(?:job|task|worker|request|event)s?\b.{0,80}"
-        r"\b(?:runs?|executes?|processes?)\b.{0,32}"
-        r"\bsame\s+(?:job|task|worker|request|event)s?\b.{0,32}"
-        r"\b(?:twice|multiple\s+times|more\s+than\s+once)\b)"
-    ),
-    re.compile(
-        r"\bbalances?\b.{0,80}"
-        r"\b(?:is|are|becomes?|became|turns?|turned|ends?|ended|gets?)\b.{0,32}"
+        r"\bbalances?\b[\s\S]{0,80}"
+        r"\b(?:is|are|becomes?|became|turns?|turned|ends?|ended|gets?)\b[\s\S]{0,32}"
         r"\bnegative\b"
     ),
-    re.compile(r"같은\s*(?:작업|잡|요청|이벤트).{0,80}(?:두\s*번|중복).{0,40}(?:실행|처리)"),
-    re.compile(r"잔액.{0,40}(?:가끔|종종|때때로|자꾸).{0,40}음수"),
-    re.compile(r"잔액.{0,40}음수.{0,32}(?:되|돼|내려|떨어)"),
+    re.compile(
+        r"같은\s*(?:작업|잡|요청|이벤트)[\s\S]{0,80}"
+        r"(?:두\s*번|중복)[\s\S]{0,40}(?:실행|처리)"
+    ),
+    re.compile(r"잔액[\s\S]{0,40}(?:가끔|종종|때때로|자꾸)[\s\S]{0,40}음수"),
+    re.compile(r"잔액[\s\S]{0,40}음수[\s\S]{0,32}(?:되|돼|내려|떨어)"),
 )
+
+_DUPLICATE_WORK_PATTERNS: Final = (
+    re.compile(
+        r"\bsame\s+(?:job|task|worker|request|event)s?\b[\s\S]{0,80}"
+        r"\b(?:runs?|executes?|processes?)\b[\s\S]{0,32}"
+        r"(?P<multiplicity>\b(?:twice|multiple\s+times|more\s+than\s+once)\b)"
+    ),
+    re.compile(
+        r"\b(?:job|task|worker|request|event)s?\b[\s\S]{0,80}"
+        r"\b(?:runs?|executes?|processes?)\b[\s\S]{0,32}"
+        r"\bsame\s+(?:job|task|worker|request|event)s?\b[\s\S]{0,32}"
+        r"(?P<multiplicity>\b(?:twice|multiple\s+times|more\s+than\s+once)\b)"
+    ),
+)
+_DUPLICATE_WORK_QUALIFIER_PATTERN: Final = re.compile(
+    r"\b(?:sometimes|unexpectedly|after|again|duplicate(?:d)?|multiple)\b"
+)
+_INTENTIONAL_DUPLICATE_CONTEXT_PATTERN: Final = re.compile(r"\bintegration\s+test\b")
+_DUPLICATE_WORK_CONTEXT_CHARACTERS: Final = 160
 
 
 def validate_task(task: str) -> str:
@@ -274,8 +286,10 @@ def classify_task_with_reason(task: str) -> ClassificationDecision:
         normalized_task,
         _HIGH_RISK_FLOOR_ASCII_PATTERN,
         _HIGH_RISK_FLOOR_NON_ASCII_SIGNALS,
-    ) or _has_signal(normalized_task, _HIGH_ASCII_PATTERN, _HIGH_NON_ASCII_SIGNALS):
+    ):
         return ClassificationDecision("high", "high.risk_floor")
+    if _has_signal(normalized_task, _HIGH_ASCII_PATTERN, _HIGH_NON_ASCII_SIGNALS):
+        return ClassificationDecision("high", "high.complexity_signal")
     if _has_high_risk_outcome(normalized_task):
         return ClassificationDecision("high", "high.harmful_outcome")
     if len(normalized_task) <= LOW_TASK_CHARACTERS and _has_signal(
@@ -305,4 +319,28 @@ def _has_signal(
 
 def _has_high_risk_outcome(task: str) -> bool:
     """Report whether a narrowly defined costly outcome is described."""
-    return any(pattern.search(task) for pattern in _HIGH_RISK_OUTCOME_PATTERNS)
+    return any(pattern.search(task) for pattern in _HIGH_RISK_OUTCOME_PATTERNS) or (
+        _has_duplicate_work_outcome(task)
+    )
+
+
+def _has_duplicate_work_outcome(task: str) -> bool:
+    """Match one bounded duplicate-work event with independent instability evidence."""
+    for pattern in _DUPLICATE_WORK_PATTERNS:
+        for candidate in pattern.finditer(task):
+            suppressor_end = min(len(task), candidate.end() + 80)
+            if _INTENTIONAL_DUPLICATE_CONTEXT_PATTERN.search(
+                task, candidate.start(), suppressor_end
+            ):
+                continue
+
+            context_start = max(0, candidate.start() - _DUPLICATE_WORK_CONTEXT_CHARACTERS)
+            context_end = min(len(task), candidate.end() + _DUPLICATE_WORK_CONTEXT_CHARACTERS)
+            multiplicity_start, multiplicity_end = candidate.span("multiplicity")
+            for qualifier in _DUPLICATE_WORK_QUALIFIER_PATTERN.finditer(
+                task, context_start, context_end
+            ):
+                if qualifier.start() >= multiplicity_start and qualifier.end() <= multiplicity_end:
+                    continue
+                return True
+    return False

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Final, cast
 
 from .classification import Tier, classify_task
+from .json_input import JsonInputError, load_json_object
 from .router import SUPPORTED_VENDORS, RouteSelectionError
 
 POLICY_SCHEMA_VERSION: Final = 2
@@ -66,18 +67,9 @@ def _require_label(value: object) -> str:
 
 def _read_json_object(path: Path) -> dict[str, Any]:
     try:
-        if path.stat().st_size > MAX_POLICY_BYTES:
-            raise V2InvalidInputError()
-        with path.open("r", encoding="utf-8") as policy_file:
-            contents = policy_file.read(MAX_POLICY_BYTES + 1)
-        if len(contents.encode("utf-8")) > MAX_POLICY_BYTES:
-            raise V2InvalidInputError()
-        value = json.loads(contents)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise V2InvalidInputError() from error
-    if not isinstance(value, dict):
-        raise V2InvalidInputError()
-    return value
+        return load_json_object(path, max_bytes=MAX_POLICY_BYTES)
+    except JsonInputError:
+        raise V2InvalidInputError() from None
 
 
 def _parse_route(value: object) -> ApiRoute:

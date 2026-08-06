@@ -4,14 +4,17 @@
 """
 
 import contextlib
+import gc
 import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import unittest
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from unittest import mock
@@ -26,6 +29,7 @@ from weightclass.triage import (
     TriageUnavailableError,
     ask_vendor_for_tier,
     triage_command,
+    triage_descriptor,
 )
 
 
@@ -49,30 +53,63 @@ def _fake_vendor_on_path(body: str) -> "Iterator[dict[str, str]]":
         }
 
 
+@contextlib.contextmanager
+def _fake_python_vendor_on_path(source: str) -> "Iterator[dict[str, str]]":
+    """Install a fake Python vendor when a shell cannot express the lifecycle."""
+    with tempfile.TemporaryDirectory() as directory:
+        executable = Path(directory) / "claude"
+        executable.write_text(
+            f"#!{sys.executable}\n{textwrap.dedent(source)}",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        yield {
+            "PATH": f"{directory}:{os.environ.get('PATH', '')}",
+            "PYTHONPATH": f"{Path(__file__).resolve().parent.parent}/src",
+        }
+
+
 class TriageCommandTests(unittest.TestCase):
-    def test_every_supported_vendor_has_a_cheap_triage_command(self) -> None:
-        """Breaks if a vendor gains a triage command that is not the cheap one.
+    def test_claude_triage_disables_customizations_tools_mcp_and_persistence(self) -> None:
+        """Breaks if untrusted task text can reach an ambient Claude capability."""
+        command = triage_command("claude")
 
-        판정은 한 단어를 받는 호출이다. 실제 작업과 같은 비용을 쓰면 안 된다.
-        """
-        # 지원 벤더가 늘었는데 판정 명령이 없으면 그 벤더는 --ask-vendor 를 못 쓴다.
-        self.assertEqual(set(TRIAGE_COMMANDS), set(SUPPORTED_VENDORS))
-        for vendor, command in TRIAGE_COMMANDS.items():
+        self.assertEqual(command[0], "claude")
+        self.assertIn("--safe-mode", command)
+        self.assertIn("--no-session-persistence", command)
+        self.assertIn("--strict-mcp-config", command)
+        setting_sources_index = command.index("--setting-sources")
+        self.assertEqual(command[setting_sources_index + 1], "")
+        tools_index = command.index("--tools")
+        self.assertEqual(command[tools_index + 1], "")
+        permission_mode_index = command.index("--permission-mode")
+        self.assertEqual(command[permission_mode_index + 1], "plan")
+        effort_index = command.index("--effort")
+        self.assertEqual(command[effort_index + 1], "low")
+
+    def test_codex_triage_fails_closed_without_a_no_tools_contract(self) -> None:
+        """Breaks if read-only filesystem access is mistaken for no tool access."""
+        with self.assertRaises(TriageUnavailableError):
+            triage_command("codex")
+
+        descriptor = triage_descriptor("codex")
+        self.assertEqual(descriptor["source_vendor"], "codex")
+        self.assertFalse(descriptor["available"])
+        self.assertEqual(descriptor["unavailable_reason"], "no_no_tools_boundary")
+        self.assertNotIn("command", descriptor)
+
+    def test_every_supported_vendor_has_a_reviewable_triage_descriptor(self) -> None:
+        """Breaks if a new source vendor has an implicit triage policy."""
+        for vendor in SUPPORTED_VENDORS:
             with self.subTest(vendor=vendor):
-                self.assertEqual(command[0], vendor)
-                # codex 는 -c model_reasoning_effort=low 한 토큰으로 전달한다.
-                self.assertTrue(
-                    any("low" in token for token in command),
-                    f"{vendor} triage command does not ask for the cheapest effort",
-                )
+                descriptor = triage_descriptor(vendor)
+                self.assertEqual(descriptor["source_vendor"], vendor)
+                self.assertIn("available", descriptor)
 
-    def test_no_vendor_can_change_anything_while_being_asked_for_a_tier(self) -> None:
-        """Breaks if any triage command loses its read-only pin.
-
-        codex 만 검사하던 테스트는 claude 쪽 구멍을 못 봤다. 판정 프롬프트에는
-        신뢰할 수 없는 태스크가 들어가므로 두 벤더 모두 도구 실행을 막아야 한다.
-        """
-        self.assertEqual(set(TRIAGE_READ_ONLY_MARKERS), set(SUPPORTED_VENDORS))
+    def test_enabled_triage_commands_keep_their_read_only_pin(self) -> None:
+        """Breaks if an enabled adapter loses its filesystem restriction."""
+        self.assertEqual(set(TRIAGE_COMMANDS), {"claude"})
+        self.assertEqual(set(TRIAGE_READ_ONLY_MARKERS), {"claude"})
         for vendor, marker in TRIAGE_READ_ONLY_MARKERS.items():
             with self.subTest(vendor=vendor):
                 self.assertIn(marker, triage_command(vendor))
@@ -117,9 +154,25 @@ class AskVendorTests(unittest.TestCase):
     def test_accepts_a_bare_tier_word(self) -> None:
         self.assertEqual(self._ask("printf high"), "high")
 
-    def test_accepts_a_tier_at_the_end_of_a_sentence(self) -> None:
-        """Breaks if a model answering in prose makes triage fail."""
-        self.assertEqual(self._ask("printf 'This one is subtle, so: high'"), "high")
+    def test_refuses_a_tier_at_the_end_of_a_sentence(self) -> None:
+        """Breaks if prose can masquerade as the authoritative one-token output."""
+        self.assertIsNone(self._ask("printf 'This one is subtle, so: high'"))
+
+    def test_refuses_multiple_tier_tokens(self) -> None:
+        """Breaks if the parser accepts only the final whitespace token."""
+        self.assertIsNone(self._ask("printf 'high low'"))
+
+    def test_refuses_uppercase_tiers(self) -> None:
+        """Breaks if the output protocol silently expands beyond the prompt contract."""
+        self.assertIsNone(self._ask("printf HIGH"))
+
+    def test_accepts_unicode_whitespace_around_one_tier(self) -> None:
+        """Breaks if strict token parsing rejects harmless surrounding whitespace."""
+        self.assertEqual(self._ask(r"printf '\302\240high\302\240'"), "high")
+
+    def test_refuses_an_embedded_nul(self) -> None:
+        """Breaks if a tier prefix is accepted without validating the complete output."""
+        self.assertIsNone(self._ask(r"printf 'high\000'"))
 
     def test_refuses_an_answer_that_is_not_a_tier(self) -> None:
         """Breaks if unparseable output silently becomes a tier."""
@@ -190,6 +243,82 @@ class AskVendorTests(unittest.TestCase):
 
         # 가짜 벤더는 60초를 잔다. 그보다 한참 전에 끊겼어야 한다.
         self.assertLess(time.monotonic() - started, 20)
+
+    def test_vendor_runs_from_an_empty_private_working_directory(self) -> None:
+        """Breaks if project instructions or files remain discoverable from cwd."""
+        source = """
+            import os
+            import sys
+
+            sys.stdout.write("high" if not os.listdir(".") else "not-a-tier")
+        """
+        with _fake_python_vendor_on_path(source) as env, mock.patch.dict(os.environ, env):
+            self.assertEqual(ask_vendor_for_tier("task", "claude"), "high")
+
+    def test_descendant_retaining_stdout_is_stopped_before_it_can_write(self) -> None:
+        """Breaks if a successful leader can leave a descendant running."""
+        with tempfile.TemporaryDirectory() as directory:
+            sentinel = Path(directory) / "descendant-survived"
+            source = f"""
+                import os
+                import pathlib
+                import sys
+                import time
+
+                if os.fork() == 0:
+                    time.sleep(0.4)
+                    pathlib.Path({str(sentinel)!r}).write_text("survived", encoding="utf-8")
+                    os._exit(0)
+                sys.stdout.write("high")
+                sys.stdout.flush()
+                os._exit(0)
+            """
+            started = time.monotonic()
+            with _fake_python_vendor_on_path(source) as env, mock.patch.dict(os.environ, env):
+                tier = ask_vendor_for_tier("task", "claude")
+
+            self.assertEqual(tier, "high")
+            self.assertLess(time.monotonic() - started, 1.0)
+            time.sleep(0.6)
+            self.assertFalse(sentinel.exists())
+
+    def test_timeout_stops_the_whole_vendor_process_group(self) -> None:
+        """Breaks if timeout kills only the leader and waits for its descendant."""
+        with tempfile.TemporaryDirectory() as directory:
+            sentinel = Path(directory) / "descendant-survived"
+            source = f"""
+                import os
+                import pathlib
+                import time
+
+                if os.fork() == 0:
+                    time.sleep(0.6)
+                    pathlib.Path({str(sentinel)!r}).write_text("survived", encoding="utf-8")
+                    os._exit(0)
+                time.sleep(60)
+            """
+            started = time.monotonic()
+            with (
+                mock.patch("weightclass.triage.TRIAGE_TIMEOUT_SECONDS", 0.2),
+                _fake_python_vendor_on_path(source) as env,
+                mock.patch.dict(os.environ, env),
+            ):
+                with self.assertRaises(TriageUnavailableError):
+                    ask_vendor_for_tier("task", "claude")
+
+            self.assertLess(time.monotonic() - started, 1.0)
+            time.sleep(0.8)
+            self.assertFalse(sentinel.exists())
+
+    def test_success_closes_all_parent_pipe_objects(self) -> None:
+        """Breaks if completed triage leaves stdin or stdout for garbage collection."""
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always", ResourceWarning)
+            self.assertEqual(self._ask("printf high"), "high")
+            gc.collect()
+
+        resource_warnings = [item for item in captured if item.category is ResourceWarning]
+        self.assertEqual(resource_warnings, [])
 
     def test_the_timeout_default_stays_short(self) -> None:
         """Breaks if a call the module calls cheap gains an open-ended budget."""

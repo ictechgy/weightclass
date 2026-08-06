@@ -192,3 +192,28 @@ Phase 4 remains a **no-go** decision because no independently supplied
 blind-corpus candidate evidence has satisfied that gate. The deterministic
 policy engine remains the production path until measured improvement justifies
 the dependency, resource, maintenance, and supply-chain costs.
+
+### 0.4 hardening preparation
+
+The post-0.3 review priorities are implemented locally but are not yet released:
+
+- P0: Claude triage now requests safe mode, no tools/MCP, no local setting
+  sources, no persistence, and an empty private working directory. Its bounded
+  POSIX runner tears down the complete process group and accepts only one exact
+  lowercase tier. Codex triage fails closed because its documented CLI contract
+  does not currently provide an all-tools-disabled mode; native Codex routing is
+  unaffected.
+- P1: all installed-runtime policy and descriptor readers share a bounded,
+  duplicate-key-safe, regular-file JSON loader. Static inputs are validated
+  before transient task stdin is read. High-tier explanations distinguish
+  narrow risk floors from broad complexity signals, and bounded harmful-outcome
+  patterns now work across line breaks without using their multiplicity token as
+  independent instability evidence.
+- P2: unexpected parser states fail closed, source-vendor/provider coverage and
+  reason-only fingerprint invariants are tested, release metadata is checked
+  against the installed CLI, and macOS Python 3.10/3.13 process/JSON boundary
+  tests block CI and publishing.
+
+The source version is prepared as 0.4.0. The committed Homebrew formula remains
+at the already-published 0.3.0 until an authorized release supplies the final
+artifact URL and digest.

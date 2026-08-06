@@ -4,18 +4,21 @@
 전문용어 없이 설명하므로("잔액이 가끔 음수로 내려가요"), 어휘를 아무리 늘려도
 도달할 수 없다. 40개 태스크 측정에서 키워드 15/40, 벤더 CLI 33/40 이었다.
 
-여기서 새 런타임을 만들지 않는 것이 핵심이다. wclass run 은 어차피 그 벤더
-CLI 를 띄워 태스크를 넘긴다. 같은 CLI 에게 "이거 얼마나 어려워?"를 먼저 묻는
-것은 새 자격증명도, 새 과금 경계도, run 기준으로는 새 유출 경로도 만들지
-않는다. 이미 설치되어 있고 인증까지 끝난 것을 쓴다.
+이 선택적 판정은 실제 실행 전에 벤더 CLI 로 태스크를 보내므로 별도의 공개 및
+과금 경계다. 사용자가 --ask-vendor 로 명시적으로 선택했을 때만 실행한다.
 
 weightclass 자신은 HTTP 를 하지 않는다. 벤더 CLI 를 전면에서 한 번 실행할
 뿐이며, 자격증명과 네트워크는 전적으로 그 CLI 가 소유한다. V2 가 외부 런타임을
 다루는 방식과 같은 경계다.
 """
 
+import os
+import selectors
+import signal
 import subprocess
-import threading
+import tempfile
+import time
+from pathlib import Path
 from typing import Final
 
 from .classification import Tier
@@ -56,34 +59,32 @@ high      subtle, high-stakes, or easy to get subtly wrong
 
 # 판정 호출은 짧고 싸야 한다. 실제 작업이 아니라 한 단어를 받는 호출이다.
 #
-# 두 벤더 모두 도구 실행을 막아 둔다. 이 호출의 프롬프트에는 신뢰할 수 없는
-# 태스크 텍스트가 들어가는데, 난이도를 묻는 호출이 파일을 고치거나 명령을
-# 실행할 이유는 없다. claude 는 plan("no actual tool execution"), codex 는
-# --sandbox read-only 가 그 역할을 한다. 실행 라우트의 권한과 혼동하지 말 것.
-TRIAGE_READ_ONLY_MARKERS: Final = {"claude": "plan", "codex": "read-only"}
+# 이 호출의 프롬프트에는 신뢰할 수 없는 태스크 텍스트가 들어간다. Claude의
+# 공식 safe mode, no-tools, no-MCP 플래그를 함께 사용한다. 관리형 정책은 벤더가
+# 소유하는 잔여 경계이며 실행 전 descriptor 로 드러낸다.
+TRIAGE_READ_ONLY_MARKERS: Final = {"claude": "--safe-mode"}
 TRIAGE_COMMANDS: Final = {
     "claude": (
         "claude",
         "--print",
         "--no-session-persistence",
+        "--safe-mode",
+        "--setting-sources",
+        "",
+        "--strict-mcp-config",
+        "--tools",
+        "",
         "--permission-mode",
         "plan",
         "--effort",
         "low",
     ),
-    "codex": (
-        "codex",
-        "exec",
-        "--ephemeral",
-        "--sandbox",
-        "read-only",
-        "-c",
-        "model_reasoning_effort=low",
-        "-",
-    ),
 }
+TRIAGE_UNAVAILABLE_REASONS: Final = {"codex": "no_no_tools_boundary"}
+TRIAGE_ADAPTER_VERSION: Final = 1
 
 TRIAGE_TIMEOUT_SECONDS: Final = 120
+TRIAGE_CLEANUP_BUDGET_SECONDS: Final = 0.5
 MAX_TRIAGE_OUTPUT_BYTES: Final = 4096
 _VALID_TIERS: Final = frozenset({"low", "standard", "high"})
 
@@ -94,85 +95,191 @@ class TriageUnavailableError(RuntimeError):
 
 def triage_command(source_vendor: str) -> tuple[str, ...]:
     """Return the reviewable command used to ask one vendor for a tier."""
+    if source_vendor in TRIAGE_UNAVAILABLE_REASONS:
+        raise TriageUnavailableError()
     try:
         return TRIAGE_COMMANDS[source_vendor]
-    except KeyError as error:
-        raise TriageUnavailableError() from error
+    except KeyError:
+        raise TriageUnavailableError() from None
+
+
+def _observe_leader_exit(pid: int) -> bool:
+    """Observe a child exit without reaping it so its process group stays stable."""
+    while True:
+        try:
+            result = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except InterruptedError:
+            continue
+        return result is not None
+
+
+def _signal_process_group(process_group_id: int, signal_number: int) -> None:
+    """Signal only the captured vendor process group."""
+    try:
+        os.killpg(process_group_id, signal_number)
+    except (PermissionError, ProcessLookupError):
+        # macOS can report EPERM when only an unreaped zombie leader remains in
+        # the session. Real descendant tests verify that a live group is killed.
+        pass
+
+
+def _read_available_output(file_descriptor: int, answer: bytearray) -> tuple[bool, bool]:
+    """Drain immediately available bytes, returning (eof, overflow)."""
+    while len(answer) <= MAX_TRIAGE_OUTPUT_BYTES:
+        remaining = MAX_TRIAGE_OUTPUT_BYTES + 1 - len(answer)
+        try:
+            chunk = os.read(file_descriptor, min(65_536, remaining))
+        except InterruptedError:
+            continue
+        except BlockingIOError:
+            return False, False
+        if not chunk:
+            return True, False
+        answer.extend(chunk)
+    return False, True
 
 
 def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
-    """Run one vendor CLI and read at most the documented answer size.
+    """Run one vendor CLI with bounded I/O and process-group teardown."""
+    if os.name != "posix" or not all(hasattr(os, name) for name in ("killpg", "waitid")):
+        raise TriageUnavailableError()
 
-    subprocess.run(stdout=PIPE) 로 받고 나서 자르면 이미 늦다. 자르기 전에
-    전체가 메모리에 올라가므로, 64MB 를 뱉는 벤더는 그만큼을 그대로 쓴다.
-    이 프로젝트는 같은 결함을 표준 입력 쪽에서 한 번 고쳤다.
-
-    프롬프트 쓰기를 별도 스레드에 두는 것은 교착을 피하기 위해서다. 태스크는
-    파이프 버퍼보다 클 수 있고, 그때 자식이 stdout 을 먼저 채우면 양쪽이
-    서로를 기다린다. 타임아웃은 타이머로 건다. 읽기 자체가 무한정 막힐 수
-    있기 때문이다.
-    """
     prompt = TRIAGE_PROMPT.format(task=task).encode("utf-8")
-    try:
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            # 벤더의 진행 표시가 weightclass 진단에 섞이면 안 된다. 이 출력은
-            # 사용자가 요청한 결과가 아니라 판정을 위한 중간 산물이다.
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, ValueError) as error:
-        raise TriageUnavailableError() from error
+    answer = bytearray()
+    failed = False
+    process: subprocess.Popen[bytes] | None = None
 
-    def feed_prompt() -> None:
+    with tempfile.TemporaryDirectory(prefix="weightclass-triage-") as temporary_root:
+        child_working_directory = Path(temporary_root) / "cwd"
+        child_working_directory.mkdir(mode=0o700)
         try:
-            assert process.stdin is not None
-            process.stdin.write(prompt)
-            process.stdin.close()
-        except OSError:
-            # 자식이 태스크를 다 읽기 전에 답하고 끝낼 수 있다. 정상이다.
-            pass
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                cwd=child_working_directory,
+                start_new_session=True,
+            )
+        except (OSError, ValueError):
+            raise TriageUnavailableError() from None
 
-    writer = threading.Thread(target=feed_prompt, daemon=True)
-    deadline = threading.Timer(TRIAGE_TIMEOUT_SECONDS, process.kill)
-    writer.start()
-    deadline.start()
-    try:
+        assert process.stdin is not None
         assert process.stdout is not None
-        answer: bytes = process.stdout.read(MAX_TRIAGE_OUTPUT_BYTES + 1)
-        if len(answer) > MAX_TRIAGE_OUTPUT_BYTES:
+        process_group_id = process.pid
+        stdin_descriptor = process.stdin.fileno()
+        stdout_descriptor = process.stdout.fileno()
+        os.set_blocking(stdin_descriptor, False)
+        os.set_blocking(stdout_descriptor, False)
+
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+        prompt_offset = 0
+        stdout_eof = False
+        leader_observed = False
+        cleanup_budget = min(TRIAGE_CLEANUP_BUDGET_SECONDS, TRIAGE_TIMEOUT_SECONDS / 2)
+        overall_deadline = time.monotonic() + TRIAGE_TIMEOUT_SECONDS
+        exchange_deadline = overall_deadline - cleanup_budget
+
+        try:
+            while time.monotonic() < exchange_deadline:
+                leader_observed = _observe_leader_exit(process.pid)
+                if leader_observed:
+                    break
+
+                wait_seconds = min(0.05, max(0.0, exchange_deadline - time.monotonic()))
+                for key, event_mask in selector.select(wait_seconds):
+                    if key.data == "stdout" and event_mask & selectors.EVENT_READ:
+                        stdout_eof, overflow = _read_available_output(stdout_descriptor, answer)
+                        if overflow:
+                            failed = True
+                            break
+                        if stdout_eof:
+                            selector.unregister(process.stdout)
+                    elif key.data == "stdin" and event_mask & selectors.EVENT_WRITE:
+                        try:
+                            written = os.write(stdin_descriptor, prompt[prompt_offset:])
+                        except InterruptedError:
+                            continue
+                        except BlockingIOError:
+                            continue
+                        except BrokenPipeError:
+                            if not process.stdin.closed:
+                                selector.unregister(process.stdin)
+                                process.stdin.close()
+                        else:
+                            prompt_offset += written
+                            if prompt_offset == len(prompt):
+                                selector.unregister(process.stdin)
+                                process.stdin.close()
+                if failed:
+                    break
+            else:
+                failed = True
+        except (ChildProcessError, OSError, ValueError):
+            failed = True
+        finally:
+            if not process.stdin.closed:
+                try:
+                    selector.unregister(process.stdin)
+                except (KeyError, ValueError):
+                    pass
+                process.stdin.close()
+
+            _signal_process_group(process_group_id, signal.SIGTERM)
+            term_deadline = time.monotonic() + max(0.0, cleanup_budget / 2)
+            while not stdout_eof and time.monotonic() < min(term_deadline, overall_deadline):
+                try:
+                    events = selector.select(min(0.02, max(0.0, term_deadline - time.monotonic())))
+                except (OSError, ValueError):
+                    failed = True
+                    break
+                if not events:
+                    continue
+                stdout_eof, overflow = _read_available_output(stdout_descriptor, answer)
+                failed = failed or overflow
+                if overflow:
+                    stdout_eof = True
+
+            _signal_process_group(process_group_id, signal.SIGKILL)
+            while not stdout_eof and time.monotonic() < overall_deadline:
+                stdout_eof, overflow = _read_available_output(stdout_descriptor, answer)
+                failed = failed or overflow
+                if overflow:
+                    stdout_eof = True
+                if not stdout_eof:
+                    time.sleep(0.005)
+
+            selector.close()
+            if not process.stdout.closed:
+                process.stdout.close()
+            if not process.stdin.closed:
+                process.stdin.close()
+            return_code = process.wait()
+
+        if failed or not leader_observed or return_code != 0:
             raise TriageUnavailableError()
-        # 여기까지 왔다면 stdout 이 EOF 다. 남은 것은 종료 상태뿐이다.
-        if process.wait() != 0:
-            raise TriageUnavailableError()
-    finally:
-        deadline.cancel()
-        process.kill()
-        writer.join(timeout=1)
-        process.wait()
-    return answer
+
+    return bytes(answer)
 
 
 def ask_vendor_for_tier(task: str, source_vendor: str) -> Tier:
     """Run one vendor CLI in the foreground and read a tier from its output.
 
-    응답은 한 단어를 기대하지만 모델이 문장으로 답할 수 있으므로 마지막 토큰까지
-    본다. 그래도 티어가 아니면 조용히 로컬로 되돌아가지 않고 예외를 던진다.
+    응답 전체가 정확히 한 티어여야 한다. 그렇지 않으면 조용히 로컬로 되돌아가지
+    않고 예외를 던진다.
     판정을 못 했는데 아무 일 없었던 것처럼 진행하면, 라우팅이 틀렸다는 사실이
     호출자에게 보이지 않는다.
     """
     answer = _read_bounded_vendor_answer(task, triage_command(source_vendor))
     try:
-        decoded = answer.decode("utf-8").strip().casefold()
-    except UnicodeDecodeError as error:
-        raise TriageUnavailableError() from error
+        decoded = answer.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise TriageUnavailableError() from None
 
-    # decoded 는 이미 strip 되어 있으므로 유효 티어는 항상 마지막 토큰과 같다.
-    # 모델이 문장으로 답해도 끝 단어만 보면 된다.
-    tokens = decoded.split()
-    if tokens and tokens[-1] in _VALID_TIERS:
-        return tokens[-1]  # type: ignore[return-value]
+    if decoded in _VALID_TIERS:
+        return decoded  # type: ignore[return-value]
     raise TriageUnavailableError()
 
 
@@ -182,8 +289,24 @@ def triage_descriptor(source_vendor: str) -> dict[str, object]:
     AGENTS.md 는 내장 벤더 명령이 실행 전에 검토 가능해야 한다고 요구한다.
     판정 명령도 내장 명령이므로 --show-triage-command 로 노출한다.
     """
+    if source_vendor in TRIAGE_UNAVAILABLE_REASONS:
+        return {
+            "source_vendor": source_vendor,
+            "available": False,
+            "unavailable_reason": TRIAGE_UNAVAILABLE_REASONS[source_vendor],
+            "adapter_version": TRIAGE_ADAPTER_VERSION,
+            "rubric_version": TRIAGE_RUBRIC_VERSION,
+        }
+    try:
+        command = TRIAGE_COMMANDS[source_vendor]
+    except KeyError:
+        raise TriageUnavailableError() from None
     return {
         "source_vendor": source_vendor,
-        "command": list(triage_command(source_vendor)),
+        "available": True,
+        "command": list(command),
+        "adapter_version": TRIAGE_ADAPTER_VERSION,
+        "working_directory_boundary": "empty_private_directory",
+        "residual_capabilities": ["managed_policy"],
         "rubric_version": TRIAGE_RUBRIC_VERSION,
     }

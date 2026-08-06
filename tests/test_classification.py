@@ -20,14 +20,14 @@ class ClassificationPolicyContractTests(unittest.TestCase):
         classify_with_reason = getattr(classification, "classify_task_with_reason", None)
 
         self.assertTrue(callable(classify_with_reason))
-        self.assertEqual(getattr(classification, "CLASSIFICATION_POLICY_VERSION", None), "1")
+        self.assertEqual(getattr(classification, "CLASSIFICATION_POLICY_VERSION", None), "2")
         self.assertIsInstance(classification.classify_task("Fix the typo."), str)
 
-    def test_risk_floors_have_static_english_and_korean_reason_codes(self) -> None:
+    def test_high_signals_have_distinct_static_english_and_korean_reason_codes(self) -> None:
         """Breaks if a risk floor loses its category or returns matched task text."""
         cases = (
-            ("Review the security boundary.", "high.risk_floor"),
-            ("보안 경계를 검토해줘.", "high.risk_floor"),
+            ("Review the security boundary.", "high.complexity_signal"),
+            ("보안 경계를 검토해줘.", "high.complexity_signal"),
             ("Prevent stored XSS in the account-settings form.", "high.risk_floor"),
             ("검색 엔드포인트의 SQL 인젝션을 수정해줘.", "high.risk_floor"),
             ("Stop unauthenticated users from reading invoices.", "high.risk_floor"),
@@ -89,9 +89,17 @@ class ClassificationPolicyContractTests(unittest.TestCase):
             {
                 "tier": "low",
                 "reason_code": "low.mechanical",
-                "policy_version": "1",
+                "policy_version": "2",
             },
         )
+
+    def test_broad_complexity_reason_keeps_precedence_over_harmful_outcome(self) -> None:
+        """Breaks if the existing high-signal precedence changes during the reason split."""
+        decision = classification.classify_task_with_reason(
+            "Review why the payment account was charged twice."
+        )
+
+        self.assertEqual((decision.tier, decision.reason_code), ("high", "high.complexity_signal"))
 
 
 class SignalInflectionTests(unittest.TestCase):
@@ -226,6 +234,38 @@ class ClassificationRegressionTests(unittest.TestCase):
         for task in cases:
             with self.subTest(task=task):
                 self.assertEqual(classify_task(task), "high")
+
+    def test_harmful_outcome_patterns_remain_bounded_but_match_across_newlines(self) -> None:
+        """Breaks if a line wrap hides an otherwise identical costly outcome."""
+        cases = (
+            "An account was charged\ntwice after checkout.",
+            "The same job sometimes\nruns twice.",
+            "The balance\nbecame negative.",
+            "같은 작업이\n두 번 실행돼.",
+            "잔액이 가끔\n음수가 돼.",
+            "잔액이 음수로\n내려갔어.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classify_task(task), "high")
+
+    def test_duplicate_work_qualifier_order_does_not_change_the_tier(self) -> None:
+        """Breaks if a qualifier is visible only after the event's first token."""
+        cases = (
+            "Sometimes the same job runs twice.",
+            "The same job sometimes runs twice.",
+            "The same job runs twice unexpectedly.",
+            "Workers run the same job twice after a restart.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classify_task(task), "high")
+
+    def test_duplicate_multiplicity_anchor_does_not_qualify_itself(self) -> None:
+        """Breaks if `multiple` in `multiple times` invents instability evidence."""
+        self.assertEqual(classify_task("The same job runs multiple times."), "standard")
 
     def test_does_not_escalate_mentions_without_a_high_impact_outcome(self) -> None:
         """Breaks if broad outcome words turn routine presentation work into high."""
