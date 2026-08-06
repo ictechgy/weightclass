@@ -19,6 +19,16 @@ from .classification import (
     read_task_from_standard_input,
     validate_task,
 )
+from .delegation_compile import compile_delegation_descriptor, render_review_descriptor
+from .delegation_schema import (
+    DelegationInvalidInputError,
+    DelegationUnsupportedError,
+    current_platform_contract,
+    load_delegation_manifest,
+    load_delegation_policy,
+    validate_runtime_path_lexically,
+)
+from .delegation_types import DelegationTier, VendorFamily
 from .json_input import JsonInputError, load_json_object
 from .router import (
     DEFAULT_ROUTES,
@@ -217,6 +227,15 @@ def _add_api_route_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--api-runtime", required=True, type=Path)
 
 
+def _add_delegation_route_arguments(parser: argparse.ArgumentParser) -> None:
+    """Declare offline inputs shared by future delegation commands."""
+    parser.add_argument("--policy", required=True, type=Path)
+    parser.add_argument("--runtime-manifest", required=True, type=Path)
+    parser.add_argument("--delegation-runtime", required=True)
+    parser.add_argument("--source-vendor", required=True, choices=("claude", "codex"))
+    parser.add_argument("--tier", required=True, choices=("low", "standard", "high"))
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the whole command surface so `--help` lists every reachable mode.
 
@@ -269,6 +288,20 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--policy", required=True, type=Path)
     render.add_argument("--descriptor", required=True, type=Path)
 
+    delegate = subcommands.add_parser(
+        "delegate",
+        allow_abbrev=False,
+        description="Compile a reviewable role-delegation policy.",
+    )
+    delegate_subcommands = delegate.add_subparsers(dest="delegate_command", required=True)
+    _add_delegation_route_arguments(
+        delegate_subcommands.add_parser(
+            "route",
+            allow_abbrev=False,
+            description="Compile an offline delegation review descriptor.",
+        )
+    )
+
     api = subcommands.add_parser(
         "v2",
         allow_abbrev=False,
@@ -291,6 +324,38 @@ def build_parser() -> argparse.ArgumentParser:
     api_run.add_argument("--confirm-api-egress", action="store_true")
     api_run.add_argument("--ack-route-fingerprint")
     return parser
+
+
+def delegation_route(
+    policy_path: Path,
+    manifest_path: Path,
+    runtime_path: str,
+    source_vendor: VendorFamily,
+    tier: DelegationTier,
+) -> int:
+    """Compile a descriptor without reading task stdin or inspecting a runtime."""
+    try:
+        policy = load_delegation_policy(policy_path)
+        manifest = load_delegation_manifest(manifest_path)
+        normalized_runtime_path = validate_runtime_path_lexically(runtime_path)
+        target_platform = current_platform_contract()
+        descriptor = compile_delegation_descriptor(
+            policy,
+            manifest,
+            runtime_path=normalized_runtime_path,
+            source_vendor=source_vendor,
+            tier=tier,
+            target_platform=target_platform,
+        )
+        rendered = render_review_descriptor(descriptor)
+    except DelegationInvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    except DelegationUnsupportedError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+    print(rendered)
+    return 0
 
 
 def v2_route_from_standard_input(
@@ -610,6 +675,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
+    if arguments.command == "delegate" and arguments.delegate_command == "route":
+        return delegation_route(
+            arguments.policy,
+            arguments.runtime_manifest,
+            arguments.delegation_runtime,
+            arguments.source_vendor,
+            arguments.tier,
+        )
     if arguments.command == "v2" and arguments.api_command == "route":
         return v2_route_from_standard_input(
             arguments.policy,

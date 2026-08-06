@@ -11,6 +11,11 @@ user-provided model labels, and the no-retention boundary.
 
 ## Repository state
 
+- The current unreleased working tree adds the P0 offline role-delegation
+  compiler. `wclass delegate route` compiles strict Claude- or Codex-native
+  planner/worker/reviewer policy into a self-contained descriptor without
+  reading task stdin or inspecting the declared runtime path. P0 does not add
+  `delegate run` or execute any orchestration runtime.
 - PR #19 delivered routing hardening and version 0.4.0 at merge commit
   `786824cc74819e3bd8b254b615c3beb21f2fdd32`.
 - Tag `v0.4.0` published PyPI version 0.4.0 through Release workflow run
@@ -21,6 +26,30 @@ user-provided model labels, and the no-retention boundary.
   are all version 0.4.0.
 - Phase 4 local semantic-model adoption remains **no-go**. No independent fresh
   blind-corpus, resource, or supply-chain evidence has satisfied the gate.
+
+## Unreleased delegation P0
+
+- `src/weightclass/delegation_types.py`, `delegation_schema.py`, and
+  `delegation_compile.py` isolate the new schema and pure compiler from native
+  routing and V2 API routing.
+- Protocol 1 selects exactly one workflow by source vendor and tier, fully
+  inlines orchestrator, worker, reviewer, adapter, action, retention, stage,
+  artifact, cleanup, output, capacity, and byte contracts, then emits canonical
+  JSON with a descriptor-only reproducible fingerprint.
+- Claude and Codex use the same role contract. Every selected role must equal
+  the explicit source vendor and use native transport. Cross-boundary lists
+  must be empty; model and effort labels remain opaque user configuration.
+- `assurance` is only `declared_enforcement`. The offline manifest is not a
+  handshake or enforcement proof, and P0 never claims semantic authorship.
+- The 13 final RALPLAN contract objections and the P0.5/P1/P2 gates are recorded
+  in `docs/delegation-roadmap.md`. The five-round RALPLAN run itself ended at
+  `max_rounds`/`ITERATE`; the roadmap incorporates its mandatory repairs but
+  must not be described as an approved consensus plan.
+- `tests/test_delegation.py` covers offline/nonexistent runtime behavior,
+  Claude/Codex parity, fingerprint reproduction and ordering independence,
+  ambiguity, source-vendor pinning, crossed-boundary rejection, mode-specific
+  primitives, integer validation, platform uniqueness, lexical paths, task
+  privacy, and Python 3.10 deep-JSON failure redaction.
 
 ## Delivered hardening
 
@@ -75,6 +104,11 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
+- The unreleased delegation P0 passed all 190 tests under Python 3.10.20 and
+  Python 3.14.6 with `ResourceWarning` promoted to an error. Both interpreters
+  passed `compileall`, and `git diff --check` passed. Ruff and mypy were not
+  available in the local executable set or uv's offline cache, so those two
+  gates remain outstanding; no network installation was attempted.
 - Python 3.10.20 and the current local Python each passed all 177 tests with
   `ResourceWarning` promoted to an error.
 - `compileall`, Ruff check/format, native and Linux-targeted mypy, workflow YAML,
@@ -124,17 +158,26 @@ they are outside the repository and are not release artifacts.
 
 ## Next safe action
 
-1. Keep Phase 4 at no-go unless independent predeclared evidence satisfies every
+1. Run Ruff check/format and mypy in a reviewed environment where the pinned
+   tools are already available, then review and commit the isolated P0 change.
+2. Do not start P0.5 runtime execution until P0 is accepted. P0.5 must begin
+   with fake-runtime protocol tests for framing, partial writes, `EINTR`,
+   `EPIPE`, finite direct-child cleanup, reviewer rejection, artifact
+   substitution, premature success, output ownership, and descendant leakage.
+3. Keep Phase 4 at no-go unless independent predeclared evidence satisfies every
    quality, resource, privacy, and supply-chain gate.
-2. Before the next release, address the upstream `actions/setup-python` Node 20
+4. Before the next release, address the upstream `actions/setup-python` Node 20
    deprecation warning by updating only to a reviewed pinned action commit.
-3. Re-run the full local and macOS boundary gates for every routing behavior
+5. Re-run the full local and macOS boundary gates for every routing behavior
    change; do not weaken the Codex-triage fail-closed contract without a newly
    documented all-tools-disabled vendor boundary.
 
 ## Resume prompt
 
 Read `HANDOFF.md` and `AGENTS.md`. The published package and Homebrew formula are
-0.4.0. Preserve the Codex-triage fail-closed decision, native source-vendor
-routing, transient-task boundary, and Phase 4 no-go. Re-run final verification
-after any change; release, tag, and external publishing remain explicit actions.
+0.4.0. The working tree contains an unreleased offline-only delegation P0;
+finish its outstanding Ruff/mypy gates before review, and do not add runtime
+execution without the documented P0.5 test boundary. Preserve the Codex-triage
+fail-closed decision, native source-vendor routing, transient-task boundary, and
+Phase 4 no-go. Re-run final verification after any change; release, tag, and
+external publishing remain explicit actions.

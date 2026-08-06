@@ -80,3 +80,28 @@ explicit posture and static reason code, and its fingerprint binds the posture.
 For API routes, use `wclass v2 route` followed by the explicit egress
 acknowledgement described in the main README; native integration commands never
 read API credentials.
+
+## Offline Claude and Codex role review
+
+`wclass delegate route` compiles the same planner/worker/reviewer contract for
+Claude-family and Codex-family profiles while keeping every role with the
+explicit source vendor:
+
+```sh
+wclass delegate route \
+  --policy delegation-policy.json \
+  --runtime-manifest runtime-manifest.json \
+  --delegation-runtime /absolute/reviewed/runtime \
+  --source-vendor claude \
+  --tier standard
+```
+
+This P0 command reads no task standard input and does not inspect or execute the
+runtime path. Its `declared_enforcement` descriptor reports only that the
+policy and offline capability declaration are schema-compatible. It is not a
+runtime handshake, proof of delegation, or semantic-authorship claim.
+
+See [the delegation roadmap](delegation-roadmap.md) for the strict schema and
+the later trusted-runtime and exact-artifact qualification gates. Do not put
+task content, credentials, recipient data, or billing identifiers into a role
+profile or runtime manifest.

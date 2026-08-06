@@ -11,6 +11,11 @@ route can start a separately installed API runtime after explicit review and
 egress acknowledgement; weightclass never reads API credentials or makes
 provider network requests itself.
 
+The P0 `delegate route` surface can also compile a Claude- or Codex-native
+planner/worker/reviewer policy into one offline review descriptor. P0 does not
+start an orchestration runtime; its manifest is a declaration, not proof that
+the named runtime enforces delegation.
+
 ## Install
 
 weightclass has no runtime dependencies beyond Python 3.10 or later.
@@ -42,13 +47,15 @@ For reviewable native Codex and Claude Code invocation examples, see
 `wclass --help` lists the whole surface:
 
 ```text
-wclass [-h] [--version] {classify,route,run,render,v2} ...
+wclass [-h] [--version] {classify,route,run,render,delegate,v2} ...
 ```
 
 `classify`, `route`, and `run` read the task from standard input. `render`
 prints the command of a policy route named by a workflow descriptor and never
 reads a task. `v2` selects a declarative API route; see
 [V2 API routing](#v2-api-routing-through-an-external-runtime).
+`delegate route` reads only its policy and manifest and does not consume task
+standard input or inspect the supplied runtime path.
 
 Every malformed invocation — an unknown subcommand, a missing argument, a bad
 policy — exits `2` with `{"error": "invalid_input"}` on standard error and
@@ -366,6 +373,37 @@ request to select a Claude route, or the reverse. When it is `false` or absent,
 the vendor filter is applied before tier selection — including when
 `--source-vendor` is omitted, in which case the vendor of the first declared
 tier route is used.
+
+## Offline role-delegation review
+
+P0 adds a compatibility-isolated review command:
+
+```sh
+wclass delegate route \
+  --policy delegation-policy.json \
+  --runtime-manifest runtime-manifest.json \
+  --delegation-runtime /absolute/reviewed/runtime \
+  --source-vendor codex \
+  --tier standard
+```
+
+It selects exactly one workflow, fully inlines its orchestrator, worker, and
+reviewer profiles plus the matching adapter, and emits a canonical descriptor
+whose fingerprint can be reproduced from the output alone. Claude and Codex
+use the same role/action/stage contract, while protocol 1 requires every role
+to match `--source-vendor` and use the native transport. Model and effort
+labels remain opaque policy values.
+
+The runtime path may be nonexistent in P0: route compilation validates it
+lexically but never resolves, stats, opens, hashes, or executes it. The output
+therefore says `declared_enforcement`; it does not say the runtime exists, that
+it delegated work, or that any named model authored an artifact. The future
+`delegate run` command is reserved for the later trusted-runtime phase and is
+not available in P0.
+
+The exact schema, permission modes, retention rules, byte representations,
+process-lifecycle boundary, and P0.5/P1/P2 gates are documented in the
+[Claude and Codex delegation roadmap](docs/delegation-roadmap.md).
 
 ## V2 API routing through an external runtime
 
