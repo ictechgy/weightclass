@@ -150,6 +150,7 @@ class DelegationRouteTests(unittest.TestCase):
         manifest: dict[str, object] | None = None,
         runtime_path: str = RUNTIME_PATH,
         task_input: str = "",
+        require_qualified_runtime: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
@@ -157,29 +158,46 @@ class DelegationRouteTests(unittest.TestCase):
             manifest_path = directory / "runtime-manifest.json"
             policy_path.write_text(json.dumps(policy or _policy()), encoding="utf-8")
             manifest_path.write_text(json.dumps(manifest or _manifest()), encoding="utf-8")
+            arguments = [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "delegate",
+                "route",
+                "--policy",
+                str(policy_path),
+                "--runtime-manifest",
+                str(manifest_path),
+                "--delegation-runtime",
+                runtime_path,
+                "--source-vendor",
+                source_vendor,
+                "--tier",
+                tier,
+            ]
+            if require_qualified_runtime:
+                arguments.append("--require-qualified-runtime")
             return subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "weightclass",
-                    "delegate",
-                    "route",
-                    "--policy",
-                    str(policy_path),
-                    "--runtime-manifest",
-                    str(manifest_path),
-                    "--delegation-runtime",
-                    runtime_path,
-                    "--source-vendor",
-                    source_vendor,
-                    "--tier",
-                    tier,
-                ],
+                arguments,
                 capture_output=True,
                 check=False,
                 input=task_input,
                 text=True,
             )
+
+    def test_qualified_route_fails_closed_with_empty_package_registry(self) -> None:
+        """Breaks if a user declaration alone can claim conformance qualification."""
+        distinctive_task = "zephyrine glimmerfast quokka"
+
+        result = self._route(
+            require_qualified_runtime=True,
+            task_input=distinctive_task,
+        )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(json.loads(result.stderr), {"error": "unsupported_route"})
+        self.assertEqual(result.stdout, "")
+        self.assertNotIn(distinctive_task, result.stderr)
 
     def test_routes_without_reading_task_or_inspecting_runtime(self) -> None:
         """Breaks if offline review starts depending on stdin or runtime filesystem state."""

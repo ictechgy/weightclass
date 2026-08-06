@@ -11,12 +11,15 @@ user-provided model labels, and the no-retention boundary.
 
 ## Repository state
 
-- The current unreleased work adds P0/P0.5 role delegation. The offline
+- The current unreleased work adds P0/P0.5 role delegation plus the P1
+  qualification foundation. The offline
   `wclass delegate route` command compiles strict Claude- or Codex-native
   planner/worker/reviewer policy
   offline. `wclass delegate run` can start exactly one reviewed user-supplied
   runtime after explicit trust confirmation and exact fingerprint
-  acknowledgement. No Claude/Codex adapter runtime is bundled or qualified.
+  acknowledgement. Opt-in qualified route/run consult only a package-owned
+  registry and bind/verify an exact runtime artifact. That registry is empty:
+  no Claude/Codex adapter runtime is bundled or qualified.
 - PR #19 delivered routing hardening and version 0.4.0 at merge commit
   `786824cc74819e3bd8b254b615c3beb21f2fdd32`.
 - Tag `v0.4.0` published PyPI version 0.4.0 through Release workflow run
@@ -67,6 +70,36 @@ user-provided model labels, and the no-retention boundary.
   unavailable-runtime precedence, invalid task, inherited output, one spawn,
   runtime nonzero mapping, partial/interrupted writes, EPIPE, and finite
   direct-child reap. The fake is not a production adapter or qualification.
+
+## Unreleased delegation P1 foundation
+
+- `src/weightclass/delegation_qualification.py` defines a strict task-free
+  evidence schema and a bounded package qualification registry. A record binds
+  exact executable SHA-256 and size, runtime build ID, normalized platform,
+  protocol, suite revision, adapter ID, vendor family, all 54
+  role/category/action/mode observations, and all required scenario results.
+- `src/weightclass/delegation_qualifications.json` is package data and contains
+  zero records. Production has no CLI, environment, or user-path registry
+  override. `delegate route/run --require-qualified-runtime` therefore
+  currently fail closed with exit `3` for every adapter.
+- A matching record changes only `run_requirement` and the reproducible route
+  fingerprint; `assurance` remains `declared_enforcement` because offline route
+  does not inspect the current runtime path.
+- Qualified run opens the executable without following a final symlink, checks
+  regular/executable state, exact bounded size and SHA-256, and concurrent
+  metadata stability before reading task stdin. A mismatch returns redacted
+  `executor_unavailable`. Spawn remains path-based, so hash-to-spawn replacement
+  is a documented residual race.
+- `wclass delegate qualification-candidate` validates complete task-free
+  evidence and hashes one local executable, but outputs only an untrusted review
+  candidate. It never updates the package registry and cannot establish that
+  evidence was independently collected.
+- `tests/test_delegation_qualification.py` covers the 54-cell matrix, required
+  scenarios, unknown/incomplete/duplicate/failed input, exact evidence and
+  artifact digests, record ambiguity, build selection, fingerprint rebinding,
+  candidate CLI stdin independence, and changed/non-executable artifacts.
+  Runtime integration tests confirm an empty registry and changed artifact both
+  stop before task access.
 
 ## Delivered hardening
 
@@ -121,6 +154,13 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
+- The P1 foundation passed all 213 tests under Python 3.10.20 and Python
+  3.14.6 with `ResourceWarning` promoted to an error. Both interpreters passed
+  `compileall`; Ruff check/format, strict mypy, and `git diff --check` passed.
+  An offline sdist/wheel build included the qualification module, empty package
+  registry, and typing marker; a clean no-index wheel install loaded the empty
+  registry and exposed the candidate CLI. Build artifacts remained under a
+  temporary `/tmp` directory.
 - The unreleased delegation P0/P0.5 passed all 200 tests under Python 3.10.20
   and Python 3.14.6 with `ResourceWarning` promoted to an error. Both
   interpreters passed `compileall`; Ruff check/format, strict mypy, and
@@ -170,6 +210,8 @@ they are outside the repository and are not release artifacts.
   metadata remains opt-in through `--explain` or posture-bearing route output.
 - Route fingerprints bind the reviewed selection/policy inputs, not task text or
   reason metadata. Task hashes remain forbidden by the no-retention contract.
+- Qualification hashes only the external runtime artifact and task-free
+  conformance evidence. It never hashes or receives runtime task content.
 - Public evaluation data is regression-only and must not be used to approve a
   semantic candidate. Keep the Phase 4 decision no-go without independent
   predeclared evidence.
@@ -179,11 +221,10 @@ they are outside the repository and are not release artifacts.
 1. Do not advertise real Claude/Codex delegation from P0.5. It proves only the
    weightclass-to-runtime boundary; a user-supplied runtime can lie with exit
    zero, leave descendants, or ignore the descriptor.
-2. Before P1, define an independent conformance harness and package-owned
-   qualification record that bind exact artifact digest/build/platform/
-   protocol/suite/adapter identity. Cover every role/category/action/mode,
-   attribution, stage ordering, reviewer rejection, artifact substitution,
-   integration commands, deadlines, and descendant leakage.
+2. Build genuinely independent adapter-specific conformance harnesses for
+   Claude-family and Codex-family runtimes. Do not add a package qualification
+   record until a reviewed exact artifact passes the complete predeclared
+   matrix and scenario suite; candidate generation alone is not evidence.
 3. Keep Phase 4 at no-go unless independent predeclared evidence satisfies every
    quality, resource, privacy, and supply-chain gate.
 4. Before the next release, address the upstream `actions/setup-python` Node 20
@@ -195,9 +236,10 @@ they are outside the repository and are not release artifacts.
 ## Resume prompt
 
 Read `HANDOFF.md` and `AGENTS.md`. The published package and Homebrew formula are
-0.4.0. The working tree contains unreleased delegation P0/P0.5. P0.5 starts one
-explicitly trusted user runtime but bundles and qualifies no Claude/Codex
-adapter; do not describe it as proven delegation. Preserve the Codex-triage
-fail-closed decision, native source-vendor routing, transient-task boundary,
-and Phase 4 no-go. Re-run final verification after any change; release, tag,
-and external publishing remain explicit actions.
+0.4.0. The working tree contains unreleased delegation P0/P0.5 and an empty P1
+qualification registry. P0.5 starts one explicitly trusted user runtime; P1
+adds opt-in exact-artifact gates but qualifies no Claude/Codex adapter. Do not
+describe candidate generation as independent evidence or proven delegation.
+Preserve the Codex-triage fail-closed decision, native source-vendor routing,
+transient-task boundary, and Phase 4 no-go. Re-run final verification after any
+change; release, tag, and external publishing remain explicit actions.

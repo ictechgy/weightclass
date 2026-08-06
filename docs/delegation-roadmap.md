@@ -13,6 +13,7 @@ The public surface is isolated from native routing and V2 API routing:
 ```text
 wclass delegate route  -> offline descriptor compiler
 wclass delegate run    -> one trusted external runtime (P0.5, not P0)
+wclass delegate qualification-candidate -> untrusted P1 record candidate
 ```
 
 The external runtime, not weightclass, owns role-process creation, provider
@@ -100,9 +101,9 @@ The following decisions close the final Planner-Architect-Critic objections.
 2. **Offline assurance.** `delegate route` always emits
    `assurance: declared_enforcement`. It never says the current runtime path is
    qualified. P0 uses `run_requirement.kind: trusted_runtime_confirmation`.
-   A future P1 route may fingerprint an exact-artifact qualification target,
-   while only a successful run-time match may report execution as
-   `conformance_qualified`.
+   Opt-in P1 uses `run_requirement.kind: exact_artifact_conformance` to
+   fingerprint a package-recorded qualification target, but the offline route
+   still does not claim that the current path matches it.
 3. **Finite direct-child cleanup.** The fingerprint binds two bounded grace
    intervals and the future run sequence `close -> wait -> terminate -> wait ->
    kill -> reap`. Weightclass will act only on its direct child and will never
@@ -122,21 +123,22 @@ The following decisions close the final Planner-Architect-Critic objections.
    (`darwin|linux`, `aarch64|x86_64`) without accessing the runtime path.
    Duplicate manifest platforms are invalid; no exact compatible entry is an
    unsupported route. Windows remains unsupported.
-7. **Output ownership.** P0.5 runtime stdout/stderr will be inherited,
+7. **Output ownership.** P0.5 runtime stdout/stderr is inherited,
    uncaptured, unparsed, unredacted, and unbounded. Once runtime output is
    emitted, it is outside weightclass's no-retention guarantee. Terminal or log
-   exhaustion is a trusted-runtime risk. Conformance evidence uses a test-only
-   harness rather than production stdout parsing.
+   exhaustion is a trusted-runtime risk. Conformance evidence belongs to an
+   independent harness rather than production stdout parsing.
 8. **Named bounds.** Policy, manifest, descriptors, labels, paths, platforms,
    protocols, profiles, workflows, adapters, capabilities, boundary pairs,
    verification commands, argv entries/tokens, process limits, deadlines, and
-   cleanup intervals have named bounds in `delegation_schema.py` or
-   `delegation_compile.py`. Every integer field rejects booleans, floats, and
-   other non-integer JSON values.
+   cleanup intervals have named bounds in `delegation_schema.py`,
+   `delegation_compile.py`, or `delegation_qualification.py`. Every integer
+   field rejects booleans, floats, and other non-integer JSON values.
 9. **No handshake claim.** The manifest is a reviewed offline capability
    declaration. Protocol 1 has no live negotiation or authenticated
-   self-attestation. P1 adds independent exact-artifact qualification, not a
-   handshake.
+   self-attestation. P1 permits a package record only after independent
+   exact-artifact qualification; candidate generation is not a handshake or
+   qualification.
 10. **Artifact integrity.** Runtime artifact IDs are unique per run and
     immutable across worker context, category, reviewer approval, and
     integration. Duplicate, missing, altered, cross-category, or unapproved
@@ -152,8 +154,8 @@ The following decisions close the final Planner-Architect-Critic objections.
     machine must define that metric before collecting it.
 13. **Phase-specific verification.** Each phase runs only its newly available
     focused tests plus the invariant full compatibility suite, `compileall`,
-    Ruff, mypy, and `git diff --check`. P0 does not require runtime or
-    qualification test modules that do not exist yet.
+    Ruff, mypy, and `git diff --check`. P0, P0.5, and P1 tests remain separated
+    so a lower phase does not accidentally claim a higher-phase guarantee.
 
 None of these statements proves semantic authorship. The strongest permitted
 claim is that a qualified exact runtime artifact exhibited the specified
@@ -216,13 +218,52 @@ child's final exit or signal and cannot detect a dishonest zero exit.
 
 ## P1 — exact-artifact qualification
 
-Build independent conformance suites for Claude-family and Codex-family
-adapters. Package-owned records bind executable SHA-256, build ID, platform,
-protocol, suite revision, adapter ID, and the complete role/category/action/
-mode result matrix. Production must not accept a CLI, environment, or
-user-supplied qualification registry. A changed executable byte or mismatched
-field fails closed. Path validation and hashing still leave a documented
-hash-to-spawn TOCTOU until verified-object execution is available.
+Status: the local trust registry, candidate schema, route binding, and run gate
+are implemented; the package contains zero records and no adapter is qualified.
+
+Every P1 object has exactly the listed keys:
+
+| Object | Exact keys |
+| --- | --- |
+| Registry | `registry_schema_version`, `suite_revision`, `records` |
+| Record | `record_schema_version`, `artifact_sha256`, `artifact_size_bytes`, `runtime_build_id`, `platform`, `protocol_version`, `suite_revision`, `adapter_id`, `vendor_family`, `conformance_evidence_sha256`, `result_matrix`, `scenario_results` |
+| Evidence | `evidence_schema_version`, `suite_revision`, `runtime_build_id`, `platform`, `protocol_version`, `adapter_id`, `vendor_family`, `result_matrix`, `scenario_results` |
+| Observation | `role`, `category`, `action`, `mode`, `passed` |
+| Scenario result | `id`, `passed` |
+
+`--require-qualified-runtime` makes route/run select exactly one package-owned
+record by build ID, normalized host platform, protocol, adapter ID, and source
+vendor. The route fingerprint additionally binds executable SHA-256 and size,
+suite revision, and a digest over the complete normalized conformance evidence.
+Production accepts no CLI, environment, or user-supplied registry override.
+
+The evidence schema contains exactly 54 passing observations:
+
+```text
+3 roles × 3 categories × 3 actions × 2 modes = 54
+```
+
+It also requires passing scenarios for distinct contexts, process/action
+attribution, stage order, worker concurrency, reviewer rejection, artifact
+integrity and substitution, integration restrictions and verification
+commands, deadline handling, direct-child cleanup, descendant leakage, and
+output-channel separation. Unknown fields are invalid, so task content cannot
+be added through a dedicated evidence field. The harness and package reviewer
+must also keep task-derived values out of the opaque build and identity labels;
+weightclass cannot infer whether an otherwise valid label came from a task.
+
+`delegate qualification-candidate` validates and canonicalizes that task-free
+shape and hashes one local regular executable. Its output is explicitly
+untrusted: it neither establishes independent collection nor edits the package
+registry. An independent adapter-specific harness, human review, and a source
+change are required before any record can ship.
+
+At run time, qualified mode opens the path without following a final symlink,
+checks regular-file and executable status, reads a bounded artifact through the
+opened descriptor, compares exact size and SHA-256, and checks for concurrent
+metadata change. Any mismatch fails with `executor_unavailable` before task
+stdin is read. Spawning still uses the reviewed path, leaving a documented
+hash-to-spawn replacement race until verified-object execution is available.
 
 ## P2 — pair-authorized crossed boundaries
 

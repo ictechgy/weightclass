@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -7,12 +8,30 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
 from tests.test_delegation import _manifest, _policy
+from tests.test_delegation_qualification import (
+    _evidence,
+    _registry_value,
+    _write_executable,
+)
+from weightclass.cli import delegation_run_from_standard_input
+from weightclass.delegation_compile import compile_delegation_descriptor
 from weightclass.delegation_protocol import DelegationFrameError, encode_delegation_frame
+from weightclass.delegation_qualification import (
+    attach_qualification_requirement,
+    build_qualification_candidate,
+    load_qualification_registry,
+)
 from weightclass.delegation_runtime import _write_all
+from weightclass.delegation_schema import (
+    current_platform_contract,
+    load_delegation_manifest,
+    load_delegation_policy,
+)
 
 EXPECTED_TASK = "Apply the reviewed change. 테스트"
 FAKE_RUNTIME = Path(__file__).parent / "fixtures" / "fake_delegation_runtime.py"
@@ -152,6 +171,69 @@ class DelegationRunTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 5)
         self.assertEqual(json.loads(result.stderr), {"error": "delegation_confirmation_required"})
+
+    def test_empty_package_registry_blocks_qualified_run_before_task_access(self) -> None:
+        """Breaks if qualification can fall back to declared enforcement during run."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path, manifest_path = self._write_inputs(directory)
+            runtime_path = directory / "runtime-does-not-exist"
+            arguments = self._arguments("run", policy_path, manifest_path, runtime_path)
+            arguments.append("--require-qualified-runtime")
+
+            result = self._wait_without_closing_stdin(arguments)
+
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(json.loads(result.stderr), {"error": "unsupported_route"})
+
+    def test_changed_qualified_artifact_blocks_task_access(self) -> None:
+        """Breaks if task stdin is touched before the exact-artifact gate succeeds."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path, manifest_path = self._write_inputs(directory)
+            runtime_path = directory / "runtime"
+            _write_executable(runtime_path)
+            record = build_qualification_candidate(_evidence(), runtime_path)
+            registry_path = directory / "registry.json"
+            registry_path.write_text(json.dumps(_registry_value(record)), encoding="utf-8")
+            registry = load_qualification_registry(registry_path)
+            descriptor = compile_delegation_descriptor(
+                load_delegation_policy(policy_path),
+                load_delegation_manifest(manifest_path),
+                runtime_path=str(runtime_path),
+                source_vendor="claude",
+                tier="standard",
+                target_platform=current_platform_contract(),
+            )
+            qualified = attach_qualification_requirement(descriptor, registry.records[0])
+            _write_executable(runtime_path, b"changed-runtime\n")
+            diagnostic = io.StringIO()
+
+            with (
+                mock.patch(
+                    "weightclass.cli.load_packaged_qualification_registry",
+                    return_value=registry,
+                ),
+                mock.patch(
+                    "weightclass.cli.read_task_from_standard_input",
+                    side_effect=AssertionError("task input must remain untouched"),
+                ) as read_task,
+                redirect_stderr(diagnostic),
+            ):
+                result = delegation_run_from_standard_input(
+                    policy_path,
+                    manifest_path,
+                    str(runtime_path),
+                    "claude",
+                    "standard",
+                    True,
+                    str(qualified["route_fingerprint"]),
+                    True,
+                )
+
+        self.assertEqual(result, 4)
+        self.assertEqual(json.loads(diagnostic.getvalue()), {"error": "executor_unavailable"})
+        read_task.assert_not_called()
 
     def test_fingerprint_mismatch_precedes_runtime_or_task_access(self) -> None:
         """Breaks if an unreviewed descriptor can reach runtime validation or stdin."""

@@ -120,7 +120,22 @@ the WCD1 stdin frame and owns all Claude/Codex process creation, authentication,
 network, billing, permissions, review, integration, descendant cleanup, and
 output. weightclass bundles no runtime and cannot detect a dishonest zero exit.
 
+For the P1 gate, add `--require-qualified-runtime` to both the review and run
+commands. Production consults only the registry shipped inside the weightclass
+package; it accepts no environment, CLI, or user-registry override. The current
+registry is empty, so this mode intentionally returns `unsupported_route` for
+every adapter. If a reviewed package record is added later, the route binds its
+build/platform/protocol/adapter/vendor identity, exact artifact size and
+SHA-256, suite revision, and conformance-evidence digest. Run verifies those
+artifact bytes before reading task stdin. The later path-based spawn still has
+a documented hash-to-spawn replacement race.
+
+`wclass delegate qualification-candidate` only validates a complete task-free
+evidence document and hashes a local executable for package-maintainer review.
+It neither updates the registry nor proves that the supplied evidence was
+independently collected.
+
 See [the delegation roadmap](delegation-roadmap.md) for the strict schema and
 the exact-artifact qualification gate. Do not put
 task content, credentials, recipient data, or billing identifiers into a role
-profile or runtime manifest.
+profile, runtime manifest, or conformance evidence document.

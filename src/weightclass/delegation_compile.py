@@ -85,6 +85,19 @@ def canonical_json_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def bind_delegation_fingerprint(descriptor: dict[str, Any]) -> dict[str, Any]:
+    """Return a descriptor whose fingerprint binds every other rendered field."""
+    bound = dict(descriptor)
+    bound.pop("route_fingerprint", None)
+    fingerprint_payload = canonical_json_bytes(bound)
+    if len(fingerprint_payload) > MAX_FINGERPRINT_PAYLOAD_BYTES:
+        raise DelegationInvalidInputError()
+    bound["route_fingerprint"] = f"sha256:{hashlib.sha256(fingerprint_payload).hexdigest()}"
+    if len(canonical_json_bytes(bound)) > MAX_REVIEW_DESCRIPTOR_BYTES:
+        raise DelegationInvalidInputError()
+    return bound
+
+
 def _select_one(items: list[_SelectedT]) -> _SelectedT:
     if len(items) != 1:
         raise DelegationUnsupportedError()
@@ -321,13 +334,7 @@ def compile_delegation_descriptor(
         },
         "boundary_authorizations": _boundary_descriptor(workflow.boundary_authorizations),
     }
-    fingerprint_payload = canonical_json_bytes(descriptor)
-    if len(fingerprint_payload) > MAX_FINGERPRINT_PAYLOAD_BYTES:
-        raise DelegationInvalidInputError()
-    descriptor["route_fingerprint"] = f"sha256:{hashlib.sha256(fingerprint_payload).hexdigest()}"
-    if len(canonical_json_bytes(descriptor)) > MAX_REVIEW_DESCRIPTOR_BYTES:
-        raise DelegationInvalidInputError()
-    return descriptor
+    return bind_delegation_fingerprint(descriptor)
 
 
 def render_review_descriptor(descriptor: dict[str, Any]) -> str:

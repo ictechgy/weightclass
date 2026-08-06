@@ -19,8 +19,22 @@ from .classification import (
     read_task_from_standard_input,
     validate_task,
 )
-from .delegation_compile import compile_delegation_descriptor, render_review_descriptor
+from .delegation_compile import (
+    canonical_json_bytes,
+    compile_delegation_descriptor,
+    render_review_descriptor,
+)
 from .delegation_protocol import DelegationFrameError, encode_delegation_frame
+from .delegation_qualification import (
+    QualificationRecord,
+    QualifiedRuntimeUnavailableError,
+    attach_qualification_requirement,
+    build_qualification_candidate,
+    load_conformance_evidence,
+    load_packaged_qualification_registry,
+    select_qualification_for_descriptor,
+    verify_qualified_runtime,
+)
 from .delegation_runtime import (
     DelegationRuntimeFailedError,
     DelegationRuntimeUnavailableError,
@@ -241,6 +255,11 @@ def _add_delegation_route_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--delegation-runtime", required=True)
     parser.add_argument("--source-vendor", required=True, choices=("claude", "codex"))
     parser.add_argument("--tier", required=True, choices=("low", "standard", "high"))
+    parser.add_argument(
+        "--require-qualified-runtime",
+        action="store_true",
+        help="Require a matching package-owned exact-artifact record.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -316,6 +335,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_delegation_route_arguments(delegate_run)
     delegate_run.add_argument("--confirm-trusted-delegation-runtime", action="store_true")
     delegate_run.add_argument("--ack-route-fingerprint")
+    qualification_candidate = delegate_subcommands.add_parser(
+        "qualification-candidate",
+        allow_abbrev=False,
+        description="Build an untrusted qualification candidate from task-free evidence.",
+    )
+    qualification_candidate.add_argument("--evidence", required=True, type=Path)
+    qualification_candidate.add_argument("--delegation-runtime", required=True, type=Path)
 
     api = subcommands.add_parser(
         "v2",
@@ -347,7 +373,8 @@ def _compile_delegation_inputs(
     runtime_path: str,
     source_vendor: VendorFamily,
     tier: DelegationTier,
-) -> tuple[dict[str, Any], str]:
+    require_qualified_runtime: bool = False,
+) -> tuple[dict[str, Any], str, QualificationRecord | None]:
     policy = load_delegation_policy(policy_path)
     manifest = load_delegation_manifest(manifest_path)
     normalized_runtime_path = validate_runtime_path_lexically(runtime_path)
@@ -360,7 +387,12 @@ def _compile_delegation_inputs(
         tier=tier,
         target_platform=target_platform,
     )
-    return descriptor, render_review_descriptor(descriptor)
+    qualification = None
+    if require_qualified_runtime:
+        registry = load_packaged_qualification_registry()
+        qualification = select_qualification_for_descriptor(descriptor, registry)
+        descriptor = attach_qualification_requirement(descriptor, qualification)
+    return descriptor, render_review_descriptor(descriptor), qualification
 
 
 def delegation_route(
@@ -369,15 +401,17 @@ def delegation_route(
     runtime_path: str,
     source_vendor: VendorFamily,
     tier: DelegationTier,
+    require_qualified_runtime: bool = False,
 ) -> int:
     """Compile a descriptor without reading task stdin or inspecting a runtime."""
     try:
-        _, rendered = _compile_delegation_inputs(
+        _, rendered, _ = _compile_delegation_inputs(
             policy_path,
             manifest_path,
             runtime_path,
             source_vendor,
             tier,
+            require_qualified_runtime,
         )
     except DelegationInvalidInputError:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
@@ -397,15 +431,17 @@ def delegation_run_from_standard_input(
     tier: DelegationTier,
     confirm_trusted_runtime: bool,
     acknowledged_fingerprint: str | None,
+    require_qualified_runtime: bool = False,
 ) -> int:
     """Run one acknowledged external orchestrator without handling credentials."""
     try:
-        descriptor, rendered = _compile_delegation_inputs(
+        descriptor, rendered, qualification = _compile_delegation_inputs(
             policy_path,
             manifest_path,
             runtime_path,
             source_vendor,
             tier,
+            require_qualified_runtime,
         )
     except DelegationInvalidInputError:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
@@ -421,8 +457,11 @@ def delegation_run_from_standard_input(
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
     try:
-        validate_delegation_runtime(runtime_path)
-    except DelegationRuntimeUnavailableError:
+        if qualification is None:
+            validate_delegation_runtime(runtime_path)
+        else:
+            verify_qualified_runtime(Path(runtime_path), qualification)
+    except (DelegationRuntimeUnavailableError, QualifiedRuntimeUnavailableError):
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
     try:
@@ -451,6 +490,19 @@ def delegation_run_from_standard_input(
         print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
         return EXECUTOR_FAILED_EXIT_CODE
     return _report_executor_result(completed_process)
+
+
+def delegation_qualification_candidate(evidence_path: Path, runtime_path: Path) -> int:
+    """Print a review candidate without changing the package trust registry."""
+    try:
+        normalized_runtime_path = validate_runtime_path_lexically(str(runtime_path))
+        evidence = load_conformance_evidence(evidence_path)
+        candidate = build_qualification_candidate(evidence, Path(normalized_runtime_path))
+    except DelegationInvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    print(canonical_json_bytes(candidate).decode("ascii"))
+    return 0
 
 
 def v2_route_from_standard_input(
@@ -777,6 +829,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.delegation_runtime,
             arguments.source_vendor,
             arguments.tier,
+            arguments.require_qualified_runtime,
         )
     if arguments.command == "delegate" and arguments.delegate_command == "run":
         return delegation_run_from_standard_input(
@@ -787,6 +840,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.tier,
             arguments.confirm_trusted_delegation_runtime,
             arguments.ack_route_fingerprint,
+            arguments.require_qualified_runtime,
+        )
+    if arguments.command == "delegate" and arguments.delegate_command == "qualification-candidate":
+        return delegation_qualification_candidate(
+            arguments.evidence,
+            arguments.delegation_runtime,
         )
     if arguments.command == "v2" and arguments.api_command == "route":
         return v2_route_from_standard_input(

@@ -434,8 +434,38 @@ P0.5 includes no bundled Claude/Codex orchestrator. The user-supplied runtime
 owns vendor authentication, network and billing behavior, role processes,
 permission enforcement, review, integration, its deadline, descendants, and
 output. A dishonest runtime can exit zero without doing those things, so the
-descriptor remains `declared_enforcement`; stronger claims require P1
-exact-artifact qualification.
+descriptor remains `declared_enforcement`.
+
+P1's local qualification foundation is opt-in. Add
+`--require-qualified-runtime` to both `delegate route` and `delegate run` to
+require a package-owned record matching the manifest build ID, host platform,
+protocol, adapter, and source vendor. The qualified route fingerprint also
+binds the recorded executable SHA-256 and size, conformance-suite revision,
+and evidence digest. Run reopens the absolute path and checks the exact bytes
+before reading task stdin. Qualified mode rejects a final symlink and retains a
+documented hash-to-spawn path-replacement race because the child is still
+started by path.
+
+The shipped registry is intentionally empty, so qualified route/run currently
+fail closed with `unsupported_route`: no real Claude or Codex adapter has been
+independently qualified. There is no CLI, environment variable, or user path
+that overrides the production registry.
+
+Package maintainers can normalize a task-free conformance report into an
+untrusted review candidate without changing that registry:
+
+```sh
+wclass delegate qualification-candidate \
+  --evidence /absolute/conformance-evidence.json \
+  --delegation-runtime /absolute/runtime
+```
+
+Candidate input must contain all 54 role/category/action/mode observations and
+all required lifecycle, attribution, review, integrity, integration, deadline,
+cleanup, leakage, and output-channel scenarios, with every result passing.
+This command validates shape and hashes the local executable; it does not prove
+that the evidence is independent and does not qualify the runtime. Review and a
+source change to the package registry are still required.
 
 The exact schema, permission modes, retention rules, byte representations,
 process-lifecycle boundary, and P0.5/P1/P2 gates are documented in the
