@@ -13,13 +13,14 @@ weightclass 자신은 HTTP 를 하지 않는다. 벤더 CLI 를 전면에서 한
 """
 
 import os
+import select
 import selectors
 import signal
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 from .classification import Tier
 
@@ -103,11 +104,57 @@ def triage_command(source_vendor: str) -> tuple[str, ...]:
         raise TriageUnavailableError() from None
 
 
-def _observe_leader_exit(pid: int) -> bool:
+def _has_leader_exit_observer() -> bool:
+    """Return whether this POSIX runtime can observe exit without reaping."""
+    if callable(getattr(os, "waitid", None)):
+        return all(hasattr(os, name) for name in ("P_PID", "WEXITED", "WNOHANG", "WNOWAIT"))
+    return all(
+        hasattr(select, name)
+        for name in (
+            "kqueue",
+            "kevent",
+            "KQ_FILTER_PROC",
+            "KQ_EV_ADD",
+            "KQ_EV_ONESHOT",
+            "KQ_NOTE_EXIT",
+        )
+    )
+
+
+def _open_leader_exit_queue(pid: int) -> Any | None:
+    """Register a non-reaping kqueue observer when waitid is unavailable."""
+    if callable(getattr(os, "waitid", None)):
+        return None
+    exit_queue: Any | None = None
+    try:
+        exit_queue = select.kqueue()
+        event = select.kevent(
+            pid,
+            filter=select.KQ_FILTER_PROC,
+            flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+            fflags=select.KQ_NOTE_EXIT,
+        )
+        exit_queue.control([event], 0, 0)
+    except (OSError, ValueError):
+        if exit_queue is not None:
+            exit_queue.close()
+        raise TriageUnavailableError() from None
+    return exit_queue
+
+
+def _observe_leader_exit(pid: int, exit_queue: Any | None) -> bool:
     """Observe a child exit without reaping it so its process group stays stable."""
+    waitid = getattr(os, "waitid", None)
+    if not callable(waitid):
+        assert exit_queue is not None
+        while True:
+            try:
+                return bool(exit_queue.control(None, 1, 0))
+            except InterruptedError:
+                continue
     while True:
         try:
-            result = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            result = waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
         except InterruptedError:
             continue
         return result is not None
@@ -141,7 +188,7 @@ def _read_available_output(file_descriptor: int, answer: bytearray) -> tuple[boo
 
 def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
     """Run one vendor CLI with bounded I/O and process-group teardown."""
-    if os.name != "posix" or not all(hasattr(os, name) for name in ("killpg", "waitid")):
+    if os.name != "posix" or not hasattr(os, "killpg") or not _has_leader_exit_observer():
         raise TriageUnavailableError()
 
     prompt = TRIAGE_PROMPT.format(task=task).encode("utf-8")
@@ -169,12 +216,8 @@ def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
         process_group_id = process.pid
         stdin_descriptor = process.stdin.fileno()
         stdout_descriptor = process.stdout.fileno()
-        os.set_blocking(stdin_descriptor, False)
-        os.set_blocking(stdout_descriptor, False)
-
         selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
-        selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
+        exit_queue: Any | None = None
         prompt_offset = 0
         stdout_eof = False
         leader_observed = False
@@ -183,8 +226,13 @@ def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
         exchange_deadline = overall_deadline - cleanup_budget
 
         try:
+            os.set_blocking(stdin_descriptor, False)
+            os.set_blocking(stdout_descriptor, False)
+            exit_queue = _open_leader_exit_queue(process.pid)
+            selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+            selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
             while time.monotonic() < exchange_deadline:
-                leader_observed = _observe_leader_exit(process.pid)
+                leader_observed = _observe_leader_exit(process.pid, exit_queue)
                 if leader_observed:
                     break
 
@@ -217,7 +265,7 @@ def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
                     break
             else:
                 failed = True
-        except (ChildProcessError, OSError, ValueError):
+        except (ChildProcessError, OSError, TriageUnavailableError, ValueError):
             failed = True
         finally:
             if not process.stdin.closed:
@@ -252,6 +300,8 @@ def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
                     time.sleep(0.005)
 
             selector.close()
+            if exit_queue is not None:
+                exit_queue.close()
             if not process.stdout.closed:
                 process.stdout.close()
             if not process.stdin.closed:
