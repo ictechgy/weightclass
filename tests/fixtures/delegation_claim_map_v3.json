@@ -1,0 +1,1626 @@
+{
+  "claim_map_schema_version": 1,
+  "suite_revision": "delegation-conformance-v2",
+  "resource_profiles": {
+    "bounded-offline-v1": {
+      "deadline_ms": 1000,
+      "max_event_bytes": 1024,
+      "max_events": 8,
+      "max_file_bytes": 4096,
+      "max_files": 4,
+      "max_processes": 4
+    }
+  },
+  "permission_cases": [
+    {
+      "case_id": "matrix/orchestrator/implementation/workspace_read/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/implementation/workspace_read/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/implementation/workspace_write/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/implementation/workspace_write/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/implementation/command_execution/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/implementation/command_execution/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/tests/workspace_read/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/tests/workspace_read/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/tests/workspace_write/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/tests/workspace_write/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/tests/command_execution/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/tests/command_execution/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/documentation/workspace_read/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/documentation/workspace_read/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/documentation/workspace_write/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/documentation/workspace_write/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/documentation/command_execution/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/orchestrator/documentation/command_execution/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/implementation/workspace_read/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/implementation/workspace_read/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/implementation/workspace_write/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/implementation/workspace_write/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/implementation/command_execution/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/implementation/command_execution/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/tests/workspace_read/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/tests/workspace_read/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/tests/workspace_write/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/tests/workspace_write/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/tests/command_execution/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/tests/command_execution/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/documentation/workspace_read/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/documentation/workspace_read/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/documentation/workspace_write/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/documentation/workspace_write/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/documentation/command_execution/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/worker/documentation/command_execution/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/implementation/workspace_read/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/implementation/workspace_read/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/implementation/workspace_write/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/implementation/workspace_write/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/implementation/command_execution/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/implementation/command_execution/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/tests/workspace_read/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/tests/workspace_read/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/tests/workspace_write/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/tests/workspace_write/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/tests/command_execution/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/tests/command_execution/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/documentation/workspace_read/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/documentation/workspace_read/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_read-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_read-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/documentation/workspace_write/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/documentation/workspace_write/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-workspace_write-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-workspace_write-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/documentation/command_execution/allow",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-observed",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "matrix/reviewer/documentation/command_execution/deny",
+      "evaluated_subject": "adapter-role-permission",
+      "fixture_id": "fixed-command_execution-v1",
+      "setup_id": "unimplemented-permission-context-v1",
+      "stimulus_id": "attempt-command_execution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "effect-blocked",
+      "negative_control_id": "runtime-self-label-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "role-action-attribution-not-independent-v1"
+    }
+  ],
+  "scenario_cases": [
+    {
+      "case_id": "scenario/action_attribution",
+      "evaluated_subject": "adapter-runtime",
+      "fixture_id": "fixed-action_attribution-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-action_attribution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "action-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "scenario/artifact_integrity_and_substitution",
+      "evaluated_subject": "launch-identity",
+      "fixture_id": "fixed-artifact_integrity_and_substitution-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-artifact_integrity_and_substitution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "verified-object-launch-not-established-v1"
+    },
+    {
+      "case_id": "scenario/descendant_cleanup",
+      "evaluated_subject": "os-supervisor",
+      "fixture_id": "fixed-descendant_cleanup-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-descendant_cleanup-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "authoritative-lifecycle-boundary-not-established-v1"
+    },
+    {
+      "case_id": "scenario/descendant_leakage",
+      "evaluated_subject": "os-supervisor",
+      "fixture_id": "fixed-descendant_leakage-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-descendant_leakage-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "escaped-descendant-boundary-not-established-v1"
+    },
+    {
+      "case_id": "scenario/distinct_enforcement_contexts",
+      "evaluated_subject": "adapter-runtime",
+      "fixture_id": "fixed-distinct_enforcement_contexts-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-distinct_enforcement_contexts-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "context-identity-not-independent-v1"
+    },
+    {
+      "case_id": "scenario/integration_restriction",
+      "evaluated_subject": "adapter-runtime",
+      "fixture_id": "fixed-integration_restriction-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-integration_restriction-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "integration-enforcement-not-independent-v1"
+    },
+    {
+      "case_id": "scenario/integration_verification_commands",
+      "evaluated_subject": "adapter-runtime",
+      "fixture_id": "fixed-integration_verification_commands-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-integration_verification_commands-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "command-result-not-independent-v1"
+    },
+    {
+      "case_id": "scenario/output_channel_separation",
+      "evaluated_subject": "adapter-runtime",
+      "fixture_id": "fixed-output_channel_separation-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-output_channel_separation-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "channel-ownership-not-independent-v1"
+    },
+    {
+      "case_id": "scenario/process_creation_attribution",
+      "evaluated_subject": "os-supervisor",
+      "fixture_id": "fixed-process_creation_attribution-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-process_creation_attribution-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "process-role-attribution-not-independent-v1"
+    },
+    {
+      "case_id": "scenario/reviewer_rejection",
+      "evaluated_subject": "adapter-runtime",
+      "fixture_id": "fixed-reviewer_rejection-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-reviewer_rejection-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "reviewer-decision-is-untrusted-telemetry-v1"
+    },
+    {
+      "case_id": "scenario/runtime_deadline",
+      "evaluated_subject": "adapter-runtime",
+      "fixture_id": "fixed-runtime_deadline-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-runtime_deadline-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "runtime-wide-process-closure-not-established-v1"
+    },
+    {
+      "case_id": "scenario/stage_order",
+      "evaluated_subject": "adapter-runtime",
+      "fixture_id": "fixed-stage_order-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-stage_order-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "stage-events-are-untrusted-telemetry-v1"
+    },
+    {
+      "case_id": "scenario/worker_concurrency_bound",
+      "evaluated_subject": "os-supervisor",
+      "fixture_id": "fixed-worker_concurrency_bound-v1",
+      "setup_id": "unimplemented-scenario-context-v1",
+      "stimulus_id": "exercise-worker_concurrency_bound-v1",
+      "oracle_id": "no-independent-oracle-v1",
+      "expected_observation": "scenario-property-established",
+      "negative_control_id": "runtime-self-report-v1",
+      "identity_requirements": [
+        "adapter-runtime",
+        "oracle-observer",
+        "fixture-bundle"
+      ],
+      "platform_requirements": [
+        "darwin",
+        "linux"
+      ],
+      "resource_bounds_id": "bounded-offline-v1",
+      "cleanup_requirement": "cooperative-process-group-only-v1",
+      "evidence_projection": "none-claim-blocked-v1",
+      "feasibility": "blocked",
+      "blocking_reason": "worker-process-identity-not-independent-v1"
+    }
+  ]
+}

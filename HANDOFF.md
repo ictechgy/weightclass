@@ -119,6 +119,14 @@ user-provided model labels, and the no-retention boundary.
   candidate compatibility, explicit failure, case-ID spoofing, oversized valid
   JSON, fixed case timeout, same-process-group leakage detection, cleanup, and
   stdin independence. The package registry remains empty in the success test.
+- `tests/fixtures/delegation_claim_map_v3.json` is a test-only executable claim
+  inventory, not evidence. `tests/test_delegation_claim_map_v3.py` reconciles
+  its 54 permission and 13 scenario IDs with both production catalogs, enforces
+  bounded identifier-only rows, keeps every claim blocked behind
+  `no-independent-oracle-v1`, and proves the file is rejected as both v2
+  evidence and registry input. The ownership and no-go rules are documented in
+  `docs/delegation-qualification-oracles.md`; no v3 production schema or runner
+  is implemented.
 
 ## Delivered hardening
 
@@ -173,14 +181,16 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
-- The P1 qualification and conformance-runner foundation passed all 221 tests
+- The P1 qualification, conformance-runner, and blocked claim-map foundation
+  passed all 226 tests
   under Python 3.10.20 and Python
   3.14.6 with `ResourceWarning` promoted to an error. Both interpreters passed
   `compileall`; Ruff check/format, strict mypy, and `git diff --check` passed.
   An offline sdist/wheel build included the qualification module, empty package
-  registry, and typing marker; a clean no-index wheel install loaded the empty
-  registry and exposed the candidate CLI. Build artifacts remained under a
-  temporary `/tmp` directory.
+  registry, and typing marker. The claim map remained outside the wheel, while
+  its validator and JSON fixture were present together in the sdist and passed
+  there. A clean no-index wheel install loaded the empty registry and exposed
+  the candidate CLI. Build artifacts remained under a temporary directory.
 - The unreleased delegation P0/P0.5 passed all 200 tests under Python 3.10.20
   and Python 3.14.6 with `ResourceWarning` promoted to an error. Both
   interpreters passed `compileall`; Ruff check/format, strict mypy, and
@@ -241,12 +251,12 @@ they are outside the repository and are not release artifacts.
 1. Do not advertise real Claude/Codex delegation from P0.5. It proves only the
    weightclass-to-runtime boundary; a user-supplied runtime can lie with exit
    zero, leave descendants, or ignore the descriptor.
-2. Implement and source-review genuine Claude-family and Codex-family
-   adapter-specific conformance drivers against an exact runtime artifact.
-   Their probes must externally establish effects instead of merely returning
-   `passed: true`. Do not add a package record until the complete predeclared
-   suite passes under a reviewed driver; runner or candidate output alone is
-   not evidence.
+2. Add a narrowly worded v2 indistinguishability regression, then design a
+   non-public synthetic probe-protocol kernel using separate self-test IDs and
+   only runner-direct verdicts. Runtime event telemetry is not independent
+   evidence, and path execution remains `TOCTOU-UNRESOLVED`. Do not implement a
+   Claude/Codex driver or add a package record until an exact claim has an
+   independent oracle, negative control, identity closure, and platform gate.
 3. Keep Phase 4 at no-go unless independent predeclared evidence satisfies every
    quality, resource, privacy, and supply-chain gate.
 4. Before the next release, address the upstream `actions/setup-python` Node 20

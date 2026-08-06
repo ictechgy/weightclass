@@ -292,6 +292,16 @@ source-reviewed Claude- and Codex-specific drivers that externally observe the
 required effects and leakage. None are shipped yet, and the test fixture must
 never be used for a package record.
 
+The next trust-boundary increment begins with the test-only machine-readable
+inventory in `tests/fixtures/delegation_claim_map_v3.json`, documented in
+`docs/delegation-qualification-oracles.md`. It reconciles all 67 case IDs with
+both production catalogs and records a fixed subject, stimulus, expected
+observation, negative control, identity boundary, platform boundary, and stable
+blocker for each claim. Every row remains blocked and projects no evidence.
+The inventory is outside package data and is rejected as both v2 evidence and
+registry input. It must not be described as qualification-v3 evidence or as a
+vendor feasibility result.
+
 At run time, qualified mode opens the path without following a final symlink,
 checks regular-file and executable status, reads a bounded artifact through the
 opened descriptor, compares exact size and SHA-256, and checks for concurrent
