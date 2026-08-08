@@ -51,6 +51,7 @@ GROUP_CLEANUP_TIMEOUT_SECONDS: Final = 1.0
 DRIVER_ARGUMENTS: Final = ("--weightclass-conformance-driver", "1")
 _CHILD_STATUS_LOST: Final = -sys.maxsize
 _DARWIN_SA_NOCLDWAIT: Final = 0x20
+_LINUX_SA_NOCLDWAIT: Final = 0x02
 _LEADER_ALREADY_EXITED: Final = object()
 
 Role = Literal["orchestrator", "worker", "reviewer"]
@@ -101,6 +102,20 @@ class _DarwinSigaction(ctypes.Structure):
         ("handler", ctypes.c_void_p),
         ("mask", ctypes.c_uint32),
         ("flags", ctypes.c_int),
+    ]
+
+
+class _LinuxGlibcSigset(ctypes.Structure):
+    # glibc uses a 128-byte sigset_t on the reviewed 64-bit x86/AArch64 ABIs.
+    _fields_ = [("values", ctypes.c_ubyte * 128)]
+
+
+class _LinuxGlibcSigaction(ctypes.Structure):
+    _fields_ = [
+        ("handler", ctypes.c_void_p),
+        ("mask", _LinuxGlibcSigset),
+        ("flags", ctypes.c_int),
+        ("restorer", ctypes.c_void_p),
     ]
 
 
@@ -453,60 +468,32 @@ def _has_safe_sigchld_disposition() -> bool:
             return False
     except (OSError, ValueError):
         return False
-    if sys.platform != "darwin":
+    if sys.platform == "darwin":
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            action = _DarwinSigaction()
+            if libc.sigaction(sigchld, None, ctypes.byref(action)) != 0:
+                return False
+        except (AttributeError, OSError, TypeError, ValueError):
+            return False
+        return action.handler in (None, 0) and not action.flags & _DARWIN_SA_NOCLDWAIT
+    if not sys.platform.startswith("linux"):
         return True
     try:
+        machine = os.uname().machine.lower()
+        if machine not in ("aarch64", "amd64", "arm64", "x86_64"):
+            return False
+        if ctypes.sizeof(ctypes.c_void_p) != 8:
+            return False
         libc = ctypes.CDLL(None, use_errno=True)
-        action = _DarwinSigaction()
+        if not callable(getattr(libc, "gnu_get_libc_version", None)):
+            return False
+        action = _LinuxGlibcSigaction()
         if libc.sigaction(sigchld, None, ctypes.byref(action)) != 0:
             return False
     except (AttributeError, OSError, TypeError, ValueError):
         return False
-    return action.handler in (None, 0) and not action.flags & _DARWIN_SA_NOCLDWAIT
-
-
-def _probe_child_status_ownership() -> bool:
-    """Prove Linux child statuses remain waitable without raw-fork hazards."""
-    if not sys.platform.startswith("linux"):
-        return True
-    posix_spawn = getattr(os, "posix_spawn", None)
-    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
-    if not callable(posix_spawn) or not callable(pthread_sigmask):
-        return False
-    executable = Path(sys.executable)
-    if not executable.is_absolute() or not executable.is_file():
-        return False
-    try:
-        previous_mask = pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
-    except (OSError, ValueError):
-        return False
-
-    status_owned = False
-    try:
-        try:
-            child_pid = posix_spawn(
-                str(executable),
-                (str(executable), "-I", "-S", "-c", ""),
-                {},
-                setsigmask=(),
-            )
-        except (OSError, ValueError):
-            return False
-        while True:
-            try:
-                waited_pid, wait_status = os.waitpid(child_pid, 0)
-            except InterruptedError:
-                continue
-            except OSError:
-                break
-            status_owned = waited_pid == child_pid and os.waitstatus_to_exitcode(wait_status) == 0
-            break
-    finally:
-        try:
-            pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-        except (OSError, ValueError):
-            status_owned = False
-    return status_owned
+    return action.handler in (None, 0) and not action.flags & _LINUX_SA_NOCLDWAIT
 
 
 def _open_leader_exit_queue(pid: int) -> Any | None:
@@ -668,11 +655,7 @@ def _run_driver_case(
     descendant_leaked = False
     deferred_sigint.arm()
     try:
-        if (
-            not _has_safe_sigchld_disposition()
-            or not _probe_child_status_ownership()
-            or deferred_sigint.received
-        ):
+        if not _has_safe_sigchld_disposition() or deferred_sigint.received:
             return False
         try:
             process = subprocess.Popen(
@@ -789,7 +772,6 @@ def run_conformance(
         or not hasattr(os, "killpg")
         or not _has_leader_exit_observer()
         or not _has_safe_sigchld_disposition()
-        or not _probe_child_status_ownership()
         or not 0 < CASE_TIMEOUT_SECONDS <= MAX_CASE_TIMEOUT_SECONDS
     ):
         raise ConformanceInvalidInputError()

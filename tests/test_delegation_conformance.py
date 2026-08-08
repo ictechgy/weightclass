@@ -161,6 +161,7 @@ raise SystemExit(0 if passed else 1)
 
 _SIGCHLD_CLI_RUNNER = r"""
 import ctypes
+import os
 from pathlib import Path
 import signal
 import sys
@@ -190,7 +191,7 @@ elif mode == "nocldwait":
         no_child_wait = 0x20
     elif sys.platform.startswith("linux"):
         class Sigset(ctypes.Structure):
-            _fields_ = [("values", ctypes.c_ulong * 16)]
+            _fields_ = [("values", ctypes.c_ubyte * 128)]
 
         class Sigaction(ctypes.Structure):
             _fields_ = [
@@ -216,6 +217,26 @@ elif mode == "nocldwait":
         raise SystemExit(92)
     if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
         raise SystemExit(93)
+    try:
+        probe_pid = os.posix_spawn(
+            sys.executable,
+            (sys.executable, "-I", "-S", "-c", ""),
+            {},
+        )
+    except (OSError, ValueError):
+        raise SystemExit(95)
+    while True:
+        try:
+            waited_pid, _wait_status = os.waitpid(probe_pid, 0)
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            break
+        except OSError:
+            raise SystemExit(95)
+        if waited_pid == probe_pid:
+            raise SystemExit(95)
+        raise SystemExit(95)
 else:
     raise SystemExit(90)
 
@@ -252,6 +273,24 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         process.stdin.close.side_effect = lambda: setattr(process.stdin, "closed", True)
         process.stdout.close.side_effect = lambda: setattr(process.stdout, "closed", True)
         return cast(subprocess.Popen[bytes], process)
+
+    @staticmethod
+    def _mock_linux_glibc(*, native_flags: int = 0) -> mock.Mock:
+        libc = mock.Mock()
+        libc.gnu_get_libc_version = lambda: b"2.36"
+
+        def inspect_sigaction(
+            _signal_number: int,
+            _new_action: Any,
+            current_action: Any,
+        ) -> int:
+            action = cast(Any, current_action)._obj
+            action.handler = None
+            action.flags = native_flags
+            return 0
+
+        libc.sigaction.side_effect = inspect_sigaction
+        return libc
 
     def _wait_for_pid_publication(
         self,
@@ -1336,46 +1375,162 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         self.assertEqual(native_checks, 2)
         popen.assert_not_called()
 
-    def test_linux_wait_ownership_probe_rejects_hidden_auto_reap(self) -> None:
-        """Breaks if Linux accepts a child status that cannot be waited."""
+    def test_linux_glibc_sigaction_checks_native_no_child_wait_flag(self) -> None:
+        """Breaks if Python-visible SIG_DFL hides glibc auto-reaping."""
         from weightclass import delegation_conformance as conformance
+
+        for native_flags, expected_safe in ((0, True), (0x02, False)):
+            with self.subTest(native_flags=native_flags):
+                libc = self._mock_linux_glibc(native_flags=native_flags)
+                with (
+                    mock.patch(
+                        "weightclass.delegation_conformance.sys.platform",
+                        "linux",
+                    ),
+                    mock.patch(
+                        "weightclass.delegation_conformance.signal.getsignal",
+                        return_value=signal.SIG_DFL,
+                    ),
+                    mock.patch(
+                        "weightclass.delegation_conformance.os.uname",
+                        return_value=mock.Mock(machine="x86_64"),
+                    ),
+                    mock.patch(
+                        "weightclass.delegation_conformance.ctypes.sizeof",
+                        return_value=8,
+                    ),
+                    mock.patch(
+                        "weightclass.delegation_conformance.ctypes.CDLL",
+                        return_value=libc,
+                    ),
+                ):
+                    self.assertIs(
+                        conformance._has_safe_sigchld_disposition(),
+                        expected_safe,
+                    )
+
+                libc.sigaction.assert_called_once()
+
+    def test_linux_sigaction_unknown_abi_or_libc_fails_closed(self) -> None:
+        """Breaks if an unreviewed Linux sigaction layout is treated as safe."""
+        from weightclass import delegation_conformance as conformance
+
+        cases = (
+            ("i686", 8, self._mock_linux_glibc()),
+            ("x86_64", 4, self._mock_linux_glibc()),
+            ("x86_64", 8, object()),
+        )
+        for machine, pointer_size, libc in cases:
+            with (
+                self.subTest(machine=machine, pointer_size=pointer_size),
+                mock.patch(
+                    "weightclass.delegation_conformance.sys.platform",
+                    "linux",
+                ),
+                mock.patch(
+                    "weightclass.delegation_conformance.signal.getsignal",
+                    return_value=signal.SIG_DFL,
+                ),
+                mock.patch(
+                    "weightclass.delegation_conformance.os.uname",
+                    return_value=mock.Mock(machine=machine),
+                ),
+                mock.patch(
+                    "weightclass.delegation_conformance.ctypes.sizeof",
+                    return_value=pointer_size,
+                ),
+                mock.patch(
+                    "weightclass.delegation_conformance.ctypes.CDLL",
+                    return_value=libc,
+                ),
+            ):
+                self.assertFalse(conformance._has_safe_sigchld_disposition())
+
+    def test_linux_sigaction_inspection_failure_blocks_driver_spawn(self) -> None:
+        """Breaks if the spawn-adjacent native inspection can fail open."""
+        native_checks = 0
+        libc = self._mock_linux_glibc()
+
+        def inspect_then_fail(*_args: Any, **_kwargs: Any) -> Any:
+            nonlocal native_checks
+            native_checks += 1
+            if native_checks == 1:
+                return libc
+            raise OSError()
 
         with (
             mock.patch("weightclass.delegation_conformance.sys.platform", "linux"),
             mock.patch(
-                "weightclass.delegation_conformance.os.posix_spawn",
-                return_value=321,
-                create=True,
-            ) as posix_spawn,
+                "weightclass.delegation_conformance.os.uname",
+                return_value=mock.Mock(machine="x86_64"),
+            ),
             mock.patch(
-                "weightclass.delegation_conformance.os.waitpid",
-                side_effect=ChildProcessError(),
-            ) as waitpid,
-        ):
-            self.assertFalse(conformance._probe_child_status_ownership())
-
-        posix_spawn.assert_called_once()
-        waitpid.assert_called_once_with(321, 0)
-
-    def test_linux_wait_ownership_probe_retries_interrupted_wait(self) -> None:
-        """Breaks if a transient EINTR abandons the disposable status child."""
-        from weightclass import delegation_conformance as conformance
-
-        with (
-            mock.patch("weightclass.delegation_conformance.sys.platform", "linux"),
+                "weightclass.delegation_conformance.ctypes.sizeof",
+                return_value=8,
+            ),
+            mock.patch.object(ctypes, "CDLL", side_effect=inspect_then_fail),
             mock.patch(
                 "weightclass.delegation_conformance.os.posix_spawn",
                 return_value=321,
-                create=True,
             ),
             mock.patch(
                 "weightclass.delegation_conformance.os.waitpid",
-                side_effect=(InterruptedError(), (321, 0)),
-            ) as waitpid,
+                return_value=(321, 0),
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.subprocess.Popen",
+                side_effect=OSError(),
+            ) as popen,
         ):
-            self.assertTrue(conformance._probe_child_status_ownership())
+            passed = _run_driver_case(
+                FAKE_DRIVER,
+                FIXED_SENTINEL_RUNTIME,
+                CONFORMANCE_CASES[0],
+                Path.cwd(),
+                timeout_seconds=0.1,
+            )
 
-        self.assertEqual(waitpid.call_args_list, [mock.call(321, 0), mock.call(321, 0)])
+        self.assertFalse(passed)
+        self.assertEqual(native_checks, 2)
+        popen.assert_not_called()
+
+    def test_linux_supported_context_spawns_no_disposable_status_probe(self) -> None:
+        """Breaks if conformance probes ownership by creating another child."""
+        libc = self._mock_linux_glibc()
+        with (
+            mock.patch("weightclass.delegation_conformance.sys.platform", "linux"),
+            mock.patch(
+                "weightclass.delegation_conformance.os.uname",
+                return_value=mock.Mock(machine="x86_64"),
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.ctypes.sizeof",
+                return_value=8,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.ctypes.CDLL",
+                return_value=libc,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.os.posix_spawn",
+                side_effect=AssertionError("disposable probe child was spawned"),
+            ) as posix_spawn,
+            mock.patch(
+                "weightclass.delegation_conformance.subprocess.Popen",
+                side_effect=OSError(),
+            ) as popen,
+        ):
+            passed = _run_driver_case(
+                FAKE_DRIVER,
+                FIXED_SENTINEL_RUNTIME,
+                CONFORMANCE_CASES[0],
+                Path.cwd(),
+                timeout_seconds=0.1,
+            )
+
+        self.assertFalse(passed)
+        posix_spawn.assert_not_called()
+        popen.assert_called_once()
 
     def test_observer_echild_releases_every_numeric_signal_target(self) -> None:
         """Breaks if observer ECHILD leaves a reusable PID or PGID signalable."""
@@ -1452,10 +1607,6 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             mock.patch(
                 "weightclass.delegation_conformance.subprocess.Popen",
                 return_value=process,
-            ),
-            mock.patch(
-                "weightclass.delegation_conformance._probe_child_status_ownership",
-                return_value=True,
             ),
             mock.patch(
                 "weightclass.delegation_conformance._write_request",
@@ -1607,10 +1758,6 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             mock.patch(
                 "weightclass.delegation_conformance.subprocess.Popen",
                 return_value=process,
-            ),
-            mock.patch(
-                "weightclass.delegation_conformance._probe_child_status_ownership",
-                return_value=True,
             ),
             mock.patch("weightclass.delegation_conformance._open_leader_exit_queue"),
             mock.patch(
@@ -2125,7 +2272,12 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
 
     @unittest.skipUnless(
         sys.platform == "darwin"
-        or (sys.platform.startswith("linux") and platform.libc_ver()[0] == "glibc"),
+        or (
+            sys.platform.startswith("linux")
+            and platform.libc_ver()[0] == "glibc"
+            and ctypes.sizeof(ctypes.c_void_p) == 8
+            and platform.machine().lower() in ("aarch64", "amd64", "arm64", "x86_64")
+        ),
         "requires Darwin or glibc Linux sigaction",
     )
     def test_hidden_sa_nocldwait_is_rejected_before_driver_spawn(self) -> None:

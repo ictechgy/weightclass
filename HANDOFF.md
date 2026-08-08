@@ -113,19 +113,22 @@ user-provided model labels, and the no-retention boundary.
   driver with fixed protocol argv. Driver stdin/stdout, case deadline, output
   size, response ID, exit status, and same-process-group cleanup are bounded and
   fail closed; SIGINT cleans the active group and returns redacted exit `130`.
-  Python-visible unsafe `SIGCHLD` state, Darwin `SA_NOCLDWAIT`, and a Linux
-  behavioral probe that cannot authoritatively reap its disposable child are
-  rejected immediately before spawn. Real `ECHILD` releases every numeric
-  signal target; macOS Python 3.10 kqueue `ESRCH` from a normally exited,
-  still-waitable leader instead preserves the zombie PGID anchor through group
-  cleanup and one final authoritative `waitpid`. Evidence schema 2 binds the
+  Python-visible unsafe `SIGCHLD` state and native `SA_NOCLDWAIT` are rejected
+  immediately before spawn. Darwin and reviewed 64-bit glibc Linux
+  x86_64/AArch64 ABIs use native `sigaction` inspection; unsupported Linux
+  libc/ABI combinations and inspection failures fail closed without creating a
+  disposable status-probe child. Real `ECHILD` releases every numeric signal
+  target; macOS Python 3.10 kqueue `ESRCH` from a normally exited, still-waitable
+  leader instead preserves the zombie PGID anchor through group cleanup and one
+  final authoritative `waitpid`. Evidence schema 2 binds the
   runtime size/SHA-256
   observed before the suite;
   the runner rechecks it after all cases and candidate construction rechecks the
   current bytes. The runner reads no task stdin and never edits the registry.
-- The Linux child-status probe is behavioral, not atomic against a hostile
-  concurrent native reaper. A later `ECHILD` fails the case and releases stale
-  numeric signal targets instead of risking PID/PGID reuse.
+- Native `SIGCHLD` inspection is not atomic against hostile concurrent native
+  disposition mutation between the spawn-adjacent check and process creation.
+  A later `ECHILD` fails the case and releases stale numeric signal targets
+  instead of risking PID/PGID reuse.
 - The runner is not an attestation mechanism. Drivers inherit the environment
   and own runtime/vendor authentication, network, quota, billing, and external
   observation. A driver can lie or escape its process group. No real Claude or
@@ -252,15 +255,18 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
-- On 2026-08-09, the current PR #22 worktree passed all 402 tests under Python
-  3.14.6 in 62.495s and Python 3.10.20 in 59.053s with `ResourceWarning`
-  promoted to an error. Ruff 0.16.1 check/format, mypy 2.3.0 strict checking,
-  workflow YAML parsing, and `git diff --check` passed. Independent diff and
-  completion-evidence reviews reported no actionable critical, high, or medium
-  findings.
-- A fresh offline exact wheel/sdist build passed the distribution-isolation
-  gate and all 402 extracted-sdist tests under both interpreters: 68.339s on
-  Python 3.14.6 and 62.994s on Python 3.10.20, with one platform skip each. The
+- On 2026-08-09, the current PR #22 worktree passed all 404 tests under Python
+  3.14.6 in 63.738s and Python 3.10.20 in 60.326s with `ResourceWarning`
+  promoted to an error. The Linux glibc AArch64 conformance module passed 44/44
+  tests in 20.863s with one platform skip. A fresh offline wheel/sdist passed
+  the isolation gate and all 404 extracted-sdist tests under Python 3.14.6 in
+  69.097s and Python 3.10.20 in 65.877s, with one platform skip per run. Ruff
+  0.16.1 check/format, mypy 2.3.0 strict checking, both-version compileall, and
+  `git diff --check` passed. Independent process-safety, ABI, and completion
+  reviews reported no actionable critical, high, or medium findings.
+- The fresh offline exact wheel/sdist build passed the distribution-isolation
+  gate and all 404 extracted-sdist tests under both interpreters: 69.097s on
+  Python 3.14.6 and 65.877s on Python 3.10.20, with one platform skip each. The
   gate proves exact empty source/wheel/sdist registries; rejects duplicate,
   Unicode-normalized, case-folding, and file/implicit-directory archive
   identities; bounds physical tar and classic-ZIP headers and payloads before
