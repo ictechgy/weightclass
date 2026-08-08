@@ -160,10 +160,13 @@ user-provided model labels, and the no-retention boundary.
   Platform labels, child cooperation, and child self-report never imply
   containment. No unsafe or runaway descendant was launched.
 - Distribution gates require the source, wheel, and sdist production registries
-  to have the exact canonical empty shape and exact archive identity. The sdist
-  must have one root; synthetic assets must occupy their exact `tests/...`
-  paths, and links, devices, FIFOs, or other special members are rejected before
-  extraction. Synthetic and candidate-like content are excluded from the wheel.
+  to have the exact canonical empty shape and canonical archive identity. Wheel
+  member collisions use Unicode NFC plus case-folding, while the production
+  registry itself must use its exact path. The sdist must have one root;
+  backslash/NUL and other unsafe member names, links, devices, FIFOs, or other
+  special members are rejected before extraction; synthetic assets must occupy
+  their exact `tests/...` paths. Synthetic and candidate-like content are
+  excluded from the wheel.
   CI/release action pins were not changed.
 
 ## Delivered hardening
@@ -219,24 +222,27 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
-- On 2026-08-08, the current PR #22 worktree passed all 303 tests under Python
-  3.14.6 in 58.145s and Python 3.10.20 in 52.435s with `ResourceWarning`
-  promoted to an error. The focused conformance, runtime, qualification, and
-  distribution-isolation set passed all 81 tests under both interpreters.
+- On 2026-08-08, the current PR #22 worktree passed all 312 tests under Python
+  3.14.6 in 56.124s and Python 3.10.20 in 53.874s with `ResourceWarning`
+  promoted to an error. Those runs include the current 90-test focused
+  conformance, runtime, qualification, and distribution-isolation set.
   Ruff 0.16.1 check/format, mypy 2.3.0 strict checking, and `git diff --check`
   passed. Independent diff and completion-evidence reviews reported no
   actionable critical, high, or medium findings.
 - A fresh offline wheel/sdist build passed the distribution-isolation gate and
-  extracted-sdist suite under both interpreters. The gate proves exact empty
-  source/wheel/sdist registries, rejects duplicate, Unicode-normalized, and
-  case-folding archive identities before extraction, excludes test-only and
-  qualification-like wheel content, and confines required synthetic assets to
-  their exact sdist `tests/` paths.
+  all 312 extracted-sdist tests under both interpreters. The gate proves exact
+  empty source/wheel/sdist registries, rejects duplicate, Unicode-normalized,
+  and case-folding archive identities before extraction, excludes test-only
+  and qualification-like wheel content, and confines required synthetic assets
+  to their exact sdist `tests/` paths.
 - Verification did not access a credential or secret-like file, invoke a
   weightclass-selected product/vendor runtime, persist runtime task content,
-  publish a release, or deploy. External review received only bounded redacted
-  targets. The synthetic kernel does not qualify a runtime or advertise
-  delegation support; the packaged production registry remains empty.
+  publish a release, or deploy. External review tools received only bounded,
+  redacted code targets; their provider authentication and network egress remain
+  owned by those tools and are not a weightclass guarantee. No runtime task
+  content was supplied to review. The synthetic kernel does not qualify a
+  runtime or advertise delegation support; the packaged production registry
+  remains empty.
 - The P1 qualification, conformance-runner, and blocked claim-map foundation
   passed all 227 tests
   under Python 3.10.20 and Python
@@ -289,7 +295,7 @@ The final offline distribution verification additionally used a fresh output
 directory:
 
 ```sh
-wclass_artifact_dir=$(mktemp -d /tmp/wclass-g5-final.XXXXXX)
+wclass_artifact_dir=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-pr22-final.XXXXXX")
 uv --quiet build --offline --no-python-downloads --out-dir "$wclass_artifact_dir"
 python3.14 tests/verify_distribution_isolation.py \
   --source . --wheel "$wclass_artifact_dir"/*.whl \
@@ -301,8 +307,8 @@ python3.10 tests/verify_distribution_isolation.py \
   --run-sdist-tests
 ```
 
-Build artifacts were created under a temporary `/tmp` path; they are outside
-the repository and are not release artifacts.
+Build artifacts were created under a system temporary directory; they are
+outside the repository and are not release artifacts.
 
 ## Safety and compatibility decisions
 
