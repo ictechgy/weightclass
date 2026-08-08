@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -411,6 +412,111 @@ class DistributionIsolationTests(unittest.TestCase):
                 asset.write_text("test-only\n", encoding="utf-8")
             with tarfile.open(sdist, "w:gz") as archive:
                 archive.add(root, arcname="weightclass-0")
+
+            with self.assertRaises(IsolationError):
+                verify_sdist(sdist)
+
+    def test_sdist_rejects_casefold_registry_alias_with_populated_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdist = Path(directory) / "weightclass-0.tar.gz"
+            root = Path(directory) / "payload/weightclass-0"
+            registry = root / "src/weightclass/delegation_qualifications.json"
+            registry.parent.mkdir(parents=True)
+            registry.write_text(
+                '{"records":[],"registry_schema_version":1,'
+                '"suite_revision":"delegation-conformance-v2"}',
+                encoding="utf-8",
+            )
+            for relative_path in (
+                "tests/synthetic_descendant_containment.py",
+                "tests/synthetic_probe_child.py",
+                "tests/synthetic_probe_protocol.py",
+                "tests/synthetic_probe_runner.py",
+                "tests/test_distribution_isolation.py",
+                "tests/test_synthetic_probe_protocol.py",
+                "tests/verify_distribution_isolation.py",
+            ):
+                asset = root / relative_path
+                asset.parent.mkdir(parents=True, exist_ok=True)
+                asset.write_text("test-only\n", encoding="utf-8")
+            with tarfile.open(sdist, "w:gz") as archive:
+                archive.add(root, arcname="weightclass-0")
+                alias_name = "weightclass-0/src/WeightClass/delegation_qualifications.json"
+                alias_raw = json.dumps(_candidate_like_record()).encode("utf-8")
+                alias = tarfile.TarInfo(alias_name)
+                alias.size = len(alias_raw)
+                archive.addfile(alias, io.BytesIO(alias_raw))
+
+            with self.assertRaises(IsolationError):
+                verify_sdist(sdist)
+
+    def test_sdist_rejects_casefold_collision_in_required_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdist = Path(directory) / "weightclass-0.tar.gz"
+            root = Path(directory) / "payload/weightclass-0"
+            registry = root / "src/weightclass/delegation_qualifications.json"
+            registry.parent.mkdir(parents=True)
+            registry.write_text(
+                '{"records":[],"registry_schema_version":1,'
+                '"suite_revision":"delegation-conformance-v2"}',
+                encoding="utf-8",
+            )
+            for relative_path in (
+                "tests/synthetic_descendant_containment.py",
+                "tests/synthetic_probe_child.py",
+                "tests/synthetic_probe_protocol.py",
+                "tests/synthetic_probe_runner.py",
+                "tests/test_distribution_isolation.py",
+                "tests/test_synthetic_probe_protocol.py",
+                "tests/verify_distribution_isolation.py",
+            ):
+                asset = root / relative_path
+                asset.parent.mkdir(parents=True, exist_ok=True)
+                asset.write_text("test-only\n", encoding="utf-8")
+            with tarfile.open(sdist, "w:gz") as archive:
+                archive.add(root, arcname="weightclass-0")
+                alias_name = "weightclass-0/tests/Synthetic_Probe_Child.py"
+                alias_raw = b"test-only\n"
+                alias = tarfile.TarInfo(alias_name)
+                alias.size = len(alias_raw)
+                archive.addfile(alias, io.BytesIO(alias_raw))
+
+            with self.assertRaises(IsolationError):
+                verify_sdist(sdist)
+
+    def test_sdist_rejects_unicode_normalization_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdist = Path(directory) / "weightclass-0.tar.gz"
+            root = Path(directory) / "payload/weightclass-0"
+            registry = root / "src/weightclass/delegation_qualifications.json"
+            registry.parent.mkdir(parents=True)
+            registry.write_text(
+                '{"records":[],"registry_schema_version":1,'
+                '"suite_revision":"delegation-conformance-v2"}',
+                encoding="utf-8",
+            )
+            for relative_path in (
+                "tests/synthetic_descendant_containment.py",
+                "tests/synthetic_probe_child.py",
+                "tests/synthetic_probe_protocol.py",
+                "tests/synthetic_probe_runner.py",
+                "tests/test_distribution_isolation.py",
+                "tests/test_synthetic_probe_protocol.py",
+                "tests/verify_distribution_isolation.py",
+            ):
+                asset = root / relative_path
+                asset.parent.mkdir(parents=True, exist_ok=True)
+                asset.write_text("test-only\n", encoding="utf-8")
+            with tarfile.open(sdist, "w:gz") as archive:
+                archive.add(root, arcname="weightclass-0")
+                for alias_name in (
+                    "weightclass-0/tests/café.txt",
+                    "weightclass-0/tests/cafe\u0301.txt",
+                ):
+                    alias_raw = b"test-only\n"
+                    alias = tarfile.TarInfo(alias_name)
+                    alias.size = len(alias_raw)
+                    archive.addfile(alias, io.BytesIO(alias_raw))
 
             with self.assertRaises(IsolationError):
                 verify_sdist(sdist)

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import unicodedata
 import zipfile
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
@@ -218,16 +219,23 @@ def verify_wheel(wheel: Path) -> None:
 
 def _safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
     members = archive.getmembers()
+    names: set[str] = set()
+    normalized_names: set[str] = set()
     for member in members:
         path = PurePosixPath(member.name)
+        normalized_name = unicodedata.normalize("NFC", member.name).casefold()
         if (
-            not path.parts
+            member.name in names
+            or normalized_name in normalized_names
+            or not path.parts
             or member.name != path.as_posix()
             or path.is_absolute()
             or ".." in path.parts
             or not (member.isdir() or member.isfile())
         ):
             _fail(f"unsafe sdist member: {member.name}")
+        names.add(member.name)
+        normalized_names.add(normalized_name)
     return members
 
 
@@ -243,7 +251,10 @@ def verify_sdist(sdist: Path) -> None:
         members = _safe_members(archive)
         root = _sdist_root(members)
         expected_registry = f"{root}/{SDIST_REGISTRY_PATH}"
-        registries = [member for member in members if member.name.endswith(WHEEL_REGISTRY_PATH)]
+        folded_registry_suffix = WHEEL_REGISTRY_PATH.casefold()
+        registries = [
+            member for member in members if member.name.casefold().endswith(folded_registry_suffix)
+        ]
         if len(registries) != 1 or registries[0].name != expected_registry:
             _fail(f"{sdist.name}: expected exactly one production registry")
         extracted = archive.extractfile(registries[0])
