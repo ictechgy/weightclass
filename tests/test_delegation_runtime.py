@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import redirect_stderr
@@ -23,6 +24,13 @@ from tests.test_delegation_qualification import (
 )
 from weightclass.cli import delegation_run_from_standard_input
 from weightclass.delegation_compile import compile_delegation_descriptor
+from weightclass.delegation_conformance import (
+    _has_leader_exit_observer,
+    _has_safe_sigchld_disposition,
+    _open_leader_exit_queue,
+    _process_group_exists,
+    _wait_for_leader_exit,
+)
 from weightclass.delegation_protocol import DelegationFrameError, encode_delegation_frame
 from weightclass.delegation_qualification import (
     attach_qualification_requirement,
@@ -85,7 +93,7 @@ class DelegationProtocolUnitTests(unittest.TestCase):
     ) -> int:
         deadline = time.monotonic() + 5
         while not pid_path.is_file():
-            if process.poll() is not None or time.monotonic() >= deadline:
+            if time.monotonic() >= deadline:
                 self.fail("runtime PID was not published")
             time.sleep(0.005)
         return int(pid_path.read_text(encoding="ascii"))
@@ -95,8 +103,11 @@ class DelegationProtocolUnitTests(unittest.TestCase):
             return
         if process.stdin is not None and not process.stdin.closed:
             process.stdin.close()
-        if process.poll() is None:
-            process.kill()
+        if process.returncode is None:
+            try:
+                os.kill(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         process.wait()
 
     def test_frame_encoding_has_exact_lengths_and_utf8_bytes(self) -> None:
@@ -447,7 +458,7 @@ class DelegationProtocolUnitTests(unittest.TestCase):
                 " process = real_popen(*args, **kwargs)\n"
                 " deadline = time.monotonic() + 5\n"
                 " while not Path(sys.argv[2]).is_file():\n"
-                "  if process.poll() is not None or time.monotonic() >= deadline:\n"
+                "  if time.monotonic() >= deadline:\n"
                 "   raise SystemExit(90)\n"
                 "  time.sleep(0.005)\n"
                 " os.kill(os.getpid(), signal.SIGINT)\n"
@@ -772,16 +783,99 @@ class DelegationRunTests(unittest.TestCase):
         manifest_path: Path,
         runtime_path: Path,
     ) -> dict[str, object]:
-        result = subprocess.run(
+        result = self._run_router(
             self._arguments("route", policy_path, manifest_path, runtime_path),
-            capture_output=True,
-            check=False,
-            text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         value = json.loads(result.stdout)
         assert isinstance(value, dict)
         return value
+
+    @staticmethod
+    def _close_router_streams(process: subprocess.Popen[Any]) -> None:
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
+
+    @staticmethod
+    def _signal_anchored_group(process: subprocess.Popen[Any]) -> None:
+        if process.returncode is not None:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (PermissionError, ProcessLookupError):
+            pass
+
+    def _run_router(
+        self,
+        arguments: list[str],
+        *,
+        input_text: str | None = None,
+        environment: dict[str, str] | None = None,
+        timeout_seconds: float = 8,
+    ) -> subprocess.CompletedProcess[str]:
+        process = subprocess.Popen(
+            arguments,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            start_new_session=True,
+            text=True,
+        )
+        try:
+            try:
+                stdout, stderr = process.communicate(input=input_text, timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                self._signal_anchored_group(process)
+                try:
+                    process.communicate(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self._close_router_streams(process)
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        raise AssertionError("router cleanup timed out") from None
+                raise AssertionError("router subprocess timed out") from None
+            return_code = process.returncode
+            assert return_code is not None
+            return subprocess.CompletedProcess(arguments, return_code, stdout, stderr)
+        except BaseException:
+            if process.returncode is None:
+                self._signal_anchored_group(process)
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    raise AssertionError("router cleanup timed out") from None
+            raise
+        finally:
+            self._close_router_streams(process)
+
+    def _observe_owned_group_before_reap(
+        self,
+        process: subprocess.Popen[Any],
+        *,
+        exit_queue: object | None,
+        timeout_seconds: float,
+    ) -> tuple[bool, bool, bool]:
+        leader_observed = _wait_for_leader_exit(process.pid, exit_queue, timeout_seconds)
+        live_group_observed = leader_observed and _process_group_exists(process.pid)
+        cleanup_complete = True
+        if not leader_observed or live_group_observed:
+            self._signal_anchored_group(process)
+            if not leader_observed:
+                leader_observed = _wait_for_leader_exit(process.pid, exit_queue, 2)
+            deadline = time.monotonic() + 2
+            while _process_group_exists(process.pid):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    cleanup_complete = False
+                    break
+                time.sleep(min(0.005, remaining))
+        return leader_observed, live_group_observed, cleanup_complete
 
     def _wait_without_closing_stdin(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
         process = subprocess.Popen(
@@ -789,44 +883,124 @@ class DelegationRunTests(unittest.TestCase):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
             text=True,
         )
         try:
-            return_code = process.wait(timeout=5)
-            stdout, stderr = process.communicate(timeout=1)
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
-        return subprocess.CompletedProcess(arguments, return_code, stdout, stderr)
-
-    def _cleanup_owned_process_group(self, process: subprocess.Popen[str]) -> None:
-        """Kill the owned group while its Popen anchor is alive, then reap once."""
-        try:
-            if process.returncode is None:
-                if os.name == "posix":
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    except PermissionError:
-                        os.kill(process.pid, signal.SIGKILL)
-                else:
-                    process.kill()
+            try:
+                return_code = process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._signal_anchored_group(process)
                 try:
                     process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    # The direct PID remains anchored because wait did not reap it.
-                    if os.name == "posix":
-                        os.kill(process.pid, signal.SIGKILL)
-                    else:
-                        process.kill()
+                    raise AssertionError("router cleanup timed out") from None
+                raise AssertionError("router subprocess timed out") from None
+            stdout, stderr = process.communicate(timeout=1)
+        except BaseException:
+            if process.returncode is None:
+                self._signal_anchored_group(process)
+                try:
                     process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    raise AssertionError("router cleanup timed out") from None
+            raise
         finally:
-            # Never signal or probe the numeric group id after the anchor is reaped.
-            for stream in (process.stdin, process.stdout, process.stderr):
-                if stream is not None and not stream.closed:
-                    stream.close()
+            self._close_router_streams(process)
+        return subprocess.CompletedProcess(arguments, return_code, stdout, stderr)
+
+    def test_bounded_router_timeout_kills_anchored_group_and_reaps(self) -> None:
+        """Breaks if a timed-out test router can outlive its bounded helper."""
+        captured: list[subprocess.Popen[str]] = []
+        real_popen = cast(Any, subprocess.Popen)
+
+        def capture_process(*args: Any, **kwargs: Any) -> subprocess.Popen[str]:
+            process = cast(subprocess.Popen[str], real_popen(*args, **kwargs))
+            captured.append(process)
+            return process
+
+        with (
+            mock.patch(
+                f"{__name__}.subprocess.Popen",
+                side_effect=capture_process,
+            ),
+            self.assertRaisesRegex(AssertionError, "router subprocess timed out"),
+        ):
+            self._run_router(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                input_text="",
+                timeout_seconds=0.05,
+            )
+
+        self.assertEqual(len(captured), 1)
+        process = captured[0]
+        self.assertEqual(process.returncode, -signal.SIGKILL)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            self.assertIsNotNone(stream)
+            assert stream is not None
+            self.assertTrue(stream.closed)
+
+    def test_live_group_observation_precedes_cleanup_and_reap(self) -> None:
+        """Breaks if a leaked group is hidden by reaping its numeric anchor first."""
+        events: list[str] = []
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = 424_242
+        process.returncode = None
+
+        def observe_exit(pid: int, exit_queue: object, timeout_seconds: float) -> bool:
+            del exit_queue, timeout_seconds
+            self.assertEqual(pid, process.pid)
+            events.append("observe-exit")
+            return True
+
+        group_states = iter((True, False))
+
+        def group_exists(process_group_id: int) -> bool:
+            self.assertEqual(process_group_id, process.pid)
+            self.assertIsNone(process.returncode)
+            exists = next(group_states)
+            events.append("group-exists" if exists else "group-absent")
+            return exists
+
+        def kill_group(process_group_id: int, signal_number: int) -> None:
+            self.assertEqual((process_group_id, signal_number), (process.pid, signal.SIGKILL))
+            self.assertIsNone(process.returncode)
+            events.append("kill-group")
+
+        def reap(*, timeout: float) -> int:
+            self.assertEqual(timeout, 2)
+            events.append("reap")
+            process.returncode = -signal.SIGKILL
+            return -signal.SIGKILL
+
+        process.wait.side_effect = reap
+        with (
+            mock.patch(
+                f"{__name__}._wait_for_leader_exit",
+                side_effect=observe_exit,
+            ),
+            mock.patch(
+                f"{__name__}._process_group_exists",
+                side_effect=group_exists,
+            ),
+            mock.patch(f"{__name__}.os.killpg", side_effect=kill_group),
+        ):
+            leader_observed, live_group_observed, cleanup_complete = (
+                self._observe_owned_group_before_reap(
+                    process,
+                    exit_queue=None,
+                    timeout_seconds=1,
+                )
+            )
+            process.wait(timeout=2)
+
+        self.assertTrue(leader_observed)
+        self.assertTrue(live_group_observed)
+        self.assertTrue(cleanup_complete)
+        self.assertEqual(
+            events,
+            ["observe-exit", "group-exists", "kill-group", "group-absent", "reap"],
+        )
 
     def test_confirmation_is_required_before_runtime_or_task_access(self) -> None:
         """Breaks if an unconfirmed run touches a runtime or blocks on task stdin."""
@@ -965,13 +1139,10 @@ class DelegationRunTests(unittest.TestCase):
             environment = os.environ.copy()
             environment["WEIGHTCLASS_FAKE_DELEGATION_START_MARKER"] = str(start_marker_path)
 
-            result = subprocess.run(
+            result = self._run_router(
                 arguments,
-                capture_output=True,
-                check=False,
-                env=environment,
-                input=EXPECTED_TASK,
-                text=True,
+                environment=environment,
+                input_text=EXPECTED_TASK,
             )
             start_marker_contents = start_marker_path.read_text(encoding="ascii")
 
@@ -1000,13 +1171,10 @@ class DelegationRunTests(unittest.TestCase):
             environment = os.environ.copy()
             environment["WEIGHTCLASS_FAKE_DELEGATION_START_MARKER"] = str(start_marker_path)
 
-            result = subprocess.run(
+            result = self._run_router(
                 arguments,
-                capture_output=True,
-                check=False,
-                env=environment,
-                input="",
-                text=True,
+                environment=environment,
+                input_text="",
             )
             start_marker_exists = start_marker_path.exists()
 
@@ -1033,13 +1201,10 @@ class DelegationRunTests(unittest.TestCase):
             environment = os.environ.copy()
             environment["WEIGHTCLASS_FAKE_DELEGATION_MODE"] = "exit-9"
 
-            result = subprocess.run(
+            result = self._run_router(
                 arguments,
-                capture_output=True,
-                check=False,
-                env=environment,
-                input="zephyrine glimmerfast quokka",
-                text=True,
+                environment=environment,
+                input_text="zephyrine glimmerfast quokka",
             )
 
         self.assertEqual(result.returncode, 7)
@@ -1051,6 +1216,12 @@ class DelegationRunTests(unittest.TestCase):
 
     def test_broken_pipe_terminates_and_reaps_owned_process_group(self) -> None:
         """Breaks if framing failure leaks the owned router/runtime process group."""
+        if (
+            os.name != "posix"
+            or not _has_leader_exit_observer()
+            or not _has_safe_sigchld_disposition()
+        ):
+            self.skipTest("safe non-reaping leader observation is unavailable")
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path, manifest_path = self._write_inputs(directory, cleanup_seconds=1)
@@ -1076,25 +1247,103 @@ class DelegationRunTests(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=environment,
-                start_new_session=(os.name == "posix"),
-                text=True,
+                start_new_session=True,
             )
+            exit_queue: object | None = None
+            stdout_chunks: list[bytes] = []
+            stderr_chunks: list[bytes] = []
+            io_failures: list[str] = []
+            threads: list[threading.Thread] = []
+            leader_observed = False
+            live_group_observed = False
+            cleanup_complete = False
+            io_complete = False
+            return_code: int | None = None
+
+            def write_task() -> None:
+                assert process.stdin is not None
+                try:
+                    process.stdin.write(("🧪" * 20_000).encode())
+                    process.stdin.flush()
+                except (BrokenPipeError, OSError, ValueError):
+                    io_failures.append("stdin")
+                finally:
+                    try:
+                        process.stdin.close()
+                    except (OSError, ValueError):
+                        io_failures.append("stdin-close")
+
+            def read_output(stream: Any, chunks: list[bytes], name: str) -> None:
+                try:
+                    while chunk := stream.read(65_536):
+                        chunks.append(chunk)
+                except (OSError, ValueError):
+                    io_failures.append(name)
+
             try:
-                stdout, stderr = process.communicate(input="🧪" * 20_000, timeout=8)
-                return_code = process.returncode
+                exit_queue = _open_leader_exit_queue(process.pid)
+                assert process.stdin is not None
+                assert process.stdout is not None
+                assert process.stderr is not None
+                threads = [
+                    threading.Thread(target=write_task, daemon=True, name="router-stdin"),
+                    threading.Thread(
+                        target=read_output,
+                        args=(process.stdout, stdout_chunks, "stdout"),
+                        daemon=True,
+                        name="router-stdout",
+                    ),
+                    threading.Thread(
+                        target=read_output,
+                        args=(process.stderr, stderr_chunks, "stderr"),
+                        daemon=True,
+                        name="router-stderr",
+                    ),
+                ]
+                for thread in threads:
+                    thread.start()
+                leader_observed, live_group_observed, cleanup_complete = (
+                    self._observe_owned_group_before_reap(
+                        process,
+                        exit_queue=exit_queue,
+                        timeout_seconds=8,
+                    )
+                )
                 elapsed = time.monotonic() - started_at
-                start_marker_contents = start_marker_path.read_text(encoding="ascii")
             finally:
-                self._cleanup_owned_process_group(process)
+                if process.returncode is None and not leader_observed:
+                    self._signal_anchored_group(process)
+                    if exit_queue is not None:
+                        _wait_for_leader_exit(process.pid, exit_queue, 2)
+                for thread in threads:
+                    thread.join(timeout=2)
+                self._close_router_streams(process)
+                for thread in threads:
+                    if thread.is_alive():
+                        thread.join(timeout=2)
+                io_complete = all(not thread.is_alive() for thread in threads)
+                if exit_queue is not None:
+                    try:
+                        cast(Any, exit_queue).close()
+                    except OSError:
+                        pass
+                if process.returncode is None:
+                    return_code = process.wait(timeout=2)
+
+            stdout = b"".join(stdout_chunks).decode("utf-8")
+            stderr = b"".join(stderr_chunks).decode("utf-8")
+            start_marker_contents = start_marker_path.read_text(encoding="ascii")
 
         self.assertEqual(return_code, 7, stderr)
         self.assertLess(elapsed, 8)
+        self.assertTrue(leader_observed)
+        self.assertFalse(live_group_observed)
+        self.assertTrue(cleanup_complete)
+        self.assertTrue(io_complete)
+        self.assertEqual(io_failures, [])
         self.assertEqual(start_marker_contents, "started\n")
-        self.assertEqual(stdout.count("fake-runtime-started"), 1)
-        self.assertEqual(
-            json.loads([line for line in stderr.splitlines() if line][-1]),
-            {"error": "executor_failed"},
-        )
+        self.assertEqual(stdout, "fake-runtime-started\n")
+        self.assertEqual(stderr, '{"error": "executor_failed"}\n')
 
 
 if __name__ == "__main__":
