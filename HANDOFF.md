@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-08 by Codex_
+_Last updated: 2026-08-09 by Codex_
 
 ## Goal
 
@@ -51,11 +51,15 @@ user-provided model labels, and the no-retention boundary.
   interrupted writes, inherits environment/stdout/stderr, and waits for the
   direct child.
 - Confirmation and fingerprint mismatch exit before runtime or task access;
-  runtime unavailability exits before task stdin is read. Post-spawn framing
-  failure uses fingerprinted grace intervals and the direct-child sequence
-  `close -> wait -> terminate -> wait -> kill -> reap`, then returns redacted
-  exit `7`. Normal runtime deadline, descendants, role enforcement, review,
-  integration, provider access, and output remain external-runtime duties.
+  runtime unavailability and Python-visible unsafe `SIGCHLD` contexts exit
+  before task stdin is read. Module-owned `waitpid` preserves the exact child
+  status and treats ECHILD, including hidden Darwin `SA_NOCLDWAIT`, as redacted
+  post-spawn exit `7` instead of synthetic success. Framing failure uses
+  fingerprinted grace intervals and the direct-child sequence `close -> wait ->
+  terminate -> wait -> kill -> reap`; each signal is preceded by an
+  authoritative zero-time wait. Normal runtime deadline, descendants, role
+  enforcement, review, integration, provider access, and output remain
+  external-runtime duties.
 - The 13 final RALPLAN contract objections and the P0.5/P1/P2 gates are recorded
   in `docs/delegation-roadmap.md`. The five-round RALPLAN run itself ended at
   `max_rounds`/`ITERATE`; the roadmap incorporates its mandatory repairs but
@@ -69,7 +73,9 @@ user-provided model labels, and the no-retention boundary.
   frame/argv/task delivery, confirmation and acknowledgement precedence,
   unavailable-runtime precedence, invalid task, inherited output, one spawn,
   runtime nonzero mapping, partial/interrupted writes, EPIPE, and finite
-  direct-child reap. The fake is not a production adapter or qualification.
+  direct-child reap, Python-visible SIGCHLD rejection, child-status-loss races,
+  and actual Darwin `SA_NOCLDWAIT`. The fake is not a production adapter or
+  qualification.
 
 ## Unreleased delegation P1 foundation
 
@@ -161,8 +167,11 @@ user-provided model labels, and the no-retention boundary.
   containment. No unsafe or runaway descendant was launched.
 - Distribution gates require the source, wheel, and sdist production registries
   to have the exact canonical empty shape and canonical archive identity. Wheel
-  member collisions use Unicode NFC plus case-folding, while the production
-  registry itself must use its exact path. The sdist must have one root;
+  and sdist component tries retain exact spelling alongside Unicode NFC plus
+  case-folded identity, reject implicit file-parent and file/directory
+  collisions in either order, and cap raw name bytes before normalization plus
+  total path depth. The production registry itself must use its exact path. The
+  sdist must have one root;
   backslash/NUL and other unsafe member names, links, devices, FIFOs, or other
   special members are rejected before extraction; synthetic assets must occupy
   their exact `tests/...` paths. Synthetic and candidate-like content are
@@ -222,15 +231,15 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
-- On 2026-08-08, the current PR #22 worktree passed all 331 tests under Python
-  3.14.6 in 60.974s and Python 3.10.20 in 59.037s with `ResourceWarning`
-  promoted to an error. Those runs include the current 109-test focused
+- On 2026-08-09, the current PR #22 worktree passed all 353 tests under Python
+  3.14.6 in 65.196s and Python 3.10.20 in 57.922s with `ResourceWarning`
+  promoted to an error. Those runs include the current 131-test focused
   conformance, runtime, qualification, and distribution-isolation set.
   Ruff 0.16.1 check/format, mypy 2.3.0 strict checking, and `git diff --check`
   passed. Independent diff and completion-evidence reviews reported no
   actionable critical, high, or medium findings.
 - A fresh offline wheel/sdist build passed the distribution-isolation gate and
-  all 331 extracted-sdist tests under both interpreters. The gate proves exact
+  all 353 extracted-sdist tests under both interpreters. The gate proves exact
   empty source/wheel/sdist registries, rejects duplicate, Unicode-normalized,
   and case-folding archive identities before extraction, excludes test-only
   and qualification-like wheel content, and confines required synthetic assets
