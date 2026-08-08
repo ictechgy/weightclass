@@ -424,11 +424,12 @@ frame before spawning exactly one foreground process:
 ```
 
 The canonical review descriptor and UTF-8 task are sent on the child's standard
-input. Its stdout/stderr and environment are inherited. weightclass does not
-capture, parse, redact, limit, or retain runtime output. Runtime nonzero and
-post-spawn framing failure map to exit `7`; framing failure triggers the
-fingerprinted direct-child `close -> wait -> terminate -> wait -> kill -> reap`
-sequence. weightclass does not enumerate descendants.
+input within the fingerprinted `direct_child_cleanup.grace_seconds` deadline.
+Its stdout/stderr and environment are inherited. weightclass does not capture,
+parse, redact, limit, or retain runtime output. Runtime nonzero and post-spawn
+framing failure map to exit `7`; framing failure triggers the fingerprinted
+direct-child `close -> wait -> terminate -> wait -> kill -> reap` sequence.
+weightclass does not enumerate descendants.
 
 P0.5 includes no bundled Claude/Codex orchestrator. The user-supplied runtime
 owns vendor authentication, network and billing behavior, role processes,

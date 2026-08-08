@@ -1,7 +1,9 @@
 """One-shot process boundary for a trusted external delegation runtime."""
 
 import os
+import selectors
 import subprocess
+import time
 from pathlib import Path
 from typing import Final
 
@@ -25,28 +27,58 @@ def validate_delegation_runtime(runtime_path: str) -> None:
         raise DelegationRuntimeUnavailableError()
 
 
-def _write_all(file_descriptor: int, contents: bytes) -> None:
-    """Write every byte, retrying only interrupted writes."""
+def _write_all(file_descriptor: int, contents: bytes, timeout: float) -> None:
+    """Write every byte without blocking beyond one monotonic deadline."""
+    deadline = time.monotonic() + timeout
     remaining = memoryview(contents)
-    while remaining:
-        try:
-            written = os.write(file_descriptor, remaining)
-        except InterruptedError:
-            continue
-        if written <= 0:
-            raise DelegationRuntimeFailedError()
-        remaining = remaining[written:]
+    os.set_blocking(file_descriptor, False)
+    with selectors.DefaultSelector() as selector:
+        selector.register(file_descriptor, selectors.EVENT_WRITE)
+        while remaining:
+            if time.monotonic() >= deadline:
+                raise DelegationRuntimeFailedError()
+            try:
+                written = os.write(file_descriptor, remaining)
+            except InterruptedError:
+                continue
+            except BlockingIOError:
+                while True:
+                    remaining_seconds = deadline - time.monotonic()
+                    if remaining_seconds <= 0:
+                        raise DelegationRuntimeFailedError() from None
+                    try:
+                        ready = selector.select(remaining_seconds)
+                    except InterruptedError:
+                        continue
+                    if not ready:
+                        raise DelegationRuntimeFailedError() from None
+                    break
+                continue
+            if written <= 0:
+                raise DelegationRuntimeFailedError()
+            remaining = remaining[written:]
 
 
 def _wait(
     process: subprocess.Popen[bytes],
     timeout: float | None = None,
 ) -> int:
+    if timeout is None:
+        while True:
+            try:
+                return process.wait()
+            except InterruptedError:
+                continue
+
+    deadline = time.monotonic() + timeout
+    remaining_seconds = timeout
     while True:
         try:
-            return process.wait(timeout=timeout)
+            return process.wait(timeout=remaining_seconds)
         except InterruptedError:
-            continue
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                raise subprocess.TimeoutExpired(process.args, timeout) from None
 
 
 def _close_stdin(process: subprocess.Popen[bytes]) -> None:
@@ -54,13 +86,13 @@ def _close_stdin(process: subprocess.Popen[bytes]) -> None:
         process.stdin.close()
 
 
-def _cleanup_after_framing_failure(
+def _cleanup_direct_child(
     process: subprocess.Popen[bytes],
     cleanup: DirectChildCleanup,
 ) -> None:
     try:
         _close_stdin(process)
-    except OSError:
+    except (OSError, ValueError):
         pass
     try:
         _wait(process, cleanup.grace_seconds)
@@ -80,7 +112,7 @@ def run_delegation_runtime(
     frame: bytes,
     cleanup: DirectChildCleanup,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Spawn once, write one complete frame, and wait for the direct child."""
+    """Spawn once, deliver one frame within the reviewed grace, and wait."""
     arguments = (runtime_path, *RUNTIME_ARGUMENTS)
     try:
         process = subprocess.Popen(
@@ -94,11 +126,17 @@ def run_delegation_runtime(
     try:
         if process.stdin is None:
             raise DelegationRuntimeFailedError()
-        _write_all(process.stdin.fileno(), frame)
-        _close_stdin(process)
-    except (OSError, ValueError):
-        _cleanup_after_framing_failure(process, cleanup)
-        raise DelegationRuntimeFailedError() from None
-
-    return_code = _wait(process)
+        try:
+            _write_all(process.stdin.fileno(), frame, cleanup.grace_seconds)
+            _close_stdin(process)
+        except (OSError, ValueError):
+            raise DelegationRuntimeFailedError() from None
+        return_code = _wait(process)
+    except BaseException:
+        try:
+            _cleanup_direct_child(process, cleanup)
+        except BaseException:
+            # Cleanup failure must not replace the original interruption.
+            pass
+        raise
     return subprocess.CompletedProcess(arguments, return_code)

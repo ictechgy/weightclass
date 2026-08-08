@@ -2,6 +2,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -26,12 +27,17 @@ from weightclass.delegation_qualification import (
     build_qualification_candidate,
     load_qualification_registry,
 )
-from weightclass.delegation_runtime import _write_all
+from weightclass.delegation_runtime import (
+    _wait,
+    _write_all,
+    run_delegation_runtime,
+)
 from weightclass.delegation_schema import (
     current_platform_contract,
     load_delegation_manifest,
     load_delegation_policy,
 )
+from weightclass.delegation_types import DirectChildCleanup
 
 EXPECTED_TASK = "Apply the reviewed change. 테스트"
 FAKE_RUNTIME = Path(__file__).parent / "fixtures" / "fake_delegation_runtime.py"
@@ -53,10 +59,11 @@ class DelegationProtocolUnitTests(unittest.TestCase):
         """Breaks if a short write truncates the reviewed descriptor or task."""
         written = bytearray()
         attempts = 0
+        read_descriptor, write_descriptor = os.pipe()
 
         def partial_write(file_descriptor: int, contents: bytes) -> int:
             nonlocal attempts
-            self.assertEqual(file_descriptor, 99)
+            self.assertEqual(file_descriptor, write_descriptor)
             attempts += 1
             if attempts == 1:
                 raise InterruptedError()
@@ -64,11 +71,216 @@ class DelegationProtocolUnitTests(unittest.TestCase):
             written.extend(contents[:length])
             return length
 
-        with mock.patch("weightclass.delegation_runtime.os.write", side_effect=partial_write):
-            _write_all(99, b"abcdef")
+        try:
+            with mock.patch("weightclass.delegation_runtime.os.write", side_effect=partial_write):
+                _write_all(write_descriptor, b"abcdef", 1)
+        finally:
+            os.close(read_descriptor)
+            os.close(write_descriptor)
 
         self.assertEqual(bytes(written), b"abcdef")
         self.assertEqual(attempts, 4)
+
+    def test_wait_preserves_one_finite_deadline_across_interruptions(self) -> None:
+        """Breaks if each InterruptedError restarts the complete timeout."""
+        process = mock.Mock(spec=subprocess.Popen)
+        process.wait.side_effect = [InterruptedError(), InterruptedError(), 0]
+
+        with mock.patch("time.monotonic", side_effect=[10.0, 11.0, 12.0]):
+            return_code = _wait(process, 5.0)
+
+        self.assertEqual(return_code, 0)
+        self.assertEqual(
+            process.wait.call_args_list,
+            [mock.call(timeout=5.0), mock.call(timeout=4.0), mock.call(timeout=3.0)],
+        )
+
+    def test_keyboard_interrupt_during_write_cleans_child_then_reraises(self) -> None:
+        """Breaks if an interrupted owner abandons the direct child during framing."""
+        events: list[tuple[str, float | None] | str] = []
+        process = mock.Mock(spec=subprocess.Popen)
+        process.args = ("runtime",)
+        process.stdin = mock.Mock()
+        process.stdin.closed = False
+        process.stdin.fileno.return_value = 99
+
+        def close_stdin() -> None:
+            events.append("close")
+            process.stdin.closed = True
+
+        process.stdin.close.side_effect = close_stdin
+        wait_outcomes: list[BaseException | int] = [
+            subprocess.TimeoutExpired(process.args, 2),
+            subprocess.TimeoutExpired(process.args, 3),
+            0,
+        ]
+
+        def wait(*, timeout: float | None = None) -> int:
+            events.append(("wait", timeout))
+            outcome = wait_outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        process.wait.side_effect = wait
+        process.terminate.side_effect = lambda: events.append("terminate")
+        process.kill.side_effect = lambda: events.append("kill")
+        interruption = KeyboardInterrupt()
+
+        with (
+            mock.patch(
+                "weightclass.delegation_runtime.subprocess.Popen",
+                return_value=process,
+            ),
+            mock.patch(
+                "weightclass.delegation_runtime._write_all",
+                side_effect=interruption,
+            ),
+            self.assertRaises(KeyboardInterrupt) as raised,
+        ):
+            run_delegation_runtime(
+                "runtime",
+                b"frame",
+                DirectChildCleanup(grace_seconds=2, terminate_grace_seconds=3),
+            )
+
+        self.assertIs(raised.exception, interruption)
+        self.assertEqual(
+            events,
+            [
+                "close",
+                ("wait", 2),
+                "terminate",
+                ("wait", 3),
+                "kill",
+                ("wait", None),
+            ],
+        )
+
+    def test_unexpected_final_wait_error_cleans_child_then_reraises(self) -> None:
+        """Breaks if an unexpected wait failure escapes while the direct child is live."""
+        events: list[tuple[str, float | None] | str] = []
+        process = mock.Mock(spec=subprocess.Popen)
+        process.args = ("runtime",)
+        process.stdin = mock.Mock()
+        process.stdin.closed = False
+        process.stdin.fileno.return_value = 99
+
+        def close_stdin() -> None:
+            events.append("close")
+            process.stdin.closed = True
+
+        process.stdin.close.side_effect = close_stdin
+        wait_error = RuntimeError("unexpected wait failure")
+        wait_outcomes: list[BaseException | int] = [
+            wait_error,
+            subprocess.TimeoutExpired(process.args, 2),
+            subprocess.TimeoutExpired(process.args, 3),
+            0,
+        ]
+
+        def wait(*, timeout: float | None = None) -> int:
+            events.append(("wait", timeout))
+            outcome = wait_outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        process.wait.side_effect = wait
+        process.terminate.side_effect = lambda: events.append("terminate")
+        process.kill.side_effect = lambda: events.append("kill")
+
+        with (
+            mock.patch(
+                "weightclass.delegation_runtime.subprocess.Popen",
+                return_value=process,
+            ),
+            mock.patch("weightclass.delegation_runtime._write_all"),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            run_delegation_runtime(
+                "runtime",
+                b"frame",
+                DirectChildCleanup(grace_seconds=2, terminate_grace_seconds=3),
+            )
+
+        self.assertIs(raised.exception, wait_error)
+        self.assertEqual(
+            events,
+            [
+                "close",
+                ("wait", None),
+                ("wait", 2),
+                "terminate",
+                ("wait", 3),
+                "kill",
+                ("wait", None),
+            ],
+        )
+
+    def test_maximum_frame_to_nonreading_child_is_bounded_and_reaps_exact_pid(self) -> None:
+        """Breaks if a full pipe blocks before direct-child cleanup can run."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            pid_path = directory / "runtime.pid"
+            status_path = directory / "helper.status"
+            runtime_path = directory / "nonreading-runtime"
+            runtime_path.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "from pathlib import Path\n"
+                "import time\n"
+                f"Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='ascii')\n"
+                "time.sleep(60)\n",
+                encoding="utf-8",
+            )
+            runtime_path.chmod(runtime_path.stat().st_mode | stat.S_IXUSR)
+            helper = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import sys; "
+                        "from weightclass.delegation_runtime import "
+                        "DelegationRuntimeFailedError, run_delegation_runtime; "
+                        "from weightclass.delegation_types import DirectChildCleanup; "
+                        "\ntry:\n"
+                        " run_delegation_runtime(sys.argv[1], b'x' * 342_156, "
+                        "DirectChildCleanup(1, 1))\n"
+                        "except DelegationRuntimeFailedError:\n"
+                        " status = 7\n"
+                        "except BaseException:\n"
+                        " status = 99\n"
+                        "else:\n"
+                        " status = 0\n"
+                        "from pathlib import Path\n"
+                        "Path(sys.argv[2]).write_text(str(status), encoding='ascii')\n"
+                        "import time\n"
+                        "time.sleep(60)\n"
+                    ),
+                    str(runtime_path),
+                    str(status_path),
+                ],
+                close_fds=True,
+                start_new_session=True,
+            )
+            try:
+                deadline = time.monotonic() + 6
+                while not (pid_path.is_file() and status_path.is_file()):
+                    if time.monotonic() >= deadline:
+                        self.fail("runtime helper did not publish its bounded result")
+                    time.sleep(0.01)
+                self.assertTrue(pid_path.is_file())
+                runtime_pid = int(pid_path.read_text(encoding="ascii"))
+                self.assertEqual(status_path.read_text(encoding="ascii"), "7")
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(runtime_pid, 0)
+            finally:
+                try:
+                    os.killpg(helper.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                helper.wait()
 
 
 class DelegationRunTests(unittest.TestCase):
