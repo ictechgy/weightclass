@@ -104,14 +104,24 @@ def _load_empty_registry(raw: bytes, location: str) -> None:
         _fail(f"{location}: registry shape is not the empty production shape")
 
 
-def _read_archive_text(archive: Any, name: str, location: str) -> bytes:
+def _read_archive_member(archive: zipfile.ZipFile, member: zipfile.ZipInfo, location: str) -> bytes:
+    if member.file_size < 0 or member.file_size > MAX_ARCHIVE_TEXT_BYTES:
+        _fail(f"{location}: archive member exceeds the scan limit")
     try:
-        with archive.open(name) as member:
-            raw = bytes(member.read(MAX_ARCHIVE_TEXT_BYTES + 1))
-    except (OSError, EOFError, RuntimeError, zipfile.BadZipFile):
-        _fail(f"{location}: text member could not be inspected")
+        with archive.open(member) as stream:
+            raw = bytes(stream.read(MAX_ARCHIVE_TEXT_BYTES + 1))
+    except (
+        OSError,
+        EOFError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        KeyError,
+        zipfile.BadZipFile,
+    ):
+        _fail(f"{location}: archive member could not be inspected")
     if len(raw) > MAX_ARCHIVE_TEXT_BYTES:
-        _fail(f"{location}: text member exceeds the scan limit")
+        _fail(f"{location}: archive member exceeds the scan limit")
     return raw
 
 
@@ -141,22 +151,64 @@ def verify_source_registry(root: Path) -> None:
     _load_empty_registry(registry.read_bytes(), str(registry))
 
 
+def _wheel_members(archive: zipfile.ZipFile, wheel: Path) -> list[zipfile.ZipInfo]:
+    members = archive.infolist()
+    names: set[str] = set()
+    casefolded_names: set[str] = set()
+    for member in members:
+        name = member.filename
+        path = PurePosixPath(name)
+        casefolded_name = name.casefold()
+        if (
+            name in names
+            or casefolded_name in casefolded_names
+            or not path.parts
+            or path.is_absolute()
+            or ".." in path.parts
+            or "." in path.parts
+            or "\\" in name
+            or "\x00" in name
+            or name != (f"{path.as_posix()}/" if member.is_dir() else path.as_posix())
+        ):
+            _fail(f"{wheel.name}: noncanonical or duplicate archive member: {name}")
+        names.add(name)
+        casefolded_names.add(casefolded_name)
+    return members
+
+
 def verify_wheel(wheel: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
-        names = archive.namelist()
-        registries = [name for name in names if name.endswith(WHEEL_REGISTRY_PATH)]
-        if registries != [WHEEL_REGISTRY_PATH]:
+        members = _wheel_members(archive, wheel)
+        folded_registry_path = WHEEL_REGISTRY_PATH.casefold()
+        folded_registry_suffix = f"/{WHEEL_REGISTRY_PATH}".casefold()
+        registry_aliases = [
+            member
+            for member in members
+            if member.filename.casefold() == folded_registry_path
+            or member.filename.casefold().endswith(folded_registry_suffix)
+        ]
+        canonical_registries = [
+            member for member in registry_aliases if member.filename == WHEEL_REGISTRY_PATH
+        ]
+        if (
+            len(registry_aliases) != 1
+            or len(canonical_registries) != 1
+            or canonical_registries[0].is_dir()
+        ):
             _fail(f"{wheel.name}: expected exactly one production registry")
+        registry = canonical_registries[0]
         _load_empty_registry(
-            archive.read(WHEEL_REGISTRY_PATH), f"{wheel.name}:{WHEEL_REGISTRY_PATH}"
+            _read_archive_member(archive, registry, f"{wheel.name}:{WHEEL_REGISTRY_PATH}"),
+            f"{wheel.name}:{WHEEL_REGISTRY_PATH}",
         )
-        for name in names:
+        for member in members:
+            if member.is_dir():
+                continue
+            name = member.filename
             lowered = name.lower()
             if any(part in lowered for part in FORBIDDEN_WHEEL_PATH_PARTS):
                 _fail(f"{wheel.name}: test-only artifact shipped: {name}")
-            if not lowered.endswith((".py", ".json", ".txt", ".md")):
-                continue
-            raw = _read_archive_text(archive, name, f"{wheel.name}:{name}")
+            raw = _read_archive_member(archive, member, f"{wheel.name}:{name}")
             if any(token.encode() in raw for token in FORBIDDEN_WHEEL_TEXT):
                 _fail(f"{wheel.name}: synthetic or candidate-like content shipped: {name}")
             document_kind = _qualification_document_kind(raw, f"{wheel.name}:{name}")

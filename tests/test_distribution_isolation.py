@@ -6,11 +6,13 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+import warnings
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
 from tests.verify_distribution_isolation import (
+    MAX_ARCHIVE_TEXT_BYTES,
     IsolationError,
     run_extracted_sdist_tests,
     verify_sdist,
@@ -167,6 +169,114 @@ class DistributionIsolationTests(unittest.TestCase):
 
             with self.assertRaises(IsolationError):
                 verify_wheel(wheel)
+
+    def test_wheel_rejects_populated_data_purelib_registry_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr(
+                    "weightclass-0.data/purelib/weightclass/delegation_qualifications.json",
+                    json.dumps(
+                        {
+                            "records": [{"adapter_id": "decoy"}],
+                            "registry_schema_version": 1,
+                            "suite_revision": "delegation-conformance-v2",
+                        }
+                    ),
+                )
+
+            with self.assertRaises(IsolationError):
+                verify_wheel(wheel)
+
+    def test_wheel_rejects_case_variant_registry_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr(
+                    "WeightClass/delegation_qualifications.json",
+                    json.dumps(
+                        {
+                            "records": [{"adapter_id": "case-decoy"}],
+                            "registry_schema_version": 1,
+                            "suite_revision": "delegation-conformance-v2",
+                        }
+                    ),
+                )
+
+            with self.assertRaises(IsolationError):
+                verify_wheel(wheel)
+
+    def test_wheel_rejects_candidate_hidden_by_duplicate_member_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr(
+                    "weightclass/_reviewed_candidate.json",
+                    json.dumps(_candidate_like_record()),
+                )
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", UserWarning)
+                    archive.writestr("weightclass/_reviewed_candidate.json", "not JSON")
+
+            with self.assertRaises(IsolationError):
+                verify_wheel(wheel)
+
+    def test_wheel_rejects_noncanonical_member_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr("weightclass/./module.py", "VALUE = 1\n")
+
+            with self.assertRaises(IsolationError):
+                verify_wheel(wheel)
+
+    def test_wheel_rejects_candidate_at_extensionless_package_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr(
+                    "weightclass/_reviewed_candidate",
+                    json.dumps(_candidate_like_record()),
+                )
+
+            with self.assertRaises(IsolationError):
+                verify_wheel(wheel)
+
+    def test_wheel_bounds_production_registry_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            oversized_registry = b"{" + b" " * MAX_ARCHIVE_TEXT_BYTES + b"}"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr("weightclass/delegation_qualifications.json", oversized_registry)
+
+            with patch.object(zipfile.ZipFile, "read", side_effect=AssertionError):
+                with self.assertRaises(IsolationError):
+                    verify_wheel(wheel)
 
     def test_wheel_rejects_evidence_document_at_non_registry_package_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
