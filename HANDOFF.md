@@ -222,15 +222,15 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
-- On 2026-08-08, the current PR #22 worktree passed all 312 tests under Python
-  3.14.6 in 56.124s and Python 3.10.20 in 53.874s with `ResourceWarning`
-  promoted to an error. Those runs include the current 90-test focused
+- On 2026-08-08, the current PR #22 worktree passed all 331 tests under Python
+  3.14.6 in 60.974s and Python 3.10.20 in 59.037s with `ResourceWarning`
+  promoted to an error. Those runs include the current 109-test focused
   conformance, runtime, qualification, and distribution-isolation set.
   Ruff 0.16.1 check/format, mypy 2.3.0 strict checking, and `git diff --check`
   passed. Independent diff and completion-evidence reviews reported no
   actionable critical, high, or medium findings.
 - A fresh offline wheel/sdist build passed the distribution-isolation gate and
-  all 312 extracted-sdist tests under both interpreters. The gate proves exact
+  all 331 extracted-sdist tests under both interpreters. The gate proves exact
   empty source/wheel/sdist registries, rejects duplicate, Unicode-normalized,
   and case-folding archive identities before extraction, excludes test-only
   and qualification-like wheel content, and confines required synthetic assets
