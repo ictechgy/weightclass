@@ -1075,7 +1075,10 @@ class DelegationProtocolUnitTests(unittest.TestCase):
                         "else:\n"
                         " status = 0\n"
                         "from pathlib import Path\n"
-                        "Path(sys.argv[2]).write_text(str(status), encoding='ascii')\n"
+                        "status_path = Path(sys.argv[2])\n"
+                        "status_tmp = status_path.with_name(status_path.name + '.tmp')\n"
+                        "status_tmp.write_text(str(status), encoding='ascii')\n"
+                        "status_tmp.replace(status_path)\n"
                         "import time\n"
                         "time.sleep(60)\n"
                     ),
