@@ -1,3 +1,4 @@
+import fcntl
 import hashlib
 import json
 import os
@@ -31,6 +32,7 @@ FAKE_DRIVER = Path(__file__).parent / "fixtures" / "fake_conformance_driver.py"
 FIXED_SENTINEL_RUNTIME = Path(__file__).parent / "fixtures" / "fixed_conformance_sentinel.py"
 
 _SIGNAL_CASE_RUNNER = r"""
+import json
 import signal
 import sys
 import time
@@ -44,6 +46,7 @@ workspace_path = Path(sys.argv[3])
 handler_mode = sys.argv[4]
 handler_path = Path(sys.argv[5])
 cleanup_path = Path(sys.argv[6])
+cleanup_observation_path = Path(sys.argv[7])
 
 cleanup_state = {"completed": False}
 original_cleanup = conformance._DriverCaseOwnership.cleanup
@@ -52,13 +55,70 @@ def observed_cleanup(ownership):
     if cleanup_path.name != "-":
         cleanup_path.write_text("started", encoding="ascii")
         time.sleep(0.3)
-    original_cleanup(ownership)
+    original_before_final_reap = ownership.before_final_reap
+    original_wait_after_kill = conformance._wait_after_kill
+    observation = {}
+    reap_calls = 0
+
+    def observed_before_final_reap():
+        process = ownership.process
+        process_group_id = ownership.process_group_id
+        assert process is not None
+        assert process_group_id is not None
+        assert process.stdin is not None
+        assert process.stdout is not None
+        reader_signal_target = ownership.reader_signal_target
+        observation.update(
+            {
+                "group_gone_before_reap": not conformance._process_group_exists(
+                    process_group_id
+                ),
+                "leader_unreaped_before_reap": process.returncode is None,
+                "reader_signal_target_cleared_before_reap": (
+                    reader_signal_target is not None
+                    and reader_signal_target._process_group_id is None
+                ),
+                "streams_closed_before_reap": (
+                    process.stdin.closed and process.stdout.closed
+                ),
+            }
+        )
+        if original_before_final_reap is not None:
+            original_before_final_reap()
+        deferred_signal_target = getattr(original_before_final_reap, "__self__", None)
+        observation["deferred_signal_target_cleared_before_reap"] = (
+            deferred_signal_target is not None
+            and deferred_signal_target.process_group_id is None
+        )
+
+    def observed_wait_after_kill(process):
+        nonlocal reap_calls
+        reap_calls += 1
+        return original_wait_after_kill(process)
+
+    ownership.before_final_reap = observed_before_final_reap
+    conformance._wait_after_kill = observed_wait_after_kill
+    try:
+        original_cleanup(ownership)
+    finally:
+        conformance._wait_after_kill = original_wait_after_kill
     process = ownership.process
     cleanup_state["completed"] = (
         ownership.cleaned
         and not ownership.group_cleanup_incomplete
         and ownership.process_group_id is None
         and (process is None or process.returncode is not None)
+    )
+    observation.update(
+        {
+            "reap_calls": reap_calls,
+            "reaped_after_cleanup": process is not None and process.returncode is not None,
+            "target_cleared_after_reap": ownership.process_group_id is None,
+        }
+    )
+    cleanup_observation_path.write_text(
+        json.dumps(observation, sort_keys=True),
+        encoding="ascii",
     )
 
 conformance._DriverCaseOwnership.cleanup = observed_cleanup
@@ -160,22 +220,29 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         process: subprocess.Popen[Any],
     ) -> None:
         """Clean up only a live, unreaped Popen that anchors its own group."""
-        if process.returncode is not None:
-            return
-        try:
-            process_group_id = os.getpgid(process.pid)
-        except (PermissionError, ProcessLookupError):
-            return
-        if process_group_id != process.pid:
-            return
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except (PermissionError, ProcessLookupError):
-            pass
-        try:
-            process.wait(timeout=1)
-        except (ChildProcessError, OSError, ValueError, subprocess.TimeoutExpired):
-            pass
+        if process.returncode is None:
+            try:
+                anchor_unreaped = process.poll() is None
+            except (ChildProcessError, OSError, ValueError):
+                anchor_unreaped = False
+            group_signaled = False
+            if anchor_unreaped:
+                try:
+                    process_group_id = os.getpgid(process.pid)
+                    if process_group_id == process.pid:
+                        os.killpg(process_group_id, signal.SIGKILL)
+                        group_signaled = True
+                except (PermissionError, ProcessLookupError):
+                    pass
+                if not group_signaled:
+                    try:
+                        process.kill()
+                    except (OSError, ValueError):
+                        pass
+            try:
+                process.wait(timeout=1)
+            except (ChildProcessError, OSError, ValueError, subprocess.TimeoutExpired):
+                pass
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None and not stream.closed:
                 try:
@@ -194,10 +261,56 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         except (OSError, ValueError, subprocess.TimeoutExpired):
             pass
 
-    def test_cleanup_owned_process_group_skips_reaped_anchor(self) -> None:
+    def _wait_for_fixture_lock_release(
+        self,
+        lock_path: Path,
+        *,
+        allow_spawn_window: bool,
+    ) -> None:
+        deadline = time.monotonic() + 1
+        absence_deadline = time.monotonic() + (0.1 if allow_spawn_window else 0)
+        while True:
+            try:
+                lock_file = lock_path.open("rb")
+            except FileNotFoundError:
+                if time.monotonic() >= absence_deadline:
+                    return
+            else:
+                with lock_file:
+                    try:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        pass
+                    else:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                        return
+            if time.monotonic() >= deadline:
+                self.fail("nested fixture retained its liveness lock")
+            time.sleep(0.005)
+
+    def _cleanup_nested_fixture_process(
+        self,
+        process: subprocess.Popen[Any],
+        lock_path: Path,
+        stop_path: Path,
+    ) -> None:
+        try:
+            stop_path.write_text("stop", encoding="ascii")
+            self._wait_for_fixture_lock_release(lock_path, allow_spawn_window=False)
+        finally:
+            try:
+                self._cleanup_test_process(process)
+            finally:
+                self._wait_for_fixture_lock_release(lock_path, allow_spawn_window=True)
+
+    def test_cleanup_closes_streams_without_signaling_reaped_anchor(self) -> None:
         anchor = mock.create_autospec(subprocess.Popen, instance=True)
         anchor.pid = 123
         anchor.returncode = 0
+        anchor.poll.return_value = 0
+        anchor.stdin = mock.Mock(closed=False)
+        anchor.stdout = mock.Mock(closed=False)
+        anchor.stderr = mock.Mock(closed=False)
 
         with (
             mock.patch.object(os, "getpgid") as getpgid,
@@ -209,13 +322,177 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         getpgid.assert_not_called()
         killpg.assert_not_called()
         kill.assert_not_called()
+        anchor.poll.assert_not_called()
         anchor.kill.assert_not_called()
         anchor.wait.assert_not_called()
+        anchor.stdin.close.assert_called_once_with()
+        anchor.stdout.close.assert_called_once_with()
+        anchor.stderr.close.assert_called_once_with()
+
+    def test_cleanup_test_process_reaps_runner_and_closes_streams(self) -> None:
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            self._cleanup_test_process(process)
+
+            self.assertIsNotNone(process.returncode)
+            assert process.stdout is not None
+            assert process.stderr is not None
+            self.assertTrue(process.stdout.closed)
+            self.assertTrue(process.stderr.closed)
+        finally:
+            if process.returncode is None:
+                process.kill()
+                process.communicate(timeout=1)
+
+    def test_cleanup_owned_process_group_kills_nonleader_child_before_wait(self) -> None:
+        anchor = mock.create_autospec(subprocess.Popen, instance=True)
+        anchor.pid = 123
+        anchor.returncode = None
+        anchor.poll.return_value = None
+        events: list[str] = []
+        anchor.stdin = mock.Mock(closed=True)
+        anchor.stdout = mock.Mock(closed=True)
+        anchor.stderr = mock.Mock(closed=True)
+        anchor.kill.side_effect = lambda: events.append("kill")
+        anchor.wait.side_effect = lambda **_: events.append("wait")
+
+        with (
+            mock.patch.object(os, "getpgid", return_value=456) as getpgid,
+            mock.patch.object(os, "killpg") as killpg,
+            mock.patch.object(os, "kill") as kill,
+        ):
+            self._cleanup_owned_process_group(anchor)
+
+        self.assertEqual(events, ["kill", "wait"])
+        getpgid.assert_called_once_with(anchor.pid)
+        killpg.assert_not_called()
+        kill.assert_not_called()
+        anchor.poll.assert_called_once_with()
+        anchor.wait.assert_called_once_with(timeout=1)
+        anchor.kill.assert_called_once_with()
+
+    def test_cleanup_owned_process_group_kills_anchored_child_when_group_lookup_fails(
+        self,
+    ) -> None:
+        anchor = mock.create_autospec(subprocess.Popen, instance=True)
+        anchor.pid = 123
+        anchor.returncode = None
+        anchor.poll.return_value = None
+        events: list[str] = []
+        anchor.stdin = mock.Mock(closed=True)
+        anchor.stdout = mock.Mock(closed=True)
+        anchor.stderr = mock.Mock(closed=True)
+        anchor.kill.side_effect = lambda: events.append("kill")
+        anchor.wait.side_effect = lambda **_: events.append("wait")
+
+        with (
+            mock.patch.object(os, "getpgid", side_effect=ProcessLookupError) as getpgid,
+            mock.patch.object(os, "killpg") as killpg,
+            mock.patch.object(os, "kill") as kill,
+        ):
+            self._cleanup_owned_process_group(anchor)
+
+        self.assertEqual(events, ["kill", "wait"])
+        getpgid.assert_called_once_with(anchor.pid)
+        killpg.assert_not_called()
+        kill.assert_not_called()
+        anchor.poll.assert_called_once_with()
+        anchor.wait.assert_called_once_with(timeout=1)
+        anchor.kill.assert_called_once_with()
+
+    def test_cleanup_poll_reaps_dead_anchor_without_os_probe_or_signal(self) -> None:
+        anchor = subprocess.Popen(
+            [sys.executable, "-c", "pass"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            assert anchor.stdout is not None
+            self.assertEqual(anchor.stdout.read(), b"")
+            self.assertIsNone(anchor.returncode)
+
+            with (
+                mock.patch.object(
+                    os,
+                    "getpgid",
+                    side_effect=AssertionError("released PID was probed"),
+                ) as getpgid,
+                mock.patch.object(
+                    os,
+                    "kill",
+                    side_effect=AssertionError("released PID was signaled"),
+                ) as raw_kill,
+            ):
+                self._cleanup_owned_process_group(anchor)
+
+            getpgid.assert_not_called()
+            raw_kill.assert_not_called()
+            self.assertEqual(anchor.returncode, 0)
+            self.assertTrue(anchor.stdout.closed)
+        finally:
+            self._cleanup_owned_process_group(anchor)
+
+    def test_preexisting_stop_marker_ends_locked_hanging_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            runtime_path = directory / "runtime"
+            workspace_path = directory / "workspace"
+            pid_path = directory / "driver.pid"
+            lock_path = directory / "driver.lock"
+            stop_path = directory / "driver.stop"
+            workspace_path.mkdir(mode=0o700)
+            _write_executable(runtime_path, b"unqualified-test-runtime\n")
+            stop_path.write_text("stop", encoding="ascii")
+            environment = os.environ.copy()
+            environment["WEIGHTCLASS_FAKE_CONFORMANCE_MODE"] = "hang"
+            environment["WEIGHTCLASS_FAKE_CONFORMANCE_TARGET"] = CONFORMANCE_CASES[0].case_id
+            environment["WEIGHTCLASS_FAKE_CONFORMANCE_PID_PATH"] = str(pid_path)
+            environment["WEIGHTCLASS_FAKE_CONFORMANCE_LOCK_PATH"] = str(lock_path)
+            environment["WEIGHTCLASS_FAKE_CONFORMANCE_STOP_PATH"] = str(stop_path)
+            process = subprocess.Popen(
+                [str(FAKE_DRIVER), "--weightclass-conformance-driver", "1"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=workspace_path,
+                env=environment,
+                start_new_session=True,
+                text=True,
+            )
+            request = json.dumps(
+                {
+                    "case": CONFORMANCE_CASES[0].case,
+                    "case_id": CONFORMANCE_CASES[0].case_id,
+                    "driver_protocol_version": 1,
+                    "runtime_path": str(runtime_path),
+                    "workspace_path": str(workspace_path),
+                }
+            )
+            try:
+                try:
+                    stdout, stderr = process.communicate(request, timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    self.fail("preexisting stop marker did not stop the fixture")
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertIn('"passed":true', stdout)
+            finally:
+                self._cleanup_owned_process_group(process)
+
+            self.assertTrue(lock_path.is_file())
+            with lock_path.open("rb") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def test_cleanup_owned_process_group_signals_live_anchor_before_wait(self) -> None:
         anchor = mock.create_autospec(subprocess.Popen, instance=True)
         anchor.pid = 123
         anchor.returncode = None
+        anchor.poll.return_value = None
         events: list[str] = []
         anchor.stdin = mock.Mock(closed=False)
         anchor.stdout = mock.Mock(closed=False)
@@ -240,6 +517,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         getpgid.assert_called_once_with(anchor.pid)
         killpg.assert_called_once_with(anchor.pid, signal.SIGKILL)
         kill.assert_not_called()
+        anchor.poll.assert_called_once_with()
         anchor.wait.assert_called_once_with(timeout=1)
         anchor.kill.assert_not_called()
 
@@ -249,18 +527,23 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         *,
         handler_mode: str,
         delayed_cleanup: bool = False,
-    ) -> tuple[subprocess.Popen[str], Path, Path]:
+    ) -> tuple[subprocess.Popen[str], Path, Path, Path, Path, Path]:
         runtime_path = directory / "runtime"
         workspace_path = directory / "workspace"
         pid_path = directory / "driver.pid"
         handler_path = directory / "handler.log"
         cleanup_path = directory / ("cleanup.started" if delayed_cleanup else "-")
+        cleanup_observation_path = directory / "cleanup.observation.json"
+        lock_path = directory / "driver.lock"
+        stop_path = directory / "driver.stop"
         workspace_path.mkdir(mode=0o700)
         _write_executable(runtime_path, b"unqualified-test-runtime\n")
         environment = os.environ.copy()
         environment["WEIGHTCLASS_FAKE_CONFORMANCE_MODE"] = "hang"
         environment["WEIGHTCLASS_FAKE_CONFORMANCE_TARGET"] = CONFORMANCE_CASES[0].case_id
         environment["WEIGHTCLASS_FAKE_CONFORMANCE_PID_PATH"] = str(pid_path)
+        environment["WEIGHTCLASS_FAKE_CONFORMANCE_LOCK_PATH"] = str(lock_path)
+        environment["WEIGHTCLASS_FAKE_CONFORMANCE_STOP_PATH"] = str(stop_path)
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -272,13 +555,84 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 handler_mode,
                 str(handler_path),
                 str(cleanup_path),
+                str(cleanup_observation_path),
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             env=environment,
             text=True,
         )
-        return process, pid_path, cleanup_path
+        return (
+            process,
+            pid_path,
+            cleanup_path,
+            cleanup_observation_path,
+            lock_path,
+            stop_path,
+        )
+
+    def _assert_production_cleanup_observed(self, observation_path: Path) -> None:
+        self.assertTrue(observation_path.is_file(), "cleanup observation was not published")
+        self.assertEqual(
+            json.loads(observation_path.read_text(encoding="ascii")),
+            {
+                "deferred_signal_target_cleared_before_reap": True,
+                "group_gone_before_reap": True,
+                "leader_unreaped_before_reap": True,
+                "reader_signal_target_cleared_before_reap": True,
+                "reap_calls": 1,
+                "reaped_after_cleanup": True,
+                "streams_closed_before_reap": True,
+                "target_cleared_after_reap": True,
+            },
+        )
+
+    def test_nested_fixture_finalizer_releases_lock_when_body_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            (
+                process,
+                pid_path,
+                _,
+                _,
+                lock_path,
+                stop_path,
+            ) = self._start_signal_case(directory, handler_mode="callable")
+
+            with self.assertRaisesRegex(AssertionError, "forced body failure"):
+                try:
+                    self._wait_for_pid_publication(pid_path, process)
+                    self._wait_for_path(lock_path, process)
+                    raise AssertionError("forced body failure")
+                finally:
+                    self._cleanup_nested_fixture_process(process, lock_path, stop_path)
+
+            self.assertIsNotNone(process.returncode)
+            with lock_path.open("rb") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def test_nested_fixture_finalizer_handles_stop_before_driver_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            (
+                process,
+                _,
+                _,
+                _,
+                lock_path,
+                stop_path,
+            ) = self._start_signal_case(
+                Path(temporary_directory),
+                handler_mode="callable",
+            )
+
+            self._cleanup_nested_fixture_process(process, lock_path, stop_path)
+
+            self.assertIsNotNone(process.returncode)
+            if lock_path.exists():
+                with lock_path.open("rb") as lock_file:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def _arguments(self, runtime_path: Path) -> list[str]:
         return [
@@ -535,7 +889,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
 
             def capture_process(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
                 process = cast(subprocess.Popen[bytes], real_popen(*args, **kwargs))
-                process_group_id = process.pid
+                process_group_id = os.getpgid(process.pid)
                 spawned.append((process, process_group_id))
                 anchors_by_group[process_group_id] = process
                 return process
@@ -610,7 +964,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
 
             def capture_process(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
                 process = cast(subprocess.Popen[bytes], real_popen(*args, **kwargs))
-                spawned[process.pid] = (process, process.pid)
+                spawned[process.pid] = (process, os.getpgid(process.pid))
                 return process
 
             def observe_group(process_group_id: int) -> bool:
@@ -719,11 +1073,31 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             _write_executable(runtime_path, b"unqualified-test-runtime\n")
             real_popen = cast(Any, subprocess.Popen)
             spawned: list[tuple[subprocess.Popen[bytes], int]] = []
+            cleanup_observations: list[tuple[bool, bool, bool, int | None]] = []
+            from weightclass import delegation_conformance as conformance_module
+
+            real_group_exists = conformance_module._process_group_exists
+            real_wait_after_kill = conformance_module._wait_after_kill
 
             def capture_process(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
                 process = cast(subprocess.Popen[bytes], real_popen(*args, **kwargs))
                 spawned.append((process, os.getpgid(process.pid)))
                 return process
+
+            def observe_final_reap(process: subprocess.Popen[bytes]) -> int:
+                spawned_process, process_group_id = spawned[0]
+                assert process is spawned_process
+                assert process.stdin is not None
+                assert process.stdout is not None
+                cleanup_observations.append(
+                    (
+                        real_group_exists(process_group_id),
+                        process.stdin.closed,
+                        process.stdout.closed,
+                        process.returncode,
+                    )
+                )
+                return real_wait_after_kill(process)
 
             try:
                 with (
@@ -734,6 +1108,10 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                     mock.patch(
                         "weightclass.delegation_conformance.threading.Thread.start",
                         side_effect=KeyboardInterrupt,
+                    ),
+                    mock.patch(
+                        "weightclass.delegation_conformance._wait_after_kill",
+                        side_effect=observe_final_reap,
                     ),
                     self.assertRaises(KeyboardInterrupt),
                 ):
@@ -748,6 +1126,8 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 self.assertEqual(len(spawned), 1)
                 process, process_group_id = spawned[0]
                 self.assertEqual(process_group_id, process.pid)
+                self.assertEqual(cleanup_observations, [(False, True, True, None)])
+                self.assertIsNotNone(process.returncode)
             finally:
                 for process, _ in spawned:
                     self._cleanup_owned_process_group(process)
@@ -762,6 +1142,11 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             _write_executable(runtime_path, b"unqualified-test-runtime\n")
             real_popen = cast(Any, subprocess.Popen)
             spawned: list[tuple[subprocess.Popen[bytes], int]] = []
+            cleanup_observations: list[tuple[bool, bool, bool, int | None]] = []
+            from weightclass import delegation_conformance as conformance_module
+
+            real_group_exists = conformance_module._process_group_exists
+            real_wait_after_kill = conformance_module._wait_after_kill
 
             def interrupt_spawn(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
                 process = cast(subprocess.Popen[bytes], real_popen(*args, **kwargs))
@@ -769,11 +1154,30 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 os.kill(os.getpid(), signal.SIGINT)
                 return process
 
+            def observe_final_reap(process: subprocess.Popen[bytes]) -> int:
+                spawned_process, process_group_id = spawned[0]
+                assert process is spawned_process
+                assert process.stdin is not None
+                assert process.stdout is not None
+                cleanup_observations.append(
+                    (
+                        real_group_exists(process_group_id),
+                        process.stdin.closed,
+                        process.stdout.closed,
+                        process.returncode,
+                    )
+                )
+                return real_wait_after_kill(process)
+
             try:
                 with (
                     mock.patch(
                         "weightclass.delegation_conformance.subprocess.Popen",
                         side_effect=interrupt_spawn,
+                    ),
+                    mock.patch(
+                        "weightclass.delegation_conformance._wait_after_kill",
+                        side_effect=observe_final_reap,
                     ),
                     self.assertRaises(KeyboardInterrupt),
                 ):
@@ -788,6 +1192,8 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 self.assertEqual(len(spawned), 1)
                 process, process_group_id = spawned[0]
                 self.assertEqual(process_group_id, process.pid)
+                self.assertEqual(cleanup_observations, [(False, True, True, None)])
+                self.assertIsNotNone(process.returncode)
             finally:
                 for process, _ in spawned:
                     self._cleanup_owned_process_group(process)
@@ -795,10 +1201,14 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
     def test_sigint_with_default_disposition_cleans_group_before_termination(self) -> None:
         """Breaks if SIG_DFL terminates the runner before its owned group is cleaned."""
         with tempfile.TemporaryDirectory() as temporary_directory:
-            process, pid_path, _ = self._start_signal_case(
-                Path(temporary_directory),
-                handler_mode="default",
-            )
+            (
+                process,
+                pid_path,
+                _,
+                cleanup_observation_path,
+                lock_path,
+                stop_path,
+            ) = self._start_signal_case(Path(temporary_directory), handler_mode="default")
             try:
                 driver_pid, process_group_id = self._wait_for_pid_publication(pid_path, process)
                 self.assertEqual(driver_pid, process_group_id)
@@ -807,8 +1217,9 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
 
                 self.assertEqual(process.returncode, -signal.SIGINT)
                 self.assertEqual(stderr, "")
+                self._assert_production_cleanup_observed(cleanup_observation_path)
             finally:
-                self._cleanup_test_process(process)
+                self._cleanup_nested_fixture_process(process, lock_path, stop_path)
 
     def test_sigint_handler_swap_dispatches_each_signal_once(self) -> None:
         """Breaks if restoring the previous handler loses a boundary SIGINT."""
@@ -860,10 +1271,14 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         """Breaks if a previous callable handler observes the driver before cleanup."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
-            process, pid_path, _ = self._start_signal_case(
-                directory,
-                handler_mode="callable",
-            )
+            (
+                process,
+                pid_path,
+                _,
+                cleanup_observation_path,
+                lock_path,
+                stop_path,
+            ) = self._start_signal_case(directory, handler_mode="callable")
             try:
                 _driver_pid, _process_group_id = self._wait_for_pid_publication(pid_path, process)
                 process.send_signal(signal.SIGINT)
@@ -875,17 +1290,22 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                     (directory / "handler.log").read_text(encoding="ascii").splitlines(),
                     ["after-cleanup"],
                 )
+                self._assert_production_cleanup_observed(cleanup_observation_path)
             finally:
-                self._cleanup_test_process(process)
+                self._cleanup_nested_fixture_process(process, lock_path, stop_path)
 
     def test_sigint_ignore_disposition_is_preserved_through_timeout_cleanup(self) -> None:
         """Breaks if installing the deferred handler changes an ignored SIGINT."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
-            process, pid_path, _ = self._start_signal_case(
-                directory,
-                handler_mode="ignore",
-            )
+            (
+                process,
+                pid_path,
+                _,
+                cleanup_observation_path,
+                lock_path,
+                stop_path,
+            ) = self._start_signal_case(directory, handler_mode="ignore")
             try:
                 _driver_pid, _process_group_id = self._wait_for_pid_publication(pid_path, process)
                 started_at = time.monotonic()
@@ -896,14 +1316,22 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 self.assertEqual(stderr, "")
                 self.assertGreaterEqual(time.monotonic() - started_at, 0.2)
                 self.assertFalse((directory / "handler.log").exists())
+                self._assert_production_cleanup_observed(cleanup_observation_path)
             finally:
-                self._cleanup_test_process(process)
+                self._cleanup_nested_fixture_process(process, lock_path, stop_path)
 
     def test_two_sigints_during_cleanup_are_deferred_until_group_is_gone(self) -> None:
         """Breaks if a second SIGINT can interrupt the ownership cleanup scope."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
-            process, pid_path, cleanup_path = self._start_signal_case(
+            (
+                process,
+                pid_path,
+                cleanup_path,
+                cleanup_observation_path,
+                lock_path,
+                stop_path,
+            ) = self._start_signal_case(
                 directory,
                 handler_mode="callable",
                 delayed_cleanup=True,
@@ -921,8 +1349,9 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                     (directory / "handler.log").read_text(encoding="ascii").splitlines(),
                     ["after-cleanup"],
                 )
+                self._assert_production_cleanup_observed(cleanup_observation_path)
             finally:
-                self._cleanup_test_process(process)
+                self._cleanup_nested_fixture_process(process, lock_path, stop_path)
 
     def test_group_is_killed_and_checked_before_the_single_final_reap(self) -> None:
         """Breaks if wait reaps the leader before group ownership cleanup finishes."""
@@ -1278,7 +1707,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
 
             def capture_process(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
                 process = cast(subprocess.Popen[bytes], real_popen(*args, **kwargs))
-                spawned.append((process, process.pid))
+                spawned.append((process, os.getpgid(process.pid)))
                 return process
 
             def interrupt_after_wait(process_group_id: int) -> bool:
@@ -1332,6 +1761,8 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             directory = Path(temporary_directory)
             runtime_path = directory / "runtime"
             pid_path = directory / "driver.pid"
+            lock_path = directory / "driver.lock"
+            stop_path = directory / "driver.stop"
             _write_executable(runtime_path, b"unqualified-test-runtime\n")
             environment = os.environ.copy()
             environment["WEIGHTCLASS_FAKE_CONFORMANCE_MODE"] = "hang"
@@ -1339,6 +1770,8 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 "matrix/orchestrator/implementation/workspace_read/allow"
             )
             environment["WEIGHTCLASS_FAKE_CONFORMANCE_PID_PATH"] = str(pid_path)
+            environment["WEIGHTCLASS_FAKE_CONFORMANCE_LOCK_PATH"] = str(lock_path)
+            environment["WEIGHTCLASS_FAKE_CONFORMANCE_STOP_PATH"] = str(stop_path)
             process = subprocess.Popen(
                 self._arguments(runtime_path),
                 stdout=subprocess.PIPE,
@@ -1358,6 +1791,18 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                     time.sleep(0.01)
                 self.assertIsNotNone(driver_pid)
                 assert driver_pid is not None
+                lock_published = False
+                for _ in range(100):
+                    if lock_path.exists() and lock_path.read_text(encoding="ascii") == "locked":
+                        lock_published = True
+                        break
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.01)
+                if not lock_published:
+                    process.send_signal(signal.SIGINT)
+                    process.communicate(timeout=5)
+                self.assertTrue(lock_published, "driver liveness lock was not published")
                 process_group_id = os.getpgid(driver_pid)
                 self.assertEqual(process_group_id, driver_pid)
                 process.send_signal(signal.SIGINT)
@@ -1365,8 +1810,16 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 130)
                 self.assertEqual(stdout, "")
                 self.assertEqual(stderr, '{"error": "interrupted"}\n')
+                with lock_path.open("rb") as lock_file:
+                    try:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError as error:
+                        raise AssertionError(
+                            "driver retained its liveness lock after runner cleanup"
+                        ) from error
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             finally:
-                self._cleanup_test_process(process)
+                self._cleanup_nested_fixture_process(process, lock_path, stop_path)
 
 
 if __name__ == "__main__":

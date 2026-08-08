@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Test-only conformance driver. It is not independent qualification evidence."""
 
+import fcntl
 import json
 import os
 import subprocess
@@ -11,6 +12,7 @@ from pathlib import Path
 MARKER_BYTES = b"weightclass-v2-marker-v1\n"
 SENTINEL_ARGUMENTS = ["--weightclass-test-sentinel", "1"]
 HANG_LIFETIME_SECONDS = 10
+STOP_POLL_SECONDS = 0.01
 
 
 def _publish_pid(path_value: str, pid: int) -> None:
@@ -18,6 +20,18 @@ def _publish_pid(path_value: str, pid: int) -> None:
     temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary_path.write_text(str(pid), encoding="ascii")
     os.replace(temporary_path, path)
+
+
+def _wait_for_hang_lifetime(stop_path_value: str | None) -> None:
+    deadline = time.monotonic() + HANG_LIFETIME_SECONDS
+    stop_path = Path(stop_path_value) if stop_path_value is not None else None
+    while True:
+        if stop_path is not None and stop_path.exists():
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(STOP_POLL_SECONDS, remaining))
 
 
 def main() -> int:
@@ -73,8 +87,18 @@ def main() -> int:
         pid_path = os.environ.get("WEIGHTCLASS_FAKE_CONFORMANCE_PID_PATH")
         if pid_path is None:
             return 25
-        _publish_pid(pid_path, os.getpid())
-        time.sleep(HANG_LIFETIME_SECONDS)
+        lock_path = os.environ.get("WEIGHTCLASS_FAKE_CONFORMANCE_LOCK_PATH")
+        stop_path = os.environ.get("WEIGHTCLASS_FAKE_CONFORMANCE_STOP_PATH")
+        if lock_path is None:
+            _publish_pid(pid_path, os.getpid())
+            _wait_for_hang_lifetime(stop_path)
+        else:
+            with open(lock_path, "w", encoding="ascii") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                lock_file.write("locked")
+                lock_file.flush()
+                _publish_pid(pid_path, os.getpid())
+                _wait_for_hang_lifetime(stop_path)
     if case_id == target and mode == "mutate-runtime":
         runtime_path = request["runtime_path"]
         if not isinstance(runtime_path, str):
