@@ -30,6 +30,7 @@ from weightclass.delegation_schema import (
 )
 
 SUITE_REVISION = "delegation-conformance-v2"
+OVERSIZED_INTEGER_JSON = '{"value":' + ("9" * 5_000) + "}"
 REQUIRED_SCENARIOS = (
     "action_attribution",
     "artifact_integrity_and_substitution",
@@ -247,6 +248,15 @@ class QualificationRegistryTests(unittest.TestCase):
                         "records": [record, duplicate],
                     },
                 )
+
+    def test_registry_translates_oversized_integer_parse_error(self) -> None:
+        """Breaks if an untrusted parser ValueError escapes registry loading."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            registry_path = Path(temporary_directory) / "registry.json"
+            registry_path.write_text(OVERSIZED_INTEGER_JSON, encoding="utf-8")
+
+            with self.assertRaises(QualificationInvalidInputError):
+                load_qualification_registry(registry_path)
 
     def test_selection_attaches_exact_requirement_and_rebinds_fingerprint(self) -> None:
         """Breaks if an unreviewed qualification input is hidden from the route digest."""

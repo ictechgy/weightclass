@@ -13,6 +13,7 @@ from unittest import mock
 from weightclass import cli, json_input
 
 MAX_RUNTIME_JSON_BYTES = 262_144
+OVERSIZED_INTEGER_JSON = '{"value":' + ("9" * 5_000) + "}"
 
 
 def _native_policy() -> dict[str, object]:
@@ -279,6 +280,40 @@ class RuntimeJsonInputTests(unittest.TestCase):
                     os.close(file_descriptor)
                 except OSError:
                     pass
+
+    def test_open_descriptor_converts_oversized_integer_parse_error_and_closes(self) -> None:
+        """Breaks if Python's integer digit ValueError escapes or leaks the descriptor."""
+        load_open_descriptor = getattr(json_input, "_load_json_object_from_open_fd", None)
+        self.assertIsNotNone(load_open_descriptor)
+        if load_open_descriptor is None:
+            return
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "oversized.json"
+            path.write_text(OVERSIZED_INTEGER_JSON, encoding="utf-8")
+            file_descriptor = os.open(path, os.O_RDONLY)
+
+            try:
+                with self.assertRaises(json_input.JsonInputError):
+                    load_open_descriptor(file_descriptor, max_bytes=MAX_RUNTIME_JSON_BYTES)
+                with self.assertRaises(OSError):
+                    os.fstat(file_descriptor)
+            finally:
+                try:
+                    os.close(file_descriptor)
+                except OSError:
+                    pass
+
+    def test_native_cli_redacts_oversized_integer_parse_error(self) -> None:
+        """Breaks if an untrusted parser ValueError reaches the CLI traceback."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            path.write_text(OVERSIZED_INTEGER_JSON, encoding="utf-8")
+
+            result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+
+        self._assert_invalid_input(result)
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_invalid_static_policy_is_rejected_before_task_input_is_read(self) -> None:
         """Breaks if invalid configuration causes unnecessary task handling."""
