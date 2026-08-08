@@ -431,6 +431,12 @@ framing failure map to exit `7`; framing failure triggers the fingerprinted
 direct-child `close -> wait -> terminate -> wait -> kill -> reap` sequence.
 weightclass does not enumerate descendants.
 
+Before task input is read, run rejects a non-main-thread launch or a
+Python-visible non-default `SIGCHLD` disposition. Platform flags hidden from
+Python can only be detected after spawn; weightclass owns the direct
+`waitpid`, never converts unavailable child status to exit zero, and maps that
+condition to the same redacted exit `7` failure.
+
 P0.5 includes no bundled Claude/Codex orchestrator. The user-supplied runtime
 owns vendor authentication, network and billing behavior, role processes,
 permission enforcement, review, integration, its deadline, descendants, and

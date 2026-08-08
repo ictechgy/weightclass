@@ -41,6 +41,7 @@ from weightclass.delegation_qualification import (
     load_qualification_registry,
 )
 from weightclass.delegation_runtime import (
+    DelegationRuntimeFailedError,
     DelegationRuntimeUnavailableError,
     _cleanup_direct_child,
     _DeferredSigint,
@@ -84,6 +85,20 @@ class DelegationProtocolUnitTests(unittest.TestCase):
         runtime_path = directory / "stdin-draining-runtime"
         runtime_path.write_text(
             "#!/usr/bin/env python3\nimport sys\nsys.stdin.buffer.read()\n",
+            encoding="utf-8",
+        )
+        runtime_path.chmod(runtime_path.stat().st_mode | stat.S_IXUSR)
+        return runtime_path
+
+    def _write_nonzero_runtime(self, directory: Path, start_marker: Path) -> Path:
+        runtime_path = directory / "nonzero-runtime"
+        runtime_path.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            f"Path({str(start_marker)!r}).touch()\n"
+            "sys.stdin.buffer.read()\n"
+            "raise SystemExit(17)\n",
             encoding="utf-8",
         )
         runtime_path.chmod(runtime_path.stat().st_mode | stat.S_IXUSR)
@@ -153,22 +168,101 @@ class DelegationProtocolUnitTests(unittest.TestCase):
     def test_wait_preserves_one_finite_deadline_across_interruptions(self) -> None:
         """Breaks if each InterruptedError restarts the complete timeout."""
         process = mock.Mock(spec=subprocess.Popen)
-        process.wait.side_effect = [InterruptedError(), InterruptedError(), 0]
+        process.args = ("runtime",)
+        process.pid = 123
+        process.returncode = None
 
-        with mock.patch("time.monotonic", side_effect=[10.0, 11.0, 12.0]):
+        with (
+            mock.patch(
+                "weightclass.delegation_runtime.os.waitpid",
+                side_effect=[InterruptedError(), InterruptedError(), (123, 17 << 8)],
+            ) as waitpid,
+            mock.patch(
+                "weightclass.delegation_runtime.time.monotonic", side_effect=[10.0, 11.0, 12.0]
+            ),
+        ):
             return_code = _wait(process, 5.0)
 
-        self.assertEqual(return_code, 0)
-        self.assertEqual(
-            process.wait.call_args_list,
-            [mock.call(timeout=5.0), mock.call(timeout=4.0), mock.call(timeout=3.0)],
-        )
+        self.assertEqual(return_code, 17)
+        self.assertEqual(process.returncode, 17)
+        self.assertEqual(waitpid.call_args_list, [mock.call(123, os.WNOHANG)] * 3)
+        process.wait.assert_not_called()
+
+    def test_wait_fails_closed_when_child_status_is_unavailable(self) -> None:
+        """Breaks if ECHILD is converted to a synthetic successful exit."""
+        process = mock.Mock(spec=subprocess.Popen)
+        process.args = ("runtime",)
+        process.pid = 123
+        process.returncode = None
+
+        with (
+            mock.patch(
+                "weightclass.delegation_runtime.os.waitpid",
+                side_effect=ChildProcessError(),
+            ) as waitpid,
+            self.assertRaises(DelegationRuntimeFailedError),
+        ):
+            _wait(process, 1)
+
+        self.assertIsNotNone(process.returncode)
+        process.wait.assert_not_called()
+        waitpid.reset_mock()
+        with self.assertRaises(DelegationRuntimeFailedError):
+            _wait(process, 1)
+        waitpid.assert_not_called()
+
+    def test_wait_decodes_signal_status_from_owned_waitpid(self) -> None:
+        process = mock.Mock(spec=subprocess.Popen)
+        process.args = ("runtime",)
+        process.pid = 123
+        process.returncode = None
+
+        with mock.patch(
+            "weightclass.delegation_runtime.os.waitpid",
+            return_value=(123, signal.SIGTERM),
+        ):
+            return_code = _wait(process)
+
+        self.assertEqual(return_code, -signal.SIGTERM)
+        self.assertEqual(process.returncode, -signal.SIGTERM)
+        process.wait.assert_not_called()
+
+    def test_cleanup_does_not_signal_after_child_status_is_lost(self) -> None:
+        """Breaks if ECHILD releases the PID before cleanup signals it."""
+        process = mock.Mock(spec=subprocess.Popen)
+        process.args = ("runtime",)
+        process.pid = 123
+        process.returncode = None
+        process.stdin = mock.Mock()
+        process.stdin.closed = False
+
+        with (
+            mock.patch(
+                "weightclass.delegation_runtime.os.waitpid",
+                side_effect=ChildProcessError(),
+            ),
+            mock.patch("weightclass.delegation_runtime.os.kill") as kill,
+            self.assertRaises(DelegationRuntimeFailedError),
+        ):
+            _cleanup_direct_child(
+                process,
+                DirectChildCleanup(grace_seconds=1, terminate_grace_seconds=1),
+            )
+
+        process.stdin.close.assert_called_once_with()
+        kill.assert_not_called()
+        process.poll.assert_not_called()
+        process.wait.assert_not_called()
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
 
     def test_keyboard_interrupt_during_write_cleans_child_then_reraises(self) -> None:
         """Breaks if an interrupted owner abandons the direct child during framing."""
         events: list[tuple[str, float | None] | str] = []
         process = mock.Mock(spec=subprocess.Popen)
         process.args = ("runtime",)
+        process.pid = 123
+        process.returncode = None
         process.stdin = mock.Mock()
         process.stdin.closed = False
         process.stdin.fileno.return_value = 99
@@ -178,22 +272,32 @@ class DelegationProtocolUnitTests(unittest.TestCase):
             process.stdin.closed = True
 
         process.stdin.close.side_effect = close_stdin
-        wait_outcomes: list[BaseException | int] = [
-            subprocess.TimeoutExpired(process.args, 2),
-            subprocess.TimeoutExpired(process.args, 3),
-            0,
-        ]
+        wait_outcomes: list[BaseException | int]
 
-        def wait(*, timeout: float | None = None) -> int:
+        def wait(
+            owned_process: subprocess.Popen[bytes],
+            timeout: float | None = None,
+        ) -> int:
+            self.assertIs(owned_process, process)
             events.append(("wait", timeout))
             outcome = wait_outcomes.pop(0)
             if isinstance(outcome, BaseException):
                 raise outcome
+            process.returncode = outcome
             return outcome
 
-        process.wait.side_effect = wait
-        process.terminate.side_effect = lambda: events.append("terminate")
-        process.kill.side_effect = lambda: events.append("kill")
+        wait_outcomes = [
+            subprocess.TimeoutExpired(process.args, 2),
+            subprocess.TimeoutExpired(process.args, 0),
+            subprocess.TimeoutExpired(process.args, 3),
+            subprocess.TimeoutExpired(process.args, 0),
+            0,
+        ]
+
+        def signal_child(process_id: int, signal_number: int) -> None:
+            self.assertEqual(process_id, process.pid)
+            events.append("terminate" if signal_number == signal.SIGTERM else "kill")
+
         interruption = KeyboardInterrupt()
 
         with (
@@ -205,6 +309,8 @@ class DelegationProtocolUnitTests(unittest.TestCase):
                 "weightclass.delegation_runtime._write_all",
                 side_effect=interruption,
             ),
+            mock.patch("weightclass.delegation_runtime._wait", side_effect=wait),
+            mock.patch("weightclass.delegation_runtime.os.kill", side_effect=signal_child),
             self.assertRaises(KeyboardInterrupt) as raised,
         ):
             run_delegation_runtime(
@@ -219,8 +325,10 @@ class DelegationProtocolUnitTests(unittest.TestCase):
             [
                 "close",
                 ("wait", 2),
+                ("wait", 0),
                 "terminate",
                 ("wait", 3),
+                ("wait", 0),
                 "kill",
                 ("wait", None),
             ],
@@ -446,6 +554,259 @@ class DelegationProtocolUnitTests(unittest.TestCase):
             finally:
                 signal.signal(signal.SIGINT, previous_sigint)
 
+    @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
+    def test_ignored_sigchld_fails_closed_before_runtime_spawn(self) -> None:
+        """Breaks if auto-reaping turns a nonzero runtime exit into success."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            start_marker = directory / "runtime.started"
+            runtime_path = self._write_nonzero_runtime(directory, start_marker)
+            previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+            try:
+                with self.assertRaises(DelegationRuntimeUnavailableError):
+                    run_delegation_runtime(
+                        str(runtime_path),
+                        b"frame",
+                        DirectChildCleanup(grace_seconds=1, terminate_grace_seconds=1),
+                    )
+                self.assertFalse(start_marker.exists())
+            finally:
+                signal.signal(signal.SIGCHLD, previous_sigchld)
+
+    @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
+    def test_callable_sigchld_fails_closed_before_runtime_spawn(self) -> None:
+        """Breaks if an unknown handler can steal the direct child's exit status."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            start_marker = directory / "runtime.started"
+            runtime_path = self._write_nonzero_runtime(directory, start_marker)
+
+            def sigchld_handler(signal_number: int, frame: FrameType | None) -> None:
+                del signal_number, frame
+
+            previous_sigchld = signal.signal(signal.SIGCHLD, sigchld_handler)
+            try:
+                with self.assertRaises(DelegationRuntimeUnavailableError):
+                    run_delegation_runtime(
+                        str(runtime_path),
+                        b"frame",
+                        DirectChildCleanup(grace_seconds=1, terminate_grace_seconds=1),
+                    )
+                self.assertFalse(start_marker.exists())
+            finally:
+                signal.signal(signal.SIGCHLD, previous_sigchld)
+
+    @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
+    def test_default_sigchld_preserves_nonzero_runtime_exit(self) -> None:
+        """Breaks if the signal preflight rejects the safe default disposition."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            start_marker = directory / "runtime.started"
+            runtime_path = self._write_nonzero_runtime(directory, start_marker)
+            previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+            try:
+                result = run_delegation_runtime(
+                    str(runtime_path),
+                    b"frame",
+                    DirectChildCleanup(grace_seconds=1, terminate_grace_seconds=1),
+                )
+                self.assertEqual(result.returncode, 17)
+                self.assertTrue(start_marker.is_file())
+            finally:
+                signal.signal(signal.SIGCHLD, previous_sigchld)
+
+    @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
+    def test_sigchld_reaper_race_after_preflight_fails_closed(self) -> None:
+        """Breaks if lost child status is reported as a successful runtime exit."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            start_marker = directory / "runtime.started"
+            runtime_path = self._write_nonzero_runtime(directory, start_marker)
+            real_popen = cast(Any, subprocess.Popen)
+
+            def spawn_then_enable_auto_reap(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+                process = cast(subprocess.Popen[bytes], real_popen(*args, **kwargs))
+                signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+                return process
+
+            previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+            try:
+                with (
+                    mock.patch(
+                        "weightclass.delegation_runtime.subprocess.Popen",
+                        side_effect=spawn_then_enable_auto_reap,
+                    ),
+                    self.assertRaises(DelegationRuntimeFailedError),
+                ):
+                    run_delegation_runtime(
+                        str(runtime_path),
+                        b"frame",
+                        DirectChildCleanup(grace_seconds=1, terminate_grace_seconds=1),
+                    )
+                self.assertTrue(start_marker.is_file())
+            finally:
+                signal.signal(signal.SIGCHLD, previous_sigchld)
+
+    @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
+    def test_spawn_adjacent_sigchld_check_follows_sigint_arming(self) -> None:
+        """Breaks if SIGINT setup can invalidate SIGCHLD ownership before spawn."""
+        original_arm = _DeferredSigint.arm
+
+        def arm_then_enable_auto_reap(deferred_sigint: _DeferredSigint) -> None:
+            original_arm(deferred_sigint)
+            signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+
+        previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+        previous_sigint = signal.getsignal(signal.SIGINT)
+        try:
+            with (
+                mock.patch.object(
+                    _DeferredSigint,
+                    "arm",
+                    arm_then_enable_auto_reap,
+                ),
+                mock.patch(
+                    "weightclass.delegation_runtime.subprocess.Popen",
+                    side_effect=AssertionError("runtime spawn must remain untouched"),
+                ) as popen,
+                self.assertRaises(DelegationRuntimeUnavailableError),
+            ):
+                run_delegation_runtime(
+                    "runtime",
+                    b"frame",
+                    DirectChildCleanup(grace_seconds=1, terminate_grace_seconds=1),
+                )
+            popen.assert_not_called()
+            self.assertIs(signal.getsignal(signal.SIGINT), previous_sigint)
+        finally:
+            signal.signal(signal.SIGCHLD, previous_sigchld)
+            signal.signal(signal.SIGINT, previous_sigint)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin sigaction")
+    def test_sa_nocldwait_never_becomes_success(self) -> None:
+        """Breaks if hidden auto-reaping is converted to a synthetic zero exit."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            start_marker = directory / "runtime.started"
+            runtime_path = self._write_nonzero_runtime(directory, start_marker)
+            helper_code = (
+                "import ctypes, signal, sys\n"
+                "from weightclass.delegation_runtime import (\n"
+                " DelegationRuntimeFailedError, run_delegation_runtime,\n"
+                ")\n"
+                "from weightclass.delegation_types import DirectChildCleanup\n"
+                "class Sigaction(ctypes.Structure):\n"
+                " _fields_ = [('handler', ctypes.c_void_p), "
+                "('mask', ctypes.c_uint32), ('flags', ctypes.c_int)]\n"
+                "libc = ctypes.CDLL(None, use_errno=True)\n"
+                "old = Sigaction()\n"
+                "if libc.sigaction(signal.SIGCHLD, None, ctypes.byref(old)) != 0:\n"
+                " raise SystemExit(91)\n"
+                "installed = Sigaction()\n"
+                "ctypes.memmove(ctypes.byref(installed), ctypes.byref(old), ctypes.sizeof(old))\n"
+                "installed.handler = None\n"
+                "installed.flags |= 0x20\n"
+                "if libc.sigaction(signal.SIGCHLD, ctypes.byref(installed), None) != 0:\n"
+                " raise SystemExit(92)\n"
+                "try:\n"
+                " if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:\n"
+                "  raise SystemExit(93)\n"
+                " try:\n"
+                "  result = run_delegation_runtime(\n"
+                "   sys.argv[1], b'frame', DirectChildCleanup(1, 1),\n"
+                "  )\n"
+                " except DelegationRuntimeFailedError:\n"
+                "  status = 7\n"
+                " else:\n"
+                "  status = 80 if result.returncode == 0 else 81\n"
+                "finally:\n"
+                " if libc.sigaction(signal.SIGCHLD, ctypes.byref(old), None) != 0:\n"
+                "  raise SystemExit(94)\n"
+                "raise SystemExit(status)\n"
+            )
+            helper = subprocess.Popen(
+                [sys.executable, "-c", helper_code, str(runtime_path)],
+                close_fds=True,
+                start_new_session=True,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                _, stderr = helper.communicate(timeout=8)
+                self.assertEqual(helper.returncode, 7, stderr)
+                self.assertTrue(start_marker.is_file())
+            finally:
+                if helper.returncode is None:
+                    try:
+                        os.killpg(helper.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    helper.wait()
+                if helper.stderr is not None and not helper.stderr.closed:
+                    helper.stderr.close()
+
+    def test_unknown_sigchld_state_fails_closed_before_popen(self) -> None:
+        """Breaks if an unreadable process signal boundary reaches spawn."""
+        for unsafe_state in (OSError(), ValueError(), object()):
+            with self.subTest(unsafe_state=type(unsafe_state).__name__):
+                real_getsignal = signal.getsignal
+
+                def getsignal(
+                    signal_number: int,
+                    *,
+                    current_unsafe_state: object = unsafe_state,
+                    current_getsignal: Any = real_getsignal,
+                ) -> Any:
+                    if signal_number != signal.SIGCHLD:
+                        return current_getsignal(signal_number)
+                    if isinstance(current_unsafe_state, BaseException):
+                        raise current_unsafe_state
+                    return current_unsafe_state
+
+                with (
+                    mock.patch(
+                        "weightclass.delegation_runtime.signal.getsignal",
+                        getsignal,
+                    ),
+                    mock.patch(
+                        "weightclass.delegation_runtime.subprocess.Popen",
+                        side_effect=AssertionError("runtime spawn must remain untouched"),
+                    ) as popen,
+                    self.assertRaises(DelegationRuntimeUnavailableError),
+                ):
+                    run_delegation_runtime(
+                        "runtime",
+                        b"frame",
+                        DirectChildCleanup(grace_seconds=1, terminate_grace_seconds=1),
+                    )
+                popen.assert_not_called()
+
+    def test_worker_thread_runtime_launch_fails_closed_before_popen(self) -> None:
+        """Breaks if another thread can race the process-global SIGCHLD state."""
+        errors: list[BaseException] = []
+
+        def launch() -> None:
+            try:
+                run_delegation_runtime(
+                    "runtime",
+                    b"frame",
+                    DirectChildCleanup(grace_seconds=1, terminate_grace_seconds=1),
+                )
+            except BaseException as error:
+                errors.append(error)
+
+        with mock.patch(
+            "weightclass.delegation_runtime.subprocess.Popen",
+            side_effect=AssertionError("runtime spawn must remain untouched"),
+        ) as popen:
+            thread = threading.Thread(target=launch)
+            thread.start()
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], DelegationRuntimeUnavailableError)
+        popen.assert_not_called()
+
     def test_sigint_default_disposition_is_redispatched_after_cleanup(self) -> None:
         """Breaks if SIG_DFL exits the owner before its direct child is reaped."""
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -510,7 +871,7 @@ class DelegationProtocolUnitTests(unittest.TestCase):
             interrupt_check: Any,
         ) -> int:
             del owned_process, interrupt_check
-            os.kill(os.getpid(), signal.SIGINT)
+            signal.raise_signal(signal.SIGINT)
             return 0
 
         def previous_handler(signal_number: int, frame: FrameType | None) -> None:
@@ -529,6 +890,7 @@ class DelegationProtocolUnitTests(unittest.TestCase):
                     "weightclass.delegation_runtime._wait_interruptibly",
                     side_effect=reap_then_interrupt,
                 ),
+                mock.patch("weightclass.delegation_runtime.os.kill") as kill,
                 self.assertRaises(KeyboardInterrupt) as raised,
             ):
                 run_delegation_runtime(
@@ -540,7 +902,9 @@ class DelegationProtocolUnitTests(unittest.TestCase):
             self.assertIs(raised.exception, interruption)
             process.terminate.assert_not_called()
             process.kill.assert_not_called()
-            process.wait.assert_called_once_with(timeout=2)
+            process.wait.assert_not_called()
+            process.poll.assert_not_called()
+            kill.assert_not_called()
         finally:
             signal.signal(signal.SIGINT, previous_sigint)
 
@@ -606,6 +970,8 @@ class DelegationProtocolUnitTests(unittest.TestCase):
         events: list[tuple[str, float | None] | str] = []
         process = mock.Mock(spec=subprocess.Popen)
         process.args = ("runtime",)
+        process.pid = 123
+        process.returncode = None
         process.stdin = mock.Mock()
         process.stdin.closed = False
         process.stdin.fileno.return_value = 99
@@ -619,20 +985,27 @@ class DelegationProtocolUnitTests(unittest.TestCase):
         wait_outcomes: list[BaseException | int] = [
             wait_error,
             subprocess.TimeoutExpired(process.args, 2),
+            subprocess.TimeoutExpired(process.args, 0),
             subprocess.TimeoutExpired(process.args, 3),
+            subprocess.TimeoutExpired(process.args, 0),
             0,
         ]
 
-        def wait(*, timeout: float | None = None) -> int:
+        def wait(
+            owned_process: subprocess.Popen[bytes],
+            timeout: float | None = None,
+        ) -> int:
+            self.assertIs(owned_process, process)
             events.append(("wait", timeout))
             outcome = wait_outcomes.pop(0)
             if isinstance(outcome, BaseException):
                 raise outcome
+            process.returncode = outcome
             return outcome
 
-        process.wait.side_effect = wait
-        process.terminate.side_effect = lambda: events.append("terminate")
-        process.kill.side_effect = lambda: events.append("kill")
+        def signal_child(process_id: int, signal_number: int) -> None:
+            self.assertEqual(process_id, process.pid)
+            events.append("terminate" if signal_number == signal.SIGTERM else "kill")
 
         with (
             mock.patch(
@@ -640,6 +1013,8 @@ class DelegationProtocolUnitTests(unittest.TestCase):
                 return_value=process,
             ),
             mock.patch("weightclass.delegation_runtime._write_all"),
+            mock.patch("weightclass.delegation_runtime._wait", side_effect=wait),
+            mock.patch("weightclass.delegation_runtime.os.kill", side_effect=signal_child),
             self.assertRaises(RuntimeError) as raised,
         ):
             run_delegation_runtime(
@@ -655,8 +1030,10 @@ class DelegationProtocolUnitTests(unittest.TestCase):
                 "close",
                 ("wait", 0.05),
                 ("wait", 2),
+                ("wait", 0),
                 "terminate",
                 ("wait", 3),
+                ("wait", 0),
                 "kill",
                 ("wait", None),
             ],
@@ -1534,6 +1911,161 @@ class DelegationRunTests(unittest.TestCase):
         self.assertEqual(result, 4)
         self.assertEqual(json.loads(diagnostic.getvalue()), {"error": "executor_unavailable"})
         read_task.assert_not_called()
+
+    @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
+    def test_unsafe_sigchld_blocks_task_access(self) -> None:
+        """Breaks if task stdin is read before child-status ownership is safe."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path, manifest_path = self._write_inputs(directory)
+            runtime_path = self._copy_runtime(directory)
+            descriptor = compile_delegation_descriptor(
+                load_delegation_policy(policy_path),
+                load_delegation_manifest(manifest_path),
+                runtime_path=str(runtime_path),
+                source_vendor="claude",
+                tier="standard",
+                target_platform=current_platform_contract(),
+            )
+            diagnostic = io.StringIO()
+            previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+            try:
+                with (
+                    mock.patch(
+                        "weightclass.cli.read_task_from_standard_input",
+                        side_effect=AssertionError("task input must remain untouched"),
+                    ) as read_task,
+                    redirect_stderr(diagnostic),
+                ):
+                    result = delegation_run_from_standard_input(
+                        policy_path,
+                        manifest_path,
+                        str(runtime_path),
+                        "claude",
+                        "standard",
+                        True,
+                        str(descriptor["route_fingerprint"]),
+                    )
+            finally:
+                signal.signal(signal.SIGCHLD, previous_sigchld)
+
+        self.assertEqual(result, 4)
+        self.assertEqual(json.loads(diagnostic.getvalue()), {"error": "executor_unavailable"})
+        read_task.assert_not_called()
+
+    @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
+    def test_spawn_adjacent_sigchld_recheck_blocks_runtime(self) -> None:
+        """Breaks if the pre-task check is trusted after signal state changes."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path, manifest_path = self._write_inputs(directory)
+            runtime_path = self._copy_runtime(directory)
+            descriptor = compile_delegation_descriptor(
+                load_delegation_policy(policy_path),
+                load_delegation_manifest(manifest_path),
+                runtime_path=str(runtime_path),
+                source_vendor="claude",
+                tier="standard",
+                target_platform=current_platform_contract(),
+            )
+
+            def change_sigchld_after_preflight() -> str:
+                signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+                return EXPECTED_TASK
+
+            diagnostic = io.StringIO()
+            previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+            try:
+                with (
+                    mock.patch(
+                        "weightclass.cli.read_task_from_standard_input",
+                        side_effect=change_sigchld_after_preflight,
+                    ),
+                    mock.patch(
+                        "weightclass.delegation_runtime.subprocess.Popen",
+                        side_effect=AssertionError("runtime spawn must remain untouched"),
+                    ) as popen,
+                    redirect_stderr(diagnostic),
+                ):
+                    result = delegation_run_from_standard_input(
+                        policy_path,
+                        manifest_path,
+                        str(runtime_path),
+                        "claude",
+                        "standard",
+                        True,
+                        str(descriptor["route_fingerprint"]),
+                    )
+            finally:
+                signal.signal(signal.SIGCHLD, previous_sigchld)
+
+        self.assertEqual(result, 4)
+        self.assertEqual(json.loads(diagnostic.getvalue()), {"error": "executor_unavailable"})
+        popen.assert_not_called()
+
+    @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
+    def test_post_spawn_child_status_loss_maps_to_executor_failed(self) -> None:
+        """Breaks if ECHILD escapes the CLI boundary or becomes success."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path, manifest_path = self._write_inputs(directory)
+            start_marker = directory / "runtime.started"
+            runtime_path = directory / "nonzero-runtime"
+            runtime_path.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "from pathlib import Path\n"
+                f"Path({str(start_marker)!r}).touch()\n"
+                "sys.stdin.buffer.read()\n"
+                "raise SystemExit(17)\n",
+                encoding="utf-8",
+            )
+            runtime_path.chmod(runtime_path.stat().st_mode | stat.S_IXUSR)
+            descriptor = compile_delegation_descriptor(
+                load_delegation_policy(policy_path),
+                load_delegation_manifest(manifest_path),
+                runtime_path=str(runtime_path),
+                source_vendor="claude",
+                tier="standard",
+                target_platform=current_platform_contract(),
+            )
+            real_popen = cast(Any, subprocess.Popen)
+
+            def spawn_then_enable_auto_reap(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+                process = cast(subprocess.Popen[bytes], real_popen(*args, **kwargs))
+                signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+                return process
+
+            diagnostic = io.StringIO()
+            previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+            try:
+                with (
+                    mock.patch(
+                        "weightclass.cli.read_task_from_standard_input",
+                        return_value=EXPECTED_TASK,
+                    ),
+                    mock.patch(
+                        "weightclass.delegation_runtime.subprocess.Popen",
+                        side_effect=spawn_then_enable_auto_reap,
+                    ),
+                    redirect_stderr(diagnostic),
+                ):
+                    result = delegation_run_from_standard_input(
+                        policy_path,
+                        manifest_path,
+                        str(runtime_path),
+                        "claude",
+                        "standard",
+                        True,
+                        str(descriptor["route_fingerprint"]),
+                    )
+            finally:
+                signal.signal(signal.SIGCHLD, previous_sigchld)
+            marker_started = start_marker.is_file()
+
+        self.assertEqual(result, 7)
+        self.assertEqual(json.loads(diagnostic.getvalue()), {"error": "executor_failed"})
+        self.assertTrue(marker_started)
 
     def test_fingerprint_mismatch_precedes_runtime_or_task_access(self) -> None:
         """Breaks if an unreviewed descriptor can reach runtime validation or stdin."""

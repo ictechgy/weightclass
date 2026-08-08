@@ -109,7 +109,12 @@ The following decisions close the final Planner-Architect-Critic objections.
    intervals and the future run sequence `close -> wait -> terminate -> wait ->
    kill -> reap`. Weightclass will act only on its direct child and will never
    enumerate descendants. A defective trusted runtime can still orphan them;
-   descendant leakage fails P1 conformance.
+   descendant leakage fails P1 conformance. Runtime execution also requires a
+   main-thread, Python-visible default `SIGCHLD` disposition before task input.
+   A module-owned `waitpid` treats missing child status as a redacted runtime
+   failure rather than trusting `Popen`'s synthetic zero fallback. Hidden or
+   concurrently changed native signal state remains outside the portable
+   pre-spawn proof boundary.
 4. **Stage-specific retention.** Worker contexts release after the worker
    stage. Runtime-owned artifacts remain available through review and
    integration and are destroyed on reviewer rejection or after integration.

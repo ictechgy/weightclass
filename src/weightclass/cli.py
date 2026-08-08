@@ -40,6 +40,7 @@ from .delegation_runtime import (
     DelegationRuntimeUnavailableError,
     run_delegation_runtime,
     validate_delegation_runtime,
+    validate_runtime_process_context,
 )
 from .delegation_schema import (
     DelegationInvalidInputError,
@@ -461,6 +462,7 @@ def delegation_run_from_standard_input(
             validate_delegation_runtime(runtime_path)
         else:
             verify_qualified_runtime(Path(runtime_path), qualification)
+        validate_runtime_process_context()
     except (DelegationRuntimeUnavailableError, QualifiedRuntimeUnavailableError):
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4

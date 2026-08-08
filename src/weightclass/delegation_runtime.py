@@ -4,6 +4,7 @@ import os
 import selectors
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -16,6 +17,7 @@ from .delegation_types import DirectChildCleanup
 
 RUNTIME_ARGUMENTS: Final = ("--weightclass-delegation-protocol", "1")
 _SIGINT_POLL_SECONDS: Final = 0.05
+_CHILD_STATUS_LOST: Final = -sys.maxsize
 
 
 class DelegationRuntimeUnavailableError(OSError):
@@ -96,6 +98,23 @@ def validate_delegation_runtime(runtime_path: str) -> None:
         raise DelegationRuntimeUnavailableError()
 
 
+def validate_runtime_process_context() -> None:
+    """Reject Python-visible contexts known to make child status unsafe.
+
+    Platform flags hidden from ``signal.getsignal`` are detected after spawn by
+    the authoritative ``waitpid`` boundary and become a redacted runtime failure.
+    """
+    sigchld = getattr(signal, "SIGCHLD", None)
+    if sigchld is None or threading.current_thread() is not threading.main_thread():
+        raise DelegationRuntimeUnavailableError()
+    try:
+        disposition = signal.getsignal(sigchld)
+    except (OSError, ValueError):
+        raise DelegationRuntimeUnavailableError() from None
+    if disposition != signal.SIG_DFL:
+        raise DelegationRuntimeUnavailableError()
+
+
 def _write_all(
     file_descriptor: int,
     contents: bytes,
@@ -147,27 +166,60 @@ def _wait(
     process: subprocess.Popen[bytes],
     timeout: float | None = None,
 ) -> int:
-    if timeout is None:
+    if process.returncode == _CHILD_STATUS_LOST:
+        raise DelegationRuntimeFailedError()
+    if process.returncode is not None:
+        return process.returncode
+
+    deadline = None if timeout is None else time.monotonic() + timeout
+    wait_flags = 0 if deadline is None else os.WNOHANG
+    while True:
         while True:
             try:
-                return process.wait()
+                waited_pid, wait_status = os.waitpid(process.pid, wait_flags)
+                break
             except InterruptedError:
-                continue
-
-    deadline = time.monotonic() + timeout
-    remaining_seconds = timeout
-    while True:
-        try:
-            return process.wait(timeout=remaining_seconds)
-        except InterruptedError:
-            remaining_seconds = deadline - time.monotonic()
-            if remaining_seconds <= 0:
-                raise subprocess.TimeoutExpired(process.args, timeout) from None
+                if deadline is not None and time.monotonic() >= deadline:
+                    assert timeout is not None
+                    raise subprocess.TimeoutExpired(process.args, timeout) from None
+            except ChildProcessError:
+                # Popen.wait() treats ECHILD as exit 0. That is unsafe when an
+                # inherited/raced SIGCHLD policy has discarded the real status.
+                process.returncode = _CHILD_STATUS_LOST
+                raise DelegationRuntimeFailedError() from None
+        if waited_pid == process.pid:
+            return_code = os.waitstatus_to_exitcode(wait_status)
+            process.returncode = return_code
+            return return_code
+        if waited_pid != 0:
+            process.returncode = _CHILD_STATUS_LOST
+            raise DelegationRuntimeFailedError()
+        assert deadline is not None
+        assert timeout is not None
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        time.sleep(min(_SIGINT_POLL_SECONDS, remaining_seconds))
 
 
 def _close_stdin(process: subprocess.Popen[bytes]) -> None:
     if process.stdin is not None and not process.stdin.closed:
         process.stdin.close()
+
+
+def _signal_direct_child(process: subprocess.Popen[bytes], signal_number: int) -> bool:
+    """Signal only while waitpid still proves that the owned PID is live."""
+    try:
+        _wait(process, 0)
+        return False
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.kill(process.pid, signal_number)
+    except ProcessLookupError:
+        process.returncode = _CHILD_STATUS_LOST
+        raise DelegationRuntimeFailedError() from None
+    return True
 
 
 def _cleanup_direct_child(
@@ -182,12 +234,14 @@ def _cleanup_direct_child(
         _wait(process, cleanup.grace_seconds)
         return
     except subprocess.TimeoutExpired:
-        process.terminate()
+        if not _signal_direct_child(process, signal.SIGTERM):
+            return
     try:
         _wait(process, cleanup.terminate_grace_seconds)
         return
     except subprocess.TimeoutExpired:
-        process.kill()
+        if not _signal_direct_child(process, signal.SIGKILL):
+            return
     _wait(process)
 
 
@@ -220,6 +274,7 @@ def run_delegation_runtime(
     return_code = 0
     deferred_sigint.arm()
     try:
+        validate_runtime_process_context()
         try:
             process = subprocess.Popen(
                 arguments,
