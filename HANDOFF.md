@@ -219,27 +219,24 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
-- On 2026-08-08, the complete 259-test suite passed under Python 3.14.6 in
-  58.130s and Python 3.10.20 in 55.844s with `ResourceWarning` promoted to an
-  error. Both interpreters
-  passed `compileall`; Ruff 0.16.1 check/format, mypy 2.3.0 strict checking, and
-  `git diff --check` passed. The cumulative diff from `f1dd1b6` was reviewed as
-  test-only synthetic protocol/containment code plus packaging gates: no `src`
-  behavior, production record, registry content, action pin, or vendor
-  configuration changed, and diagnostics remain bounded and value-free.
-- A fresh `uv build --offline --no-python-downloads` wrote wheel and sdist
-  artifacts under `/tmp`; both passed the distribution-isolation gate under
-  both interpreters. The gate proved exact empty source/wheel/sdist registries,
-  exact archive paths, no test-only or candidate-like wheel content, all
-  required synthetic assets confined to sdist `tests/`, and rejection of decoy
-  registry/test paths and special tar members. The extracted sdist passed all
-  259 tests in 58.249s (Python 3.14.6) and 37.862s (Python 3.10.20).
-- This verification made no web request, accessed no credential or secret-like
-  file, or invoked a weightclass-selected product/vendor runtime. It persisted
-  no runtime task content and performed no destructive cleanup, commit, push,
-  deployment, or release action. The synthetic kernel does not qualify a
-  runtime or advertise delegation support; the packaged production registry
-  remains empty.
+- On 2026-08-08, the current PR #22 worktree passed all 303 tests under Python
+  3.14.6 in 58.145s and Python 3.10.20 in 52.435s with `ResourceWarning`
+  promoted to an error. The focused conformance, runtime, qualification, and
+  distribution-isolation set passed all 81 tests under both interpreters.
+  Ruff 0.16.1 check/format, mypy 2.3.0 strict checking, and `git diff --check`
+  passed. Independent diff and completion-evidence reviews reported no
+  actionable critical, high, or medium findings.
+- A fresh offline wheel/sdist build passed the distribution-isolation gate and
+  extracted-sdist suite under both interpreters. The gate proves exact empty
+  source/wheel/sdist registries, rejects duplicate, Unicode-normalized, and
+  case-folding archive identities before extraction, excludes test-only and
+  qualification-like wheel content, and confines required synthetic assets to
+  their exact sdist `tests/` paths.
+- Verification did not access a credential or secret-like file, invoke a
+  weightclass-selected product/vendor runtime, persist runtime task content,
+  publish a release, or deploy. External review received only bounded redacted
+  targets. The synthetic kernel does not qualify a runtime or advertise
+  delegation support; the packaged production registry remains empty.
 - The P1 qualification, conformance-runner, and blocked claim-map foundation
   passed all 227 tests
   under Python 3.10.20 and Python

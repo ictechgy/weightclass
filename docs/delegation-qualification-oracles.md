@@ -79,12 +79,17 @@ package registry. A future claim becomes eligible only through a separately
 reviewed protocol revision with an implemented independent oracle and negative
 control.
 
-The next safe implementation increment is a non-public synthetic probe kernel.
-Probe self-tests must use separate IDs rather than weakening any of the 67
-qualification claims. Initially they may establish only runner-direct facts.
-Runtime telemetry remains untrusted, and path-based execution must be reported
-as `TOCTOU-UNRESOLVED` until verified-object or reviewed immutable launch
-binding exists.
+The non-public synthetic probe kernel is now implemented as test-only code. Its
+self-tests use separate IDs rather than weakening any of the 67 qualification
+claims, and establish only runner-direct facts. Runtime telemetry remains
+untrusted, path-based execution remains `TOCTOU-UNRESOLVED`, and the tested
+Linux and Darwin descendant-containment decisions remain `NO-GO`.
+
+The next safe increment is an independently reviewed design for one exact claim
+with an external oracle, hostile negative control, identity closure, and an
+authoritative per-platform containment gate. A verified-object or reviewed
+immutable launch binding is still required before path-based execution can
+support a qualification claim.
 
 No vendor CLI, credentials, network access, billing event, production runtime,
 qualification record, or delegation advertisement belongs in that increment.

@@ -631,7 +631,11 @@ python3 -m pip install ruff mypy build twine
 ruff check src tests
 ruff format --check src tests
 mypy
-python3 -m build && twine check dist/*
+python3 -m build
+python3 tests/verify_distribution_isolation.py \
+  --source . --wheel dist/*.whl --sdist dist/*.tar.gz \
+  --run-sdist-tests
+twine check --strict dist/*
 ```
 
 ## License
