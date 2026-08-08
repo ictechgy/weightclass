@@ -59,7 +59,10 @@ class DelegationProtocolUnitTests(unittest.TestCase):
             "import signal\n"
             "import time\n"
             "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
-            f"Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='ascii')\n"
+            f"pid_path = Path({str(pid_path)!r})\n"
+            "pid_tmp = pid_path.with_name(pid_path.name + '.tmp')\n"
+            "pid_tmp.write_text(str(os.getpid()), encoding='ascii')\n"
+            "os.replace(pid_tmp, pid_path)\n"
             "time.sleep(60)\n",
             encoding="utf-8",
         )
@@ -797,6 +800,34 @@ class DelegationRunTests(unittest.TestCase):
                 process.wait()
         return subprocess.CompletedProcess(arguments, return_code, stdout, stderr)
 
+    def _cleanup_owned_process_group(self, process: subprocess.Popen[str]) -> None:
+        """Kill the owned group while its Popen anchor is alive, then reap once."""
+        try:
+            if process.returncode is None:
+                if os.name == "posix":
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        os.kill(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    # The direct PID remains anchored because wait did not reap it.
+                    if os.name == "posix":
+                        os.kill(process.pid, signal.SIGKILL)
+                    else:
+                        process.kill()
+                    process.wait(timeout=2)
+        finally:
+            # Never signal or probe the numeric group id after the anchor is reaped.
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None and not stream.closed:
+                    stream.close()
+
     def test_confirmation_is_required_before_runtime_or_task_access(self) -> None:
         """Breaks if an unconfirmed run touches a runtime or blocks on task stdin."""
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -921,6 +952,7 @@ class DelegationRunTests(unittest.TestCase):
             directory = Path(temporary_directory)
             policy_path, manifest_path = self._write_inputs(directory)
             runtime_path = self._copy_runtime(directory)
+            start_marker_path = directory / "runtime-started"
             descriptor = self._review(policy_path, manifest_path, runtime_path)
             arguments = self._arguments("run", policy_path, manifest_path, runtime_path)
             arguments.extend(
@@ -930,16 +962,21 @@ class DelegationRunTests(unittest.TestCase):
                     str(descriptor["route_fingerprint"]),
                 ]
             )
+            environment = os.environ.copy()
+            environment["WEIGHTCLASS_FAKE_DELEGATION_START_MARKER"] = str(start_marker_path)
 
             result = subprocess.run(
                 arguments,
                 capture_output=True,
                 check=False,
+                env=environment,
                 input=EXPECTED_TASK,
                 text=True,
             )
+            start_marker_contents = start_marker_path.read_text(encoding="ascii")
 
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(start_marker_contents, "started\n")
         self.assertEqual(result.stdout.count("fake-runtime-ok"), 1)
         self.assertIn(f"fake-runtime-fingerprint:{descriptor['route_fingerprint']}", result.stdout)
         self.assertEqual(result.stderr, "fake-runtime-stderr\n")
@@ -950,6 +987,7 @@ class DelegationRunTests(unittest.TestCase):
             directory = Path(temporary_directory)
             policy_path, manifest_path = self._write_inputs(directory)
             runtime_path = self._copy_runtime(directory)
+            start_marker_path = directory / "runtime-started"
             descriptor = self._review(policy_path, manifest_path, runtime_path)
             arguments = self._arguments("run", policy_path, manifest_path, runtime_path)
             arguments.extend(
@@ -959,18 +997,23 @@ class DelegationRunTests(unittest.TestCase):
                     str(descriptor["route_fingerprint"]),
                 ]
             )
+            environment = os.environ.copy()
+            environment["WEIGHTCLASS_FAKE_DELEGATION_START_MARKER"] = str(start_marker_path)
 
             result = subprocess.run(
                 arguments,
                 capture_output=True,
                 check=False,
+                env=environment,
                 input="",
                 text=True,
             )
+            start_marker_exists = start_marker_path.exists()
 
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
         self.assertEqual(result.stdout, "")
+        self.assertFalse(start_marker_exists)
 
     def test_runtime_nonzero_maps_to_router_failure_without_task_content(self) -> None:
         """Breaks if runtime status collides with router codes or leaks task text."""
@@ -1006,12 +1049,13 @@ class DelegationRunTests(unittest.TestCase):
         )
         self.assertNotIn("zephyrine", result.stdout + result.stderr)
 
-    def test_broken_pipe_terminates_and_reaps_the_direct_child(self) -> None:
-        """Breaks if post-spawn framing failure hangs or leaves its direct child alive."""
+    def test_broken_pipe_terminates_and_reaps_owned_process_group(self) -> None:
+        """Breaks if framing failure leaks the owned router/runtime process group."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path, manifest_path = self._write_inputs(directory, cleanup_seconds=1)
             runtime_path = self._copy_runtime(directory)
+            start_marker_path = directory / "runtime-started"
             descriptor = self._review(policy_path, manifest_path, runtime_path)
             arguments = self._arguments("run", policy_path, manifest_path, runtime_path)
             arguments.extend(
@@ -1023,29 +1067,32 @@ class DelegationRunTests(unittest.TestCase):
             )
             environment = os.environ.copy()
             environment["WEIGHTCLASS_FAKE_DELEGATION_MODE"] = "close-stdin-and-hang"
+            environment["WEIGHTCLASS_FAKE_DELEGATION_START_MARKER"] = str(start_marker_path)
             started_at = time.monotonic()
 
-            result = subprocess.run(
+            process = subprocess.Popen(
                 arguments,
-                capture_output=True,
-                check=False,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 env=environment,
-                input="🧪" * 20_000,
+                start_new_session=(os.name == "posix"),
                 text=True,
-                timeout=8,
             )
-            elapsed = time.monotonic() - started_at
+            try:
+                stdout, stderr = process.communicate(input="🧪" * 20_000, timeout=8)
+                return_code = process.returncode
+                elapsed = time.monotonic() - started_at
+                start_marker_contents = start_marker_path.read_text(encoding="ascii")
+            finally:
+                self._cleanup_owned_process_group(process)
 
-        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(return_code, 7, stderr)
         self.assertLess(elapsed, 8)
-        pid_line = next(
-            line for line in result.stdout.splitlines() if line.startswith("fake-runtime-pid:")
-        )
-        runtime_pid = int(pid_line.removeprefix("fake-runtime-pid:"))
-        with self.assertRaises(ProcessLookupError):
-            os.kill(runtime_pid, 0)
+        self.assertEqual(start_marker_contents, "started\n")
+        self.assertEqual(stdout.count("fake-runtime-started"), 1)
         self.assertEqual(
-            json.loads([line for line in result.stderr.splitlines() if line][-1]),
+            json.loads([line for line in stderr.splitlines() if line][-1]),
             {"error": "executor_failed"},
         )
 

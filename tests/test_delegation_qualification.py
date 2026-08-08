@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -7,6 +8,7 @@ import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from tests.test_delegation import _manifest, _policy
@@ -348,6 +350,63 @@ class QualifiedRuntimeTests(unittest.TestCase):
 
             with self.assertRaises(QualifiedRuntimeUnavailableError):
                 verify_qualified_runtime(runtime_path, selected)
+
+    def test_verifier_rejects_final_symlink(self) -> None:
+        """Breaks if the final runtime path is a symlink at verification time."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            runtime_path = directory / "runtime"
+            replacement_path = directory / "replacement"
+            _write_executable(runtime_path)
+            record = build_qualification_candidate(_evidence(), runtime_path)
+            registry_path = directory / "registry.json"
+            registry_path.write_text(json.dumps(_registry_value(record)), encoding="utf-8")
+            selected = load_qualification_registry(registry_path).records[0]
+            _write_executable(replacement_path)
+            runtime_path.unlink()
+            runtime_path.symlink_to(replacement_path)
+
+            with self.assertRaises(QualifiedRuntimeUnavailableError):
+                verify_qualified_runtime(runtime_path, selected)
+
+    def test_verifier_rejects_post_read_metadata_divergence(self) -> None:
+        """Breaks if bytes are hashed without binding the post-read metadata."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            runtime_path = directory / "runtime"
+            _write_executable(runtime_path)
+            record = build_qualification_candidate(_evidence(), runtime_path)
+            registry_path = directory / "registry.json"
+            registry_path.write_text(json.dumps(_registry_value(record)), encoding="utf-8")
+            selected = load_qualification_registry(registry_path).records[0]
+            real_fstat = os.fstat
+            fstat_calls = 0
+
+            def diverge_after_read(file_descriptor: int) -> object:
+                nonlocal fstat_calls
+                fstat_calls += 1
+                result = real_fstat(file_descriptor)
+                if fstat_calls == 2:
+                    return SimpleNamespace(
+                        st_dev=result.st_dev,
+                        st_ino=result.st_ino,
+                        st_mode=result.st_mode,
+                        st_size=result.st_size,
+                        st_mtime_ns=result.st_mtime_ns + 1,
+                        st_ctime_ns=result.st_ctime_ns,
+                    )
+                return result
+
+            with (
+                mock.patch(
+                    "weightclass.delegation_qualification.os.fstat",
+                    side_effect=diverge_after_read,
+                ),
+                self.assertRaises(QualifiedRuntimeUnavailableError),
+            ):
+                verify_qualified_runtime(runtime_path, selected)
+
+        self.assertEqual(fstat_calls, 2)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,23 @@ import time
 EXPECTED_TASK = "Apply the reviewed change. 테스트"
 MAX_DESCRIPTOR_BYTES = 262_144
 MAX_TASK_BYTES = 80_000
+START_MARKER_ENV = "WEIGHTCLASS_FAKE_DELEGATION_START_MARKER"
+
+
+def _record_start() -> None:
+    """Synchronously record one process start without exposing task data."""
+    marker_path = os.environ.get(START_MARKER_ENV)
+    if not marker_path:
+        return
+    file_descriptor = os.open(
+        marker_path,
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+    )
+    try:
+        os.write(file_descriptor, b"started\n")
+    finally:
+        os.close(file_descriptor)
 
 
 def _read_exact(length: int) -> bytes:
@@ -54,10 +71,11 @@ def _validate_descriptor(contents: bytes) -> dict[str, object]:
 def main() -> int:
     if sys.argv[1:] != ["--weightclass-delegation-protocol", "1"]:
         return 25
+    _record_start()
     mode = os.environ.get("WEIGHTCLASS_FAKE_DELEGATION_MODE", "success")
     if mode == "close-stdin-and-hang":
         os.close(sys.stdin.fileno())
-        print(f"fake-runtime-pid:{os.getpid()}", flush=True)
+        print("fake-runtime-started", flush=True)
         time.sleep(60)
         return 26
 
