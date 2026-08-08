@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 from tests.test_delegation import _manifest, _policy
@@ -362,7 +361,7 @@ class QualifiedRuntimeTests(unittest.TestCase):
             registry_path = directory / "registry.json"
             registry_path.write_text(json.dumps(_registry_value(record)), encoding="utf-8")
             selected = load_qualification_registry(registry_path).records[0]
-            _write_executable(replacement_path)
+            replacement_path.hardlink_to(runtime_path)
             runtime_path.unlink()
             runtime_path.symlink_to(replacement_path)
 
@@ -382,19 +381,23 @@ class QualifiedRuntimeTests(unittest.TestCase):
             real_fstat = os.fstat
             fstat_calls = 0
 
+            class DivergentStat:
+                def __init__(self, original: os.stat_result) -> None:
+                    self._original = original
+
+                @property
+                def st_mtime_ns(self) -> int:
+                    return self._original.st_mtime_ns + 1
+
+                def __getattr__(self, name: str) -> object:
+                    return getattr(self._original, name)
+
             def diverge_after_read(file_descriptor: int) -> object:
                 nonlocal fstat_calls
                 fstat_calls += 1
                 result = real_fstat(file_descriptor)
                 if fstat_calls == 2:
-                    return SimpleNamespace(
-                        st_dev=result.st_dev,
-                        st_ino=result.st_ino,
-                        st_mode=result.st_mode,
-                        st_size=result.st_size,
-                        st_mtime_ns=result.st_mtime_ns + 1,
-                        st_ctime_ns=result.st_ctime_ns,
-                    )
+                    return DivergentStat(result)
                 return result
 
             with (
