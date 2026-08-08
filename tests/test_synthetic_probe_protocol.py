@@ -157,6 +157,15 @@ class SyntheticProbeProtocolTests(unittest.TestCase):
                 with self.assertRaises(ProbeProtocolInvalidInputError):
                     parse_probe_manifest(encoded)
 
+    def test_rejects_deeply_nested_json_with_bounded_protocol_error(self) -> None:
+        encoded = (b"[" * 8_000) + (b"]" * 8_000)
+        self.assertLess(len(encoded), MAX_MANIFEST_BYTES)
+
+        with self.assertRaises(ProbeProtocolInvalidInputError) as context:
+            parse_probe_manifest(encoded)
+
+        self.assertEqual(str(context.exception), "")
+
     def test_schema_bounds_identifiers_and_provenance(self) -> None:
         overlong = "wcp-selftest/v1/" + ("a" * 128)
         invalid_identifiers = ["", overlong, "matrix/worker", "wcp-selftest/v1/UPPER", "x"]
@@ -176,6 +185,34 @@ class SyntheticProbeProtocolTests(unittest.TestCase):
 
 
 class SyntheticProbeRunnerTests(unittest.TestCase):
+    def test_rejects_embedded_nul_before_starting_a_process(self) -> None:
+        argv = (*_child_argv("clean"), "opaque-input\x00with-nul")
+        with patch(
+            "tests.synthetic_probe_runner.subprocess.Popen",
+            side_effect=AssertionError("Popen must not receive embedded NUL"),
+        ) as popen:
+            result = run_synthetic_probe(argv, timeout_seconds=1.0)
+
+        popen.assert_not_called()
+        self.assertEqual(result["diagnostic"], "probe_invalid_input")
+        self.assertIs(result["child_started"], False)
+        self.assertIsNone(result["child_pid"])
+        self.assertIsNone(result["exit_status"])
+
+    def test_normalizes_popen_value_error_to_bounded_start_failure(self) -> None:
+        argv = _child_argv("clean")
+        with patch(
+            "tests.synthetic_probe_runner.subprocess.Popen",
+            side_effect=ValueError("opaque child-start detail"),
+        ):
+            result = run_synthetic_probe(argv, timeout_seconds=1.0)
+
+        self.assertEqual(result["diagnostic"], "probe_start_failed")
+        self.assertNotIn("opaque child-start detail", cast(str, result["diagnostic"]))
+        self.assertIs(result["child_started"], False)
+        self.assertIsNone(result["child_pid"])
+        self.assertIsNone(result["exit_status"])
+
     def test_stop_failure_is_redacted_and_preserves_runner_observations(self) -> None:
         argv = _child_argv("timeout")
         with patch(

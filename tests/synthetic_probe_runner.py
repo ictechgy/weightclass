@@ -205,7 +205,7 @@ def run_synthetic_probe(
     argv = tuple(selected_argv)
     if (
         not argv
-        or any(not isinstance(item, str) or not item for item in argv)
+        or any(not isinstance(item, str) or not item or "\x00" in item for item in argv)
         or isinstance(timeout_seconds, bool)
         or not isinstance(timeout_seconds, (int, float))
         or not math.isfinite(timeout_seconds)
@@ -290,7 +290,7 @@ def run_synthetic_probe(
                 "untrusted_stdout_policy": "discarded-non-decisive",
             }
         )
-    except OSError:
+    except (OSError, ValueError):
         return _invalid_result(
             argv,
             pid=None,

@@ -156,6 +156,6 @@ def parse_probe_manifest(encoded: bytes) -> dict[str, object]:
             encoded.decode("utf-8", errors="strict"),
             object_pairs_hook=_object_without_duplicate_keys,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateKeyError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, _DuplicateKeyError):
         raise ProbeProtocolInvalidInputError() from None
     return _parse_value(value)
