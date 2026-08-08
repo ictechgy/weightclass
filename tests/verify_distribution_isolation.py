@@ -888,6 +888,17 @@ def _qualification_document_kind(raw: bytes, location: str) -> str | None:
 
 
 def _read_source_registry(registry: Path) -> bytes:
+    def read_bounded(descriptor: int) -> bytes:
+        raw = bytearray()
+        while chunk := os.read(
+            descriptor,
+            min(65_536, MAX_ARCHIVE_TEXT_BYTES + 1 - len(raw)),
+        ):
+            raw.extend(chunk)
+            if len(raw) > MAX_ARCHIVE_TEXT_BYTES:
+                _fail("source registry exceeds the safety limit")
+        return bytes(raw)
+
     flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = _open_no_follow(str(registry), flags)
@@ -900,11 +911,9 @@ def _read_source_registry(registry: Path) -> bytes:
                 _fail("source registry must be a nonsymlink regular file")
             if before.st_size < 0 or before.st_size > MAX_ARCHIVE_TEXT_BYTES:
                 _fail("source registry exceeds the safety limit")
-            raw = bytearray()
-            while chunk := os.read(descriptor, min(65_536, MAX_ARCHIVE_TEXT_BYTES + 1 - len(raw))):
-                raw.extend(chunk)
-                if len(raw) > MAX_ARCHIVE_TEXT_BYTES:
-                    _fail("source registry exceeds the safety limit")
+            raw = read_bounded(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            confirmed_raw = read_bounded(descriptor)
             after = os.fstat(descriptor)
         except IsolationError:
             raise
@@ -918,11 +927,12 @@ def _read_source_registry(registry: Path) -> bytes:
         _fail("source registry changed while it was inspected")
     if (
         len(raw) != after.st_size
+        or raw != confirmed_raw
         or _stat_identity(before) != _stat_identity(after)
         or _stat_identity(after) != _stat_identity(current)
     ):
         _fail("source registry changed while it was inspected")
-    return bytes(raw)
+    return confirmed_raw
 
 
 def verify_source_registry(root: Path) -> None:

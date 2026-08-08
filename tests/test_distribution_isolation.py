@@ -1463,9 +1463,15 @@ class DistributionIsolationTests(unittest.TestCase):
                     )
                 return raw
 
-            with patch(
-                "tests.verify_distribution_isolation.os.read",
-                side_effect=mutate_after_read,
+            with (
+                patch(
+                    "tests.verify_distribution_isolation._stat_identity",
+                    return_value=(0, 0, 0, 0, 0, 0),
+                ),
+                patch(
+                    "tests.verify_distribution_isolation.os.read",
+                    side_effect=mutate_after_read,
+                ),
             ):
                 with self.assertRaisesRegex(IsolationError, "source registry changed"):
                     verify_source_registry(root)
