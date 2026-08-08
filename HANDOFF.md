@@ -253,8 +253,8 @@ user-provided model labels, and the no-retention boundary.
   completion-evidence reviews reported no actionable critical, high, or medium
   findings.
 - A fresh offline exact wheel/sdist build passed the distribution-isolation
-  gate and all 400 extracted-sdist tests under both interpreters: 69.995s on
-  Python 3.14.6 and 63.072s on Python 3.10.20, with one platform skip each. The
+  gate and all 400 extracted-sdist tests under both interpreters: 69.153s on
+  Python 3.14.6 and 60.496s on Python 3.10.20, with one platform skip each. The
   gate proves exact empty source/wheel/sdist registries; rejects duplicate,
   Unicode-normalized, case-folding, and file/implicit-directory archive
   identities; bounds physical tar and classic-ZIP headers and payloads before
