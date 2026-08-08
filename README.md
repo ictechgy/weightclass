@@ -11,6 +11,11 @@ route can start a separately installed API runtime after explicit review and
 egress acknowledgement; weightclass never reads API credentials or makes
 provider network requests itself.
 
+The `delegate` surface can also compile a Claude- or Codex-native
+planner/worker/reviewer policy into one offline review descriptor. P0.5 may
+start one explicitly trusted user-supplied orchestration runtime after review;
+its manifest remains a declaration, not proof that it enforces delegation.
+
 ## Install
 
 weightclass has no runtime dependencies beyond Python 3.10 or later.
@@ -42,13 +47,16 @@ For reviewable native Codex and Claude Code invocation examples, see
 `wclass --help` lists the whole surface:
 
 ```text
-wclass [-h] [--version] {classify,route,run,render,v2} ...
+wclass [-h] [--version] {classify,route,run,render,delegate,v2} ...
 ```
 
 `classify`, `route`, and `run` read the task from standard input. `render`
 prints the command of a policy route named by a workflow descriptor and never
 reads a task. `v2` selects a declarative API route; see
 [V2 API routing](#v2-api-routing-through-an-external-runtime).
+`delegate route` reads only its policy and manifest and does not consume task
+standard input or inspect the supplied runtime path. `delegate run` reads the
+task only after confirmation, fingerprint, and runtime-availability gates.
 
 Every malformed invocation — an unknown subcommand, a missing argument, a bad
 policy — exits `2` with `{"error": "invalid_input"}` on standard error and
@@ -64,7 +72,7 @@ them:
 | `2` | `invalid_task` or `invalid_input`. |
 | `3` | `unsupported_route` — no policy route matched. |
 | `4` | `executor_unavailable` — the command could not be started. |
-| `5` | `api_confirmation_required` — V2 without `--confirm-api-egress`. |
+| `5` | `api_confirmation_required` or `delegation_confirmation_required`. |
 | `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
 | `7` | `executor_failed` — the command started and exited non-zero. |
 | `8` | `triage_unavailable` — `--ask-vendor` could not obtain a tier. |
@@ -367,6 +375,151 @@ the vendor filter is applied before tier selection — including when
 `--source-vendor` is omitted, in which case the vendor of the first declared
 tier route is used.
 
+## Reviewed role delegation
+
+P0 adds a compatibility-isolated review command:
+
+```sh
+wclass delegate route \
+  --policy delegation-policy.json \
+  --runtime-manifest runtime-manifest.json \
+  --delegation-runtime /absolute/reviewed/runtime \
+  --source-vendor codex \
+  --tier standard
+```
+
+It selects exactly one workflow, fully inlines its orchestrator, worker, and
+reviewer profiles plus the matching adapter, and emits a canonical descriptor
+whose fingerprint can be reproduced from the output alone. Claude and Codex
+use the same role/action/stage contract, while protocol 1 requires every role
+to match `--source-vendor` and use the native transport. Model and effort
+labels remain opaque policy values.
+
+The runtime path may be nonexistent during review: route compilation validates it
+lexically but never resolves, stats, opens, hashes, or executes it. The output
+therefore says `declared_enforcement`; it does not say the runtime exists, that
+it delegated work, or that any named model authored an artifact.
+
+To run, copy the exact fingerprint and provide both execution gates:
+
+```sh
+printf '%s' 'Apply the reviewed change.' | \
+  wclass delegate run \
+  --policy delegation-policy.json \
+  --runtime-manifest runtime-manifest.json \
+  --delegation-runtime /absolute/reviewed/runtime \
+  --source-vendor codex \
+  --tier standard \
+  --confirm-trusted-delegation-runtime \
+  --ack-route-fingerprint 'sha256:copied-from-route'
+```
+
+`delegate run` recompiles without printing, checks confirmation and the exact
+fingerprint, verifies that the reviewed path is currently a regular executable,
+then reads and validates task stdin. It constructs the complete bounded WCD1
+frame before spawning exactly one foreground process:
+
+```text
+/absolute/reviewed/runtime --weightclass-delegation-protocol 1
+```
+
+The canonical review descriptor and UTF-8 task are sent on the child's standard
+input within the fingerprinted `direct_child_cleanup.grace_seconds` deadline.
+Its stdout/stderr and environment are inherited. weightclass does not capture,
+parse, redact, limit, or retain runtime output. Runtime nonzero and post-spawn
+framing failure map to exit `7`; framing failure triggers the fingerprinted
+direct-child `close -> wait -> terminate -> wait -> kill -> reap` sequence.
+weightclass does not enumerate descendants.
+
+Before task input is read, run rejects a non-main-thread launch or a
+Python-visible non-default `SIGCHLD` disposition. Platform flags hidden from
+Python can only be detected after spawn; weightclass owns the direct
+`waitpid`, never converts unavailable child status to exit zero, and maps that
+condition to the same redacted exit `7` failure.
+
+P0.5 includes no bundled Claude/Codex orchestrator. The user-supplied runtime
+owns vendor authentication, network and billing behavior, role processes,
+permission enforcement, review, integration, its deadline, descendants, and
+output. A dishonest runtime can exit zero without doing those things, so the
+descriptor remains `declared_enforcement`.
+
+P1's local qualification foundation is opt-in. Add
+`--require-qualified-runtime` to both `delegate route` and `delegate run` to
+require a package-owned record matching the manifest build ID, host platform,
+protocol, adapter, and source vendor. The qualified route fingerprint also
+binds the recorded executable SHA-256 and size, conformance-suite revision,
+and evidence digest. Run reopens the absolute path and checks the exact bytes
+before reading task stdin. Qualified mode rejects a final symlink and retains a
+documented hash-to-spawn path-replacement race because the child is still
+started by path.
+
+The shipped registry is intentionally empty, so qualified route/run currently
+fail closed with `unsupported_route`: no real Claude or Codex adapter has been
+independently qualified. There is no CLI, environment variable, or user path
+that overrides the production registry.
+
+Package maintainers can normalize a task-free conformance report into an
+untrusted review candidate without changing that registry:
+
+```sh
+wclass delegate qualification-candidate \
+  --evidence /absolute/conformance-evidence.json \
+  --delegation-runtime /absolute/runtime
+```
+
+Candidate input must contain all 54 role/category/action/mode observations and
+all required lifecycle, attribution, review, integrity, integration, deadline,
+cleanup, leakage, and output-channel scenarios, with every result passing.
+This command validates shape and hashes the local executable; it does not prove
+that the evidence is independent and does not qualify the runtime. Review and a
+source change to the package registry are still required.
+
+Repository maintainers can produce that evidence through the bounded external
+driver contract:
+
+```sh
+PYTHONPATH=src python3 -m weightclass.delegation_conformance \
+  --driver /absolute/reviewed/adapter-conformance-driver \
+  --runtime /absolute/runtime \
+  --runtime-build-id 'opaque runtime build' \
+  --adapter-id claude-native-v1 \
+  --vendor-family claude
+```
+
+The runner creates a new private workspace for each of the 67 predeclared
+cases, never reads task stdin, and starts the driver with exactly:
+
+```text
+/absolute/reviewed/adapter-conformance-driver \
+  --weightclass-conformance-driver 1
+```
+
+Each case has a fixed 60-second deadline and a 4,096-byte stdout limit; driver
+stderr is discarded. The driver process starts in a new session. A nonzero
+exit, malformed or mismatched response, timeout, oversized output, or a live
+same-process-group descendant records that case as failed, then the runner
+cleans the group. An interrupt also cleans the active group and returns exit
+`130` with a redacted diagnostic. Driver and runtime environment variables are
+inherited, so a real driver may still cause vendor authentication, network,
+quota, and billing effects; invoke it only after reviewing both artifacts and
+the exact command.
+
+The runner hashes the executable before and after all cases and evidence schema
+2 carries that exact size and SHA-256. Candidate construction rechecks the
+current executable against those observed bytes, so a post-suite replacement
+cannot inherit the earlier passing matrix.
+
+No real Claude-family or Codex-family conformance driver is shipped. The test
+fixture merely pressure-tests the runner and can trivially claim success
+without using the runtime. Evidence from an arbitrary `--driver` is therefore
+untrusted, and escaped sessions or process groups remain a driver-side
+conformance concern. The package registry stays empty until source-reviewed,
+adapter-specific drivers independently establish every required observation.
+
+The exact schema, permission modes, retention rules, byte representations,
+process-lifecycle boundary, and P0.5/P1/P2 gates are documented in the
+[Claude and Codex delegation roadmap](docs/delegation-roadmap.md).
+
 ## V2 API routing through an external runtime
 
 V2 adds declarative API-route selection without turning weightclass into an API
@@ -443,8 +596,9 @@ credential management, background execution, or a bundled provider runtime.
 - No persistence: weightclass writes no router artifacts or vendor
   configuration.
 - Task text is read only from standard input, held in memory to classify and
-  pass to the selected child process, then discarded. weightclass never logs,
-  stores, echoes, or places it in diagnostics.
+  pass to the selected child process, then discarded. `delegate route` does not
+  read it; `delegate run` reads it only after its static execution gates.
+  weightclass never logs, stores, echoes, hashes, or places it in diagnostics.
 - weightclass never reads credentials, subscription balances, pricing, cookies,
   or vendor configuration. It does not capture or process vendor output. V2
   does not issue provider HTTP requests; a separately installed runtime may do
@@ -473,9 +627,26 @@ credential management, background execution, or a bundled provider runtime.
 ## Development verification
 
 weightclass has no runtime dependencies. These development tools are not
-required to use it, only to reproduce what CI checks:
+required to use it, only to reproduce what CI checks. The distribution gate
+accepts only a directory containing exactly one regular, nonsymlink wheel and
+one regular, nonsymlink sdist. Each distribution artifact is capped at 72 MiB
+before hashing or archive parsing. The gate fingerprints that exact inventory
+and checks it again after running the extracted sdist tests. Archives are
+rejected before content inspection or extraction when they exceed 4,096
+physical members or 64 MiB total declared payload. Wheel members and supported
+local PAX records are capped at 256 KiB, ordinary sdist records at 8 MiB, and
+archive directory entries must report zero size. The physical tar scan rejects
+GNU, global-PAX, sparse, or offset-changing extensions, malformed headers,
+missing terminators, and nonzero trailing data before `tarfile` processes them.
+The source registry and both distributions are read through bounded no-follow
+descriptors, and archive parsers consume private snapshots matching the initial
+fingerprints. The classic-ZIP preflight rejects ZIP64, multidisk, encrypted,
+data-descriptor, gapped, overlapping, or inconsistent layouts before `ZipFile`;
+it also requires exact stored/raw-deflate input consumption, output size, and
+CRC for every wheel member.
 
 ```sh
+set -eu
 PYTHONPATH=src python3 -m unittest discover -s tests
 PYTHONPATH=src python3 -m compileall -q src
 
@@ -483,7 +654,12 @@ python3 -m pip install ruff mypy build twine
 ruff check src tests
 ruff format --check src tests
 mypy
-python3 -m build && twine check dist/*
+weightclass_dist_dir=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-dist.XXXXXX")
+python3 -m build --outdir "$weightclass_dist_dir"
+twine check --strict "$weightclass_dist_dir"/*.whl "$weightclass_dist_dir"/*.tar.gz
+python3 tests/verify_distribution_isolation.py \
+  --source . --dist-dir "$weightclass_dist_dir" \
+  --run-sdist-tests
 ```
 
 ## License

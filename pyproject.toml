@@ -41,7 +41,7 @@ where = ["src"]
 
 # Typing :: Typed 를 광고하려면 마커를 실제로 배포해야 한다.
 [tool.setuptools.package-data]
-weightclass = ["py.typed"]
+weightclass = ["delegation_qualifications.json", "py.typed"]
 
 [tool.setuptools.dynamic]
 version = {attr = "weightclass.__version__"}

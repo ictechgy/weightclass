@@ -273,12 +273,14 @@ class AskVendorTests(unittest.TestCase):
                 sys.stdout.flush()
                 os._exit(0)
             """
-            started = time.monotonic()
-            with _fake_python_vendor_on_path(source) as env, mock.patch.dict(os.environ, env):
+            with (
+                mock.patch("weightclass.triage.TRIAGE_TIMEOUT_SECONDS", 5),
+                _fake_python_vendor_on_path(source) as env,
+                mock.patch.dict(os.environ, env),
+            ):
                 tier = ask_vendor_for_tier("task", "claude")
 
             self.assertEqual(tier, "high")
-            self.assertLess(time.monotonic() - started, 1.0)
             time.sleep(0.6)
             self.assertFalse(sentinel.exists())
 

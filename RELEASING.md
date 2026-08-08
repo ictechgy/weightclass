@@ -46,7 +46,11 @@ publisher once, on PyPI:
    ```sh
    PYTHONPATH=src python3 -W error::ResourceWarning -m unittest discover -s tests
    ruff check src tests && ruff format --check src tests && mypy
-   python3 -m build && twine check --strict dist/*
+   release_dist_dir=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-release.XXXXXX")
+   python3 -m build --outdir "$release_dist_dir"
+   twine check --strict "$release_dist_dir"/*.whl "$release_dist_dir"/*.tar.gz
+   python3 tests/verify_distribution_isolation.py \
+     --source . --dist-dir "$release_dist_dir" --run-sdist-tests
    ```
 
    The release is also blocked unless CI's macOS Python 3.10 and 3.13 triage
@@ -62,8 +66,14 @@ publisher once, on PyPI:
    ```
 
 4. The `Release` workflow re-runs every gate against the tagged commit, checks
-   the tag against the declared version, builds the wheel and sdist, and uploads
-   them to PyPI. Watch it finish before continuing.
+   the tag against the declared version, builds exactly one wheel and one sdist,
+   verifies them, and uploads only those two patterns as an immutable unverified
+   artifact before executing their extracted tests locally. The local copies are
+   fingerprinted again after those tests. The immutable artifact then crosses a
+   job boundary to a fresh runner, which installs no project tooling and executes
+   only the standard-library isolation verifier. Publication is gated on that
+   check and consumes the same immutable artifact instead of re-uploading mutable
+   filesystem paths. Watch the workflow finish before continuing.
 
 5. Verify the published artifact from a clean environment:
 

@@ -53,7 +53,12 @@ jobs:
       - name: Build distributions
         run: python -m build
       - name: Verify distribution metadata
-        run: twine check --strict dist/*
+        run: twine check --strict dist/*.whl dist/*.tar.gz
+      - name: Verify qualification isolation in distributions
+        run: |
+          python tests/verify_distribution_isolation.py \
+            --source . --dist-dir dist \
+            --run-sdist-tests
 
   macos-routing-boundaries:
     name: macOS routing boundaries (Python ${{ matrix.python-version }})
@@ -72,4 +77,5 @@ jobs:
       - name: Verify process and JSON input boundaries
         run: |
           PYTHONPATH=src python -W error::ResourceWarning -m unittest \
-            tests.test_triage tests.test_json_input
+            tests.test_triage tests.test_json_input \
+            tests.test_delegation_conformance tests.test_delegation_runtime
