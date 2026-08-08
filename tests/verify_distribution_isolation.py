@@ -164,13 +164,16 @@ def _wheel_members(archive: zipfile.ZipFile, wheel: Path) -> list[zipfile.ZipInf
     members = archive.infolist()
     names: set[str] = set()
     casefolded_names: set[str] = set()
+    install_path_names: set[str] = set()
     for member in members:
         name = member.filename
         path = PurePosixPath(name)
         casefolded_name = unicodedata.normalize("NFC", name).casefold()
+        install_path_name = unicodedata.normalize("NFC", path.as_posix()).casefold()
         if (
             name in names
             or casefolded_name in casefolded_names
+            or install_path_name in install_path_names
             or not path.parts
             or path.is_absolute()
             or ".." in path.parts
@@ -182,6 +185,7 @@ def _wheel_members(archive: zipfile.ZipFile, wheel: Path) -> list[zipfile.ZipInf
             _fail(f"{wheel.name}: noncanonical or duplicate archive member: {name}")
         names.add(name)
         casefolded_names.add(casefolded_name)
+        install_path_names.add(install_path_name)
     return members
 
 
@@ -278,7 +282,7 @@ def verify_sdist(sdist: Path) -> None:
         for member in members:
             relative = PurePosixPath(member.name).relative_to(root)
             if _is_tests_path(relative) or _has_forbidden_fuzzy_path(relative):
-                if not relative.parts or relative.parts[0].lower() != "tests":
+                if not relative.parts or relative.parts[0] != "tests":
                     _fail(f"{sdist.name}: test-only artifact escaped tests/: {member.name}")
         regular_names = [
             PurePosixPath(member.name).relative_to(root).as_posix()

@@ -181,7 +181,22 @@ class DistributionIsolationTests(unittest.TestCase):
                 archive.writestr("weightclass/café.py", "VALUE = 1\n")
                 archive.writestr("weightclass/cafe\u0301.py", "VALUE = 2\n")
 
-            with self.assertRaises(IsolationError):
+            with self.assertRaisesRegex(IsolationError, "noncanonical or duplicate archive member"):
+                verify_wheel(wheel)
+
+    def test_wheel_rejects_file_directory_install_path_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr("weightclass/pkg/", "")
+                archive.writestr("weightclass/pkg", "VALUE = 1\n")
+
+            with self.assertRaisesRegex(IsolationError, "noncanonical or duplicate archive member"):
                 verify_wheel(wheel)
 
     def test_wheel_uses_exact_tests_path_detection(self) -> None:
@@ -626,6 +641,16 @@ class DistributionIsolationTests(unittest.TestCase):
             ):
                 sdist = _write_sdist_fixture(directory, (member_name,))
                 with self.assertRaises(IsolationError):
+                    verify_sdist(sdist)
+
+    def test_sdist_rejects_case_variant_test_root(self) -> None:
+        for root_name in ("Tests", "TESTS", "tEsTs"):
+            with (
+                self.subTest(root_name=root_name),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                sdist = _write_sdist_fixture(directory, (f"weightclass-0/{root_name}/example.py",))
+                with self.assertRaisesRegex(IsolationError, "test-only artifact escaped tests/"):
                     verify_sdist(sdist)
 
     def test_sdist_rejects_backslash_and_nul_member_names(self) -> None:
