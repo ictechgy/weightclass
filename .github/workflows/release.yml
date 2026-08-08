@@ -52,6 +52,11 @@ jobs:
         run: mypy
       - name: Build distributions
         run: python -m build
+      - name: Verify qualification isolation in distributions
+        run: |
+          python tests/verify_distribution_isolation.py \
+            --source . --wheel dist/*.whl --sdist dist/*.tar.gz \
+            --run-sdist-tests
       - name: Verify distribution metadata
         run: twine check --strict dist/*
       - name: Upload distributions

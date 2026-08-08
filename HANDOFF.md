@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-06 by Codex_
+_Last updated: 2026-08-08 by Codex_
 
 ## Goal
 
@@ -132,6 +132,40 @@ user-provided model labels, and the no-retention boundary.
   `docs/delegation-qualification-oracles.md`; no v3 production schema or runner
   is implemented.
 
+### Synthetic probe-protocol kernel (test-only)
+
+- `tests/synthetic_probe_protocol.py`, `synthetic_probe_runner.py`, and their
+  fixtures define a bounded non-public self-test kernel. Its
+  `wcp-selftest/v1/*` identifiers are separate from all 67 qualification claim
+  identifiers, its canonical manifests hardcode qualification and delegation
+  false, and its output is not qualification-candidate or registry compatible.
+- Decisive observations are limited to runner-selected argv, runner-observed
+  direct-child PID/start, exit status, timeout, and runner-owned framed file
+  descriptor traffic. Child payload assertions, stdout markers, telemetry, and
+  self-attestation are explicitly untrusted and non-decisive. Malformed,
+  truncated, duplicate, reordered, oversized, retained-writer, and hostile
+  substitution cases fail closed with bounded value-free diagnostics.
+- Containment assessment accepts direct provenance only from the runner-owned
+  immutable result type; a plain child- or caller-supplied mapping cannot gain
+  `runner-direct` provenance by copying field values. This is a test-process
+  type boundary, not cryptographic attestation or protection from malicious
+  code already executing inside that Python process.
+- Path-based execution remains `TOCTOU-UNRESOLVED`: the probe does not establish
+  that reviewed bytes were the bytes executed. It invokes only bounded local
+  synthetic fixtures and is not a production driver or qualification runner.
+- `tests/synthetic_descendant_containment.py` records tested Linux and Darwin
+  `NO-GO` decisions. Process groups/sessions and observation of known processes
+  do not establish an authoritative descendant boundary; Linux cgroup v2 was
+  not verified as runner-owned and Darwin has no verified equivalent here.
+  Platform labels, child cooperation, and child self-report never imply
+  containment. No unsafe or runaway descendant was launched.
+- Distribution gates require the source, wheel, and sdist production registries
+  to have the exact canonical empty shape and exact archive identity. The sdist
+  must have one root; synthetic assets must occupy their exact `tests/...`
+  paths, and links, devices, FIFOs, or other special members are rejected before
+  extraction. Synthetic and candidate-like content are excluded from the wheel.
+  CI/release action pins were not changed.
+
 ## Delivered hardening
 
 ### P0 — optional vendor triage boundary
@@ -185,6 +219,27 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
+- On 2026-08-08, the complete 259-test suite passed under Python 3.14.6 in
+  58.130s and Python 3.10.20 in 55.844s with `ResourceWarning` promoted to an
+  error. Both interpreters
+  passed `compileall`; Ruff 0.16.1 check/format, mypy 2.3.0 strict checking, and
+  `git diff --check` passed. The cumulative diff from `f1dd1b6` was reviewed as
+  test-only synthetic protocol/containment code plus packaging gates: no `src`
+  behavior, production record, registry content, action pin, or vendor
+  configuration changed, and diagnostics remain bounded and value-free.
+- A fresh `uv build --offline --no-python-downloads` wrote wheel and sdist
+  artifacts under `/tmp`; both passed the distribution-isolation gate under
+  both interpreters. The gate proved exact empty source/wheel/sdist registries,
+  exact archive paths, no test-only or candidate-like wheel content, all
+  required synthetic assets confined to sdist `tests/`, and rejection of decoy
+  registry/test paths and special tar members. The extracted sdist passed all
+  259 tests in 58.249s (Python 3.14.6) and 37.862s (Python 3.10.20).
+- This verification made no web request, accessed no credential or secret-like
+  file, or invoked a weightclass-selected product/vendor runtime. It persisted
+  no runtime task content and performed no destructive cleanup, commit, push,
+  deployment, or release action. The synthetic kernel does not qualify a
+  runtime or advertise delegation support; the packaged production registry
+  remains empty.
 - The P1 qualification, conformance-runner, and blocked claim-map foundation
   passed all 227 tests
   under Python 3.10.20 and Python
@@ -224,15 +279,33 @@ Reproduction commands:
 
 ```sh
 PYTHONPATH=src python3 -W error::ResourceWarning -m unittest discover -s tests
+PYTHONPATH=src python3.10 -W error::ResourceWarning -m unittest discover -s tests
 python3 -m compileall -q src tests
+python3.10 -m compileall -q src tests
 uvx --offline ruff check src tests
 uvx --offline ruff format --check src tests
 uvx --offline mypy
 git diff --check
 ```
 
-Build and install smoke artifacts were created under temporary `/tmp` paths;
-they are outside the repository and are not release artifacts.
+The final offline distribution verification additionally used a fresh output
+directory:
+
+```sh
+wclass_artifact_dir=$(mktemp -d /tmp/wclass-g5-final.XXXXXX)
+uv --quiet build --offline --no-python-downloads --out-dir "$wclass_artifact_dir"
+python3.14 tests/verify_distribution_isolation.py \
+  --source . --wheel "$wclass_artifact_dir"/*.whl \
+  --sdist "$wclass_artifact_dir"/*.tar.gz \
+  --run-sdist-tests
+python3.10 tests/verify_distribution_isolation.py \
+  --source . --wheel "$wclass_artifact_dir"/*.whl \
+  --sdist "$wclass_artifact_dir"/*.tar.gz \
+  --run-sdist-tests
+```
+
+Build artifacts were created under a temporary `/tmp` path; they are outside
+the repository and are not release artifacts.
 
 ## Safety and compatibility decisions
 
@@ -256,12 +329,13 @@ they are outside the repository and are not release artifacts.
 1. Do not advertise real Claude/Codex delegation from P0.5. It proves only the
    weightclass-to-runtime boundary; a user-supplied runtime can lie with exit
    zero, leave descendants, or ignore the descriptor.
-2. Design a non-public synthetic probe-protocol kernel using separate self-test
-   IDs and only runner-direct verdicts. Runtime event telemetry is not
-   independent evidence, and path execution remains `TOCTOU-UNRESOLVED`. Do not
-   implement a Claude/Codex driver or add a package record until an exact claim
-   has an independent oracle, negative control, identity closure, and platform
-   gate.
+2. Keep the completed synthetic probe kernel test-only. Its runner-direct facts
+   do not close runtime identity or descendant containment and cannot support a
+   qualification record. The next honest boundary is an independently reviewed
+   design for one exact claim with an external oracle, hostile negative control,
+   identity closure, and an authoritative per-platform containment gate. Do not
+   implement a Claude/Codex driver, add a package record, or advertise
+   delegation support before those prerequisites exist.
 3. Keep Phase 4 at no-go unless independent predeclared evidence satisfies every
    quality, resource, privacy, and supply-chain gate.
 4. Before the next release, address the upstream `actions/setup-python` Node 20
@@ -278,7 +352,10 @@ qualification registry. P0.5 starts one explicitly trusted user runtime; P1
 adds opt-in exact-artifact gates and a bounded maintainer evidence runner but
 qualifies no Claude/Codex adapter and ships no real conformance driver. Do not
 describe runner or candidate output as independent evidence or proven
-delegation.
+delegation. The working tree also contains a test-only synthetic probe kernel;
+its runner-direct observations remain `TOCTOU-UNRESOLVED`, Linux and Darwin
+descendant containment are tested `NO-GO`, the production registry is empty,
+and no synthetic artifact ships in the wheel.
 Preserve the Codex-triage fail-closed decision, native source-vendor routing,
 transient-task boundary, and Phase 4 no-go. Re-run final verification after any
 change; release, tag, and external publishing remain explicit actions.

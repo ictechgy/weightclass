@@ -1,2 +1,4 @@
 recursive-include tests/fixtures *.json *.py
 recursive-include tests/eval *.json *.md *.py
+include tests/synthetic_*.py
+include tests/verify_distribution_isolation.py

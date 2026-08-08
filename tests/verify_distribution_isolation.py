@@ -1,0 +1,200 @@
+"""Test-owned distribution isolation gate; this module is never shipped in a wheel."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tarfile
+import tempfile
+import zipfile
+from collections.abc import Mapping
+from pathlib import Path, PurePosixPath
+from typing import Any, NoReturn
+
+WHEEL_REGISTRY_PATH = "weightclass/delegation_qualifications.json"
+SDIST_REGISTRY_PATH = "src/weightclass/delegation_qualifications.json"
+EMPTY_REGISTRY = {
+    "records": [],
+    "registry_schema_version": 1,
+    "suite_revision": "delegation-conformance-v2",
+}
+FORBIDDEN_WHEEL_PATH_PARTS = (
+    "tests/",
+    "synthetic_probe",
+    "synthetic_descendant",
+    "delegation_claim_map",
+    "fake_conformance_driver",
+)
+FORBIDDEN_WHEEL_TEXT = ("wcp-selftest/v1", '"qualification_eligible"')
+REQUIRED_SDIST_TEST_SUFFIXES = (
+    "tests/synthetic_descendant_containment.py",
+    "tests/synthetic_probe_child.py",
+    "tests/synthetic_probe_protocol.py",
+    "tests/synthetic_probe_runner.py",
+    "tests/test_distribution_isolation.py",
+    "tests/test_synthetic_probe_protocol.py",
+    "tests/verify_distribution_isolation.py",
+)
+
+
+class IsolationError(ValueError):
+    """A distribution crossed the qualification-isolation boundary."""
+
+
+class _DuplicateKeyError(ValueError):
+    pass
+
+
+def _fail(message: str) -> NoReturn:
+    raise IsolationError(message)
+
+
+def _object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise _DuplicateKeyError
+        value[key] = item
+    return value
+
+
+def _load_empty_registry(raw: bytes, location: str) -> None:
+    try:
+        value: Any = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_object_without_duplicate_keys
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateKeyError):
+        _fail(f"{location}: registry is not canonical JSON")
+    if not isinstance(value, Mapping) or value != EMPTY_REGISTRY:
+        _fail(f"{location}: registry shape is not the empty production shape")
+
+
+def verify_source_registry(root: Path) -> None:
+    registry = root / "src" / "weightclass" / "delegation_qualifications.json"
+    _load_empty_registry(registry.read_bytes(), str(registry))
+
+
+def verify_wheel(wheel: Path) -> None:
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+        registries = [name for name in names if name.endswith(WHEEL_REGISTRY_PATH)]
+        if registries != [WHEEL_REGISTRY_PATH]:
+            _fail(f"{wheel.name}: expected exactly one production registry")
+        _load_empty_registry(
+            archive.read(WHEEL_REGISTRY_PATH), f"{wheel.name}:{WHEEL_REGISTRY_PATH}"
+        )
+        for name in names:
+            lowered = name.lower()
+            if any(part in lowered for part in FORBIDDEN_WHEEL_PATH_PARTS):
+                _fail(f"{wheel.name}: test-only artifact shipped: {name}")
+            if not lowered.endswith((".py", ".json", ".txt", ".md")):
+                continue
+            raw = archive.read(name)
+            if any(token.encode() in raw for token in FORBIDDEN_WHEEL_TEXT):
+                _fail(f"{wheel.name}: synthetic or candidate-like content shipped: {name}")
+
+
+def _safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
+    members = archive.getmembers()
+    for member in members:
+        path = PurePosixPath(member.name)
+        if (
+            not path.parts
+            or member.name != path.as_posix()
+            or path.is_absolute()
+            or ".." in path.parts
+            or not (member.isdir() or member.isfile())
+        ):
+            _fail(f"unsafe sdist member: {member.name}")
+    return members
+
+
+def _sdist_root(members: list[tarfile.TarInfo]) -> str:
+    roots = {PurePosixPath(member.name).parts[0] for member in members}
+    if len(roots) != 1:
+        _fail("sdist must contain exactly one archive root")
+    return roots.pop()
+
+
+def verify_sdist(sdist: Path) -> None:
+    with tarfile.open(sdist, "r:gz") as archive:
+        members = _safe_members(archive)
+        root = _sdist_root(members)
+        expected_registry = f"{root}/{SDIST_REGISTRY_PATH}"
+        registries = [member for member in members if member.name.endswith(WHEEL_REGISTRY_PATH)]
+        if len(registries) != 1 or registries[0].name != expected_registry:
+            _fail(f"{sdist.name}: expected exactly one production registry")
+        extracted = archive.extractfile(registries[0])
+        if extracted is None:
+            _fail(f"{sdist.name}: registry is not a regular file")
+        _load_empty_registry(extracted.read(), f"{sdist.name}:{registries[0].name}")
+        for member in members:
+            relative = PurePosixPath(member.name).relative_to(root)
+            lowered = relative.as_posix().lower()
+            if any(part in lowered for part in FORBIDDEN_WHEEL_PATH_PARTS):
+                if not relative.parts or relative.parts[0].lower() != "tests":
+                    _fail(f"{sdist.name}: test-only artifact escaped tests/: {member.name}")
+        regular_names = [
+            PurePosixPath(member.name).relative_to(root).as_posix()
+            for member in members
+            if member.isfile()
+        ]
+        for suffix in REQUIRED_SDIST_TEST_SUFFIXES:
+            if regular_names.count(suffix) != 1:
+                _fail(f"{sdist.name}: expected one test-only artifact: {suffix}")
+
+
+def run_extracted_sdist_tests(sdist: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="wclass-sdist-isolation-") as directory:
+        destination = Path(directory)
+        with tarfile.open(sdist, "r:gz") as archive:
+            members = _safe_members(archive)
+            root = _sdist_root(members)
+            archive.extractall(destination, members=members)
+        roots = list(destination.iterdir())
+        expected_root = destination / root
+        if roots != [expected_root] or not expected_root.is_dir():
+            _fail(f"{sdist.name}: expected one archive root")
+        current_python_bin = Path(sys.executable).resolve().parent
+        environment = {
+            "PATH": f"{current_python_bin}{os.pathsep}{os.defpath}",
+            "PYTHONPATH": str(expected_root / "src"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        subprocess.run(
+            [
+                sys.executable,
+                "-W",
+                "error::ResourceWarning",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "tests",
+            ],
+            cwd=expected_root,
+            env=environment,
+            check=True,
+        )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--wheel", type=Path, required=True)
+    parser.add_argument("--sdist", type=Path, required=True)
+    parser.add_argument("--run-sdist-tests", action="store_true")
+    args = parser.parse_args()
+    verify_source_registry(args.source)
+    verify_wheel(args.wheel)
+    verify_sdist(args.sdist)
+    if args.run_sdist_tests:
+        run_extracted_sdist_tests(args.sdist)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
