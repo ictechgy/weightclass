@@ -1376,6 +1376,14 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
 
         with (
             mock.patch.object(os, "waitid", None, create=True),
+            mock.patch.multiple(
+                "weightclass.delegation_conformance.select",
+                KQ_FILTER_PROC=0,
+                KQ_EV_ADD=0,
+                KQ_EV_ONESHOT=0,
+                KQ_NOTE_EXIT=0,
+                create=True,
+            ),
             mock.patch(
                 "weightclass.delegation_conformance.select.kevent",
                 side_effect=ProcessLookupError(errno.ESRCH, "gone"),
@@ -1438,6 +1446,14 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
 
         with (
             mock.patch.object(os, "waitid", None, create=True),
+            mock.patch.multiple(
+                "weightclass.delegation_conformance.select",
+                KQ_FILTER_PROC=0,
+                KQ_EV_ADD=0,
+                KQ_EV_ONESHOT=0,
+                KQ_NOTE_EXIT=0,
+                create=True,
+            ),
             mock.patch(
                 "weightclass.delegation_conformance.select.kevent",
                 side_effect=ProcessLookupError(errno.ESRCH, "gone"),
