@@ -226,24 +226,31 @@ user-provided model labels, and the no-retention boundary.
 - CI and release workflows add blocking macOS Python 3.10/3.13 triage-process
   and JSON-input boundary jobs. Release verification compares source version,
   installed metadata, and `wclass --version`.
+- Distribution verification accepts exactly one regular wheel and one regular
+  sdist, binds their inventory and hashes across extracted tests, and applies
+  bounded physical-tar checks before `tarfile` parsing or extraction. Release
+  validation uses a fresh stdlib-only job, and publication consumes the same
+  immutable artifact that job approved rather than re-uploading mutable paths.
 - `README.md`, `RELEASING.md`, `tests/eval/README.md`, and
   `docs/routing-roadmap.md` describe the new boundaries and 0.4.0 delivery.
 
 ## Verification evidence
 
-- On 2026-08-09, the current PR #22 worktree passed all 353 tests under Python
-  3.14.6 in 65.196s and Python 3.10.20 in 57.922s with `ResourceWarning`
-  promoted to an error. Those runs include the current 131-test focused
-  conformance, runtime, qualification, and distribution-isolation set.
-  Ruff 0.16.1 check/format, mypy 2.3.0 strict checking, and `git diff --check`
-  passed. Independent diff and completion-evidence reviews reported no
-  actionable critical, high, or medium findings.
-- A fresh offline wheel/sdist build passed the distribution-isolation gate and
-  all 353 extracted-sdist tests under both interpreters. The gate proves exact
-  empty source/wheel/sdist registries, rejects duplicate, Unicode-normalized,
-  and case-folding archive identities before extraction, excludes test-only
-  and qualification-like wheel content, and confines required synthetic assets
-  to their exact sdist `tests/` paths.
+- On 2026-08-09, the current PR #22 worktree passed all 377 tests under Python
+  3.14.6 in 61.687s and Python 3.10.20 in 57.336s with `ResourceWarning`
+  promoted to an error. Ruff 0.16.1 check/format, mypy 2.3.0 strict checking,
+  workflow YAML parsing, and `git diff --check` passed. Independent diff and
+  completion-evidence reviews reported no actionable critical, high, or medium
+  findings.
+- A fresh offline exact wheel/sdist build passed the distribution-isolation
+  gate and all 377 extracted-sdist tests under both interpreters: 73.637s on
+  Python 3.14.6 and 64.652s on Python 3.10.20, with one platform skip each. The
+  gate proves exact empty source/wheel/sdist registries; rejects duplicate,
+  Unicode-normalized, case-folding, and file/implicit-directory archive
+  identities; bounds physical tar headers and payloads before parsing; binds
+  preflight, parsing, and extraction to one snapshot; excludes test-only and
+  qualification-like wheel content; and confines required synthetic assets to
+  their exact sdist `tests/` paths.
 - Verification did not access a credential or secret-like file, invoke a
   weightclass-selected product/vendor runtime, persist runtime task content,
   publish a release, or deploy. External review tools received only bounded,
@@ -290,13 +297,13 @@ user-provided model labels, and the no-retention boundary.
 Reproduction commands:
 
 ```sh
-PYTHONPATH=src python3 -W error::ResourceWarning -m unittest discover -s tests
+PYTHONPATH=src python3.14 -W error::ResourceWarning -m unittest discover -s tests
 PYTHONPATH=src python3.10 -W error::ResourceWarning -m unittest discover -s tests
-python3 -m compileall -q src tests
+python3.14 -m compileall -q src tests
 python3.10 -m compileall -q src tests
 uvx --offline ruff check src tests
 uvx --offline ruff format --check src tests
-uvx --offline mypy
+uvx --offline mypy --strict src tests
 git diff --check
 ```
 
@@ -305,14 +312,13 @@ directory:
 
 ```sh
 wclass_artifact_dir=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-pr22-final.XXXXXX")
-uv --quiet build --offline --no-python-downloads --out-dir "$wclass_artifact_dir"
+uv --quiet build --offline --no-python-downloads --no-create-gitignore \
+  --out-dir "$wclass_artifact_dir"
 python3.14 tests/verify_distribution_isolation.py \
-  --source . --wheel "$wclass_artifact_dir"/*.whl \
-  --sdist "$wclass_artifact_dir"/*.tar.gz \
+  --source . --dist-dir "$wclass_artifact_dir" \
   --run-sdist-tests
 python3.10 tests/verify_distribution_isolation.py \
-  --source . --wheel "$wclass_artifact_dir"/*.whl \
-  --sdist "$wclass_artifact_dir"/*.tar.gz \
+  --source . --dist-dir "$wclass_artifact_dir" \
   --run-sdist-tests
 ```
 
