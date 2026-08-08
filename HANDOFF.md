@@ -288,10 +288,10 @@ user-provided model labels, and the no-retention boundary.
   check/format, strict mypy over all 40 source files, both-version `compileall`
   over `src` and `tests`, and `git diff --check` passed.
 - The final current-tree source suite passed all 428 tests under Python 3.14.6
-  in 73.008s and Python 3.10.20 in 66.668s with `ResourceWarning` promoted to
+  in 65.399s and Python 3.10.20 in 59.351s with `ResourceWarning` promoted to
   an error. A fresh offline exact wheel/sdist build then passed the
   distribution-isolation gate and all 428 extracted-sdist tests under both
-  interpreters: 74.769s on Python 3.14.6 and 67.641s on Python 3.10.20, with one
+  interpreters: 69.532s on Python 3.14.6 and 64.994s on Python 3.10.20, with one
   platform skip each. The gate proves exact empty source/wheel/sdist registries;
   rejects duplicate, Unicode-normalized, case-folding, file/implicit-directory,
   and alternate `.dist-info` identities; binds the exact canonical

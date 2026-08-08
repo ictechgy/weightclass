@@ -1061,7 +1061,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                     self._cleanup_owned_process_group(process)
 
     def test_hanging_driver_times_out_one_case_and_is_reaped(self) -> None:
-        """Breaks if one stuck driver blocks the suite or survives its case deadline."""
+        """Breaks if one stuck driver blocks the next case or survives its deadline."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             runtime_path = directory / "runtime"
@@ -1071,6 +1071,20 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             environment["WEIGHTCLASS_FAKE_CONFORMANCE_MODE"] = "hang"
             environment["WEIGHTCLASS_FAKE_CONFORMANCE_TARGET"] = "scenario/runtime_deadline"
             environment["WEIGHTCLASS_FAKE_CONFORMANCE_PID_PATH"] = str(pid_path)
+            selected_case_ids = (
+                CONFORMANCE_CASES[0].case_id,
+                "scenario/runtime_deadline",
+                "scenario/stage_order",
+            )
+            selected_cases = tuple(
+                conformance_case
+                for conformance_case in CONFORMANCE_CASES
+                if conformance_case.case_id in selected_case_ids
+            )
+            self.assertEqual(
+                tuple(conformance_case.case_id for conformance_case in selected_cases),
+                selected_case_ids,
+            )
             real_popen = cast(Any, subprocess.Popen)
             spawned: dict[int, tuple[subprocess.Popen[bytes], int]] = {}
             group_observations: list[tuple[int, bool, int | None]] = []
@@ -1130,6 +1144,10 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                         side_effect=run_with_target_timeout,
                     ),
                     mock.patch(
+                        "weightclass.delegation_conformance.CONFORMANCE_CASES",
+                        selected_cases,
+                    ),
+                    mock.patch(
                         "weightclass.delegation_conformance._process_group_exists",
                         side_effect=observe_group,
                     ),
@@ -1161,21 +1179,24 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 )
                 self.assertIn((True, None), driver_group_observations)
                 self.assertEqual(driver_group_observations[-1], (False, None))
+                self.assertIsNotNone(driver_process.returncode)
                 self.assertFalse(passed)
                 self.assertLess(elapsed, 5)
                 result_matrix = evidence["result_matrix"]
                 scenario_results = evidence["scenario_results"]
                 assert isinstance(result_matrix, list)
                 assert isinstance(scenario_results, list)
+                self.assertEqual(len(result_matrix), 1)
                 self.assertTrue(
                     all(isinstance(item, dict) and item["passed"] is True for item in result_matrix)
                 )
-                failed = [
-                    item
-                    for item in scenario_results
-                    if isinstance(item, dict) and item["passed"] is False
-                ]
-                self.assertEqual(failed, [{"id": "runtime_deadline", "passed": False}])
+                self.assertEqual(
+                    scenario_results,
+                    [
+                        {"id": "runtime_deadline", "passed": False},
+                        {"id": "stage_order", "passed": True},
+                    ],
+                )
             finally:
                 for process, _ in spawned.values():
                     self._cleanup_owned_process_group(process)
