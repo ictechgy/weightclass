@@ -624,6 +624,7 @@ weightclass has no runtime dependencies. These development tools are not
 required to use it, only to reproduce what CI checks:
 
 ```sh
+set -eu
 PYTHONPATH=src python3 -m unittest discover -s tests
 PYTHONPATH=src python3 -m compileall -q src
 
@@ -631,11 +632,34 @@ python3 -m pip install ruff mypy build twine
 ruff check src tests
 ruff format --check src tests
 mypy
-python3 -m build
+weightclass_dist_dir=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-dist.XXXXXX")
+python3 -m build --outdir "$weightclass_dist_dir"
+weightclass_wheel=$(python3 - "$weightclass_dist_dir" <<'PY'
+from pathlib import Path
+import sys
+
+directory = Path(sys.argv[1])
+matches = sorted(path for path in directory.iterdir() if path.is_file() and path.suffix == ".whl")
+if len(matches) != 1:
+    raise SystemExit(f"expected exactly one wheel, found {len(matches)}")
+print(matches[0])
+PY
+)
+weightclass_sdist=$(python3 - "$weightclass_dist_dir" <<'PY'
+from pathlib import Path
+import sys
+
+directory = Path(sys.argv[1])
+matches = sorted(path for path in directory.iterdir() if path.is_file() and path.name.endswith(".tar.gz"))
+if len(matches) != 1:
+    raise SystemExit(f"expected exactly one sdist, found {len(matches)}")
+print(matches[0])
+PY
+)
 python3 tests/verify_distribution_isolation.py \
-  --source . --wheel dist/*.whl --sdist dist/*.tar.gz \
+  --source . --wheel "$weightclass_wheel" --sdist "$weightclass_sdist" \
   --run-sdist-tests
-twine check --strict dist/*
+twine check --strict "$weightclass_wheel" "$weightclass_sdist"
 ```
 
 ## License

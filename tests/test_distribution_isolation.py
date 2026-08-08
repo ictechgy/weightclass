@@ -10,11 +10,13 @@ import unittest
 import warnings
 import zipfile
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from tests.verify_distribution_isolation import (
     MAX_ARCHIVE_TEXT_BYTES,
     IsolationError,
+    _safe_members,
     run_extracted_sdist_tests,
     verify_sdist,
     verify_source_registry,
@@ -84,6 +86,37 @@ def _evidence_like_document() -> dict[str, object]:
     }
 
 
+def _write_sdist_fixture(directory: str, extra_members: tuple[str, ...] = ()) -> Path:
+    sdist = Path(directory) / "weightclass-0.tar.gz"
+    root = Path(directory) / "payload/weightclass-0"
+    registry = root / "src/weightclass/delegation_qualifications.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        '{"records":[],"registry_schema_version":1,"suite_revision":"delegation-conformance-v2"}',
+        encoding="utf-8",
+    )
+    for relative_path in (
+        "tests/synthetic_descendant_containment.py",
+        "tests/synthetic_probe_child.py",
+        "tests/synthetic_probe_protocol.py",
+        "tests/synthetic_probe_runner.py",
+        "tests/test_distribution_isolation.py",
+        "tests/test_synthetic_probe_protocol.py",
+        "tests/verify_distribution_isolation.py",
+    ):
+        asset = root / relative_path
+        asset.parent.mkdir(parents=True, exist_ok=True)
+        asset.write_text("test-only\n", encoding="utf-8")
+    with tarfile.open(sdist, "w:gz") as archive:
+        archive.add(root, arcname="weightclass-0")
+        for member_name in extra_members:
+            raw = b"test-only\n"
+            member = tarfile.TarInfo(member_name)
+            member.size = len(raw)
+            archive.addfile(member, io.BytesIO(raw))
+    return sdist
+
+
 class DistributionIsolationTests(unittest.TestCase):
     def test_source_registry_must_remain_empty(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -135,6 +168,50 @@ class DistributionIsolationTests(unittest.TestCase):
                 archive.writestr("tests/synthetic_probe_protocol.py", "wcp-selftest/v1")
             with self.assertRaises(IsolationError):
                 verify_wheel(wheel)
+
+    def test_wheel_rejects_unicode_normalization_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr("weightclass/café.py", "VALUE = 1\n")
+                archive.writestr("weightclass/cafe\u0301.py", "VALUE = 2\n")
+
+            with self.assertRaises(IsolationError):
+                verify_wheel(wheel)
+
+    def test_wheel_uses_exact_tests_path_detection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr("weightclass/contests/example.py", "VALUE = 1\n")
+
+            verify_wheel(wheel)
+
+            for member_name in (
+                "tests/example.py",
+                "weightclass/tests/example.py",
+                "weightclass/synthetic_probe_report.py",
+                "weightclass/delegation_claim_map_v3.json",
+            ):
+                with zipfile.ZipFile(wheel, "w") as archive:
+                    archive.writestr(
+                        "weightclass/delegation_qualifications.json",
+                        '{"records":[],"registry_schema_version":1,'
+                        '"suite_revision":"delegation-conformance-v2"}',
+                    )
+                    archive.writestr(member_name, "test-only\n")
+                with self.assertRaises(IsolationError):
+                    verify_wheel(wheel)
 
     def test_wheel_rejects_nonempty_or_candidate_compatible_registry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -450,6 +527,16 @@ class DistributionIsolationTests(unittest.TestCase):
             with self.assertRaises(IsolationError):
                 verify_sdist(sdist)
 
+    def test_sdist_rejects_registry_suffix_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdist = _write_sdist_fixture(
+                directory,
+                ("weightclass-0/decoy/weightclass/delegation_qualifications.json",),
+            )
+
+            with self.assertRaisesRegex(IsolationError, "expected exactly one production registry"):
+                verify_sdist(sdist)
+
     def test_sdist_rejects_casefold_collision_in_required_assets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             sdist = Path(directory) / "weightclass-0.tar.gz"
@@ -520,6 +607,43 @@ class DistributionIsolationTests(unittest.TestCase):
 
             with self.assertRaises(IsolationError):
                 verify_sdist(sdist)
+
+    def test_sdist_uses_exact_tests_path_detection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdist = _write_sdist_fixture(directory)
+            root = Path(directory) / "payload/weightclass-0"
+            contests = root / "weightclass/contests/example.py"
+            contests.parent.mkdir(parents=True)
+            contests.write_text("test-only\n", encoding="utf-8")
+            with tarfile.open(sdist, "w:gz") as archive:
+                archive.add(root, arcname="weightclass-0")
+            verify_sdist(sdist)
+
+            for member_name in (
+                "weightclass-0/not/tests/example.py",
+                "weightclass-0/weightclass/synthetic_probe_report.py",
+                "weightclass-0/weightclass/delegation_claim_map_v3.json",
+            ):
+                sdist = _write_sdist_fixture(directory, (member_name,))
+                with self.assertRaises(IsolationError):
+                    verify_sdist(sdist)
+
+    def test_sdist_rejects_backslash_and_nul_member_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdist = _write_sdist_fixture(
+                directory, ("weightclass-0/weightclass\\synthetic_probe.py",)
+            )
+            with self.assertRaises(IsolationError):
+                verify_sdist(sdist)
+
+        member = tarfile.TarInfo("weightclass-0/weightclass/synthetic\x00probe.py")
+
+        class ArchiveWithNulMember:
+            def getmembers(self) -> list[tarfile.TarInfo]:
+                return [member]
+
+        with self.assertRaises(IsolationError):
+            _safe_members(cast(tarfile.TarFile, ArchiveWithNulMember()))
 
     def test_sdist_rejects_special_files_before_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

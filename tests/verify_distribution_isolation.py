@@ -54,8 +54,7 @@ EVIDENCE_SCHEMA_KEYS = frozenset(
         "scenario_results",
     }
 )
-FORBIDDEN_WHEEL_PATH_PARTS = (
-    "tests/",
+FORBIDDEN_FUZZY_PATH_PARTS = (
     "synthetic_probe",
     "synthetic_descendant",
     "delegation_claim_map",
@@ -152,6 +151,15 @@ def verify_source_registry(root: Path) -> None:
     _load_empty_registry(registry.read_bytes(), str(registry))
 
 
+def _is_tests_path(path: PurePosixPath) -> bool:
+    return any(part.casefold() == "tests" for part in path.parts)
+
+
+def _has_forbidden_fuzzy_path(path: PurePosixPath) -> bool:
+    lowered = path.as_posix().casefold()
+    return any(part in lowered for part in FORBIDDEN_FUZZY_PATH_PARTS)
+
+
 def _wheel_members(archive: zipfile.ZipFile, wheel: Path) -> list[zipfile.ZipInfo]:
     members = archive.infolist()
     names: set[str] = set()
@@ -159,7 +167,7 @@ def _wheel_members(archive: zipfile.ZipFile, wheel: Path) -> list[zipfile.ZipInf
     for member in members:
         name = member.filename
         path = PurePosixPath(name)
-        casefolded_name = name.casefold()
+        casefolded_name = unicodedata.normalize("NFC", name).casefold()
         if (
             name in names
             or casefolded_name in casefolded_names
@@ -206,8 +214,9 @@ def verify_wheel(wheel: Path) -> None:
             if member.is_dir():
                 continue
             name = member.filename
-            lowered = name.lower()
-            if any(part in lowered for part in FORBIDDEN_WHEEL_PATH_PARTS):
+            if _is_tests_path(PurePosixPath(name)) or _has_forbidden_fuzzy_path(
+                PurePosixPath(name)
+            ):
                 _fail(f"{wheel.name}: test-only artifact shipped: {name}")
             raw = _read_archive_member(archive, member, f"{wheel.name}:{name}")
             if any(token.encode() in raw for token in FORBIDDEN_WHEEL_TEXT):
@@ -231,6 +240,8 @@ def _safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
             or member.name != path.as_posix()
             or path.is_absolute()
             or ".." in path.parts
+            or "\\" in member.name
+            or "\x00" in member.name
             or not (member.isdir() or member.isfile())
         ):
             _fail(f"unsafe sdist member: {member.name}")
@@ -266,8 +277,7 @@ def verify_sdist(sdist: Path) -> None:
         _load_empty_registry(registry_raw, f"{sdist.name}:{registries[0].name}")
         for member in members:
             relative = PurePosixPath(member.name).relative_to(root)
-            lowered = relative.as_posix().lower()
-            if any(part in lowered for part in FORBIDDEN_WHEEL_PATH_PARTS):
+            if _is_tests_path(relative) or _has_forbidden_fuzzy_path(relative):
                 if not relative.parts or relative.parts[0].lower() != "tests":
                     _fail(f"{sdist.name}: test-only artifact escaped tests/: {member.name}")
         regular_names = [
