@@ -239,8 +239,9 @@ user-provided model labels, and the no-retention boundary.
 - Distribution verification accepts exactly one regular wheel and one regular
   sdist, binds their inventory and hashes across extracted tests, and applies
   bounded physical-tar checks before `tarfile` parsing or extraction. The
-  source registry and both artifacts use bounded no-follow reads; wheel and
-  sdist parsers consume only fingerprint-bound private snapshots. A bounded
+  source registry uses bounded same-FD double reads, and both artifacts use
+  bounded no-follow snapshots; wheel and sdist parsers consume only
+  fingerprint-bound private bytes. A bounded
   classic-ZIP preflight runs before `ZipFile`, rejects unsupported or ambiguous
   layouts, and verifies every stored/deflated payload's exact byte consumption,
   output size, and CRC. Release
@@ -258,8 +259,8 @@ user-provided model labels, and the no-retention boundary.
   completion-evidence reviews reported no actionable critical, high, or medium
   findings.
 - A fresh offline exact wheel/sdist build passed the distribution-isolation
-  gate and all 400 extracted-sdist tests under both interpreters: 69.153s on
-  Python 3.14.6 and 60.496s on Python 3.10.20, with one platform skip each. The
+  gate and all 402 extracted-sdist tests under both interpreters: 68.339s on
+  Python 3.14.6 and 62.994s on Python 3.10.20, with one platform skip each. The
   gate proves exact empty source/wheel/sdist registries; rejects duplicate,
   Unicode-normalized, case-folding, and file/implicit-directory archive
   identities; bounds physical tar and classic-ZIP headers and payloads before
