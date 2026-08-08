@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import platform
 import signal
 import stat
 import subprocess
@@ -178,12 +179,30 @@ elif mode == "callable":
 elif mode == "default":
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
 elif mode == "nocldwait":
-    class Sigaction(ctypes.Structure):
-        _fields_ = [
-            ("handler", ctypes.c_void_p),
-            ("mask", ctypes.c_uint32),
-            ("flags", ctypes.c_int),
-        ]
+    if sys.platform == "darwin":
+        class Sigaction(ctypes.Structure):
+            _fields_ = [
+                ("handler", ctypes.c_void_p),
+                ("mask", ctypes.c_uint32),
+                ("flags", ctypes.c_int),
+            ]
+
+        no_child_wait = 0x20
+    elif sys.platform.startswith("linux"):
+        class Sigset(ctypes.Structure):
+            _fields_ = [("values", ctypes.c_ulong * 16)]
+
+        class Sigaction(ctypes.Structure):
+            _fields_ = [
+                ("handler", ctypes.c_void_p),
+                ("mask", Sigset),
+                ("flags", ctypes.c_int),
+                ("restorer", ctypes.c_void_p),
+            ]
+
+        no_child_wait = 0x02
+    else:
+        raise SystemExit(94)
 
     libc = ctypes.CDLL(None, use_errno=True)
     current = Sigaction()
@@ -192,7 +211,7 @@ elif mode == "nocldwait":
     installed = Sigaction()
     ctypes.memmove(ctypes.byref(installed), ctypes.byref(current), ctypes.sizeof(current))
     installed.handler = None
-    installed.flags |= 0x20
+    installed.flags |= no_child_wait
     if libc.sigaction(signal.SIGCHLD, ctypes.byref(installed), None) != 0:
         raise SystemExit(92)
     if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
@@ -1317,6 +1336,47 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         self.assertEqual(native_checks, 2)
         popen.assert_not_called()
 
+    def test_linux_wait_ownership_probe_rejects_hidden_auto_reap(self) -> None:
+        """Breaks if Linux accepts a child status that cannot be waited."""
+        from weightclass import delegation_conformance as conformance
+
+        with (
+            mock.patch("weightclass.delegation_conformance.sys.platform", "linux"),
+            mock.patch(
+                "weightclass.delegation_conformance.os.posix_spawn",
+                return_value=321,
+                create=True,
+            ) as posix_spawn,
+            mock.patch(
+                "weightclass.delegation_conformance.os.waitpid",
+                side_effect=ChildProcessError(),
+            ) as waitpid,
+        ):
+            self.assertFalse(conformance._probe_child_status_ownership())
+
+        posix_spawn.assert_called_once()
+        waitpid.assert_called_once_with(321, 0)
+
+    def test_linux_wait_ownership_probe_retries_interrupted_wait(self) -> None:
+        """Breaks if a transient EINTR abandons the disposable status child."""
+        from weightclass import delegation_conformance as conformance
+
+        with (
+            mock.patch("weightclass.delegation_conformance.sys.platform", "linux"),
+            mock.patch(
+                "weightclass.delegation_conformance.os.posix_spawn",
+                return_value=321,
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.os.waitpid",
+                side_effect=(InterruptedError(), (321, 0)),
+            ) as waitpid,
+        ):
+            self.assertTrue(conformance._probe_child_status_ownership())
+
+        self.assertEqual(waitpid.call_args_list, [mock.call(321, 0), mock.call(321, 0)])
+
     def test_observer_echild_releases_every_numeric_signal_target(self) -> None:
         """Breaks if observer ECHILD leaves a reusable PID or PGID signalable."""
         process = self._mock_driver_process()
@@ -1392,6 +1452,10 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             mock.patch(
                 "weightclass.delegation_conformance.subprocess.Popen",
                 return_value=process,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance._probe_child_status_ownership",
+                return_value=True,
             ),
             mock.patch(
                 "weightclass.delegation_conformance._write_request",
@@ -1543,6 +1607,10 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             mock.patch(
                 "weightclass.delegation_conformance.subprocess.Popen",
                 return_value=process,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance._probe_child_status_ownership",
+                return_value=True,
             ),
             mock.patch("weightclass.delegation_conformance._open_leader_exit_queue"),
             mock.patch(
@@ -2055,7 +2123,11 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 finally:
                     self._cleanup_test_process(process)
 
-    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin sigaction")
+    @unittest.skipUnless(
+        sys.platform == "darwin"
+        or (sys.platform.startswith("linux") and platform.libc_ver()[0] == "glibc"),
+        "requires Darwin or glibc Linux sigaction",
+    )
     def test_hidden_sa_nocldwait_is_rejected_before_driver_spawn(self) -> None:
         """Breaks if Python's cached SIG_DFL hides native auto-reaping."""
         expected = (

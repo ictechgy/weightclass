@@ -113,14 +113,19 @@ user-provided model labels, and the no-retention boundary.
   driver with fixed protocol argv. Driver stdin/stdout, case deadline, output
   size, response ID, exit status, and same-process-group cleanup are bounded and
   fail closed; SIGINT cleans the active group and returns redacted exit `130`.
-  Python-visible unsafe `SIGCHLD` state and Darwin `SA_NOCLDWAIT` are rejected
-  immediately before spawn. Real `ECHILD` releases every numeric signal target;
-  macOS Python 3.10 kqueue `ESRCH` from a normally exited, still-waitable leader
-  instead preserves the zombie PGID anchor through group cleanup and one final
-  authoritative `waitpid`. Evidence schema 2 binds the runtime size/SHA-256
+  Python-visible unsafe `SIGCHLD` state, Darwin `SA_NOCLDWAIT`, and a Linux
+  behavioral probe that cannot authoritatively reap its disposable child are
+  rejected immediately before spawn. Real `ECHILD` releases every numeric
+  signal target; macOS Python 3.10 kqueue `ESRCH` from a normally exited,
+  still-waitable leader instead preserves the zombie PGID anchor through group
+  cleanup and one final authoritative `waitpid`. Evidence schema 2 binds the
+  runtime size/SHA-256
   observed before the suite;
   the runner rechecks it after all cases and candidate construction rechecks the
   current bytes. The runner reads no task stdin and never edits the registry.
+- The Linux child-status probe is behavioral, not atomic against a hostile
+  concurrent native reaper. A later `ECHILD` fails the case and releases stale
+  numeric signal targets instead of risking PID/PGID reuse.
 - The runner is not an attestation mechanism. Drivers inherit the environment
   and own runtime/vendor authentication, network, quota, billing, and external
   observation. A driver can lie or escape its process group. No real Claude or
@@ -246,8 +251,8 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
-- On 2026-08-09, the current PR #22 worktree passed all 400 tests under Python
-  3.14.6 in 63.669s and Python 3.10.20 in 59.670s with `ResourceWarning`
+- On 2026-08-09, the current PR #22 worktree passed all 402 tests under Python
+  3.14.6 in 62.495s and Python 3.10.20 in 59.053s with `ResourceWarning`
   promoted to an error. Ruff 0.16.1 check/format, mypy 2.3.0 strict checking,
   workflow YAML parsing, and `git diff --check` passed. Independent diff and
   completion-evidence reviews reported no actionable critical, high, or medium

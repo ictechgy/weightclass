@@ -465,6 +465,50 @@ def _has_safe_sigchld_disposition() -> bool:
     return action.handler in (None, 0) and not action.flags & _DARWIN_SA_NOCLDWAIT
 
 
+def _probe_child_status_ownership() -> bool:
+    """Prove Linux child statuses remain waitable without raw-fork hazards."""
+    if not sys.platform.startswith("linux"):
+        return True
+    posix_spawn = getattr(os, "posix_spawn", None)
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if not callable(posix_spawn) or not callable(pthread_sigmask):
+        return False
+    executable = Path(sys.executable)
+    if not executable.is_absolute() or not executable.is_file():
+        return False
+    try:
+        previous_mask = pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    except (OSError, ValueError):
+        return False
+
+    status_owned = False
+    try:
+        try:
+            child_pid = posix_spawn(
+                str(executable),
+                (str(executable), "-I", "-S", "-c", ""),
+                {},
+                setsigmask=(),
+            )
+        except (OSError, ValueError):
+            return False
+        while True:
+            try:
+                waited_pid, wait_status = os.waitpid(child_pid, 0)
+            except InterruptedError:
+                continue
+            except OSError:
+                break
+            status_owned = waited_pid == child_pid and os.waitstatus_to_exitcode(wait_status) == 0
+            break
+    finally:
+        try:
+            pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        except (OSError, ValueError):
+            status_owned = False
+    return status_owned
+
+
 def _open_leader_exit_queue(pid: int) -> Any | None:
     """Register a non-reaping kqueue observer when waitid is unavailable."""
     if callable(getattr(os, "waitid", None)):
@@ -624,7 +668,11 @@ def _run_driver_case(
     descendant_leaked = False
     deferred_sigint.arm()
     try:
-        if not _has_safe_sigchld_disposition():
+        if (
+            not _has_safe_sigchld_disposition()
+            or not _probe_child_status_ownership()
+            or deferred_sigint.received
+        ):
             return False
         try:
             process = subprocess.Popen(
@@ -741,6 +789,7 @@ def run_conformance(
         or not hasattr(os, "killpg")
         or not _has_leader_exit_observer()
         or not _has_safe_sigchld_disposition()
+        or not _probe_child_status_ownership()
         or not 0 < CASE_TIMEOUT_SECONDS <= MAX_CASE_TIMEOUT_SECONDS
     ):
         raise ConformanceInvalidInputError()
