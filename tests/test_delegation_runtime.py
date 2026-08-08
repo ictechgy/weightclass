@@ -1,6 +1,9 @@
+import errno
+import fcntl
 import io
 import json
 import os
+import selectors
 import shutil
 import signal
 import stat
@@ -752,6 +755,63 @@ class DelegationRunTests(unittest.TestCase):
         runtime_path.chmod(runtime_path.stat().st_mode | stat.S_IXUSR)
         return runtime_path
 
+    def _write_escaped_writer_runtime(
+        self,
+        directory: Path,
+    ) -> tuple[Path, Path, Path, Path, Path, Path]:
+        runtime_path = directory / "escaped-writer-runtime"
+        escaped_lock_path = directory / "escaped-writer.lock"
+        escaped_ready_path = directory / "escaped-writer.ready"
+        escaped_stop_path = directory / "escaped-writer.stop"
+        escaped_stdin_closed_path = directory / "escaped-writer-stdin-closed"
+        runtime_stdin_closed_path = directory / "runtime-stdin-closed"
+        runtime_path.write_text(
+            "#!/usr/bin/env python3\n"
+            "import fcntl\n"
+            "import os\n"
+            "import time\n"
+            "from pathlib import Path\n"
+            f"lock_path = Path({str(escaped_lock_path)!r})\n"
+            f"ready_path = Path({str(escaped_ready_path)!r})\n"
+            f"stop_path = Path({str(escaped_stop_path)!r})\n"
+            f"stdin_closed_path = Path({str(escaped_stdin_closed_path)!r})\n"
+            f"runtime_stdin_closed_path = Path({str(runtime_stdin_closed_path)!r})\n"
+            "def write_marker(path):\n"
+            "    marker_fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)\n"
+            "    os.close(marker_fd)\n"
+            "child_pid = os.fork()\n"
+            "if child_pid == 0:\n"
+            "    os.setsid()\n"
+            "    os.close(0)\n"
+            "    write_marker(stdin_closed_path)\n"
+            "    lock_fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)\n"
+            "    fcntl.flock(lock_fd, fcntl.LOCK_EX)\n"
+            "    write_marker(ready_path)\n"
+            "    deadline = time.monotonic() + 12\n"
+            "    while not stop_path.is_file() and time.monotonic() < deadline:\n"
+            "        time.sleep(0.01)\n"
+            "    os._exit(0)\n"
+            "deadline = time.monotonic() + 3\n"
+            "while not ready_path.is_file():\n"
+            "    if time.monotonic() >= deadline:\n"
+            "        raise SystemExit(92)\n"
+            "    time.sleep(0.01)\n"
+            "os.close(0)\n"
+            "write_marker(runtime_stdin_closed_path)\n"
+            "print('escaped-runtime-started', flush=True)\n"
+            "time.sleep(15)\n",
+            encoding="utf-8",
+        )
+        runtime_path.chmod(runtime_path.stat().st_mode | stat.S_IXUSR)
+        return (
+            runtime_path,
+            escaped_lock_path,
+            escaped_ready_path,
+            escaped_stop_path,
+            escaped_stdin_closed_path,
+            runtime_stdin_closed_path,
+        )
+
     def _arguments(
         self,
         command: str,
@@ -806,8 +866,189 @@ class DelegationRunTests(unittest.TestCase):
             return
         try:
             os.killpg(process.pid, signal.SIGKILL)
-        except (PermissionError, ProcessLookupError):
+        except PermissionError:
+            try:
+                os.kill(process.pid, signal.SIGKILL)
+            except (PermissionError, ProcessLookupError):
+                pass
+        except ProcessLookupError:
             pass
+
+    @staticmethod
+    def _pipe_reader(
+        stream: Any,
+        chunks: list[bytes],
+        name: str,
+        stop_event: threading.Event,
+        io_failures: list[str],
+    ) -> threading.Thread:
+        """Read a pipe without holding a BufferedReader lock across cleanup."""
+        file_descriptor = stream.fileno()
+        os.set_blocking(file_descriptor, False)
+
+        def read_output() -> None:
+            try:
+                with selectors.DefaultSelector() as selector:
+                    selector.register(file_descriptor, selectors.EVENT_READ)
+                    while True:
+                        stopping = stop_event.is_set()
+                        if not selector.select(0 if stopping else 0.05):
+                            if stopping:
+                                return
+                            continue
+                        try:
+                            chunk = os.read(file_descriptor, 65_536)
+                        except BlockingIOError:
+                            continue
+                        except OSError:
+                            if not stop_event.is_set():
+                                io_failures.append(name)
+                            return
+                        if not chunk:
+                            return
+                        chunks.append(chunk)
+            except (OSError, ValueError):
+                if not stop_event.is_set():
+                    io_failures.append(name)
+
+        return threading.Thread(target=read_output, daemon=True, name=f"router-{name}")
+
+    @staticmethod
+    def _is_expected_broken_pipe(error: BaseException) -> bool:
+        return isinstance(error, BrokenPipeError) or (
+            isinstance(error, OSError) and error.errno == errno.EPIPE
+        )
+
+    @staticmethod
+    def _publish_private_marker(path: Path) -> None:
+        try:
+            marker_fd = os.open(
+                path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+            )
+        except FileExistsError:
+            return
+        os.close(marker_fd)
+
+    @staticmethod
+    def _stop_escaped_writer(
+        escaped_stop_path: Path,
+        escaped_lock_path: Path,
+        *,
+        escaped_ready_path: Path | None = None,
+        timeout_seconds: float = 2,
+    ) -> bool:
+        """Request exit while the escaped writer still owns its lifetime lock."""
+        DelegationRunTests._publish_private_marker(escaped_stop_path)
+        ready_observed = escaped_ready_path is not None
+        if escaped_ready_path is not None:
+            deadline = time.monotonic() + timeout_seconds
+            while not escaped_ready_path.is_file():
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.01)
+        if not escaped_lock_path.is_file():
+            return False
+        lock_file = escaped_lock_path.open("r+")
+        try:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                deadline = time.monotonic() + timeout_seconds
+                while True:
+                    try:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise AssertionError("escaped writer cleanup timed out") from None
+                        time.sleep(0.01)
+                    else:
+                        return True
+            else:
+                return ready_observed
+        finally:
+            lock_file.close()
+
+    def _finalize_broken_pipe_resources(
+        self,
+        process: subprocess.Popen[Any],
+        started_threads: list[threading.Thread],
+        stop_readers: threading.Event,
+        *,
+        exit_queue: object | None,
+        leader_observed: bool,
+        escaped_stop_path: Path,
+        escaped_lock_path: Path,
+        escaped_ready_path: Path | None = None,
+    ) -> tuple[int | None, bool, bool]:
+        """Close every owned probe resource while preserving the first error."""
+        original_error = sys.exc_info()[1]
+        cleanup_error: BaseException | None = None
+
+        def attempt(operation: Any) -> None:
+            nonlocal cleanup_error
+            try:
+                operation()
+            except BaseException as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+
+        if process.returncode is None and not leader_observed:
+            attempt(lambda: self._signal_anchored_group(process))
+            if exit_queue is not None:
+                attempt(lambda: _wait_for_leader_exit(process.pid, exit_queue, 2))
+
+        attempt(stop_readers.set)
+        for thread in started_threads:
+            attempt(lambda thread=thread: thread.join(timeout=2))
+        attempt(lambda: self._close_router_streams(process))
+
+        escaped_stopped = False
+
+        def stop_escaped_writer() -> None:
+            nonlocal escaped_stopped
+            escaped_stopped = self._stop_escaped_writer(
+                escaped_stop_path,
+                escaped_lock_path,
+                escaped_ready_path=escaped_ready_path,
+            )
+
+        attempt(stop_escaped_writer)
+        for thread in started_threads:
+            try:
+                thread_alive = thread.is_alive()
+            except BaseException as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+                continue
+            if thread_alive:
+                attempt(lambda thread=thread: thread.join(timeout=2))
+        io_complete = True
+        for thread in started_threads:
+            try:
+                if thread.is_alive():
+                    io_complete = False
+            except BaseException as error:
+                io_complete = False
+                if cleanup_error is None:
+                    cleanup_error = error
+
+        if exit_queue is not None:
+            attempt(cast(Any, exit_queue).close)
+
+        return_code: int | None = process.returncode
+        if process.returncode is None:
+
+            def reap_router() -> None:
+                nonlocal return_code
+                return_code = process.wait(timeout=2)
+
+            attempt(reap_router)
+
+        if cleanup_error is not None and original_error is None:
+            raise cleanup_error
+        return return_code, io_complete, escaped_stopped
 
     def _run_router(
         self,
@@ -878,6 +1119,9 @@ class DelegationRunTests(unittest.TestCase):
         return leader_observed, live_group_observed, cleanup_complete
 
     def _wait_without_closing_stdin(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        # These callers exercise pre-spawn confirmation/availability gates. The
+        # router must exit without reading task stdin or starting a runtime, so
+        # waiting for this direct child before draining its pipes is bounded.
         process = subprocess.Popen(
             arguments,
             stdin=subprocess.PIPE,
@@ -939,6 +1183,218 @@ class DelegationRunTests(unittest.TestCase):
             self.assertIsNotNone(stream)
             assert stream is not None
             self.assertTrue(stream.closed)
+
+    def test_signal_anchored_group_falls_back_to_direct_leader(self) -> None:
+        """Breaks if a group permission failure abandons the live router leader."""
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = 424_242
+        process.returncode = None
+
+        with (
+            mock.patch.object(os, "killpg", side_effect=PermissionError),
+            mock.patch.object(os, "kill") as kill,
+        ):
+            self._signal_anchored_group(process)
+
+        kill.assert_called_once_with(process.pid, signal.SIGKILL)
+
+    def test_pipe_reader_drains_queued_bytes_after_stop(self) -> None:
+        """Breaks if shutdown drops bytes already queued by the router."""
+        read_file_descriptor, write_file_descriptor = os.pipe()
+        stream = os.fdopen(read_file_descriptor, "rb", buffering=0)
+        chunks: list[bytes] = []
+        io_failures: list[str] = []
+        stop_event = threading.Event()
+        try:
+            os.write(write_file_descriptor, b"queued-output")
+            stop_event.set()
+            thread = self._pipe_reader(
+                stream,
+                chunks,
+                "stdout",
+                stop_event,
+                io_failures,
+            )
+            thread.start()
+            thread.join(timeout=1)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(chunks, [b"queued-output"])
+            self.assertEqual(io_failures, [])
+        finally:
+            os.close(write_file_descriptor)
+            stream.close()
+
+    def test_expected_broken_pipe_does_not_hide_other_stdin_errors(self) -> None:
+        self.assertTrue(self._is_expected_broken_pipe(BrokenPipeError()))
+        self.assertTrue(self._is_expected_broken_pipe(OSError(errno.EPIPE, "closed")))
+        self.assertFalse(self._is_expected_broken_pipe(OSError(errno.EIO, "failed")))
+        self.assertFalse(self._is_expected_broken_pipe(ValueError("closed")))
+
+    def test_escaped_stop_does_not_create_marker_when_lock_free(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            escaped_stop_path = directory / "escaped-writer.stop"
+            escaped_lock_path = directory / "escaped-writer.lock"
+            escaped_lock_path.touch()
+
+            with mock.patch.object(os, "kill") as kill:
+                self.assertFalse(self._stop_escaped_writer(escaped_stop_path, escaped_lock_path))
+
+            kill.assert_not_called()
+            self.assertTrue(escaped_stop_path.exists())
+
+    def test_escaped_stop_ready_child_released_lock_is_success(self) -> None:
+        """A ready child may finish between stop publication and lock probing."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            escaped_stop_path = directory / "escaped-writer.stop"
+            escaped_lock_path = directory / "escaped-writer.lock"
+            escaped_ready_path = directory / "escaped-writer.ready"
+            escaped_lock_path.touch()
+            escaped_ready_path.touch()
+
+            self.assertTrue(
+                self._stop_escaped_writer(
+                    escaped_stop_path,
+                    escaped_lock_path,
+                    escaped_ready_path=escaped_ready_path,
+                )
+            )
+
+    def test_escaped_stop_publishes_before_lock_exists(self) -> None:
+        """Setup failure must leave a private stop request for a late child."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            escaped_stop_path = directory / "escaped-writer.stop"
+            escaped_lock_path = directory / "escaped-writer.lock"
+
+            self.assertFalse(self._stop_escaped_writer(escaped_stop_path, escaped_lock_path))
+            self.assertTrue(escaped_stop_path.is_file())
+
+    def test_escaped_stop_bounds_wait_for_late_ready_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            escaped_stop_path = directory / "escaped-writer.stop"
+            escaped_lock_path = directory / "escaped-writer.lock"
+            escaped_ready_path = directory / "escaped-writer.ready"
+            started_at = time.monotonic()
+
+            self.assertFalse(
+                self._stop_escaped_writer(
+                    escaped_stop_path,
+                    escaped_lock_path,
+                    escaped_ready_path=escaped_ready_path,
+                    timeout_seconds=0.05,
+                )
+            )
+            stop_published = escaped_stop_path.is_file()
+
+        self.assertLess(time.monotonic() - started_at, 1)
+        self.assertTrue(stop_published)
+
+    def test_escaped_stop_does_not_signal_after_lock_releases(self) -> None:
+        """A lock release race must not cause any process signal."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            escaped_stop_path = directory / "escaped-writer.stop"
+            escaped_lock_path = directory / "escaped-writer.lock"
+            escaped_lock_path.touch()
+
+            with (
+                mock.patch.object(
+                    fcntl,
+                    "flock",
+                    side_effect=[BlockingIOError(), None],
+                ),
+                mock.patch.object(os, "kill") as kill,
+            ):
+                self._stop_escaped_writer(escaped_stop_path, escaped_lock_path)
+
+            kill.assert_not_called()
+            self.assertTrue(escaped_stop_path.is_file())
+
+    def test_finalizer_waits_and_closes_queue_after_escaped_stop_failure(self) -> None:
+        """An escaped-stop error must not skip queue close or the single final reap."""
+        events: list[str] = []
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = 424_242
+        process.returncode = None
+
+        def wait(*, timeout: float | None = None) -> int:
+            del timeout
+            events.append("wait")
+            process.returncode = -signal.SIGKILL
+            return -signal.SIGKILL
+
+        process.wait.side_effect = wait
+        started_thread = mock.Mock(spec=threading.Thread)
+        started_thread.is_alive.return_value = False
+        started_thread.join.side_effect = lambda **_: events.append("join")
+        stop_readers = mock.Mock(spec=threading.Event)
+        stop_readers.set.side_effect = lambda: events.append("stop-readers")
+        exit_queue = mock.Mock()
+        exit_queue.close.side_effect = lambda: events.append("queue-close")
+
+        with (
+            mock.patch.object(
+                type(self),
+                "_close_router_streams",
+                side_effect=lambda *_: events.append("streams"),
+            ),
+            mock.patch.object(
+                type(self),
+                "_stop_escaped_writer",
+                side_effect=lambda *_, **__: (_ for _ in ()).throw(RuntimeError("stop failed")),
+            ),
+            self.assertRaisesRegex(RuntimeError, "stop failed"),
+        ):
+            self._finalize_broken_pipe_resources(
+                process,
+                [started_thread],
+                stop_readers,
+                exit_queue=exit_queue,
+                leader_observed=True,
+                escaped_stop_path=Path("/private/stop"),
+                escaped_lock_path=Path("/private/lock"),
+            )
+
+        self.assertEqual(events, ["stop-readers", "join", "streams", "queue-close", "wait"])
+
+    def test_finalizer_preserves_original_error_after_cleanup_failure(self) -> None:
+        process = mock.Mock(spec=subprocess.Popen)
+        process.pid = 424_242
+        process.returncode = None
+        process.wait.return_value = -signal.SIGKILL
+        started_thread = mock.Mock(spec=threading.Thread)
+        started_thread.is_alive.return_value = False
+        exit_queue = mock.Mock()
+
+        with (
+            mock.patch.object(type(self), "_close_router_streams"),
+            mock.patch.object(
+                type(self),
+                "_stop_escaped_writer",
+                side_effect=RuntimeError("stop failed"),
+            ),
+        ):
+            try:
+                raise ValueError("original failure")
+            except ValueError:
+                self._finalize_broken_pipe_resources(
+                    process,
+                    [started_thread],
+                    threading.Event(),
+                    exit_queue=exit_queue,
+                    leader_observed=True,
+                    escaped_stop_path=Path("/private/stop"),
+                    escaped_lock_path=Path("/private/lock"),
+                )
+                with self.assertRaisesRegex(ValueError, "original failure"):
+                    raise
+
+        exit_queue.close.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=2)
 
     def test_live_group_observation_precedes_cleanup_and_reap(self) -> None:
         """Breaks if a leaked group is hidden by reaping its numeric anchor first."""
@@ -1215,7 +1671,7 @@ class DelegationRunTests(unittest.TestCase):
         self.assertNotIn("zephyrine", result.stdout + result.stderr)
 
     def test_broken_pipe_terminates_and_reaps_owned_process_group(self) -> None:
-        """Breaks if framing failure leaks the owned router/runtime process group."""
+        """Breaks if a closed-input escaped writer leaks the owned output pipes."""
         if (
             os.name != "posix"
             or not _has_leader_exit_observer()
@@ -1225,8 +1681,14 @@ class DelegationRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path, manifest_path = self._write_inputs(directory, cleanup_seconds=1)
-            runtime_path = self._copy_runtime(directory)
-            start_marker_path = directory / "runtime-started"
+            (
+                runtime_path,
+                escaped_lock_path,
+                escaped_ready_path,
+                escaped_stop_path,
+                escaped_stdin_closed_path,
+                runtime_stdin_closed_path,
+            ) = self._write_escaped_writer_runtime(directory)
             descriptor = self._review(policy_path, manifest_path, runtime_path)
             arguments = self._arguments("run", policy_path, manifest_path, runtime_path)
             arguments.extend(
@@ -1236,9 +1698,6 @@ class DelegationRunTests(unittest.TestCase):
                     str(descriptor["route_fingerprint"]),
                 ]
             )
-            environment = os.environ.copy()
-            environment["WEIGHTCLASS_FAKE_DELEGATION_MODE"] = "close-stdin-and-hang"
-            environment["WEIGHTCLASS_FAKE_DELEGATION_START_MARKER"] = str(start_marker_path)
             started_at = time.monotonic()
 
             process = subprocess.Popen(
@@ -1246,7 +1705,6 @@ class DelegationRunTests(unittest.TestCase):
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                env=environment,
                 start_new_session=True,
             )
             exit_queue: object | None = None
@@ -1254,31 +1712,33 @@ class DelegationRunTests(unittest.TestCase):
             stderr_chunks: list[bytes] = []
             io_failures: list[str] = []
             threads: list[threading.Thread] = []
+            started_threads: list[threading.Thread] = []
+            stop_readers = threading.Event()
             leader_observed = False
             live_group_observed = False
             cleanup_complete = False
             io_complete = False
             return_code: int | None = None
+            escaped_writer_stopped = False
 
             def write_task() -> None:
                 assert process.stdin is not None
                 try:
                     process.stdin.write(("🧪" * 20_000).encode())
                     process.stdin.flush()
-                except (BrokenPipeError, OSError, ValueError):
+                except OSError as error:
+                    if not self._is_expected_broken_pipe(error):
+                        io_failures.append("stdin")
+                except ValueError:
                     io_failures.append("stdin")
                 finally:
                     try:
                         process.stdin.close()
-                    except (OSError, ValueError):
+                    except OSError as error:
+                        if not self._is_expected_broken_pipe(error):
+                            io_failures.append("stdin-close")
+                    except ValueError:
                         io_failures.append("stdin-close")
-
-            def read_output(stream: Any, chunks: list[bytes], name: str) -> None:
-                try:
-                    while chunk := stream.read(65_536):
-                        chunks.append(chunk)
-                except (OSError, ValueError):
-                    io_failures.append(name)
 
             try:
                 exit_queue = _open_leader_exit_queue(process.pid)
@@ -1287,21 +1747,31 @@ class DelegationRunTests(unittest.TestCase):
                 assert process.stderr is not None
                 threads = [
                     threading.Thread(target=write_task, daemon=True, name="router-stdin"),
-                    threading.Thread(
-                        target=read_output,
-                        args=(process.stdout, stdout_chunks, "stdout"),
-                        daemon=True,
-                        name="router-stdout",
+                    self._pipe_reader(
+                        process.stdout,
+                        stdout_chunks,
+                        "stdout",
+                        stop_readers,
+                        io_failures,
                     ),
-                    threading.Thread(
-                        target=read_output,
-                        args=(process.stderr, stderr_chunks, "stderr"),
-                        daemon=True,
-                        name="router-stderr",
+                    self._pipe_reader(
+                        process.stderr,
+                        stderr_chunks,
+                        "stderr",
+                        stop_readers,
+                        io_failures,
                     ),
                 ]
                 for thread in threads:
                     thread.start()
+                    started_threads.append(thread)
+                ready_deadline = time.monotonic() + 5
+                while not escaped_ready_path.is_file():
+                    if process.poll() is not None:
+                        self.fail("escaped writer exited before ready marker")
+                    if time.monotonic() >= ready_deadline:
+                        self.fail("escaped writer did not publish ready marker")
+                    time.sleep(0.01)
                 leader_observed, live_group_observed, cleanup_complete = (
                     self._observe_owned_group_before_reap(
                         process,
@@ -1311,28 +1781,23 @@ class DelegationRunTests(unittest.TestCase):
                 )
                 elapsed = time.monotonic() - started_at
             finally:
-                if process.returncode is None and not leader_observed:
-                    self._signal_anchored_group(process)
-                    if exit_queue is not None:
-                        _wait_for_leader_exit(process.pid, exit_queue, 2)
-                for thread in threads:
-                    thread.join(timeout=2)
-                self._close_router_streams(process)
-                for thread in threads:
-                    if thread.is_alive():
-                        thread.join(timeout=2)
-                io_complete = all(not thread.is_alive() for thread in threads)
-                if exit_queue is not None:
-                    try:
-                        cast(Any, exit_queue).close()
-                    except OSError:
-                        pass
-                if process.returncode is None:
-                    return_code = process.wait(timeout=2)
+                return_code, io_complete, escaped_writer_stopped = (
+                    self._finalize_broken_pipe_resources(
+                        process,
+                        started_threads,
+                        stop_readers,
+                        exit_queue=exit_queue,
+                        leader_observed=leader_observed,
+                        escaped_stop_path=escaped_stop_path,
+                        escaped_lock_path=escaped_lock_path,
+                        escaped_ready_path=escaped_ready_path,
+                    )
+                )
 
             stdout = b"".join(stdout_chunks).decode("utf-8")
             stderr = b"".join(stderr_chunks).decode("utf-8")
-            start_marker_contents = start_marker_path.read_text(encoding="ascii")
+            escaped_stdin_closed = escaped_stdin_closed_path.is_file()
+            runtime_stdin_closed = runtime_stdin_closed_path.is_file()
 
         self.assertEqual(return_code, 7, stderr)
         self.assertLess(elapsed, 8)
@@ -1340,9 +1805,11 @@ class DelegationRunTests(unittest.TestCase):
         self.assertFalse(live_group_observed)
         self.assertTrue(cleanup_complete)
         self.assertTrue(io_complete)
+        self.assertTrue(escaped_writer_stopped)
+        self.assertTrue(escaped_stdin_closed)
+        self.assertTrue(runtime_stdin_closed)
         self.assertEqual(io_failures, [])
-        self.assertEqual(start_marker_contents, "started\n")
-        self.assertEqual(stdout, "fake-runtime-started\n")
+        self.assertEqual(stdout, "escaped-runtime-started\n")
         self.assertEqual(stderr, '{"error": "executor_failed"}\n')
 
 
