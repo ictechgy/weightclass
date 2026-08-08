@@ -19,6 +19,68 @@ from tests.verify_distribution_isolation import (
 )
 
 
+def _candidate_like_record() -> dict[str, object]:
+    return {
+        "record_schema_version": 1,
+        "artifact_sha256": "a" * 64,
+        "artifact_size_bytes": 24,
+        "runtime_build_id": "opaque-runtime-build",
+        "platform": {"os": "linux", "architecture": "x86_64"},
+        "protocol_version": 1,
+        "suite_revision": "delegation-conformance-v2",
+        "adapter_id": "claude-native-v1",
+        "vendor_family": "claude",
+        "conformance_evidence_sha256": "b" * 64,
+        "result_matrix": [
+            {
+                "role": role,
+                "category": category,
+                "action": action,
+                "mode": mode,
+                "passed": True,
+            }
+            for role in ("orchestrator", "worker", "reviewer")
+            for category in ("implementation", "tests", "documentation")
+            for action in ("workspace_read", "workspace_write", "command_execution")
+            for mode in ("allow", "deny")
+        ],
+        "scenario_results": [
+            {"id": scenario_id, "passed": True}
+            for scenario_id in (
+                "action_attribution",
+                "artifact_integrity_and_substitution",
+                "descendant_cleanup",
+                "descendant_leakage",
+                "distinct_enforcement_contexts",
+                "integration_restriction",
+                "integration_verification_commands",
+                "output_channel_separation",
+                "process_creation_attribution",
+                "reviewer_rejection",
+                "runtime_deadline",
+                "stage_order",
+                "worker_concurrency_bound",
+            )
+        ],
+    }
+
+
+def _evidence_like_document() -> dict[str, object]:
+    candidate = _candidate_like_record()
+    return {
+        "evidence_schema_version": 2,
+        **{
+            key: value
+            for key, value in candidate.items()
+            if key
+            not in {
+                "record_schema_version",
+                "conformance_evidence_sha256",
+            }
+        },
+    }
+
+
 class DistributionIsolationTests(unittest.TestCase):
     def test_source_registry_must_remain_empty(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -86,6 +148,74 @@ class DistributionIsolationTests(unittest.TestCase):
                         }
                     ),
                 )
+            with self.assertRaises(IsolationError):
+                verify_wheel(wheel)
+
+    def test_wheel_rejects_candidate_record_at_non_registry_package_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr(
+                    "weightclass/_reviewed_candidate.json",
+                    json.dumps(_candidate_like_record()),
+                )
+
+            with self.assertRaises(IsolationError):
+                verify_wheel(wheel)
+
+    def test_wheel_rejects_evidence_document_at_non_registry_package_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr(
+                    "weightclass/_conformance_evidence.json",
+                    json.dumps(_evidence_like_document()),
+                )
+
+            with self.assertRaises(IsolationError):
+                verify_wheel(wheel)
+
+    def test_wheel_allows_unrelated_text_that_mentions_schema_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr(
+                    "weightclass/README.md",
+                    "The record_schema_version and evidence_schema_version fields "
+                    "are reserved for test-owned qualification documents.\n",
+                )
+
+            verify_wheel(wheel)
+
+    def test_wheel_rejects_duplicate_fields_in_qualification_document(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w") as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+                archive.writestr(
+                    "weightclass/_candidate.json",
+                    '{"record_schema_version":1,"record_schema_version":1}',
+                )
+
             with self.assertRaises(IsolationError):
                 verify_wheel(wheel)
 

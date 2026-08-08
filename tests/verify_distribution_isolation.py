@@ -21,6 +21,38 @@ EMPTY_REGISTRY = {
     "registry_schema_version": 1,
     "suite_revision": "delegation-conformance-v2",
 }
+MAX_ARCHIVE_TEXT_BYTES = 262_144
+CANDIDATE_SCHEMA_KEYS = frozenset(
+    {
+        "record_schema_version",
+        "artifact_sha256",
+        "artifact_size_bytes",
+        "runtime_build_id",
+        "platform",
+        "protocol_version",
+        "suite_revision",
+        "adapter_id",
+        "vendor_family",
+        "conformance_evidence_sha256",
+        "result_matrix",
+        "scenario_results",
+    }
+)
+EVIDENCE_SCHEMA_KEYS = frozenset(
+    {
+        "evidence_schema_version",
+        "artifact_sha256",
+        "artifact_size_bytes",
+        "suite_revision",
+        "runtime_build_id",
+        "platform",
+        "protocol_version",
+        "adapter_id",
+        "vendor_family",
+        "result_matrix",
+        "scenario_results",
+    }
+)
 FORBIDDEN_WHEEL_PATH_PARTS = (
     "tests/",
     "synthetic_probe",
@@ -72,6 +104,38 @@ def _load_empty_registry(raw: bytes, location: str) -> None:
         _fail(f"{location}: registry shape is not the empty production shape")
 
 
+def _read_archive_text(archive: Any, name: str, location: str) -> bytes:
+    try:
+        with archive.open(name) as member:
+            raw = bytes(member.read(MAX_ARCHIVE_TEXT_BYTES + 1))
+    except (OSError, EOFError, RuntimeError, zipfile.BadZipFile):
+        _fail(f"{location}: text member could not be inspected")
+    if len(raw) > MAX_ARCHIVE_TEXT_BYTES:
+        _fail(f"{location}: text member exceeds the scan limit")
+    return raw
+
+
+def _qualification_document_kind(raw: bytes, location: str) -> str | None:
+    if not raw.lstrip().startswith(b"{"):
+        return None
+    try:
+        value: Any = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_object_without_duplicate_keys
+        )
+    except _DuplicateKeyError:
+        _fail(f"{location}: duplicate JSON object field")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, Mapping):
+        return None
+    keys = frozenset(value)
+    if keys == CANDIDATE_SCHEMA_KEYS and value.get("record_schema_version") == 1:
+        return "candidate"
+    if keys == EVIDENCE_SCHEMA_KEYS and value.get("evidence_schema_version") == 2:
+        return "evidence"
+    return None
+
+
 def verify_source_registry(root: Path) -> None:
     registry = root / "src" / "weightclass" / "delegation_qualifications.json"
     _load_empty_registry(registry.read_bytes(), str(registry))
@@ -92,9 +156,12 @@ def verify_wheel(wheel: Path) -> None:
                 _fail(f"{wheel.name}: test-only artifact shipped: {name}")
             if not lowered.endswith((".py", ".json", ".txt", ".md")):
                 continue
-            raw = archive.read(name)
+            raw = _read_archive_text(archive, name, f"{wheel.name}:{name}")
             if any(token.encode() in raw for token in FORBIDDEN_WHEEL_TEXT):
                 _fail(f"{wheel.name}: synthetic or candidate-like content shipped: {name}")
+            document_kind = _qualification_document_kind(raw, f"{wheel.name}:{name}")
+            if document_kind is not None:
+                _fail(f"{wheel.name}: qualification {document_kind} shipped: {name}")
 
 
 def _safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
@@ -130,7 +197,10 @@ def verify_sdist(sdist: Path) -> None:
         extracted = archive.extractfile(registries[0])
         if extracted is None:
             _fail(f"{sdist.name}: registry is not a regular file")
-        _load_empty_registry(extracted.read(), f"{sdist.name}:{registries[0].name}")
+        registry_raw = extracted.read(MAX_ARCHIVE_TEXT_BYTES + 1)
+        if len(registry_raw) > MAX_ARCHIVE_TEXT_BYTES:
+            _fail(f"{sdist.name}:{registries[0].name}: registry exceeds the scan limit")
+        _load_empty_registry(registry_raw, f"{sdist.name}:{registries[0].name}")
         for member in members:
             relative = PurePosixPath(member.name).relative_to(root)
             lowered = relative.as_posix().lower()
