@@ -627,7 +627,17 @@ credential management, background execution, or a bundled provider runtime.
 ## Development verification
 
 weightclass has no runtime dependencies. These development tools are not
-required to use it, only to reproduce what CI checks:
+required to use it, only to reproduce what CI checks. The distribution gate
+accepts only a directory containing exactly one regular, nonsymlink wheel and
+one regular, nonsymlink sdist. Each distribution artifact is capped at 72 MiB
+before hashing or archive parsing. The gate fingerprints that exact inventory
+and checks it again after running the extracted sdist tests. Archives are
+rejected before content inspection or extraction when they exceed 4,096
+physical members or 64 MiB total declared payload. Wheel members and supported
+local PAX records are capped at 256 KiB, ordinary sdist records at 8 MiB, and
+archive directory entries must report zero size. The physical tar scan rejects
+GNU, global-PAX, sparse, or offset-changing extensions, malformed headers,
+missing terminators, and nonzero trailing data before `tarfile` processes them.
 
 ```sh
 set -eu
@@ -640,32 +650,10 @@ ruff format --check src tests
 mypy
 weightclass_dist_dir=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-dist.XXXXXX")
 python3 -m build --outdir "$weightclass_dist_dir"
-weightclass_wheel=$(python3 - "$weightclass_dist_dir" <<'PY'
-from pathlib import Path
-import sys
-
-directory = Path(sys.argv[1])
-matches = sorted(path for path in directory.iterdir() if path.is_file() and path.suffix == ".whl")
-if len(matches) != 1:
-    raise SystemExit(f"expected exactly one wheel, found {len(matches)}")
-print(matches[0])
-PY
-)
-weightclass_sdist=$(python3 - "$weightclass_dist_dir" <<'PY'
-from pathlib import Path
-import sys
-
-directory = Path(sys.argv[1])
-matches = sorted(path for path in directory.iterdir() if path.is_file() and path.name.endswith(".tar.gz"))
-if len(matches) != 1:
-    raise SystemExit(f"expected exactly one sdist, found {len(matches)}")
-print(matches[0])
-PY
-)
+twine check --strict "$weightclass_dist_dir"/*.whl "$weightclass_dist_dir"/*.tar.gz
 python3 tests/verify_distribution_isolation.py \
-  --source . --wheel "$weightclass_wheel" --sdist "$weightclass_sdist" \
+  --source . --dist-dir "$weightclass_dist_dir" \
   --run-sdist-tests
-twine check --strict "$weightclass_wheel" "$weightclass_sdist"
 ```
 
 ## License

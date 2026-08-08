@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import gzip
 import io
 import json
 import os
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unicodedata
 import unittest
 import warnings
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -19,8 +21,12 @@ from tests.verify_distribution_isolation import (
     ARCHIVE_MEMBER_NAME_LIMIT_ERROR,
     MAX_ARCHIVE_MEMBER_NAME_BYTES,
     MAX_ARCHIVE_TEXT_BYTES,
+    MAX_SDIST_EXTENSION_BYTES,
     IsolationError,
+    _fingerprint_artifact,
     _safe_members,
+    _verify_physical_sdist,
+    _wheel_members,
     run_extracted_sdist_tests,
     verify_sdist,
     verify_source_registry,
@@ -90,7 +96,11 @@ def _evidence_like_document() -> dict[str, object]:
     }
 
 
-def _write_sdist_fixture(directory: str, extra_members: tuple[str, ...] = ()) -> Path:
+def _write_sdist_fixture(
+    directory: str,
+    extra_members: tuple[str, ...] = (),
+    extra_files: tuple[tuple[str, str], ...] = (),
+) -> Path:
     sdist = Path(directory) / "weightclass-0.tar.gz"
     root = Path(directory) / "payload/weightclass-0"
     registry = root / "src/weightclass/delegation_qualifications.json"
@@ -110,7 +120,11 @@ def _write_sdist_fixture(directory: str, extra_members: tuple[str, ...] = ()) ->
     ):
         asset = root / relative_path
         asset.parent.mkdir(parents=True, exist_ok=True)
-        asset.write_text("test-only\n", encoding="utf-8")
+        asset.write_text("pass\n", encoding="utf-8")
+    for relative_path, contents in extra_files:
+        asset = root / relative_path
+        asset.parent.mkdir(parents=True, exist_ok=True)
+        asset.write_text(contents, encoding="utf-8")
     with tarfile.open(sdist, "w:gz") as archive:
         archive.add(root, arcname="weightclass-0")
         for member_name in extra_members:
@@ -121,7 +135,834 @@ def _write_sdist_fixture(directory: str, extra_members: tuple[str, ...] = ()) ->
     return sdist
 
 
+def _write_distribution_fixture(
+    directory: str,
+    *,
+    extracted_test: str | None = None,
+) -> tuple[Path, Path, Path]:
+    base = Path(directory)
+    source = base / "source"
+    source_registry = source / "src/weightclass/delegation_qualifications.json"
+    source_registry.parent.mkdir(parents=True)
+    source_registry.write_text(
+        '{"records":[],"registry_schema_version":1,"suite_revision":"delegation-conformance-v2"}',
+        encoding="utf-8",
+    )
+
+    dist = base / "dist"
+    dist.mkdir()
+    wheel = dist / "weightclass-0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "weightclass/delegation_qualifications.json",
+            '{"records":[],"registry_schema_version":1,'
+            '"suite_revision":"delegation-conformance-v2"}',
+        )
+        archive.writestr("weightclass/module.py", "VALUE = 1\n")
+
+    extra_files: tuple[tuple[str, str], ...] = ()
+    if extracted_test is not None:
+        extra_files = (("tests/test_artifact_mutation.py", extracted_test),)
+    build_directory = base / "build"
+    build_directory.mkdir()
+    built_sdist = _write_sdist_fixture(str(build_directory), extra_files=extra_files)
+    sdist = dist / built_sdist.name
+    built_sdist.replace(sdist)
+    return source, wheel, sdist
+
+
+def _tar_physical_record(name: str, payload: bytes, type_flag: bytes) -> bytes:
+    member = tarfile.TarInfo(name)
+    member.size = len(payload)
+    member.type = type_flag
+    header = member.tobuf(format=tarfile.GNU_FORMAT)
+    if len(header) != 512:
+        raise AssertionError("test fixture name unexpectedly required an extension record")
+    padding = b"\0" * (-len(payload) % 512)
+    return header + payload + padding
+
+
+def _pax_record(key: str, value: str) -> bytes:
+    body = f" {key}={value}\n"
+    length = len(body) + 1
+    while True:
+        record = f"{length}{body}".encode()
+        if len(record) == length:
+            return record
+        length = len(record)
+
+
+def _pax_record_with_size(key: str, size: int) -> bytes:
+    value_size = size
+    while True:
+        record = _pax_record(key, "x" * value_size)
+        difference = size - len(record)
+        if difference == 0:
+            return record
+        value_size += difference
+        if value_size < 0:
+            raise AssertionError("requested PAX record size is too small")
+
+
+def _append_physical_tar_records(sdist: Path, records: bytes) -> None:
+    raw = gzip.decompress(sdist.read_bytes())
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as archive:
+        members = archive.getmembers()
+    last = members[-1]
+    body_end = last.offset_data + ((last.size + 511) // 512) * 512
+    modified = raw[:body_end] + records + (b"\0" * 1_024)
+    modified += b"\0" * (-len(modified) % 10_240)
+    sdist.write_bytes(gzip.compress(modified, mtime=0))
+
+
+def _replace_tar_checksum(header: bytearray) -> None:
+    header[148:156] = b"        "
+    checksum = sum(header)
+    header[148:156] = f"{checksum:06o}\0 ".encode()
+
+
+def _run_distribution_verifier(
+    source: Path,
+    dist: Path,
+    *,
+    run_sdist_tests: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    command = [
+        sys.executable,
+        str(Path(__file__).with_name("verify_distribution_isolation.py")),
+        "--source",
+        str(source),
+        "--dist-dir",
+        str(dist),
+    ]
+    if run_sdist_tests:
+        command.append("--run-sdist-tests")
+    return subprocess.run(command, check=False, capture_output=True, text=True)
+
+
+class _WheelMemberArchive:
+    def __init__(self, members: list[zipfile.ZipInfo]) -> None:
+        self._members = members
+
+    def infolist(self) -> list[zipfile.ZipInfo]:
+        return self._members
+
+
+class _SdistMemberArchive:
+    def __init__(self, members: list[tarfile.TarInfo]) -> None:
+        self._members = members
+
+    def __iter__(self) -> Iterator[tarfile.TarInfo]:
+        return iter(self._members)
+
+    def getmembers(self) -> list[tarfile.TarInfo]:
+        raise AssertionError("sdist inventory was eagerly loaded")
+
+
+def _workflow_step_blocks(path: Path, job: str) -> list[str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    job_start = lines.index(f"  {job}:")
+    job_end = len(lines)
+    for index in range(job_start + 1, len(lines)):
+        line = lines[index]
+        if line.startswith("  ") and not line.startswith("    ") and line.endswith(":"):
+            job_end = index
+            break
+    steps_start = lines.index("    steps:", job_start, job_end)
+    blocks: list[list[str]] = []
+    for line in lines[steps_start + 1 : job_end]:
+        if line.startswith("      - "):
+            blocks.append([line])
+        elif blocks:
+            blocks[-1].append(line)
+    return ["\n".join(block) for block in blocks]
+
+
+def _workflow_job_block(path: Path, job: str) -> str:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    job_start = lines.index(f"  {job}:")
+    job_end = len(lines)
+    for index in range(job_start + 1, len(lines)):
+        line = lines[index]
+        if line.startswith("  ") and not line.startswith("    ") and line.endswith(":"):
+            job_end = index
+            break
+    return "\n".join(lines[job_start:job_end])
+
+
+def _workflow_step_name(block: str) -> str:
+    first_line = block.splitlines()[0]
+    prefix = "      - name: "
+    if not first_line.startswith(prefix):
+        return ""
+    return first_line.removeprefix(prefix)
+
+
 class DistributionIsolationTests(unittest.TestCase):
+    def test_outer_artifact_size_is_rejected_before_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in (".whl", ".tar.gz"):
+                with self.subTest(suffix=suffix):
+                    artifact = Path(directory) / f"private-artifact{suffix}"
+                    with artifact.open("wb") as stream:
+                        stream.seek(72 * 1_024 * 1_024)
+                        stream.write(b"x")
+                    with patch(
+                        "tests.verify_distribution_isolation.os.read",
+                        side_effect=AssertionError("oversized artifact was hashed"),
+                    ):
+                        with self.assertRaises(IsolationError) as context:
+                            _fingerprint_artifact(artifact)
+                    message = str(context.exception)
+                    self.assertLess(len(message), 256)
+                    self.assertNotIn(artifact.name, message)
+
+    def test_physical_sdist_extensions_cannot_bypass_archive_caps(self) -> None:
+        oversized_size = 9_437_201
+        pax_global_record = _pax_record("comment", "bounded")
+        oversized_local_pax = _pax_record_with_size(
+            "comment",
+            MAX_SDIST_EXTENSION_BYTES + 1,
+        )
+        gnu_name = b"weightclass-0/tests/physical-gnu-longname.txt\0"
+        cases = (
+            (
+                "oversized-pax-global",
+                _tar_physical_record(
+                    "pax_global_header",
+                    pax_global_record + b"\0" * (oversized_size - len(pax_global_record)),
+                    tarfile.XGLTYPE,
+                ),
+            ),
+            (
+                "repeated-pax-global",
+                _tar_physical_record("pax_global_header", b"", tarfile.XGLTYPE) * 4_097,
+            ),
+            (
+                "oversized-pax-extended",
+                _tar_physical_record(
+                    "pax_extended_header",
+                    oversized_local_pax,
+                    tarfile.XHDTYPE,
+                )
+                + _tar_physical_record("placeholder", b"", tarfile.REGTYPE),
+            ),
+            (
+                "oversized-gnu-longname",
+                _tar_physical_record(
+                    "././@LongLink",
+                    gnu_name + b"\0" * (oversized_size - len(gnu_name)),
+                    tarfile.GNUTYPE_LONGNAME,
+                )
+                + _tar_physical_record("placeholder", b"", tarfile.REGTYPE),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as root_directory:
+            for case_name, records in cases:
+                with (
+                    self.subTest(case=case_name),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    source, wheel, sdist = _write_distribution_fixture(directory)
+                    _append_physical_tar_records(sdist, records)
+                    result = _run_distribution_verifier(source, wheel.parent)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("physical sdist", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertNotIn("physical-pax-extension", result.stderr)
+                    self.assertNotIn("physical-gnu-longname", result.stderr)
+                    self.assertLess(len(result.stderr), 512)
+
+    def test_oversized_json_integer_failures_are_bounded_and_value_free(self) -> None:
+        private_integer = "7" * 5_000
+        with tempfile.TemporaryDirectory() as root_directory:
+            for location in ("source-registry", "wheel-member"):
+                with (
+                    self.subTest(location=location),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    source, wheel, _sdist = _write_distribution_fixture(directory)
+                    if location == "source-registry":
+                        registry = source / "src/weightclass/delegation_qualifications.json"
+                        registry.write_text(
+                            '{"records":[' + private_integer + '],"registry_schema_version":1,'
+                            '"suite_revision":"delegation-conformance-v2"}',
+                            encoding="utf-8",
+                        )
+                    else:
+                        with zipfile.ZipFile(wheel, "a") as archive:
+                            archive.writestr(
+                                "weightclass/private-integer.json",
+                                '{"private":' + private_integer + "}",
+                            )
+                    result = _run_distribution_verifier(source, wheel.parent)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("distribution isolation failed", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertNotIn(private_integer, result.stderr)
+                    self.assertLess(len(result.stderr), 512)
+
+    def test_deeply_nested_json_failures_are_bounded_and_value_free(self) -> None:
+        private_nested_value = "[" * 2_000 + "0" + "]" * 2_000
+        candidate = _candidate_like_record()
+        candidate["result_matrix"] = "private-nested-value"
+        candidate_json = json.dumps(candidate, separators=(",", ":")).replace(
+            '"private-nested-value"',
+            private_nested_value,
+        )
+        with tempfile.TemporaryDirectory() as root_directory:
+            for location in ("source-registry", "wheel-member"):
+                with (
+                    self.subTest(location=location),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    source, wheel, _sdist = _write_distribution_fixture(directory)
+                    if location == "source-registry":
+                        registry = source / "src/weightclass/delegation_qualifications.json"
+                        registry.write_text(
+                            '{"records":' + private_nested_value + ',"registry_schema_version":1,'
+                            '"suite_revision":"delegation-conformance-v2"}',
+                            encoding="utf-8",
+                        )
+                    else:
+                        with zipfile.ZipFile(wheel, "a") as archive:
+                            archive.writestr("weightclass/private-nested.json", candidate_json)
+                    result = _run_distribution_verifier(source, wheel.parent)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("distribution isolation failed", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertNotIn(private_nested_value, result.stderr)
+                    self.assertLess(len(result.stderr), 512)
+
+    def test_physical_sdist_rejects_unsafe_extensions(self) -> None:
+        target = _tar_physical_record("placeholder", b"", tarfile.REGTYPE)
+        cases = (
+            (
+                "pax-size",
+                _tar_physical_record(
+                    "pax_extended_header",
+                    _pax_record("size", "0"),
+                    tarfile.XHDTYPE,
+                )
+                + target,
+            ),
+            (
+                "pax-gnu-sparse",
+                _tar_physical_record(
+                    "pax_extended_header",
+                    _pax_record("GNU.sparse.map", "0,0"),
+                    tarfile.XHDTYPE,
+                )
+                + target,
+            ),
+            (
+                "old-gnu-sparse",
+                _tar_physical_record("sparse", b"", tarfile.GNUTYPE_SPARSE),
+            ),
+            (
+                "pax-length-overflow",
+                _tar_physical_record(
+                    "pax_extended_header",
+                    b"9" * 5_000 + b" path=safe\n",
+                    tarfile.XHDTYPE,
+                )
+                + target,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as root_directory:
+            for case_name, records in cases:
+                with (
+                    self.subTest(case=case_name),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    source, wheel, sdist = _write_distribution_fixture(directory)
+                    _append_physical_tar_records(sdist, records)
+                    result = _run_distribution_verifier(source, wheel.parent)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("physical sdist", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertLess(len(result.stderr), 512)
+
+    def test_physical_sdist_rejects_noncanonical_or_truncated_streams(self) -> None:
+        with tempfile.TemporaryDirectory() as root_directory:
+            for case_name in (
+                "bad-checksum",
+                "base-256-checksum",
+                "base-256-size",
+                "missing-end-markers",
+                "truncated-payload",
+            ):
+                with (
+                    self.subTest(case=case_name),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    source, wheel, sdist = _write_distribution_fixture(directory)
+                    raw = gzip.decompress(sdist.read_bytes())
+                    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as archive:
+                        members = archive.getmembers()
+                    last = members[-1]
+                    body_end = last.offset_data + ((last.size + 511) // 512) * 512
+                    if case_name == "bad-checksum":
+                        header = bytearray(raw[:512])
+                        header[0] ^= 1
+                        modified = bytes(header) + raw[512:]
+                    elif case_name == "base-256-checksum":
+                        header = bytearray(raw[:512])
+                        header[148:156] = b"        "
+                        checksum = sum(header)
+                        header[148:156] = b"\x80" + checksum.to_bytes(7, "big")
+                        modified = bytes(header) + raw[512:]
+                    elif case_name == "base-256-size":
+                        header = bytearray(raw[:512])
+                        header[124:136] = b"\x80" + b"\0" * 11
+                        _replace_tar_checksum(header)
+                        modified = bytes(header) + raw[512:]
+                    elif case_name == "missing-end-markers":
+                        modified = raw[:body_end]
+                    else:
+                        member = tarfile.TarInfo("weightclass-0/tests/truncated.txt")
+                        member.size = 1
+                        modified = raw[:body_end] + member.tobuf(format=tarfile.GNU_FORMAT)
+                    sdist.write_bytes(gzip.compress(modified, mtime=0))
+                    result = _run_distribution_verifier(source, wheel.parent)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("physical sdist", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertLess(len(result.stderr), 512)
+
+    def test_physical_sdist_rejects_nonzero_padding_and_partial_zero_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as root_directory:
+            for case_name in ("nonzero-padding", "partial-zero-tail"):
+                with (
+                    self.subTest(case=case_name),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    sdist = _write_sdist_fixture(directory)
+                    raw = bytearray(gzip.decompress(sdist.read_bytes()))
+                    if case_name == "nonzero-padding":
+                        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as archive:
+                            member = next(
+                                item
+                                for item in archive
+                                if item.isfile() and item.size % tarfile.BLOCKSIZE
+                            )
+                        raw[member.offset_data + member.size] = 1
+                    else:
+                        raw.extend(b"\0")
+                    sdist.write_bytes(gzip.compress(bytes(raw), mtime=0))
+                    with self.assertRaisesRegex(IsolationError, "physical sdist"):
+                        _verify_physical_sdist(sdist)
+
+    def test_physical_sdist_rejects_unsupported_types_and_local_pax_sequences(self) -> None:
+        pax = _pax_record("path", "weightclass-0/tests/bounded-pax.txt")
+        cases = (
+            ("global-pax", _tar_physical_record("global", pax, tarfile.XGLTYPE)),
+            ("solaris-pax", _tar_physical_record("solaris", pax, tarfile.SOLARIS_XHDTYPE)),
+            (
+                "gnu-longname",
+                _tar_physical_record("././@LongLink", b"bounded\0", tarfile.GNUTYPE_LONGNAME),
+            ),
+            (
+                "gnu-longlink",
+                _tar_physical_record("././@LongLink", b"bounded\0", tarfile.GNUTYPE_LONGLINK),
+            ),
+            ("special", _tar_physical_record("fifo", b"", tarfile.FIFOTYPE)),
+            ("unknown", _tar_physical_record("unknown", b"", b"Z")),
+            ("dangling-local-pax", _tar_physical_record("local", pax, tarfile.XHDTYPE)),
+            (
+                "consecutive-local-pax",
+                _tar_physical_record("local-one", pax, tarfile.XHDTYPE)
+                + _tar_physical_record("local-two", pax, tarfile.XHDTYPE)
+                + _tar_physical_record("target", b"", tarfile.REGTYPE),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as root_directory:
+            for case_name, records in cases:
+                with (
+                    self.subTest(case=case_name),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    sdist = Path(directory) / "physical-types.tar.gz"
+                    sdist.write_bytes(gzip.compress(records + b"\0" * 1_024, mtime=0))
+                    with self.assertRaisesRegex(IsolationError, "physical sdist"):
+                        _verify_physical_sdist(sdist)
+
+    def test_sdist_parse_and_extract_use_the_preflighted_snapshot_after_path_swap(self) -> None:
+        for verifier in (verify_sdist, run_extracted_sdist_tests):
+            with (
+                self.subTest(verifier=verifier.__name__),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                sdist = _write_sdist_fixture(
+                    directory,
+                    extra_files=(
+                        (
+                            "tests/test_distribution_isolation.py",
+                            "import unittest\n\n"
+                            "class SnapshotTests(unittest.TestCase):\n"
+                            "    def test_snapshot(self):\n"
+                            "        pass\n",
+                        ),
+                    ),
+                )
+                replacement = Path(directory) / "replacement.tar.gz"
+                replacement.write_bytes(b"replacement must never be parsed")
+                real_tar_open = cast(Callable[..., tarfile.TarFile], tarfile.open)
+                swapped = False
+
+                def swap_before_parse(
+                    *args: object,
+                    replacement_path: Path = replacement,
+                    sdist_path: Path = sdist,
+                    tar_open: Callable[..., tarfile.TarFile] = real_tar_open,
+                    **kwargs: object,
+                ) -> tarfile.TarFile:
+                    nonlocal swapped
+                    if not swapped:
+                        replacement_path.replace(sdist_path)
+                        swapped = True
+                    return tar_open(*args, **kwargs)
+
+                with patch(
+                    "tests.verify_distribution_isolation.tarfile.open",
+                    side_effect=swap_before_parse,
+                ):
+                    verifier(sdist)
+                self.assertTrue(swapped)
+                self.assertEqual(sdist.read_bytes(), b"replacement must never be parsed")
+
+    def test_physical_sdist_turns_deflate_errors_into_isolation_errors(self) -> None:
+        invalid_deflate = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff\x06" + b"\0" * 8
+        with tempfile.TemporaryDirectory() as directory:
+            sdist = Path(directory) / "invalid-deflate.tar.gz"
+            sdist.write_bytes(invalid_deflate)
+            with self.assertRaisesRegex(IsolationError, "physical sdist"):
+                _verify_physical_sdist(sdist)
+
+    def test_physical_sdist_accepts_bounded_pax_extension(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source, wheel, sdist = _write_distribution_fixture(directory)
+            records = _tar_physical_record(
+                "pax_extended_header",
+                _pax_record_with_size("comment", MAX_SDIST_EXTENSION_BYTES),
+                tarfile.XHDTYPE,
+            ) + _tar_physical_record(
+                "weightclass-0/tests/bounded-pax.txt",
+                b"",
+                tarfile.REGTYPE,
+            )
+            _append_physical_tar_records(sdist, records)
+            result = _run_distribution_verifier(source, wheel.parent)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_physical_sdist_local_pax_cap_is_the_only_rejection_reason(self) -> None:
+        oversized_local_pax = _pax_record_with_size(
+            "comment",
+            MAX_SDIST_EXTENSION_BYTES + 1,
+        )
+        records = _tar_physical_record(
+            "pax_extended_header",
+            oversized_local_pax,
+            tarfile.XHDTYPE,
+        ) + _tar_physical_record("placeholder", b"", tarfile.REGTYPE)
+        with tempfile.TemporaryDirectory() as directory:
+            sdist = Path(directory) / "local-pax-cap.tar.gz"
+            sdist.write_bytes(gzip.compress(records + b"\0" * 1_024, mtime=0))
+            with self.assertRaisesRegex(IsolationError, "member size exceeds"):
+                _verify_physical_sdist(sdist)
+            with patch(
+                "tests.verify_distribution_isolation.MAX_SDIST_EXTENSION_BYTES",
+                MAX_SDIST_EXTENSION_BYTES + 1,
+            ):
+                _verify_physical_sdist(sdist)
+
+    def test_physical_sdist_aggregate_includes_pax_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdist = Path(directory) / "pax-aggregate.tar.gz"
+            pax_record = _tar_physical_record(
+                "pax_extended_header",
+                _pax_record("x", ""),
+                tarfile.XHDTYPE,
+            )
+            target = _tar_physical_record("target", b"", tarfile.REGTYPE)
+            raw = (pax_record + target) * 3 + b"\0" * 1_024
+            sdist.write_bytes(gzip.compress(raw, mtime=0))
+            with patch(
+                "tests.verify_distribution_isolation.MAX_ARCHIVE_TOTAL_BYTES",
+                10,
+            ):
+                with self.assertRaisesRegex(IsolationError, "physical sdist aggregate"):
+                    _verify_physical_sdist(sdist)
+
+    def test_distribution_workflows_make_isolation_the_final_exact_validation(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        if not (root / ".github/workflows").is_dir():
+            self.skipTest("workflow sources are intentionally absent from the sdist")
+        workflow_jobs = ((root / ".github/workflows/ci.yml", "quality"),)
+        for workflow, job in workflow_jobs:
+            with self.subTest(workflow=workflow.name):
+                steps = _workflow_step_blocks(workflow, job)
+                names = [_workflow_step_name(step) for step in steps]
+                metadata_index = names.index("Verify distribution metadata")
+                isolation_index = names.index("Verify qualification isolation in distributions")
+                run_indexes = [
+                    index for index, step in enumerate(steps) if "\n        run:" in step
+                ]
+                self.assertLess(metadata_index, isolation_index)
+                self.assertEqual(isolation_index, run_indexes[-1])
+                metadata_step = steps[metadata_index]
+                self.assertIn(
+                    "run: twine check --strict dist/*.whl dist/*.tar.gz",
+                    metadata_step,
+                )
+                isolation_step = steps[isolation_index]
+                self.assertIn("--source . --dist-dir dist", isolation_step)
+                self.assertNotIn("--wheel", isolation_step)
+                self.assertNotIn("--sdist", isolation_step)
+                self.assertIn("--run-sdist-tests", isolation_step)
+
+        release_steps = _workflow_step_blocks(root / ".github/workflows/release.yml", "verify")
+        release_names = [_workflow_step_name(step) for step in release_steps]
+        metadata_index = release_names.index("Verify distribution metadata")
+        isolation_index = release_names.index("Verify distribution isolation before tests")
+        upload_index = release_names.index("Upload unverified distributions")
+        tests_index = release_names.index("Run extracted sdist tests against local artifacts")
+        self.assertLess(metadata_index, isolation_index)
+        self.assertLess(isolation_index, upload_index)
+        self.assertLess(upload_index, tests_index)
+        release_run_indexes = [
+            index for index, step in enumerate(release_steps) if "\n        run:" in step
+        ]
+        self.assertEqual(tests_index, release_run_indexes[-1])
+        self.assertNotIn("--run-sdist-tests", release_steps[isolation_index])
+        self.assertIn("--run-sdist-tests", release_steps[tests_index])
+        upload_step = release_steps[upload_index]
+        self.assertIn("name: unverified-distributions", upload_step)
+        self.assertIn(
+            "          path: |\n            dist/*.whl\n            dist/*.tar.gz\n"
+            "          if-no-files-found: error",
+            upload_step,
+        )
+        self.assertNotIn("          path: dist/", upload_step)
+
+        validate_steps = _workflow_step_blocks(root / ".github/workflows/release.yml", "validate")
+        validate_names = [_workflow_step_name(step) for step in validate_steps]
+        download_index = validate_names.index("Download unverified distributions")
+        isolation_index = validate_names.index("Final distribution isolation verification")
+        self.assertLess(download_index, isolation_index)
+        self.assertEqual(isolation_index, len(validate_steps) - 1)
+        self.assertNotIn("Install metadata verifier", validate_names)
+        self.assertNotIn("Verify distribution metadata", validate_names)
+        self.assertNotIn("Upload validated distributions", validate_names)
+        validate_run_indexes = [
+            index for index, step in enumerate(validate_steps) if "\n        run:" in step
+        ]
+        self.assertEqual(validate_run_indexes, [isolation_index])
+        final_isolation_step = validate_steps[isolation_index]
+        self.assertIn("--source . --dist-dir dist", final_isolation_step)
+        self.assertNotIn("--run-sdist-tests", final_isolation_step)
+        self.assertIn("name: unverified-distributions", validate_steps[download_index])
+        release_workflow = root / ".github/workflows/release.yml"
+        self.assertIn("    needs: verify", _workflow_job_block(release_workflow, "validate"))
+        self.assertIn(
+            "    needs: [validate, macos-routing-boundaries]",
+            _workflow_job_block(release_workflow, "publish"),
+        )
+        publish_steps = _workflow_step_blocks(release_workflow, "publish")
+        publish_download = publish_steps[
+            [_workflow_step_name(step) for step in publish_steps].index("Download distributions")
+        ]
+        self.assertIn("name: unverified-distributions", publish_download)
+        self.assertNotIn(
+            "          name: distributions",
+            release_workflow.read_text(encoding="utf-8"),
+        )
+
+    def test_distribution_directory_requires_exact_regular_artifact_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source, wheel, sdist = _write_distribution_fixture(directory)
+            result = _run_distribution_verifier(source, wheel.parent)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            extra = wheel.parent / "private-extra.txt"
+            extra.write_text("not distributable\n", encoding="utf-8")
+            result = _run_distribution_verifier(source, wheel.parent)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(extra.name, result.stderr)
+            extra.unlink()
+
+            target = Path(directory) / "outside-wheel.whl"
+            wheel.replace(target)
+            wheel.symlink_to(target)
+            result = _run_distribution_verifier(source, sdist.parent)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(str(target), result.stderr)
+
+    def test_distribution_directory_rechecks_inventory_and_hash_after_extracted_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as root_directory:
+            for mutation in ("replace", "delete", "add", "hash"):
+                with (
+                    self.subTest(mutation=mutation),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    base = Path(directory)
+                    wheel = base / "dist/weightclass-0-py3-none-any.whl"
+                    if mutation == "replace":
+                        mutation_source = (
+                            "import os\n"
+                            "from pathlib import Path\n"
+                            f"artifact = Path({str(wheel)!r})\n"
+                            "replacement = artifact.with_name('replacement.tmp')\n"
+                            "replacement.write_bytes(artifact.read_bytes())\n"
+                            "os.replace(replacement, artifact)\n"
+                        )
+                    elif mutation == "delete":
+                        mutation_source = (
+                            f"from pathlib import Path\nPath({str(wheel)!r}).unlink()\n"
+                        )
+                    elif mutation == "add":
+                        mutation_source = (
+                            "from pathlib import Path\n"
+                            f"Path({str(wheel.parent / 'private-added.txt')!r}).write_bytes(b'x')\n"
+                        )
+                    else:
+                        mutation_source = (
+                            "from pathlib import Path\n"
+                            f"artifact = Path({str(wheel)!r})\n"
+                            "artifact.write_bytes(artifact.read_bytes() + b'mutation')\n"
+                        )
+
+                    source, actual_wheel, _sdist = _write_distribution_fixture(
+                        directory,
+                        extracted_test=mutation_source,
+                    )
+                    self.assertEqual(actual_wheel, wheel)
+                    result = _run_distribution_verifier(
+                        source,
+                        actual_wheel.parent,
+                        run_sdist_tests=True,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(
+                        "distribution artifacts changed after extracted sdist tests",
+                        result.stderr,
+                    )
+                    self.assertLess(len(result.stderr), 2_048)
+
+    def test_archives_reject_member_count_before_names_or_contents(self) -> None:
+        wheel_members = [zipfile.ZipInfo(f"private-{index}") for index in range(4_097)]
+        sdist_members = [tarfile.TarInfo(f"private-{index}") for index in range(4_097)]
+        for verifier in (
+            lambda: _wheel_members(
+                cast(zipfile.ZipFile, _WheelMemberArchive(wheel_members)),
+                Path("private.whl"),
+            ),
+            lambda: _safe_members(cast(tarfile.TarFile, _SdistMemberArchive(sdist_members))),
+        ):
+            with self.subTest(verifier=verifier):
+                with patch(
+                    "tests.verify_distribution_isolation.unicodedata.normalize",
+                    side_effect=AssertionError("member name was normalized"),
+                ):
+                    with self.assertRaises(IsolationError) as context:
+                        verifier()
+                message = str(context.exception)
+                self.assertLess(len(message), 256)
+                self.assertNotIn("private-", message)
+
+    def test_archives_reject_per_file_size_before_names_or_contents(self) -> None:
+        wheel_member = zipfile.ZipInfo("private-wheel-value")
+        wheel_member.file_size = 262_145
+        sdist_member = tarfile.TarInfo("private-sdist-value")
+        sdist_member.size = 8 * 1_024 * 1_024 + 1
+        for verifier in (
+            lambda: _wheel_members(
+                cast(zipfile.ZipFile, _WheelMemberArchive([wheel_member])),
+                Path("private.whl"),
+            ),
+            lambda: _safe_members(cast(tarfile.TarFile, _SdistMemberArchive([sdist_member]))),
+        ):
+            with self.subTest(verifier=verifier):
+                with patch(
+                    "tests.verify_distribution_isolation.unicodedata.normalize",
+                    side_effect=AssertionError("member name was normalized"),
+                ):
+                    with self.assertRaises(IsolationError) as context:
+                        verifier()
+                message = str(context.exception)
+                self.assertLess(len(message), 256)
+                self.assertNotIn("private-", message)
+
+    def test_archives_reject_aggregate_size_before_names_or_contents(self) -> None:
+        wheel_members = [zipfile.ZipInfo(f"private-wheel-{index}") for index in range(257)]
+        for wheel_metadata in wheel_members:
+            wheel_metadata.file_size = 262_144
+        sdist_members = [tarfile.TarInfo(f"private-sdist-{index}") for index in range(9)]
+        for sdist_metadata in sdist_members:
+            sdist_metadata.size = 8 * 1_024 * 1_024
+        for verifier in (
+            lambda: _wheel_members(
+                cast(zipfile.ZipFile, _WheelMemberArchive(wheel_members)),
+                Path("private.whl"),
+            ),
+            lambda: _safe_members(cast(tarfile.TarFile, _SdistMemberArchive(sdist_members))),
+        ):
+            with self.subTest(verifier=verifier):
+                with patch(
+                    "tests.verify_distribution_isolation.unicodedata.normalize",
+                    side_effect=AssertionError("member name was normalized"),
+                ):
+                    with self.assertRaises(IsolationError) as context:
+                        verifier()
+                message = str(context.exception)
+                self.assertLess(len(message), 256)
+                self.assertNotIn("private-", message)
+
+    def test_archives_reject_nonempty_directory_before_names_or_contents(self) -> None:
+        wheel_member = zipfile.ZipInfo("private-wheel-directory/")
+        wheel_member.file_size = 1
+        sdist_member = tarfile.TarInfo("private-sdist-directory")
+        sdist_member.type = tarfile.DIRTYPE
+        sdist_member.size = 1
+        for verifier in (
+            lambda: _wheel_members(
+                cast(zipfile.ZipFile, _WheelMemberArchive([wheel_member])),
+                Path("private.whl"),
+            ),
+            lambda: _safe_members(cast(tarfile.TarFile, _SdistMemberArchive([sdist_member]))),
+        ):
+            with self.subTest(verifier=verifier):
+                with patch(
+                    "tests.verify_distribution_isolation.unicodedata.normalize",
+                    side_effect=AssertionError("member name was normalized"),
+                ):
+                    with self.assertRaises(IsolationError) as context:
+                        verifier()
+                message = str(context.exception)
+                self.assertLess(len(message), 256)
+                self.assertNotIn("private-", message)
+
+    def test_archive_metadata_caps_accept_the_exact_boundaries(self) -> None:
+        wheel_count_members = [zipfile.ZipInfo(f"wheel-count-{index}") for index in range(4_096)]
+        sdist_count_members = [tarfile.TarInfo(f"sdist-count-{index}") for index in range(4_096)]
+        _wheel_members(
+            cast(zipfile.ZipFile, _WheelMemberArchive(wheel_count_members)),
+            Path("boundary.whl"),
+        )
+        _safe_members(cast(tarfile.TarFile, _SdistMemberArchive(sdist_count_members)))
+
+        wheel_size_members = [zipfile.ZipInfo(f"wheel-size-{index}") for index in range(256)]
+        for wheel_metadata in wheel_size_members:
+            wheel_metadata.file_size = 256 * 1_024
+        sdist_size_members = [tarfile.TarInfo(f"sdist-size-{index}") for index in range(8)]
+        for sdist_metadata in sdist_size_members:
+            sdist_metadata.size = 8 * 1_024 * 1_024
+        _wheel_members(
+            cast(zipfile.ZipFile, _WheelMemberArchive(wheel_size_members)),
+            Path("boundary.whl"),
+        )
+        _safe_members(cast(tarfile.TarFile, _SdistMemberArchive(sdist_size_members)))
+
     def test_source_registry_must_remain_empty(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -908,8 +1749,8 @@ class DistributionIsolationTests(unittest.TestCase):
         member = tarfile.TarInfo("weightclass-0/weightclass/synthetic\x00probe.py")
 
         class ArchiveWithNulMember:
-            def getmembers(self) -> list[tarfile.TarInfo]:
-                return [member]
+            def __iter__(self) -> Iterator[tarfile.TarInfo]:
+                yield member
 
         with self.assertRaises(IsolationError):
             _safe_members(cast(tarfile.TarFile, ArchiveWithNulMember()))
