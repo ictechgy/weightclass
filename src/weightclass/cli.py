@@ -19,6 +19,38 @@ from .classification import (
     read_task_from_standard_input,
     validate_task,
 )
+from .delegation_compile import (
+    canonical_json_bytes,
+    compile_delegation_descriptor,
+    render_review_descriptor,
+)
+from .delegation_protocol import DelegationFrameError, encode_delegation_frame
+from .delegation_qualification import (
+    QualificationRecord,
+    QualifiedRuntimeUnavailableError,
+    attach_qualification_requirement,
+    build_qualification_candidate,
+    load_conformance_evidence,
+    load_packaged_qualification_registry,
+    select_qualification_for_descriptor,
+    verify_qualified_runtime,
+)
+from .delegation_runtime import (
+    DelegationRuntimeFailedError,
+    DelegationRuntimeUnavailableError,
+    run_delegation_runtime,
+    validate_delegation_runtime,
+    validate_runtime_process_context,
+)
+from .delegation_schema import (
+    DelegationInvalidInputError,
+    DelegationUnsupportedError,
+    current_platform_contract,
+    load_delegation_manifest,
+    load_delegation_policy,
+    validate_runtime_path_lexically,
+)
+from .delegation_types import DelegationTier, DirectChildCleanup, VendorFamily
 from .json_input import JsonInputError, load_json_object
 from .router import (
     DEFAULT_ROUTES,
@@ -217,6 +249,20 @@ def _add_api_route_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--api-runtime", required=True, type=Path)
 
 
+def _add_delegation_route_arguments(parser: argparse.ArgumentParser) -> None:
+    """Declare offline inputs shared by future delegation commands."""
+    parser.add_argument("--policy", required=True, type=Path)
+    parser.add_argument("--runtime-manifest", required=True, type=Path)
+    parser.add_argument("--delegation-runtime", required=True)
+    parser.add_argument("--source-vendor", required=True, choices=("claude", "codex"))
+    parser.add_argument("--tier", required=True, choices=("low", "standard", "high"))
+    parser.add_argument(
+        "--require-qualified-runtime",
+        action="store_true",
+        help="Require a matching package-owned exact-artifact record.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the whole command surface so `--help` lists every reachable mode.
 
@@ -269,6 +315,35 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--policy", required=True, type=Path)
     render.add_argument("--descriptor", required=True, type=Path)
 
+    delegate = subcommands.add_parser(
+        "delegate",
+        allow_abbrev=False,
+        description="Compile a reviewable role-delegation policy.",
+    )
+    delegate_subcommands = delegate.add_subparsers(dest="delegate_command", required=True)
+    _add_delegation_route_arguments(
+        delegate_subcommands.add_parser(
+            "route",
+            allow_abbrev=False,
+            description="Compile an offline delegation review descriptor.",
+        )
+    )
+    delegate_run = delegate_subcommands.add_parser(
+        "run",
+        allow_abbrev=False,
+        description="Run one reviewed trusted delegation runtime.",
+    )
+    _add_delegation_route_arguments(delegate_run)
+    delegate_run.add_argument("--confirm-trusted-delegation-runtime", action="store_true")
+    delegate_run.add_argument("--ack-route-fingerprint")
+    qualification_candidate = delegate_subcommands.add_parser(
+        "qualification-candidate",
+        allow_abbrev=False,
+        description="Build an untrusted qualification candidate from task-free evidence.",
+    )
+    qualification_candidate.add_argument("--evidence", required=True, type=Path)
+    qualification_candidate.add_argument("--delegation-runtime", required=True, type=Path)
+
     api = subcommands.add_parser(
         "v2",
         allow_abbrev=False,
@@ -291,6 +366,145 @@ def build_parser() -> argparse.ArgumentParser:
     api_run.add_argument("--confirm-api-egress", action="store_true")
     api_run.add_argument("--ack-route-fingerprint")
     return parser
+
+
+def _compile_delegation_inputs(
+    policy_path: Path,
+    manifest_path: Path,
+    runtime_path: str,
+    source_vendor: VendorFamily,
+    tier: DelegationTier,
+    require_qualified_runtime: bool = False,
+) -> tuple[dict[str, Any], str, QualificationRecord | None]:
+    policy = load_delegation_policy(policy_path)
+    manifest = load_delegation_manifest(manifest_path)
+    normalized_runtime_path = validate_runtime_path_lexically(runtime_path)
+    target_platform = current_platform_contract()
+    descriptor = compile_delegation_descriptor(
+        policy,
+        manifest,
+        runtime_path=normalized_runtime_path,
+        source_vendor=source_vendor,
+        tier=tier,
+        target_platform=target_platform,
+    )
+    qualification = None
+    if require_qualified_runtime:
+        registry = load_packaged_qualification_registry()
+        qualification = select_qualification_for_descriptor(descriptor, registry)
+        descriptor = attach_qualification_requirement(descriptor, qualification)
+    return descriptor, render_review_descriptor(descriptor), qualification
+
+
+def delegation_route(
+    policy_path: Path,
+    manifest_path: Path,
+    runtime_path: str,
+    source_vendor: VendorFamily,
+    tier: DelegationTier,
+    require_qualified_runtime: bool = False,
+) -> int:
+    """Compile a descriptor without reading task stdin or inspecting a runtime."""
+    try:
+        _, rendered, _ = _compile_delegation_inputs(
+            policy_path,
+            manifest_path,
+            runtime_path,
+            source_vendor,
+            tier,
+            require_qualified_runtime,
+        )
+    except DelegationInvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    except DelegationUnsupportedError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+    print(rendered)
+    return 0
+
+
+def delegation_run_from_standard_input(
+    policy_path: Path,
+    manifest_path: Path,
+    runtime_path: str,
+    source_vendor: VendorFamily,
+    tier: DelegationTier,
+    confirm_trusted_runtime: bool,
+    acknowledged_fingerprint: str | None,
+    require_qualified_runtime: bool = False,
+) -> int:
+    """Run one acknowledged external orchestrator without handling credentials."""
+    try:
+        descriptor, rendered, qualification = _compile_delegation_inputs(
+            policy_path,
+            manifest_path,
+            runtime_path,
+            source_vendor,
+            tier,
+            require_qualified_runtime,
+        )
+    except DelegationInvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    except DelegationUnsupportedError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+
+    if not confirm_trusted_runtime:
+        print(json.dumps({"error": "delegation_confirmation_required"}), file=sys.stderr)
+        return 5
+    if acknowledged_fingerprint != descriptor["route_fingerprint"]:
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
+    try:
+        if qualification is None:
+            validate_delegation_runtime(runtime_path)
+        else:
+            verify_qualified_runtime(Path(runtime_path), qualification)
+        validate_runtime_process_context()
+    except (DelegationRuntimeUnavailableError, QualifiedRuntimeUnavailableError):
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    try:
+        task = read_task_from_standard_input()
+        validate_task(task)
+    except InvalidTaskError:
+        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
+        return 2
+    try:
+        frame = encode_delegation_frame(rendered.encode("ascii"), task)
+    except DelegationFrameError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+
+    workflow_cleanup = descriptor["runtime_contract"]["direct_child_cleanup"]
+    cleanup = DirectChildCleanup(
+        grace_seconds=workflow_cleanup["grace_seconds"],
+        terminate_grace_seconds=workflow_cleanup["terminate_grace_seconds"],
+    )
+    try:
+        completed_process = run_delegation_runtime(runtime_path, frame, cleanup)
+    except DelegationRuntimeUnavailableError:
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    except DelegationRuntimeFailedError:
+        print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
+        return EXECUTOR_FAILED_EXIT_CODE
+    return _report_executor_result(completed_process)
+
+
+def delegation_qualification_candidate(evidence_path: Path, runtime_path: Path) -> int:
+    """Print a review candidate without changing the package trust registry."""
+    try:
+        normalized_runtime_path = validate_runtime_path_lexically(str(runtime_path))
+        evidence = load_conformance_evidence(evidence_path)
+        candidate = build_qualification_candidate(evidence, Path(normalized_runtime_path))
+    except DelegationInvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    print(canonical_json_bytes(candidate).decode("ascii"))
+    return 0
 
 
 def v2_route_from_standard_input(
@@ -610,6 +824,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
+    if arguments.command == "delegate" and arguments.delegate_command == "route":
+        return delegation_route(
+            arguments.policy,
+            arguments.runtime_manifest,
+            arguments.delegation_runtime,
+            arguments.source_vendor,
+            arguments.tier,
+            arguments.require_qualified_runtime,
+        )
+    if arguments.command == "delegate" and arguments.delegate_command == "run":
+        return delegation_run_from_standard_input(
+            arguments.policy,
+            arguments.runtime_manifest,
+            arguments.delegation_runtime,
+            arguments.source_vendor,
+            arguments.tier,
+            arguments.confirm_trusted_delegation_runtime,
+            arguments.ack_route_fingerprint,
+            arguments.require_qualified_runtime,
+        )
+    if arguments.command == "delegate" and arguments.delegate_command == "qualification-candidate":
+        return delegation_qualification_candidate(
+            arguments.evidence,
+            arguments.delegation_runtime,
+        )
     if arguments.command == "v2" and arguments.api_command == "route":
         return v2_route_from_standard_input(
             arguments.policy,

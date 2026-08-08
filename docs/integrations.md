@@ -80,3 +80,74 @@ explicit posture and static reason code, and its fingerprint binds the posture.
 For API routes, use `wclass v2 route` followed by the explicit egress
 acknowledgement described in the main README; native integration commands never
 read API credentials.
+
+## Offline Claude and Codex role review
+
+`wclass delegate route` compiles the same planner/worker/reviewer contract for
+Claude-family and Codex-family profiles while keeping every role with the
+explicit source vendor:
+
+```sh
+wclass delegate route \
+  --policy delegation-policy.json \
+  --runtime-manifest runtime-manifest.json \
+  --delegation-runtime /absolute/reviewed/runtime \
+  --source-vendor claude \
+  --tier standard
+```
+
+The route command reads no task standard input and does not inspect or execute
+the runtime path. Its `declared_enforcement` descriptor reports only that the
+policy and offline capability declaration are schema-compatible. It is not a
+runtime handshake, proof of delegation, or semantic-authorship claim.
+
+After review, P0.5 can start one user-supplied trusted runtime:
+
+```sh
+printf '%s' 'Apply the reviewed change.' | \
+  wclass delegate run \
+  --policy delegation-policy.json \
+  --runtime-manifest runtime-manifest.json \
+  --delegation-runtime /absolute/reviewed/runtime \
+  --source-vendor claude \
+  --tier standard \
+  --confirm-trusted-delegation-runtime \
+  --ack-route-fingerprint 'sha256:copied-from-route'
+```
+
+The runtime receives the exact canonical descriptor and transient task through
+the WCD1 stdin frame and owns all Claude/Codex process creation, authentication,
+network, billing, permissions, review, integration, descendant cleanup, and
+output. weightclass bundles no runtime and cannot detect a dishonest zero exit.
+
+For the P1 gate, add `--require-qualified-runtime` to both the review and run
+commands. Production consults only the registry shipped inside the weightclass
+package; it accepts no environment, CLI, or user-registry override. The current
+registry is empty, so this mode intentionally returns `unsupported_route` for
+every adapter. If a reviewed package record is added later, the route binds its
+build/platform/protocol/adapter/vendor identity, exact artifact size and
+SHA-256, suite revision, and conformance-evidence digest. Run verifies those
+artifact bytes before reading task stdin. The later path-based spawn still has
+a documented hash-to-spawn replacement race.
+
+`wclass delegate qualification-candidate` only validates a complete task-free
+evidence document and hashes a local executable for package-maintainer review.
+It neither updates the registry nor proves that the supplied evidence was
+independently collected.
+
+The repository-maintainer runner is available as
+`python -m weightclass.delegation_conformance`. It executes a separately
+reviewed driver once per predeclared case with fixed protocol argv, a private
+temporary workspace, bounded stdout, a fixed deadline, and process-group
+cleanup. It reads no task stdin and emits only the complete task-free evidence
+shape. Evidence schema 2 includes the runtime size and SHA-256 observed before
+the suite; the runner rechecks them after all cases, and candidate construction
+rechecks the current artifact again. The driver inherits the environment and
+owns any runtime/vendor process, authentication, network, quota, or billing
+effects. No Claude or Codex driver is currently shipped; the test-only fake
+driver is not qualification evidence.
+
+See [the delegation roadmap](delegation-roadmap.md) for the strict schema and
+the exact-artifact qualification gate. Do not put
+task content, credentials, recipient data, or billing identifiers into a role
+profile, runtime manifest, or conformance evidence document.
