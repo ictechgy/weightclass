@@ -23,6 +23,9 @@ EMPTY_REGISTRY = {
     "suite_revision": "delegation-conformance-v2",
 }
 MAX_ARCHIVE_TEXT_BYTES = 262_144
+MAX_ARCHIVE_MEMBER_NAME_BYTES = 4_096
+MAX_ARCHIVE_PATH_COMPONENTS = 256
+ARCHIVE_MEMBER_NAME_LIMIT_ERROR = "archive member name exceeds the safety limit"
 CANDIDATE_SCHEMA_KEYS = frozenset(
     {
         "record_schema_version",
@@ -78,6 +81,16 @@ class IsolationError(ValueError):
 
 class _DuplicateKeyError(ValueError):
     pass
+
+
+class _ArchivePathNode:
+    __slots__ = ("children", "is_file", "requires_directory", "spelling")
+
+    def __init__(self, spelling: str) -> None:
+        self.spelling = spelling
+        self.children: dict[str, _ArchivePathNode] = {}
+        self.is_file = False
+        self.requires_directory = False
 
 
 def _fail(message: str) -> NoReturn:
@@ -160,21 +173,71 @@ def _has_forbidden_fuzzy_path(path: PurePosixPath) -> bool:
     return any(part in lowered for part in FORBIDDEN_FUZZY_PATH_PARTS)
 
 
+def _has_bounded_archive_name(name: str) -> bool:
+    try:
+        name_bytes = len(name.encode("utf-8"))
+    except UnicodeEncodeError:
+        return False
+    return name_bytes <= MAX_ARCHIVE_MEMBER_NAME_BYTES
+
+
+def _has_bounded_archive_path(path: PurePosixPath) -> bool:
+    return len(path.parts) <= MAX_ARCHIVE_PATH_COMPONENTS
+
+
+def _register_archive_path(
+    root: _ArchivePathNode,
+    path: PurePosixPath,
+    *,
+    is_directory: bool,
+    error_message: str,
+) -> None:
+    node = root
+    for index, spelling in enumerate(path.parts):
+        identity = unicodedata.normalize("NFC", spelling).casefold()
+        child = node.children.get(identity)
+        if child is None:
+            child = _ArchivePathNode(spelling)
+            node.children[identity] = child
+        elif child.spelling != spelling:
+            _fail(error_message)
+
+        is_final = index == len(path.parts) - 1
+        if not is_final:
+            if child.is_file:
+                _fail(error_message)
+            child.requires_directory = True
+        elif is_directory:
+            if child.is_file:
+                _fail(error_message)
+            child.requires_directory = True
+        else:
+            if child.requires_directory or child.children:
+                _fail(error_message)
+            child.is_file = True
+        node = child
+
+
 def _wheel_members(archive: zipfile.ZipFile, wheel: Path) -> list[zipfile.ZipInfo]:
     members = archive.infolist()
     names: set[str] = set()
     casefolded_names: set[str] = set()
     install_path_names: set[str] = set()
+    path_root = _ArchivePathNode("")
     for member in members:
         name = member.filename
+        if not _has_bounded_archive_name(name):
+            _fail(ARCHIVE_MEMBER_NAME_LIMIT_ERROR)
         path = PurePosixPath(name)
         casefolded_name = unicodedata.normalize("NFC", name).casefold()
         install_path_name = unicodedata.normalize("NFC", path.as_posix()).casefold()
+        error_message = f"{wheel.name}: noncanonical or duplicate archive member: {name}"
         if (
             name in names
             or casefolded_name in casefolded_names
             or install_path_name in install_path_names
             or not path.parts
+            or not _has_bounded_archive_path(path)
             or path.is_absolute()
             or ".." in path.parts
             or "." in path.parts
@@ -182,7 +245,13 @@ def _wheel_members(archive: zipfile.ZipFile, wheel: Path) -> list[zipfile.ZipInf
             or "\x00" in name
             or name != (f"{path.as_posix()}/" if member.is_dir() else path.as_posix())
         ):
-            _fail(f"{wheel.name}: noncanonical or duplicate archive member: {name}")
+            _fail(error_message)
+        _register_archive_path(
+            path_root,
+            path,
+            is_directory=member.is_dir(),
+            error_message=error_message,
+        )
         names.add(name)
         casefolded_names.add(casefolded_name)
         install_path_names.add(install_path_name)
@@ -234,22 +303,34 @@ def _safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
     members = archive.getmembers()
     names: set[str] = set()
     normalized_names: set[str] = set()
+    path_root = _ArchivePathNode("")
     for member in members:
-        path = PurePosixPath(member.name)
-        normalized_name = unicodedata.normalize("NFC", member.name).casefold()
+        name = member.name
+        if not _has_bounded_archive_name(name):
+            _fail(ARCHIVE_MEMBER_NAME_LIMIT_ERROR)
+        path = PurePosixPath(name)
+        normalized_name = unicodedata.normalize("NFC", name).casefold()
+        error_message = f"unsafe sdist member: {name}"
         if (
-            member.name in names
+            name in names
             or normalized_name in normalized_names
             or not path.parts
-            or member.name != path.as_posix()
+            or not _has_bounded_archive_path(path)
+            or name != path.as_posix()
             or path.is_absolute()
             or ".." in path.parts
-            or "\\" in member.name
-            or "\x00" in member.name
+            or "\\" in name
+            or "\x00" in name
             or not (member.isdir() or member.isfile())
         ):
-            _fail(f"unsafe sdist member: {member.name}")
-        names.add(member.name)
+            _fail(error_message)
+        _register_archive_path(
+            path_root,
+            path,
+            is_directory=member.isdir(),
+            error_message=error_message,
+        )
+        names.add(name)
         normalized_names.add(normalized_name)
     return members
 
