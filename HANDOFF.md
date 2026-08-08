@@ -113,7 +113,12 @@ user-provided model labels, and the no-retention boundary.
   driver with fixed protocol argv. Driver stdin/stdout, case deadline, output
   size, response ID, exit status, and same-process-group cleanup are bounded and
   fail closed; SIGINT cleans the active group and returns redacted exit `130`.
-  Evidence schema 2 binds the runtime size/SHA-256 observed before the suite;
+  Python-visible unsafe `SIGCHLD` state and Darwin `SA_NOCLDWAIT` are rejected
+  immediately before spawn. Real `ECHILD` releases every numeric signal target;
+  macOS Python 3.10 kqueue `ESRCH` from a normally exited, still-waitable leader
+  instead preserves the zombie PGID anchor through group cleanup and one final
+  authoritative `waitpid`. Evidence schema 2 binds the runtime size/SHA-256
+  observed before the suite;
   the runner rechecks it after all cases and candidate construction rechecks the
   current bytes. The runner reads no task stdin and never edits the registry.
 - The runner is not an attestation mechanism. Drivers inherit the environment
@@ -228,7 +233,12 @@ user-provided model labels, and the no-retention boundary.
   installed metadata, and `wclass --version`.
 - Distribution verification accepts exactly one regular wheel and one regular
   sdist, binds their inventory and hashes across extracted tests, and applies
-  bounded physical-tar checks before `tarfile` parsing or extraction. Release
+  bounded physical-tar checks before `tarfile` parsing or extraction. The
+  source registry and both artifacts use bounded no-follow reads; wheel and
+  sdist parsers consume only fingerprint-bound private snapshots. A bounded
+  classic-ZIP preflight runs before `ZipFile`, rejects unsupported or ambiguous
+  layouts, and verifies every stored/deflated payload's exact byte consumption,
+  output size, and CRC. Release
   validation uses a fresh stdlib-only job, and publication consumes the same
   immutable artifact that job approved rather than re-uploading mutable paths.
 - `README.md`, `RELEASING.md`, `tests/eval/README.md`, and
@@ -236,21 +246,23 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
-- On 2026-08-09, the current PR #22 worktree passed all 377 tests under Python
-  3.14.6 in 61.687s and Python 3.10.20 in 57.336s with `ResourceWarning`
+- On 2026-08-09, the current PR #22 worktree passed all 400 tests under Python
+  3.14.6 in 63.669s and Python 3.10.20 in 59.670s with `ResourceWarning`
   promoted to an error. Ruff 0.16.1 check/format, mypy 2.3.0 strict checking,
   workflow YAML parsing, and `git diff --check` passed. Independent diff and
   completion-evidence reviews reported no actionable critical, high, or medium
   findings.
 - A fresh offline exact wheel/sdist build passed the distribution-isolation
-  gate and all 377 extracted-sdist tests under both interpreters: 73.637s on
-  Python 3.14.6 and 64.652s on Python 3.10.20, with one platform skip each. The
+  gate and all 400 extracted-sdist tests under both interpreters: 69.995s on
+  Python 3.14.6 and 63.072s on Python 3.10.20, with one platform skip each. The
   gate proves exact empty source/wheel/sdist registries; rejects duplicate,
   Unicode-normalized, case-folding, and file/implicit-directory archive
-  identities; bounds physical tar headers and payloads before parsing; binds
-  preflight, parsing, and extraction to one snapshot; excludes test-only and
-  qualification-like wheel content; and confines required synthetic assets to
-  their exact sdist `tests/` paths.
+  identities; bounds physical tar and classic-ZIP headers and payloads before
+  parsing; rejects unconsumed deflate bytes, checksum/size mismatches, ZIP64,
+  data descriptors, encryption, overlaps, and excessive physical member counts;
+  binds preflight, parsing, and extraction to one fingerprinted snapshot;
+  excludes test-only and qualification-like wheel content; and confines
+  required synthetic assets to their exact sdist `tests/` paths.
 - Verification did not access a credential or secret-like file, invoke a
   weightclass-selected product/vendor runtime, persist runtime task content,
   publish a release, or deploy. External review tools received only bounded,
@@ -311,14 +323,21 @@ The final offline distribution verification additionally used a fresh output
 directory:
 
 ```sh
-wclass_artifact_dir=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-pr22-final.XXXXXX")
-uv --quiet build --offline --no-python-downloads --no-create-gitignore \
-  --out-dir "$wclass_artifact_dir"
+wclass_artifact_root=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-pr22-final.XXXXXX")
+mkdir "$wclass_artifact_root/source" "$wclass_artifact_root/dist"
+git archive HEAD | tar -x -C "$wclass_artifact_root/source"
+(
+  cd "$wclass_artifact_root/source"
+  uv --quiet build --offline --no-python-downloads --no-create-gitignore \
+    --out-dir "$wclass_artifact_root/dist"
+)
 python3.14 tests/verify_distribution_isolation.py \
-  --source . --dist-dir "$wclass_artifact_dir" \
+  --source "$wclass_artifact_root/source" \
+  --dist-dir "$wclass_artifact_root/dist" \
   --run-sdist-tests
 python3.10 tests/verify_distribution_isolation.py \
-  --source . --dist-dir "$wclass_artifact_dir" \
+  --source "$wclass_artifact_root/source" \
+  --dist-dir "$wclass_artifact_root/dist" \
   --run-sdist-tests
 ```
 
