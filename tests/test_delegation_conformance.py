@@ -1,3 +1,5 @@
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
@@ -19,7 +21,10 @@ from weightclass.delegation_conformance import (
     ConformanceCase,
     _DeferredSigint,
     _linux_proc_stat_live_group_member,
+    _observe_leader_exit,
+    _open_leader_exit_queue,
     _run_driver_case,
+    _wait_after_kill,
     run_conformance,
 )
 from weightclass.delegation_qualification import (
@@ -154,6 +159,7 @@ raise SystemExit(0 if passed else 1)
 """
 
 _SIGCHLD_CLI_RUNNER = r"""
+import ctypes
 from pathlib import Path
 import signal
 import sys
@@ -169,6 +175,28 @@ elif mode == "callable":
         del signal_number, frame
 
     signal.signal(signal.SIGCHLD, sigchld_handler)
+elif mode == "default":
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+elif mode == "nocldwait":
+    class Sigaction(ctypes.Structure):
+        _fields_ = [
+            ("handler", ctypes.c_void_p),
+            ("mask", ctypes.c_uint32),
+            ("flags", ctypes.c_int),
+        ]
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    current = Sigaction()
+    if libc.sigaction(signal.SIGCHLD, None, ctypes.byref(current)) != 0:
+        raise SystemExit(91)
+    installed = Sigaction()
+    ctypes.memmove(ctypes.byref(installed), ctypes.byref(current), ctypes.sizeof(current))
+    installed.handler = None
+    installed.flags |= 0x20
+    if libc.sigaction(signal.SIGCHLD, ctypes.byref(installed), None) != 0:
+        raise SystemExit(92)
+    if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
+        raise SystemExit(93)
 else:
     raise SystemExit(90)
 
@@ -192,6 +220,20 @@ def _write_executable(path: Path, contents: bytes) -> None:
 
 
 class DelegationConformanceRunnerTests(unittest.TestCase):
+    @staticmethod
+    def _mock_driver_process() -> subprocess.Popen[bytes]:
+        process = mock.create_autospec(subprocess.Popen, instance=True)
+        process.args = ("driver",)
+        process.pid = 123
+        process.returncode = None
+        process.wait.return_value = 0
+        process.stdin = mock.Mock(closed=False)
+        process.stdout = mock.Mock(closed=False)
+        process.stderr = None
+        process.stdin.close.side_effect = lambda: setattr(process.stdin, "closed", True)
+        process.stdout.close.side_effect = lambda: setattr(process.stdout, "closed", True)
+        return cast(subprocess.Popen[bytes], process)
+
     def _wait_for_pid_publication(
         self,
         pid_path: Path,
@@ -1198,6 +1240,341 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 for process, _ in spawned:
                     self._cleanup_owned_process_group(process)
 
+    @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
+    def test_spawn_adjacent_sigchld_check_follows_sigint_arming(self) -> None:
+        """Breaks if SIGINT setup can invalidate child ownership before spawn."""
+        original_arm = _DeferredSigint.arm
+
+        def arm_then_enable_auto_reap(deferred_sigint: _DeferredSigint) -> None:
+            original_arm(deferred_sigint)
+            signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+
+        previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+        previous_sigint = signal.getsignal(signal.SIGINT)
+        try:
+            with (
+                mock.patch.object(
+                    _DeferredSigint,
+                    "arm",
+                    arm_then_enable_auto_reap,
+                ),
+                mock.patch(
+                    "weightclass.delegation_conformance.subprocess.Popen",
+                    side_effect=AssertionError("driver spawn must remain untouched"),
+                ) as popen,
+            ):
+                passed = _run_driver_case(
+                    FAKE_DRIVER,
+                    FIXED_SENTINEL_RUNTIME,
+                    CONFORMANCE_CASES[0],
+                    Path.cwd(),
+                    timeout_seconds=0.1,
+                )
+
+            self.assertFalse(passed)
+            popen.assert_not_called()
+            self.assertIs(signal.getsignal(signal.SIGINT), previous_sigint)
+        finally:
+            signal.signal(signal.SIGCHLD, previous_sigchld)
+            signal.signal(signal.SIGINT, previous_sigint)
+
+    def test_darwin_sigaction_inspection_failure_blocks_driver_spawn(self) -> None:
+        """Breaks if the spawn-adjacent native inspection can fail open."""
+        native_checks = 0
+
+        class ReadableSigaction:
+            @staticmethod
+            def sigaction(_signal_number: int, _new_action: Any, current_action: Any) -> int:
+                action = cast(Any, current_action)._obj
+                action.handler = None
+                action.flags = 0
+                return 0
+
+        def inspect_then_fail(*_args: Any, **_kwargs: Any) -> ReadableSigaction:
+            nonlocal native_checks
+            native_checks += 1
+            if native_checks == 1:
+                return ReadableSigaction()
+            raise OSError()
+
+        with (
+            mock.patch("weightclass.delegation_conformance.sys.platform", "darwin"),
+            mock.patch.object(ctypes, "CDLL", side_effect=inspect_then_fail),
+            mock.patch(
+                "weightclass.delegation_conformance.subprocess.Popen",
+                side_effect=AssertionError("driver spawn must remain untouched"),
+            ) as popen,
+        ):
+            passed = _run_driver_case(
+                FAKE_DRIVER,
+                FIXED_SENTINEL_RUNTIME,
+                CONFORMANCE_CASES[0],
+                Path.cwd(),
+                timeout_seconds=0.1,
+            )
+
+        self.assertFalse(passed)
+        self.assertEqual(native_checks, 2)
+        popen.assert_not_called()
+
+    def test_observer_echild_releases_every_numeric_signal_target(self) -> None:
+        """Breaks if observer ECHILD leaves a reusable PID or PGID signalable."""
+        process = self._mock_driver_process()
+
+        with (
+            mock.patch(
+                "weightclass.delegation_conformance.subprocess.Popen",
+                return_value=process,
+            ),
+            mock.patch("weightclass.delegation_conformance._open_leader_exit_queue"),
+            mock.patch(
+                "weightclass.delegation_conformance._wait_for_leader_exit",
+                side_effect=ChildProcessError(),
+            ),
+            mock.patch("weightclass.delegation_conformance._write_request"),
+            mock.patch("weightclass.delegation_conformance._read_response"),
+            mock.patch("weightclass.delegation_conformance._signal_process_group") as killpg,
+            mock.patch("weightclass.delegation_conformance.os.kill") as kill,
+            mock.patch(
+                "weightclass.delegation_conformance._process_group_exists",
+                return_value=False,
+            ) as probe,
+            mock.patch("weightclass.delegation_conformance._wait_after_kill") as final_wait,
+        ):
+            passed = _run_driver_case(
+                FAKE_DRIVER,
+                FIXED_SENTINEL_RUNTIME,
+                CONFORMANCE_CASES[0],
+                Path.cwd(),
+                timeout_seconds=0.1,
+            )
+
+        self.assertFalse(passed)
+        killpg.assert_not_called()
+        kill.assert_not_called()
+        probe.assert_not_called()
+        final_wait.assert_not_called()
+        cast(Any, process.wait).assert_not_called()
+
+    def test_kqueue_registration_esrch_preserves_status_until_final_reap(self) -> None:
+        """Breaks if normal fast exit is mistaken for unavailable child status."""
+        process = self._mock_driver_process()
+        events: list[str] = []
+
+        def fail_write(_stream: Any, _request: bytes, state: Any) -> None:
+            state.write_failed = True
+
+        def record_group_probe(_process_group_id: int) -> bool:
+            events.append("probe-group")
+            return False
+
+        def record_waitpid(process_id: int, flags: int) -> tuple[int, int]:
+            self.assertEqual(process_id, process.pid)
+            self.assertEqual(flags, 0)
+            events.append("waitpid")
+            return process.pid, 17 << 8
+
+        with (
+            mock.patch.object(os, "waitid", None, create=True),
+            mock.patch(
+                "weightclass.delegation_conformance.select.kevent",
+                side_effect=ProcessLookupError(errno.ESRCH, "gone"),
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.subprocess.Popen",
+                return_value=process,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance._write_request",
+                side_effect=fail_write,
+            ),
+            mock.patch("weightclass.delegation_conformance._read_response"),
+            mock.patch(
+                "weightclass.delegation_conformance._signal_process_group",
+                side_effect=lambda *_: events.append("signal-group"),
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.os.kill",
+                side_effect=lambda *_: events.append("signal-pid"),
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance._process_group_exists",
+                side_effect=record_group_probe,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.os.waitpid",
+                side_effect=record_waitpid,
+            ) as waitpid,
+        ):
+            passed = _run_driver_case(
+                FAKE_DRIVER,
+                FIXED_SENTINEL_RUNTIME,
+                CONFORMANCE_CASES[0],
+                Path.cwd(),
+                timeout_seconds=0.1,
+            )
+
+        self.assertFalse(passed)
+        waitpid.assert_called_once_with(process.pid, 0)
+        cast(Any, process.wait).assert_not_called()
+        self.assertEqual(process.returncode, 17)
+        wait_index = events.index("waitpid")
+        self.assertEqual(
+            events[:wait_index],
+            ["probe-group", "signal-group", "signal-pid", "probe-group"],
+        )
+        self.assertFalse(
+            any(
+                event in {"signal-group", "signal-pid", "probe-group"}
+                for event in events[wait_index + 1 :]
+            ),
+            events,
+        )
+
+    def test_kqueue_esrch_with_unsafe_native_sigchld_releases_all_targets(self) -> None:
+        """Breaks if a persistent post-spawn auto-reap race retains stale targets."""
+        process = self._mock_driver_process()
+
+        with (
+            mock.patch.object(os, "waitid", None, create=True),
+            mock.patch(
+                "weightclass.delegation_conformance.select.kevent",
+                side_effect=ProcessLookupError(errno.ESRCH, "gone"),
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance._has_safe_sigchld_disposition",
+                side_effect=(True, True, False),
+            ) as sigchld_checks,
+            mock.patch(
+                "weightclass.delegation_conformance.subprocess.Popen",
+                return_value=process,
+            ),
+            mock.patch("weightclass.delegation_conformance._write_request"),
+            mock.patch("weightclass.delegation_conformance._read_response"),
+            mock.patch("weightclass.delegation_conformance._signal_process_group") as killpg,
+            mock.patch("weightclass.delegation_conformance.os.kill") as kill,
+            mock.patch(
+                "weightclass.delegation_conformance._process_group_exists",
+                return_value=False,
+            ) as probe,
+            mock.patch("weightclass.delegation_conformance._wait_after_kill") as final_wait,
+        ):
+            passed = _run_driver_case(
+                FAKE_DRIVER,
+                FIXED_SENTINEL_RUNTIME,
+                CONFORMANCE_CASES[0],
+                Path.cwd(),
+                timeout_seconds=0.1,
+            )
+
+        self.assertFalse(passed)
+        self.assertEqual(sigchld_checks.call_count, 3)
+        killpg.assert_not_called()
+        kill.assert_not_called()
+        probe.assert_not_called()
+        final_wait.assert_not_called()
+        cast(Any, process.wait).assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin kqueue")
+    def test_real_kqueue_fast_exit_remains_waitable_until_final_reap(self) -> None:
+        """Breaks if kqueue ESRCH discards a normal unreaped zombie's status."""
+        process = subprocess.Popen(
+            [sys.executable, "-c", "pass"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        try:
+            assert process.stdout is not None
+            self.assertEqual(process.stdout.read(), b"")
+            self.assertIsNone(process.returncode)
+            with mock.patch.object(os, "waitid", None, create=True):
+                exit_observer = _open_leader_exit_queue(process.pid)
+
+            self.assertIsNotNone(exit_observer)
+            self.assertTrue(_observe_leader_exit(process.pid, exit_observer))
+            self.assertIsNone(process.returncode)
+            self.assertEqual(_wait_after_kill(process), 0)
+            self.assertEqual(process.returncode, 0)
+        finally:
+            if process.returncode is None:
+                process.wait(timeout=1)
+            if process.stdout is not None and not process.stdout.closed:
+                process.stdout.close()
+
+    def test_status_echild_never_uses_popen_synthetic_zero(self) -> None:
+        """Breaks if final ECHILD becomes a passing driver exit status."""
+        process = self._mock_driver_process()
+        events: list[str] = []
+
+        def record_response(_stream: Any, _target: Any, state: Any) -> None:
+            state.output.extend(
+                b'{"case_id":"matrix/orchestrator/implementation/'
+                b'workspace_read/allow","passed":true}'
+            )
+
+        def lose_status(_pid: int, _flags: int) -> tuple[int, int]:
+            events.append("status-lost")
+            raise ChildProcessError()
+
+        def record_group_probe(_process_group_id: int) -> bool:
+            events.append("probe-group")
+            return False
+
+        with (
+            mock.patch(
+                "weightclass.delegation_conformance.subprocess.Popen",
+                return_value=process,
+            ),
+            mock.patch("weightclass.delegation_conformance._open_leader_exit_queue"),
+            mock.patch(
+                "weightclass.delegation_conformance._wait_for_leader_exit",
+                return_value=True,
+            ),
+            mock.patch("weightclass.delegation_conformance._write_request"),
+            mock.patch(
+                "weightclass.delegation_conformance._read_response",
+                side_effect=record_response,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance._signal_process_group",
+                side_effect=lambda *_: events.append("signal-group"),
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.os.kill",
+                side_effect=lambda *_: events.append("signal-pid"),
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance._process_group_exists",
+                side_effect=record_group_probe,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.os.waitpid",
+                side_effect=lose_status,
+            ) as waitpid,
+        ):
+            passed = _run_driver_case(
+                FAKE_DRIVER,
+                FIXED_SENTINEL_RUNTIME,
+                CONFORMANCE_CASES[0],
+                Path.cwd(),
+                timeout_seconds=0.1,
+            )
+
+        self.assertFalse(passed)
+        waitpid.assert_called_once_with(process.pid, 0)
+        cast(Any, process.wait).assert_not_called()
+        lost_index = events.index("status-lost")
+        self.assertFalse(
+            any(
+                event in {"signal-group", "signal-pid", "probe-group"}
+                for event in events[lost_index + 1 :]
+            ),
+            events,
+        )
+
     def test_sigint_with_default_disposition_cleans_group_before_termination(self) -> None:
         """Breaks if SIG_DFL terminates the runner before its owned group is cleaned."""
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1659,6 +2036,41 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                     self.assertEqual(stderr, '{"error": "invalid_input"}\n')
                     self.assertFalse(pid_path.exists())
                     self.assertFalse((directory / "spawn-attempted").exists())
+                finally:
+                    self._cleanup_test_process(process)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin sigaction")
+    def test_hidden_sa_nocldwait_is_rejected_before_driver_spawn(self) -> None:
+        """Breaks if Python's cached SIG_DFL hides native auto-reaping."""
+        expected = (
+            ("default", 0, True, ""),
+            ("nocldwait", 2, False, '{"error": "invalid_input"}\n'),
+        )
+        for mode, return_code, spawn_expected, expected_stderr in expected:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary_directory:
+                directory = Path(temporary_directory)
+                runtime_path = directory / "runtime"
+                spawn_marker = directory / "spawn-attempted"
+                _write_executable(runtime_path, b"unqualified-test-runtime\n")
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        _SIGCHLD_CLI_RUNNER,
+                        mode,
+                        str(spawn_marker),
+                        *self._arguments(runtime_path)[3:],
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                try:
+                    stdout, stderr = process.communicate(timeout=5)
+                    self.assertEqual(process.returncode, return_code, stderr)
+                    self.assertEqual(stderr, expected_stderr)
+                    self.assertEqual(spawn_marker.is_file(), spawn_expected)
+                    self.assertEqual(bool(stdout), spawn_expected)
                 finally:
                     self._cleanup_test_process(process)
 

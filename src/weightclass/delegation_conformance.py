@@ -8,6 +8,8 @@ reviewed.
 """
 
 import argparse
+import ctypes
+import errno
 import json
 import os
 import re
@@ -47,6 +49,9 @@ MAX_DRIVER_OUTPUT_BYTES: Final = 4_096
 MAX_REQUEST_BYTES: Final = 32_768
 GROUP_CLEANUP_TIMEOUT_SECONDS: Final = 1.0
 DRIVER_ARGUMENTS: Final = ("--weightclass-conformance-driver", "1")
+_CHILD_STATUS_LOST: Final = -sys.maxsize
+_DARWIN_SA_NOCLDWAIT: Final = 0x20
+_LEADER_ALREADY_EXITED: Final = object()
 
 Role = Literal["orchestrator", "worker", "reviewer"]
 Category = Literal["implementation", "tests", "documentation"]
@@ -89,6 +94,14 @@ class ConformanceInvalidInputError(ValueError):
 
 class _DuplicateKeyError(ValueError):
     pass
+
+
+class _DarwinSigaction(ctypes.Structure):
+    _fields_ = [
+        ("handler", ctypes.c_void_p),
+        ("mask", ctypes.c_uint32),
+        ("flags", ctypes.c_int),
+    ]
 
 
 class _SafeArgumentParser(argparse.ArgumentParser):
@@ -199,6 +212,7 @@ class _DriverCaseOwnership:
     return_code: int | None = None
     exchange_incomplete: bool = False
     group_cleanup_incomplete: bool = False
+    child_status_lost: bool = False
     cleaned: bool = False
     before_final_reap: Callable[[], None] | None = None
 
@@ -211,19 +225,33 @@ class _DriverCaseOwnership:
     def _thread_is_alive(thread: threading.Thread | None) -> bool:
         return thread is not None and thread.is_alive()
 
+    def lose_child_status(self) -> None:
+        """Release every numeric target after the child identity is unprovable."""
+        if self.child_status_lost:
+            return
+        if self.before_final_reap is not None:
+            self.before_final_reap()
+        if self.reader_signal_target is not None:
+            self.reader_signal_target.clear()
+        self.process_group_id = None
+        if self.process is not None:
+            self.process.returncode = _CHILD_STATUS_LOST
+        self.return_code = _CHILD_STATUS_LOST
+        self.child_status_lost = True
+
     def cleanup(self) -> None:
         if self.cleaned:
             return
         process = self.process
-        if self.process_group_id is not None:
+        if not self.child_status_lost and self.process_group_id is not None:
             _signal_process_group(self.process_group_id, signal.SIGKILL)
-        if process is not None:
+        if not self.child_status_lost and process is not None:
             try:
                 os.kill(process.pid, signal.SIGKILL)
             except (PermissionError, ProcessLookupError):
                 pass
 
-        if self.process_group_id is not None:
+        if not self.child_status_lost and self.process_group_id is not None:
             cleanup_deadline = time.monotonic() + GROUP_CLEANUP_TIMEOUT_SECONDS
             while _process_group_exists(self.process_group_id):
                 if time.monotonic() >= cleanup_deadline:
@@ -231,7 +259,7 @@ class _DriverCaseOwnership:
                     break
                 time.sleep(0.005)
 
-        if self.exit_queue is not None:
+        if self.exit_queue is not None and self.exit_queue is not _LEADER_ALREADY_EXITED:
             try:
                 self.exit_queue.close()
             except OSError:
@@ -264,10 +292,12 @@ class _DriverCaseOwnership:
             self.before_final_reap()
         self.process_group_id = None
 
-        if process is not None:
+        if process is not None and not self.child_status_lost:
             try:
                 self.return_code = _wait_after_kill(process)
-            except (ChildProcessError, OSError, ValueError):
+            except ChildProcessError:
+                self.lose_child_status()
+            except (OSError, ValueError):
                 self.return_code = process.returncode
         self.cleaned = True
 
@@ -419,9 +449,20 @@ def _has_safe_sigchld_disposition() -> bool:
     if sigchld is None:
         return False
     try:
-        return signal.getsignal(sigchld) == signal.SIG_DFL
+        if signal.getsignal(sigchld) != signal.SIG_DFL:
+            return False
     except (OSError, ValueError):
         return False
+    if sys.platform != "darwin":
+        return True
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        action = _DarwinSigaction()
+        if libc.sigaction(sigchld, None, ctypes.byref(action)) != 0:
+            return False
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+    return action.handler in (None, 0) and not action.flags & _DARWIN_SA_NOCLDWAIT
 
 
 def _open_leader_exit_queue(pid: int) -> Any | None:
@@ -439,7 +480,19 @@ def _open_leader_exit_queue(pid: int) -> Any | None:
         )
         exit_queue = select_features["kqueue"]()
         exit_queue.control([event], 0, 0)
-    except (OSError, ValueError):
+    except OSError as error:
+        if exit_queue is not None:
+            exit_queue.close()
+        if isinstance(error, ChildProcessError) or error.errno == errno.ECHILD:
+            raise ChildProcessError() from None
+        if isinstance(error, ProcessLookupError) or error.errno == errno.ESRCH:
+            if not _has_safe_sigchld_disposition():
+                raise ChildProcessError() from None
+            # Darwin rejects EVFILT_PROC registration for a child that already
+            # exited even while its wait status and PGID anchor remain owned.
+            return _LEADER_ALREADY_EXITED
+        raise ConformanceInvalidInputError() from None
+    except ValueError:
         if exit_queue is not None:
             exit_queue.close()
         raise ConformanceInvalidInputError() from None
@@ -448,6 +501,8 @@ def _open_leader_exit_queue(pid: int) -> Any | None:
 
 def _observe_leader_exit(pid: int, exit_queue: Any | None) -> bool:
     """Observe leader exit without releasing its process-group identity."""
+    if exit_queue is _LEADER_ALREADY_EXITED:
+        return True
     waitid = getattr(os, "waitid", None)
     if not callable(waitid):
         assert exit_queue is not None
@@ -518,11 +573,26 @@ def _read_response(
 
 
 def _wait_after_kill(process: subprocess.Popen[bytes]) -> int:
+    if process.returncode == _CHILD_STATUS_LOST:
+        raise ChildProcessError()
+    if process.returncode is not None:
+        return process.returncode
     while True:
         try:
-            return process.wait()
+            waited_pid, wait_status = os.waitpid(process.pid, 0)
         except InterruptedError:
             continue
+        except OSError as error:
+            if isinstance(error, ChildProcessError) or error.errno == errno.ECHILD:
+                process.returncode = _CHILD_STATUS_LOST
+                raise ChildProcessError() from None
+            raise
+        if waited_pid != process.pid:
+            process.returncode = _CHILD_STATUS_LOST
+            raise ChildProcessError()
+        return_code = os.waitstatus_to_exitcode(wait_status)
+        process.returncode = return_code
+        return return_code
 
 
 def _run_driver_case(
@@ -554,6 +624,8 @@ def _run_driver_case(
     descendant_leaked = False
     deferred_sigint.arm()
     try:
+        if not _has_safe_sigchld_disposition():
+            return False
         try:
             process = subprocess.Popen(
                 (str(driver_path), *DRIVER_ARGUMENTS),
@@ -567,7 +639,11 @@ def _run_driver_case(
         except (OSError, ValueError):
             return False
         ownership.record_process(process)
-        ownership.exit_queue = _open_leader_exit_queue(process.pid)
+        try:
+            ownership.exit_queue = _open_leader_exit_queue(process.pid)
+        except ChildProcessError:
+            ownership.lose_child_status()
+            return False
         deferred_sigint.record_process_group(process.pid)
 
         if not deferred_sigint.received:
@@ -592,7 +668,14 @@ def _run_driver_case(
                     ownership.exit_queue,
                     timeout_seconds,
                 )
-            except (ChildProcessError, OSError, ValueError):
+            except ChildProcessError:
+                ownership.lose_child_status()
+                leader_observed = False
+            except OSError as error:
+                if error.errno == errno.ECHILD:
+                    ownership.lose_child_status()
+                leader_observed = False
+            except ValueError:
                 leader_observed = False
             timed_out = not leader_observed
             if leader_observed:
