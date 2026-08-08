@@ -2,14 +2,20 @@
 
 import os
 import selectors
+import signal
 import subprocess
+import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from types import FrameType
+from typing import Any, Final
 
 from .delegation_types import DirectChildCleanup
 
 RUNTIME_ARGUMENTS: Final = ("--weightclass-delegation-protocol", "1")
+_SIGINT_POLL_SECONDS: Final = 0.05
 
 
 class DelegationRuntimeUnavailableError(OSError):
@@ -20,6 +26,69 @@ class DelegationRuntimeFailedError(OSError):
     """Raised after a post-spawn framing failure and direct-child cleanup."""
 
 
+class _DeferredSigintInterrupt(BaseException):
+    """Stop runtime exchange only after its direct-child handle is owned."""
+
+
+@dataclass
+class _DeferredSigint:
+    """Record SIGINT until a spawned direct child can be cleaned safely."""
+
+    previous_handler: Any = None
+    received_frame: FrameType | None = None
+    active: bool = False
+    received: bool = False
+    process_owned: bool = False
+    cleaning: bool = False
+
+    def _handle(self, signal_number: int, frame: FrameType | None) -> None:
+        del signal_number
+        if self.previous_handler == signal.SIG_IGN:
+            return
+        if not self.received:
+            self.received_frame = frame
+        self.received = True
+
+    def arm(self) -> None:
+        if threading.current_thread() is not threading.main_thread():
+            return
+        try:
+            self.previous_handler = signal.getsignal(signal.SIGINT)
+            if self.previous_handler == signal.SIG_IGN:
+                return
+            signal.signal(signal.SIGINT, self._handle)
+        except (OSError, ValueError):
+            return
+        self.active = True
+
+    def record_process_ownership(self) -> None:
+        self.process_owned = True
+        self.check()
+
+    def check(self) -> None:
+        if self.active and self.process_owned and self.received and not self.cleaning:
+            raise _DeferredSigintInterrupt()
+
+    def begin_cleanup(self) -> None:
+        self.cleaning = True
+
+    def restore_and_dispatch(self) -> None:
+        if not self.active:
+            return
+        previous_handler = self.previous_handler
+        signal.signal(signal.SIGINT, previous_handler)
+        self.active = False
+        received = self.received
+        received_frame = self.received_frame
+        if not received or previous_handler == signal.SIG_IGN:
+            return
+        if previous_handler == signal.SIG_DFL:
+            signal.raise_signal(signal.SIGINT)
+            return
+        if callable(previous_handler):
+            previous_handler(signal.SIGINT, received_frame)
+
+
 def validate_delegation_runtime(runtime_path: str) -> None:
     """Require the exact reviewed path to name a regular executable file."""
     path = Path(runtime_path)
@@ -27,7 +96,12 @@ def validate_delegation_runtime(runtime_path: str) -> None:
         raise DelegationRuntimeUnavailableError()
 
 
-def _write_all(file_descriptor: int, contents: bytes, timeout: float) -> None:
+def _write_all(
+    file_descriptor: int,
+    contents: bytes,
+    timeout: float,
+    interrupt_check: Callable[[], None] | None = None,
+) -> None:
     """Write every byte without blocking beyond one monotonic deadline."""
     deadline = time.monotonic() + timeout
     remaining = memoryview(contents)
@@ -35,6 +109,8 @@ def _write_all(file_descriptor: int, contents: bytes, timeout: float) -> None:
     with selectors.DefaultSelector() as selector:
         selector.register(file_descriptor, selectors.EVENT_WRITE)
         while remaining:
+            if interrupt_check is not None:
+                interrupt_check()
             if time.monotonic() >= deadline:
                 raise DelegationRuntimeFailedError()
             try:
@@ -46,17 +122,25 @@ def _write_all(file_descriptor: int, contents: bytes, timeout: float) -> None:
                     remaining_seconds = deadline - time.monotonic()
                     if remaining_seconds <= 0:
                         raise DelegationRuntimeFailedError() from None
+                    wait_seconds = remaining_seconds
+                    if interrupt_check is not None:
+                        wait_seconds = min(wait_seconds, _SIGINT_POLL_SECONDS)
                     try:
-                        ready = selector.select(remaining_seconds)
+                        ready = selector.select(wait_seconds)
                     except InterruptedError:
                         continue
                     if not ready:
+                        if interrupt_check is not None:
+                            interrupt_check()
+                            continue
                         raise DelegationRuntimeFailedError() from None
                     break
                 continue
             if written <= 0:
                 raise DelegationRuntimeFailedError()
             remaining = remaining[written:]
+        if interrupt_check is not None:
+            interrupt_check()
 
 
 def _wait(
@@ -107,6 +191,20 @@ def _cleanup_direct_child(
     _wait(process)
 
 
+def _wait_interruptibly(
+    process: subprocess.Popen[bytes],
+    interrupt_check: Callable[[], None],
+) -> int:
+    while True:
+        interrupt_check()
+        try:
+            return_code = _wait(process, _SIGINT_POLL_SECONDS)
+        except subprocess.TimeoutExpired:
+            continue
+        interrupt_check()
+        return return_code
+
+
 def run_delegation_runtime(
     runtime_path: str,
     frame: bytes,
@@ -114,29 +212,51 @@ def run_delegation_runtime(
 ) -> subprocess.CompletedProcess[bytes]:
     """Spawn once, deliver one frame within the reviewed grace, and wait."""
     arguments = (runtime_path, *RUNTIME_ARGUMENTS)
+    deferred_sigint = _DeferredSigint()
+    process: subprocess.Popen[bytes] | None = None
+    cleanup_failed = False
+    completed = False
+    interrupted = False
+    return_code = 0
+    deferred_sigint.arm()
     try:
-        process = subprocess.Popen(
-            arguments,
-            stdin=subprocess.PIPE,
-            close_fds=True,
-        )
-    except (OSError, ValueError):
-        raise DelegationRuntimeUnavailableError() from None
-
-    try:
+        try:
+            process = subprocess.Popen(
+                arguments,
+                stdin=subprocess.PIPE,
+                close_fds=True,
+            )
+        except (OSError, ValueError):
+            raise DelegationRuntimeUnavailableError() from None
+        deferred_sigint.record_process_ownership()
         if process.stdin is None:
             raise DelegationRuntimeFailedError()
         try:
-            _write_all(process.stdin.fileno(), frame, cleanup.grace_seconds)
+            _write_all(
+                process.stdin.fileno(),
+                frame,
+                cleanup.grace_seconds,
+                deferred_sigint.check,
+            )
             _close_stdin(process)
         except (OSError, ValueError):
             raise DelegationRuntimeFailedError() from None
-        return_code = _wait(process)
-    except BaseException:
-        try:
-            _cleanup_direct_child(process, cleanup)
-        except BaseException:
-            # Cleanup failure must not replace the original interruption.
-            pass
-        raise
+        return_code = _wait_interruptibly(process, deferred_sigint.check)
+        deferred_sigint.check()
+        completed = True
+    except _DeferredSigintInterrupt:
+        interrupted = True
+    finally:
+        if process is not None and (not completed or deferred_sigint.received):
+            deferred_sigint.begin_cleanup()
+            try:
+                _cleanup_direct_child(process, cleanup)
+            except BaseException:
+                # Cleanup failure must not replace the original interruption.
+                cleanup_failed = True
+        deferred_sigint.restore_and_dispatch()
+    if interrupted:
+        if cleanup_failed or process is None or process.returncode is None:
+            raise DelegationRuntimeFailedError()
+        return subprocess.CompletedProcess(arguments, process.returncode)
     return subprocess.CompletedProcess(arguments, return_code)
