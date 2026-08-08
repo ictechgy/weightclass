@@ -638,6 +638,12 @@ local PAX records are capped at 256 KiB, ordinary sdist records at 8 MiB, and
 archive directory entries must report zero size. The physical tar scan rejects
 GNU, global-PAX, sparse, or offset-changing extensions, malformed headers,
 missing terminators, and nonzero trailing data before `tarfile` processes them.
+The source registry and both distributions are read through bounded no-follow
+descriptors, and archive parsers consume private snapshots matching the initial
+fingerprints. The classic-ZIP preflight rejects ZIP64, multidisk, encrypted,
+data-descriptor, gapped, overlapping, or inconsistent layouts before `ZipFile`;
+it also requires exact stored/raw-deflate input consumption, output size, and
+CRC for every wheel member.
 
 ```sh
 set -eu
