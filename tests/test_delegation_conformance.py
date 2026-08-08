@@ -94,12 +94,14 @@ raise SystemExit(0 if passed else 1)
 """
 
 _SIGCHLD_CLI_RUNNER = r"""
+from pathlib import Path
 import signal
 import sys
 
 import weightclass.delegation_conformance as conformance
 
 mode = sys.argv[1]
+spawn_marker_path = Path(sys.argv[2])
 if mode == "ignore":
     signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 elif mode == "callable":
@@ -110,9 +112,17 @@ elif mode == "callable":
 else:
     raise SystemExit(90)
 
+real_popen = conformance.subprocess.Popen
+
+def marked_popen(*args, **kwargs):
+    spawn_marker_path.write_text("spawn-attempted", encoding="ascii")
+    return real_popen(*args, **kwargs)
+
+conformance.subprocess.Popen = marked_popen
+
 conformance.CONFORMANCE_CASES = conformance.CONFORMANCE_CASES[:1]
 conformance.CASE_TIMEOUT_SECONDS = 0.1
-raise SystemExit(conformance.main(sys.argv[2:]))
+raise SystemExit(conformance.main(sys.argv[3:]))
 """
 
 
@@ -422,6 +432,26 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                     item for item in evidence["scenario_results"] if item["id"] == scenario_id
                 ]
                 self.assertEqual(failed, [{"id": scenario_id, "passed": False}])
+
+    def test_deeply_nested_driver_response_is_redacted_failure(self) -> None:
+        """Breaks if malformed JSON escapes the normal conformance failure path."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result, _ = self._run_with_mode(
+                Path(temporary_directory),
+                mode="deep-response",
+                target="scenario/output_channel_separation",
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stderr, '{"error": "conformance_failed"}\n')
+            self.assertNotIn("Traceback", result.stderr)
+            evidence = json.loads(result.stdout)
+
+        failed = [
+            item
+            for item in evidence["scenario_results"]
+            if item["id"] == "output_channel_separation"
+        ]
+        self.assertEqual(failed, [{"id": "output_channel_separation", "passed": False}])
 
     def test_runtime_mutation_during_suite_fails_artifact_integrity_scenario(self) -> None:
         """Breaks if the runner does not recheck the artifact after all driver cases."""
@@ -1146,6 +1176,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                         "-c",
                         _SIGCHLD_CLI_RUNNER,
                         mode,
+                        str(directory / "spawn-attempted"),
                         *self._arguments(runtime_path)[3:],
                     ],
                     stdout=subprocess.PIPE,
@@ -1169,6 +1200,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertEqual(stderr, '{"error": "invalid_input"}\n')
                     self.assertFalse(pid_path.exists())
+                    self.assertFalse((directory / "spawn-attempted").exists())
                 finally:
                     self._cleanup_test_process(process)
                     for driver_pid, process_group_id in owned_groups:

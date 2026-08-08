@@ -95,6 +95,11 @@ def main() -> int:
         if pid_path is None:
             return 28
         _publish_pid(pid_path, descendant.pid)
+    if case_id == target and mode == "deep-response":
+        # Keep this malformed response below the runner's byte limit while
+        # exceeding Python 3.10's JSON decoder recursion depth.
+        print('{"case_id":' + ("[" * 1_000) + "0" + ("]" * 1_000) + ',"passed":true}')
+        return 0
     response_case_id = f"{case_id}-spoofed" if case_id == target and mode == "spoof" else case_id
     passed = not (case_id == target and mode == "fail")
     suffix = " " * 5_000 if case_id == target and mode == "oversized" else ""

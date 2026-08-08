@@ -322,7 +322,7 @@ def _parse_driver_response(contents: bytes, expected_case_id: str) -> bool:
     try:
         decoded = contents.decode("utf-8")
         value = json.loads(decoded, object_pairs_hook=_object_without_duplicate_keys)
-    except (UnicodeDecodeError, json.JSONDecodeError, _DuplicateKeyError):
+    except (RecursionError, UnicodeDecodeError, json.JSONDecodeError, _DuplicateKeyError):
         return False
     return (
         isinstance(value, dict)
