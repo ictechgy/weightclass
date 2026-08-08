@@ -4,6 +4,7 @@ import gzip
 import io
 import json
 import os
+import struct
 import subprocess
 import sys
 import tarfile
@@ -226,6 +227,7 @@ def _run_distribution_verifier(
     dist: Path,
     *,
     run_sdist_tests: bool = False,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
@@ -237,7 +239,53 @@ def _run_distribution_verifier(
     ]
     if run_sdist_tests:
         command.append("--run-sdist-tests")
-    return subprocess.run(command, check=False, capture_output=True, text=True)
+    return subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _write_wheel_with_member_count(path: Path, member_count: int) -> None:
+    if member_count < 1:
+        raise AssertionError("a test wheel must contain its production registry")
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "weightclass/delegation_qualifications.json",
+            '{"records":[],"registry_schema_version":1,'
+            '"suite_revision":"delegation-conformance-v2"}',
+        )
+        for index in range(member_count - 1):
+            archive.writestr(f"weightclass/bounded_{index:04d}.py", b"")
+
+
+def _classic_zip_offsets(raw: bytes | bytearray) -> tuple[int, int]:
+    eocd_offset = raw.rfind(b"PK\x05\x06")
+    if eocd_offset < 0:
+        raise AssertionError("test fixture has no classic ZIP EOCD")
+    central_offset = struct.unpack_from("<I", raw, eocd_offset + 16)[0]
+    return eocd_offset, central_offset
+
+
+def _first_zip_member_layout(
+    raw: bytes | bytearray,
+) -> tuple[int, int, int, int, int, int]:
+    eocd_offset, central_offset = _classic_zip_offsets(raw)
+    local_offset = struct.unpack_from("<I", raw, central_offset + 42)[0]
+    compressed_size = struct.unpack_from("<I", raw, central_offset + 20)[0]
+    uncompressed_size = struct.unpack_from("<I", raw, central_offset + 24)[0]
+    name_size, extra_size = struct.unpack_from("<HH", raw, local_offset + 26)
+    payload_offset = local_offset + 30 + name_size + extra_size
+    return (
+        eocd_offset,
+        central_offset,
+        local_offset,
+        payload_offset,
+        compressed_size,
+        uncompressed_size,
+    )
 
 
 class _WheelMemberArchive:
@@ -316,6 +364,354 @@ class DistributionIsolationTests(unittest.TestCase):
                     message = str(context.exception)
                     self.assertLess(len(message), 256)
                     self.assertNotIn(artifact.name, message)
+
+    def test_physical_wheel_rejects_4097_entries_before_zipfile(self) -> None:
+        with tempfile.TemporaryDirectory() as root_directory:
+            for eocd_count in (4_097, 1):
+                with (
+                    self.subTest(eocd_count=eocd_count),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+                    _write_wheel_with_member_count(wheel, 4_097)
+                    if eocd_count != 4_097:
+                        raw = bytearray(wheel.read_bytes())
+                        eocd_offset, _central_offset = _classic_zip_offsets(raw)
+                        struct.pack_into("<HH", raw, eocd_offset + 8, eocd_count, eocd_count)
+                        wheel.write_bytes(raw)
+                    with patch(
+                        "tests.verify_distribution_isolation.zipfile.ZipFile",
+                        side_effect=AssertionError("ZipFile eagerly loaded the central directory"),
+                    ):
+                        with self.assertRaisesRegex(
+                            IsolationError,
+                            "physical wheel member count exceeds",
+                        ):
+                            verify_wheel(wheel)
+
+    def test_physical_wheel_accepts_exact_4096_entry_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            _write_wheel_with_member_count(wheel, 4_096)
+            verify_wheel(wheel)
+
+    def test_physical_wheel_rejects_zip64_flags_methods_and_multidisk_before_zipfile(
+        self,
+    ) -> None:
+        def zip64_locator(raw: bytearray) -> bytearray:
+            eocd_offset, _central_offset = _classic_zip_offsets(raw)
+            return raw[:eocd_offset] + bytearray(b"PK\x06\x07" + b"\0" * 16) + raw[eocd_offset:]
+
+        def multidisk(raw: bytearray) -> bytearray:
+            eocd_offset, _central_offset = _classic_zip_offsets(raw)
+            struct.pack_into("<H", raw, eocd_offset + 4, 1)
+            return raw
+
+        def flags(raw: bytearray, value: int) -> bytearray:
+            _eocd_offset, central_offset = _classic_zip_offsets(raw)
+            local_offset = struct.unpack_from("<I", raw, central_offset + 42)[0]
+            struct.pack_into("<H", raw, local_offset + 6, value)
+            struct.pack_into("<H", raw, central_offset + 8, value)
+            return raw
+
+        def method(raw: bytearray) -> bytearray:
+            _eocd_offset, central_offset = _classic_zip_offsets(raw)
+            local_offset = struct.unpack_from("<I", raw, central_offset + 42)[0]
+            struct.pack_into("<H", raw, local_offset + 8, 99)
+            struct.pack_into("<H", raw, central_offset + 10, 99)
+            return raw
+
+        cases: tuple[tuple[str, Callable[[bytearray], bytearray]], ...] = (
+            ("zip64-locator", zip64_locator),
+            ("multidisk", multidisk),
+            ("encryption", lambda raw: flags(raw, 0x0001)),
+            ("data-descriptor", lambda raw: flags(raw, 0x0008)),
+            ("unsupported-flag", lambda raw: flags(raw, 0x0010)),
+            ("unsupported-method", method),
+        )
+        with tempfile.TemporaryDirectory() as root_directory:
+            for case_name, mutate in cases:
+                with (
+                    self.subTest(case=case_name),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+                    _write_wheel_with_member_count(wheel, 1)
+                    wheel.write_bytes(mutate(bytearray(wheel.read_bytes())))
+                    with patch(
+                        "tests.verify_distribution_isolation.zipfile.ZipFile",
+                        side_effect=AssertionError("unsafe ZIP reached ZipFile"),
+                    ):
+                        with self.assertRaisesRegex(IsolationError, "physical wheel"):
+                            verify_wheel(wheel)
+
+    def test_physical_wheel_rejects_local_mismatch_gap_and_overlap_before_zipfile(
+        self,
+    ) -> None:
+        def local_mismatch(raw: bytearray) -> bytearray:
+            _eocd_offset, central_offset = _classic_zip_offsets(raw)
+            local_offset = struct.unpack_from("<I", raw, central_offset + 42)[0]
+            crc = struct.unpack_from("<I", raw, local_offset + 14)[0]
+            struct.pack_into("<I", raw, local_offset + 14, crc ^ 1)
+            return raw
+
+        def local_gap(raw: bytearray) -> bytearray:
+            eocd_offset, central_offset = _classic_zip_offsets(raw)
+            raw[central_offset:central_offset] = b"x"
+            struct.pack_into("<I", raw, eocd_offset + 1 + 16, central_offset + 1)
+            return raw
+
+        def local_overlap(raw: bytearray) -> bytearray:
+            _eocd_offset, central_offset = _classic_zip_offsets(raw)
+            local_offset = struct.unpack_from("<I", raw, central_offset + 42)[0]
+            compressed_size = struct.unpack_from("<I", raw, central_offset + 20)[0]
+            uncompressed_size = struct.unpack_from("<I", raw, central_offset + 24)[0]
+            struct.pack_into("<I", raw, central_offset + 20, compressed_size + 1)
+            struct.pack_into("<I", raw, central_offset + 24, uncompressed_size + 1)
+            struct.pack_into("<I", raw, local_offset + 18, compressed_size + 1)
+            struct.pack_into("<I", raw, local_offset + 22, uncompressed_size + 1)
+            return raw
+
+        cases: tuple[tuple[str, Callable[[bytearray], bytearray], int], ...] = (
+            ("mismatch", local_mismatch, 1),
+            ("gap", local_gap, 2),
+            ("overlap", local_overlap, 2),
+        )
+        with tempfile.TemporaryDirectory() as root_directory:
+            for case_name, mutate, member_count in cases:
+                with (
+                    self.subTest(case=case_name),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+                    _write_wheel_with_member_count(wheel, member_count)
+                    wheel.write_bytes(mutate(bytearray(wheel.read_bytes())))
+                    with patch(
+                        "tests.verify_distribution_isolation.zipfile.ZipFile",
+                        side_effect=AssertionError("invalid local layout reached ZipFile"),
+                    ):
+                        with self.assertRaisesRegex(IsolationError, "physical wheel"):
+                            verify_wheel(wheel)
+
+    def test_physical_wheel_rejects_invalid_deflate_payloads_before_zipfile(self) -> None:
+        private_junk = b"private-trailing-deflate-junk" + b"x" * 3
+
+        def trailing_junk(raw: bytearray) -> bytearray:
+            (
+                eocd_offset,
+                central_offset,
+                local_offset,
+                payload_offset,
+                compressed_size,
+                _uncompressed_size,
+            ) = _first_zip_member_layout(raw)
+            payload_end = payload_offset + compressed_size
+            if payload_end != central_offset:
+                raise AssertionError("single-member wheel layout changed")
+            raw[payload_end:payload_end] = private_junk
+            new_central_offset = central_offset + len(private_junk)
+            new_eocd_offset = eocd_offset + len(private_junk)
+            struct.pack_into(
+                "<I",
+                raw,
+                local_offset + 18,
+                compressed_size + len(private_junk),
+            )
+            struct.pack_into(
+                "<I",
+                raw,
+                new_central_offset + 20,
+                compressed_size + len(private_junk),
+            )
+            struct.pack_into("<I", raw, new_eocd_offset + 16, new_central_offset)
+            return raw
+
+        def corrupt_stream(raw: bytearray) -> bytearray:
+            (
+                _eocd_offset,
+                _central_offset,
+                _local_offset,
+                payload_offset,
+                _compressed_size,
+                _uncompressed_size,
+            ) = _first_zip_member_layout(raw)
+            raw[payload_offset] = (raw[payload_offset] & 0xF8) | 0x07
+            return raw
+
+        def truncated_stream(raw: bytearray) -> bytearray:
+            (
+                eocd_offset,
+                central_offset,
+                local_offset,
+                payload_offset,
+                compressed_size,
+                _uncompressed_size,
+            ) = _first_zip_member_layout(raw)
+            if compressed_size < 2 or payload_offset + compressed_size != central_offset:
+                raise AssertionError("single-member wheel layout changed")
+            del raw[payload_offset + compressed_size - 1]
+            new_central_offset = central_offset - 1
+            new_eocd_offset = eocd_offset - 1
+            struct.pack_into("<I", raw, local_offset + 18, compressed_size - 1)
+            struct.pack_into("<I", raw, new_central_offset + 20, compressed_size - 1)
+            struct.pack_into("<I", raw, new_eocd_offset + 16, new_central_offset)
+            return raw
+
+        def wrong_crc(raw: bytearray) -> bytearray:
+            (
+                _eocd_offset,
+                central_offset,
+                local_offset,
+                _payload_offset,
+                _compressed_size,
+                _uncompressed_size,
+            ) = _first_zip_member_layout(raw)
+            crc32 = struct.unpack_from("<I", raw, central_offset + 16)[0] ^ 1
+            struct.pack_into("<I", raw, local_offset + 14, crc32)
+            struct.pack_into("<I", raw, central_offset + 16, crc32)
+            return raw
+
+        def wrong_uncompressed_size(raw: bytearray) -> bytearray:
+            (
+                _eocd_offset,
+                central_offset,
+                local_offset,
+                _payload_offset,
+                _compressed_size,
+                uncompressed_size,
+            ) = _first_zip_member_layout(raw)
+            struct.pack_into("<I", raw, local_offset + 22, uncompressed_size + 1)
+            struct.pack_into("<I", raw, central_offset + 24, uncompressed_size + 1)
+            return raw
+
+        cases: tuple[tuple[str, Callable[[bytearray], bytearray]], ...] = (
+            ("trailing-junk-and-declared-compressed-size", trailing_junk),
+            ("corrupt-stream", corrupt_stream),
+            ("truncated-and-declared-compressed-size", truncated_stream),
+            ("declared-crc", wrong_crc),
+            ("declared-uncompressed-size", wrong_uncompressed_size),
+        )
+        with tempfile.TemporaryDirectory() as root_directory:
+            for case_name, mutate in cases:
+                with (
+                    self.subTest(case=case_name),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+                    _write_wheel_with_member_count(wheel, 1)
+                    wheel.write_bytes(mutate(bytearray(wheel.read_bytes())))
+                    with patch(
+                        "tests.verify_distribution_isolation.zipfile.ZipFile",
+                        side_effect=AssertionError("invalid deflate payload reached ZipFile"),
+                    ):
+                        with self.assertRaises(IsolationError) as context:
+                            verify_wheel(wheel)
+                    message = str(context.exception)
+                    self.assertIn("physical wheel payload", message)
+                    self.assertNotIn(private_junk.decode(), message)
+                    self.assertLess(len(message), 256)
+
+    def test_physical_wheel_rejects_stored_payload_crc_before_zipfile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            with zipfile.ZipFile(wheel, "w", compression=zipfile.ZIP_STORED) as archive:
+                archive.writestr(
+                    "weightclass/delegation_qualifications.json",
+                    '{"records":[],"registry_schema_version":1,'
+                    '"suite_revision":"delegation-conformance-v2"}',
+                )
+            raw = bytearray(wheel.read_bytes())
+            (
+                _eocd_offset,
+                _central_offset,
+                _local_offset,
+                payload_offset,
+                compressed_size,
+                _uncompressed_size,
+            ) = _first_zip_member_layout(raw)
+            if compressed_size == 0:
+                raise AssertionError("stored test payload is unexpectedly empty")
+            raw[payload_offset] ^= 1
+            wheel.write_bytes(raw)
+            with patch(
+                "tests.verify_distribution_isolation.zipfile.ZipFile",
+                side_effect=AssertionError("invalid stored payload reached ZipFile"),
+            ):
+                with self.assertRaisesRegex(IsolationError, "physical wheel payload"):
+                    verify_wheel(wheel)
+
+    def test_wheel_snapshot_must_match_expected_fingerprint_before_zipfile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            _write_wheel_with_member_count(wheel, 1)
+            expected = _fingerprint_artifact(wheel)
+            replacement = Path(directory) / "replacement.whl"
+            _write_wheel_with_member_count(replacement, 2)
+            replacement.replace(wheel)
+            with patch(
+                "tests.verify_distribution_isolation.zipfile.ZipFile",
+                side_effect=AssertionError("mismatched wheel reached ZipFile"),
+            ):
+                with self.assertRaisesRegex(IsolationError, "reviewed fingerprint"):
+                    verify_wheel(wheel, expected_fingerprint=expected)
+
+    def test_wheel_zipfile_uses_private_snapshot_after_path_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
+            _write_wheel_with_member_count(wheel, 1)
+            replacement = Path(directory) / "replacement.whl"
+            replacement.write_bytes(b"replacement must never be parsed")
+            real_zip_file = cast(Callable[..., zipfile.ZipFile], zipfile.ZipFile)
+
+            def swap_before_zipfile(
+                file: object,
+                *args: object,
+                **kwargs: object,
+            ) -> zipfile.ZipFile:
+                replacement.replace(wheel)
+                if isinstance(file, (str, os.PathLike)):
+                    raise AssertionError("ZipFile reopened the wheel path")
+                return real_zip_file(file, *args, **kwargs)
+
+            with patch(
+                "tests.verify_distribution_isolation.zipfile.ZipFile",
+                side_effect=swap_before_zipfile,
+            ):
+                verify_wheel(wheel)
+            self.assertEqual(wheel.read_bytes(), b"replacement must never be parsed")
+
+    def test_sdist_snapshot_must_match_expected_fingerprint_before_gzip_or_tar(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdist = _write_sdist_fixture(directory)
+            expected = _fingerprint_artifact(sdist)
+            replacement_directory = Path(directory) / "replacement"
+            replacement_directory.mkdir()
+            replacement = _write_sdist_fixture(str(replacement_directory))
+            replacement.replace(sdist)
+            with patch(
+                "tests.verify_distribution_isolation.gzip.GzipFile",
+                side_effect=AssertionError("mismatched sdist reached gzip"),
+            ):
+                with self.assertRaisesRegex(IsolationError, "reviewed fingerprint"):
+                    verify_sdist(sdist, expected_fingerprint=expected)
+
+    def test_sdist_gzip_uses_private_snapshot_after_path_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            sdist = _write_sdist_fixture(directory)
+            replacement = Path(directory) / "replacement.tar.gz"
+            replacement.write_bytes(b"replacement must never be parsed")
+            real_gzip_file = cast(Callable[..., gzip.GzipFile], gzip.GzipFile)
+
+            def swap_before_gzip(*args: object, **kwargs: object) -> gzip.GzipFile:
+                replacement.replace(sdist)
+                return real_gzip_file(*args, **kwargs)
+
+            with patch(
+                "tests.verify_distribution_isolation.gzip.GzipFile",
+                side_effect=swap_before_gzip,
+            ):
+                verify_sdist(sdist)
+            self.assertEqual(sdist.read_bytes(), b"replacement must never be parsed")
 
     def test_physical_sdist_extensions_cannot_bypass_archive_caps(self) -> None:
         oversized_size = 9_437_201
@@ -996,6 +1392,101 @@ class DistributionIsolationTests(unittest.TestCase):
             )
             with self.assertRaises(IsolationError):
                 verify_source_registry(root)
+
+    def test_source_registry_rejects_symlink_without_reading_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "private-target.json"
+            target.write_text(
+                '{"records":[],"registry_schema_version":1,'
+                '"suite_revision":"delegation-conformance-v2"}',
+                encoding="utf-8",
+            )
+            registry = root / "src/weightclass/delegation_qualifications.json"
+            registry.parent.mkdir(parents=True)
+            registry.symlink_to(target)
+            with self.assertRaises(IsolationError) as context:
+                verify_source_registry(root)
+            message = str(context.exception)
+            self.assertLess(len(message), 256)
+            self.assertNotIn(target.name, message)
+            self.assertNotIn(registry.name, message)
+
+    def test_source_registry_rejects_fifo_promptly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source, wheel, _sdist = _write_distribution_fixture(directory)
+            registry = source / "src/weightclass/delegation_qualifications.json"
+            registry.unlink()
+            os.mkfifo(registry)
+            result = _run_distribution_verifier(source, wheel.parent, timeout=2.0)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertLess(len(result.stderr), 512)
+
+    def test_source_registry_rejects_oversize_before_reading(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            registry = root / "src/weightclass/delegation_qualifications.json"
+            registry.parent.mkdir(parents=True)
+            with registry.open("wb") as stream:
+                stream.seek(MAX_ARCHIVE_TEXT_BYTES)
+                stream.write(b"x")
+            with patch(
+                "tests.verify_distribution_isolation.os.read",
+                side_effect=AssertionError("oversized source registry was read"),
+            ):
+                with self.assertRaisesRegex(IsolationError, "source registry exceeds"):
+                    verify_source_registry(root)
+
+    def test_source_registry_rejects_mutation_during_bounded_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            registry = root / "src/weightclass/delegation_qualifications.json"
+            registry.parent.mkdir(parents=True)
+            registry.write_text(
+                '{"records":[],"registry_schema_version":1,'
+                '"suite_revision":"delegation-conformance-v2"}',
+                encoding="utf-8",
+            )
+            real_read = os.read
+            mutated = False
+
+            def mutate_after_read(descriptor: int, size: int) -> bytes:
+                nonlocal mutated
+                raw = real_read(descriptor, size)
+                if raw and not mutated:
+                    mutated = True
+                    registry.write_text(
+                        '{"records":[],"registry_schema_version":1,'
+                        '"suite_revision":"delegation-conformance-x2"}',
+                        encoding="utf-8",
+                    )
+                return raw
+
+            with patch(
+                "tests.verify_distribution_isolation.os.read",
+                side_effect=mutate_after_read,
+            ):
+                with self.assertRaisesRegex(IsolationError, "source registry changed"):
+                    verify_source_registry(root)
+            self.assertTrue(mutated)
+
+    def test_malformed_distribution_cli_failures_are_redacted_without_tracebacks(self) -> None:
+        with tempfile.TemporaryDirectory() as root_directory:
+            for malformed in ("wheel", "sdist"):
+                with (
+                    self.subTest(malformed=malformed),
+                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
+                ):
+                    source, wheel, sdist = _write_distribution_fixture(directory)
+                    artifact = wheel if malformed == "wheel" else sdist
+                    artifact.write_bytes(b"private malformed distribution bytes")
+                    result = _run_distribution_verifier(source, wheel.parent)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("distribution isolation failed", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertNotIn("private malformed", result.stderr)
+                    self.assertLess(len(result.stderr), 512)
 
     def test_wheel_rejects_test_assets_and_candidate_like_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

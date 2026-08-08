@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -38,12 +39,21 @@ MAX_SDIST_MEMBER_BYTES = 8 * 1_024 * 1_024
 MAX_ARCHIVE_TOTAL_BYTES = 64 * 1_024 * 1_024
 MAX_DISTRIBUTION_ARTIFACT_BYTES = 72 * 1_024 * 1_024
 MAX_PHYSICAL_TAR_BYTES = MAX_ARCHIVE_TOTAL_BYTES + MAX_ARCHIVE_MEMBERS * 1_024 + tarfile.RECORDSIZE
+MAX_PHYSICAL_ZIP_METADATA_BYTES = MAX_ARCHIVE_MEMBER_NAME_BYTES
 ARCHIVE_MEMBER_NAME_LIMIT_ERROR = "archive member name exceeds the safety limit"
 ARCHIVE_MEMBER_COUNT_LIMIT_ERROR = "archive member count exceeds the safety limit"
 ARCHIVE_TOTAL_SIZE_LIMIT_ERROR = "archive total size exceeds the safety limit"
 ARCHIVE_DIRECTORY_SIZE_ERROR = "archive directory has nonzero size"
 WHEEL_MEMBER_SIZE_LIMIT_ERROR = "wheel member size exceeds the safety limit"
 SDIST_MEMBER_SIZE_LIMIT_ERROR = "sdist member size exceeds the safety limit"
+PHYSICAL_WHEEL_COUNT_LIMIT_ERROR = "physical wheel member count exceeds the safety limit"
+_CLASSIC_ZIP_EOCD_SIGNATURE = b"PK\x05\x06"
+_CLASSIC_ZIP_CENTRAL_SIGNATURE = b"PK\x01\x02"
+_CLASSIC_ZIP_LOCAL_SIGNATURE = b"PK\x03\x04"
+_ZIP64_LOCATOR_SIGNATURE = b"PK\x06\x07"
+_ZIP64_EXTRA_FIELD_ID = 0x0001
+_SUPPORTED_ZIP_FLAGS = 0x0800
+_SUPPORTED_ZIP_METHODS = frozenset((zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED))
 _SUPPORTED_PHYSICAL_MEMBER_TYPES = frozenset((tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE))
 CANDIDATE_SCHEMA_KEYS = frozenset(
     {
@@ -104,6 +114,25 @@ class _DuplicateKeyError(ValueError):
 
 class _ReadableBytes(Protocol):
     def read(self, size: int = -1) -> bytes: ...
+
+
+class _ZipSnapshotReader:
+    """Expose the private snapshot contract expected by Python 3.10 zipfile."""
+
+    def __init__(self, snapshot: BinaryIO) -> None:
+        self._snapshot = snapshot
+
+    def read(self, size: int = -1) -> bytes:
+        return self._snapshot.read(size)
+
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        return self._snapshot.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self._snapshot.tell()
+
+    def seekable(self) -> bool:
+        return True
 
 
 class _ArchivePathNode:
@@ -205,14 +234,6 @@ def _validate_outer_artifact_metadata(metadata: os.stat_result) -> None:
         _fail("distribution artifact exceeds the outer size safety limit")
 
 
-def _require_bounded_outer_artifact(path: Path) -> None:
-    try:
-        metadata = path.stat(follow_symlinks=False)
-    except OSError:
-        _fail("distribution artifact could not be inspected")
-    _validate_outer_artifact_metadata(metadata)
-
-
 def _validate_sdist_member_metadata(member: tarfile.TarInfo, total_size: int) -> int:
     size = member.size
     if size < 0:
@@ -261,6 +282,417 @@ def _open_no_follow(path: str, flags: int) -> int:
         path,
         flags | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
     )
+
+
+def _artifact_fingerprint(
+    path: Path,
+    metadata: os.stat_result,
+    digest: str,
+) -> _ArtifactFingerprint:
+    return _ArtifactFingerprint(
+        name=path.name,
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        mode=metadata.st_mode,
+        size=metadata.st_size,
+        modified_ns=metadata.st_mtime_ns,
+        changed_ns=metadata.st_ctime_ns,
+        sha256=digest,
+    )
+
+
+@contextmanager
+def _verified_artifact_snapshot(
+    path: Path,
+    expected_fingerprint: _ArtifactFingerprint | None = None,
+) -> Iterator[tuple[BinaryIO, _ArtifactFingerprint]]:
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = _open_no_follow(str(path), flags)
+    except OSError:
+        _fail("distribution artifact could not be opened safely")
+
+    try:
+        snapshot = tempfile.SpooledTemporaryFile(
+            max_size=MAX_SDIST_EXTENSION_BYTES,
+            mode="w+b",
+        )
+    except OSError:
+        os.close(descriptor)
+        _fail("distribution artifact could not be snapshotted")
+    snapshot_io = cast(BinaryIO, snapshot)
+    try:
+        try:
+            before = os.fstat(descriptor)
+            _validate_outer_artifact_metadata(before)
+            digest = hashlib.sha256()
+            copied = 0
+            while chunk := os.read(descriptor, 1_048_576):
+                copied += len(chunk)
+                if copied > MAX_DISTRIBUTION_ARTIFACT_BYTES:
+                    _fail("distribution artifact exceeds the outer size safety limit")
+                snapshot_io.write(chunk)
+                digest.update(chunk)
+            after = os.fstat(descriptor)
+        except IsolationError:
+            raise
+        except OSError:
+            _fail("distribution artifact could not be snapshotted")
+        finally:
+            os.close(descriptor)
+
+        try:
+            current = path.stat(follow_symlinks=False)
+        except OSError:
+            _fail("distribution artifact changed while it was snapshotted")
+        if (
+            copied != after.st_size
+            or _stat_identity(before) != _stat_identity(after)
+            or _stat_identity(after) != _stat_identity(current)
+        ):
+            _fail("distribution artifact changed while it was snapshotted")
+        fingerprint = _artifact_fingerprint(path, after, digest.hexdigest())
+        if expected_fingerprint is not None and fingerprint != expected_fingerprint:
+            _fail("distribution artifact does not match the reviewed fingerprint")
+        snapshot_io.seek(0)
+        yield snapshot_io, fingerprint
+    finally:
+        snapshot_io.close()
+
+
+def _read_exact_zip_at(stream: BinaryIO, offset: int, size: int) -> bytes:
+    try:
+        stream.seek(offset)
+        raw = stream.read(size)
+    except (OSError, OverflowError, ValueError):
+        _fail("physical wheel could not be inspected")
+    if len(raw) != size:
+        _fail("physical wheel is truncated")
+    return raw
+
+
+def _validate_zip_extra(extra: bytes) -> None:
+    position = 0
+    while position < len(extra):
+        if len(extra) - position < 4:
+            _fail("physical wheel extra metadata is malformed")
+        field_id, field_size = struct.unpack_from("<HH", extra, position)
+        position += 4
+        if field_size > len(extra) - position:
+            _fail("physical wheel extra metadata is malformed")
+        if field_id == _ZIP64_EXTRA_FIELD_ID:
+            _fail("physical wheel ZIP64 metadata is unsupported")
+        position += field_size
+
+
+def _physical_zip_eocd(stream: BinaryIO) -> tuple[int, int, int, int]:
+    try:
+        stream.seek(0, os.SEEK_END)
+        artifact_size = stream.tell()
+    except (OSError, OverflowError, ValueError):
+        _fail("physical wheel could not be inspected")
+    minimum_eocd_size = 22
+    if artifact_size < minimum_eocd_size:
+        _fail("physical wheel has no classic end record")
+    tail_size = min(artifact_size, minimum_eocd_size + 65_535)
+    tail_offset = artifact_size - tail_size
+    tail = _read_exact_zip_at(stream, tail_offset, tail_size)
+    candidates: list[int] = []
+    position = 0
+    while True:
+        position = tail.find(_CLASSIC_ZIP_EOCD_SIGNATURE, position)
+        if position < 0:
+            break
+        if position + minimum_eocd_size <= len(tail):
+            comment_size = struct.unpack_from("<H", tail, position + 20)[0]
+            absolute = tail_offset + position
+            if absolute + minimum_eocd_size + comment_size == artifact_size:
+                candidates.append(absolute)
+        position += 1
+    if len(candidates) != 1:
+        _fail("physical wheel has no unique classic end record")
+    eocd_offset = candidates[0]
+    eocd = _read_exact_zip_at(stream, eocd_offset, minimum_eocd_size)
+    (
+        signature,
+        disk_number,
+        central_disk,
+        entries_on_disk,
+        entry_count,
+        central_size,
+        central_offset,
+        comment_size,
+    ) = struct.unpack("<4s4H2IH", eocd)
+    if signature != _CLASSIC_ZIP_EOCD_SIGNATURE:
+        _fail("physical wheel end record is invalid")
+    if comment_size > MAX_PHYSICAL_ZIP_METADATA_BYTES:
+        _fail("physical wheel comment exceeds the safety limit")
+    if disk_number != 0 or central_disk != 0 or entries_on_disk != entry_count:
+        _fail("physical wheel multidisk metadata is unsupported")
+    if entry_count == 0xFFFF or central_size == 0xFFFFFFFF or central_offset == 0xFFFFFFFF:
+        _fail("physical wheel ZIP64 metadata is unsupported")
+    if (
+        eocd_offset >= 20
+        and _read_exact_zip_at(stream, eocd_offset - 20, 4) == _ZIP64_LOCATOR_SIGNATURE
+    ):
+        _fail("physical wheel ZIP64 metadata is unsupported")
+    if central_offset + central_size != eocd_offset:
+        _fail("physical wheel central directory layout is invalid")
+    return eocd_offset, central_offset, central_size, entry_count
+
+
+def _validate_physical_zip_name(name: bytes, flags: int) -> None:
+    if not name or len(name) > MAX_ARCHIVE_MEMBER_NAME_BYTES:
+        _fail(ARCHIVE_MEMBER_NAME_LIMIT_ERROR)
+    try:
+        decoded = name.decode("utf-8" if flags & _SUPPORTED_ZIP_FLAGS else "cp437")
+    except UnicodeDecodeError:
+        _fail("physical wheel member name encoding is invalid")
+    if "\x00" in decoded:
+        _fail("physical wheel member name is invalid")
+
+
+def _validate_physical_zip_sizes(name: bytes, compressed: int, uncompressed: int) -> None:
+    if name.endswith(b"/"):
+        if compressed != 0 or uncompressed != 0:
+            _fail(ARCHIVE_DIRECTORY_SIZE_ERROR)
+    elif uncompressed > MAX_WHEEL_MEMBER_BYTES:
+        _fail(WHEEL_MEMBER_SIZE_LIMIT_ERROR)
+    if compressed > MAX_DISTRIBUTION_ARTIFACT_BYTES:
+        _fail("physical wheel compressed member exceeds the safety limit")
+
+
+def _physical_zip_payload_chunks(
+    stream: BinaryIO,
+    offset: int,
+    size: int,
+) -> Iterator[bytes]:
+    try:
+        stream.seek(offset)
+    except (OSError, OverflowError, ValueError):
+        _fail("physical wheel payload could not be inspected")
+    remaining = size
+    while remaining:
+        try:
+            chunk = stream.read(min(remaining, 65_536))
+        except (OSError, OverflowError, ValueError):
+            _fail("physical wheel payload could not be inspected")
+        if not chunk or len(chunk) > remaining:
+            _fail("physical wheel payload is truncated")
+        remaining -= len(chunk)
+        yield chunk
+
+
+def _validate_stored_zip_payload(
+    stream: BinaryIO,
+    offset: int,
+    compressed_size: int,
+    uncompressed_size: int,
+    expected_crc32: int,
+) -> None:
+    actual_size = 0
+    actual_crc32 = 0
+    for chunk in _physical_zip_payload_chunks(stream, offset, compressed_size):
+        actual_size += len(chunk)
+        actual_crc32 = zlib.crc32(chunk, actual_crc32)
+    if actual_size != uncompressed_size or actual_crc32 != expected_crc32:
+        _fail("physical wheel payload size or checksum is invalid")
+
+
+def _validate_deflated_zip_payload(
+    stream: BinaryIO,
+    offset: int,
+    compressed_size: int,
+    uncompressed_size: int,
+    expected_crc32: int,
+) -> None:
+    decompressor = zlib.decompressobj(-zlib.MAX_WBITS)
+    supplied = 0
+    produced = 0
+    actual_crc32 = 0
+    try:
+        for chunk in _physical_zip_payload_chunks(stream, offset, compressed_size):
+            supplied += len(chunk)
+            if decompressor.eof:
+                _fail("physical wheel payload has trailing compressed data")
+            output = decompressor.decompress(chunk, uncompressed_size - produced + 1)
+            produced += len(output)
+            actual_crc32 = zlib.crc32(output, actual_crc32)
+            if produced > uncompressed_size:
+                _fail("physical wheel payload exceeds its declared size")
+            if decompressor.unused_data or decompressor.unconsumed_tail:
+                _fail("physical wheel payload has trailing compressed data")
+            if decompressor.eof and supplied != compressed_size:
+                _fail("physical wheel payload has trailing compressed data")
+        flushed = decompressor.flush(uncompressed_size - produced + 1)
+    except zlib.error:
+        _fail("physical wheel payload deflate stream is invalid")
+    produced += len(flushed)
+    actual_crc32 = zlib.crc32(flushed, actual_crc32)
+    if (
+        supplied != compressed_size
+        or not decompressor.eof
+        or decompressor.unused_data
+        or decompressor.unconsumed_tail
+    ):
+        _fail("physical wheel payload deflate stream is incomplete")
+    if produced != uncompressed_size or actual_crc32 != expected_crc32:
+        _fail("physical wheel payload size or checksum is invalid")
+
+
+def _validate_physical_zip_payload(
+    stream: BinaryIO,
+    offset: int,
+    compressed_size: int,
+    uncompressed_size: int,
+    expected_crc32: int,
+    method: int,
+) -> None:
+    if method == zipfile.ZIP_STORED:
+        _validate_stored_zip_payload(
+            stream,
+            offset,
+            compressed_size,
+            uncompressed_size,
+            expected_crc32,
+        )
+    else:
+        _validate_deflated_zip_payload(
+            stream,
+            offset,
+            compressed_size,
+            uncompressed_size,
+            expected_crc32,
+        )
+
+
+def _verify_physical_wheel(stream: BinaryIO) -> None:
+    eocd_offset, central_offset, _central_size, declared_count = _physical_zip_eocd(stream)
+    central_position = central_offset
+    expected_local_offset = 0
+    physical_count = 0
+    aggregate_size = 0
+    while central_position < eocd_offset:
+        if physical_count >= MAX_ARCHIVE_MEMBERS:
+            _fail(PHYSICAL_WHEEL_COUNT_LIMIT_ERROR)
+        central = _read_exact_zip_at(stream, central_position, 46)
+        (
+            signature,
+            _version_made_by,
+            version_needed,
+            flags,
+            method,
+            modified_time,
+            modified_date,
+            crc32,
+            compressed_size,
+            uncompressed_size,
+            name_size,
+            extra_size,
+            comment_size,
+            starting_disk,
+            _internal_attributes,
+            _external_attributes,
+            local_offset,
+        ) = struct.unpack("<4s6H3I5H2I", central)
+        if signature != _CLASSIC_ZIP_CENTRAL_SIGNATURE:
+            _fail("physical wheel central directory is invalid")
+        physical_count += 1
+        if name_size > MAX_ARCHIVE_MEMBER_NAME_BYTES:
+            _fail(ARCHIVE_MEMBER_NAME_LIMIT_ERROR)
+        if (
+            extra_size > MAX_PHYSICAL_ZIP_METADATA_BYTES
+            or comment_size > MAX_PHYSICAL_ZIP_METADATA_BYTES
+        ):
+            _fail("physical wheel member metadata exceeds the safety limit")
+        central_body_size = name_size + extra_size + comment_size
+        next_central_position = central_position + 46 + central_body_size
+        if next_central_position > eocd_offset:
+            _fail("physical wheel central directory is truncated")
+        central_body = _read_exact_zip_at(stream, central_position + 46, central_body_size)
+        name = central_body[:name_size]
+        extra = central_body[name_size : name_size + extra_size]
+        _validate_physical_zip_name(name, flags)
+        _validate_zip_extra(extra)
+        if version_needed > 20:
+            _fail("physical wheel version is unsupported")
+        if flags & ~_SUPPORTED_ZIP_FLAGS:
+            _fail("physical wheel flags are unsupported")
+        if method not in _SUPPORTED_ZIP_METHODS:
+            _fail("physical wheel compression method is unsupported")
+        if starting_disk != 0:
+            _fail("physical wheel multidisk metadata is unsupported")
+        if (
+            compressed_size == 0xFFFFFFFF
+            or uncompressed_size == 0xFFFFFFFF
+            or local_offset == 0xFFFFFFFF
+        ):
+            _fail("physical wheel ZIP64 metadata is unsupported")
+        if method == zipfile.ZIP_STORED and compressed_size != uncompressed_size:
+            _fail("physical wheel stored member sizes are inconsistent")
+        _validate_physical_zip_sizes(name, compressed_size, uncompressed_size)
+        aggregate_size += uncompressed_size
+        if aggregate_size > MAX_ARCHIVE_TOTAL_BYTES:
+            _fail(ARCHIVE_TOTAL_SIZE_LIMIT_ERROR)
+        if local_offset != expected_local_offset:
+            _fail("physical wheel local member intervals are not contiguous")
+
+        local = _read_exact_zip_at(stream, local_offset, 30)
+        (
+            local_signature,
+            local_version_needed,
+            local_flags,
+            local_method,
+            local_modified_time,
+            local_modified_date,
+            local_crc32,
+            local_compressed_size,
+            local_uncompressed_size,
+            local_name_size,
+            local_extra_size,
+        ) = struct.unpack("<4s5H3I2H", local)
+        if local_signature != _CLASSIC_ZIP_LOCAL_SIGNATURE:
+            _fail("physical wheel local header is invalid")
+        if local_name_size > MAX_ARCHIVE_MEMBER_NAME_BYTES:
+            _fail(ARCHIVE_MEMBER_NAME_LIMIT_ERROR)
+        if local_extra_size > MAX_PHYSICAL_ZIP_METADATA_BYTES:
+            _fail("physical wheel member metadata exceeds the safety limit")
+        local_body_size = local_name_size + local_extra_size
+        local_body = _read_exact_zip_at(stream, local_offset + 30, local_body_size)
+        local_name = local_body[:local_name_size]
+        local_extra = local_body[local_name_size:]
+        _validate_zip_extra(local_extra)
+        if (
+            local_version_needed != version_needed
+            or local_flags != flags
+            or local_method != method
+            or local_modified_time != modified_time
+            or local_modified_date != modified_date
+            or local_crc32 != crc32
+            or local_compressed_size != compressed_size
+            or local_uncompressed_size != uncompressed_size
+            or local_name != name
+            or local_extra != extra
+        ):
+            _fail("physical wheel central and local metadata differ")
+        payload_offset = local_offset + 30 + local_body_size
+        expected_local_offset = payload_offset + compressed_size
+        if expected_local_offset > central_offset:
+            _fail("physical wheel local member intervals overlap")
+        _validate_physical_zip_payload(
+            stream,
+            payload_offset,
+            compressed_size,
+            uncompressed_size,
+            crc32,
+            method,
+        )
+        central_position = next_central_position
+
+    if physical_count != declared_count:
+        _fail("physical wheel member count is inconsistent")
+    if expected_local_offset != central_offset:
+        _fail("physical wheel local member intervals are not contiguous")
 
 
 def _canonical_tar_size(header: bytes) -> int:
@@ -387,29 +819,23 @@ def _copy_verified_physical_sdist(stream: _ReadableBytes, snapshot: BinaryIO) ->
 
 
 @contextmanager
-def _verified_sdist_snapshot(sdist: Path) -> Iterator[BinaryIO]:
+def _verified_sdist_snapshot(
+    sdist: Path,
+    expected_fingerprint: _ArtifactFingerprint | None = None,
+) -> Iterator[BinaryIO]:
     try:
         with (
-            open(sdist, "rb", opener=_open_no_follow) as compressed,
+            _verified_artifact_snapshot(sdist, expected_fingerprint) as artifact,
             tempfile.SpooledTemporaryFile(
                 max_size=MAX_SDIST_EXTENSION_BYTES,
                 mode="w+b",
             ) as snapshot,
         ):
+            compressed, _fingerprint = artifact
             snapshot_io = cast(BinaryIO, snapshot)
-            before = os.fstat(compressed.fileno())
-            _validate_outer_artifact_metadata(before)
+            compressed.seek(0)
             with gzip.GzipFile(fileobj=compressed, mode="rb") as stream:
                 _copy_verified_physical_sdist(stream, snapshot_io)
-            after = os.fstat(compressed.fileno())
-            try:
-                current = sdist.stat(follow_symlinks=False)
-            except OSError:
-                _fail("distribution artifact changed while it was inspected")
-            if _stat_identity(before) != _stat_identity(after) or _stat_identity(
-                after
-            ) != _stat_identity(current):
-                _fail("distribution artifact changed while it was inspected")
             snapshot_io.seek(0)
             yield snapshot_io
     except IsolationError:
@@ -419,8 +845,11 @@ def _verified_sdist_snapshot(sdist: Path) -> Iterator[BinaryIO]:
 
 
 @contextmanager
-def _open_verified_sdist(sdist: Path) -> Iterator[tarfile.TarFile]:
-    with _verified_sdist_snapshot(sdist) as snapshot:
+def _open_verified_sdist(
+    sdist: Path,
+    expected_fingerprint: _ArtifactFingerprint | None = None,
+) -> Iterator[tarfile.TarFile]:
+    with _verified_sdist_snapshot(sdist, expected_fingerprint) as snapshot:
         try:
             with tarfile.open(fileobj=snapshot, mode="r:") as archive:
                 yield archive
@@ -458,9 +887,47 @@ def _qualification_document_kind(raw: bytes, location: str) -> str | None:
     return None
 
 
+def _read_source_registry(registry: Path) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = _open_no_follow(str(registry), flags)
+    except OSError:
+        _fail("source registry could not be opened safely")
+    try:
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode):
+                _fail("source registry must be a nonsymlink regular file")
+            if before.st_size < 0 or before.st_size > MAX_ARCHIVE_TEXT_BYTES:
+                _fail("source registry exceeds the safety limit")
+            raw = bytearray()
+            while chunk := os.read(descriptor, min(65_536, MAX_ARCHIVE_TEXT_BYTES + 1 - len(raw))):
+                raw.extend(chunk)
+                if len(raw) > MAX_ARCHIVE_TEXT_BYTES:
+                    _fail("source registry exceeds the safety limit")
+            after = os.fstat(descriptor)
+        except IsolationError:
+            raise
+        except OSError:
+            _fail("source registry could not be inspected")
+    finally:
+        os.close(descriptor)
+    try:
+        current = registry.stat(follow_symlinks=False)
+    except OSError:
+        _fail("source registry changed while it was inspected")
+    if (
+        len(raw) != after.st_size
+        or _stat_identity(before) != _stat_identity(after)
+        or _stat_identity(after) != _stat_identity(current)
+    ):
+        _fail("source registry changed while it was inspected")
+    return bytes(raw)
+
+
 def verify_source_registry(root: Path) -> None:
     registry = root / "src" / "weightclass" / "delegation_qualifications.json"
-    _load_empty_registry(registry.read_bytes(), str(registry))
+    _load_empty_registry(_read_source_registry(registry), "source registry")
 
 
 def _is_tests_path(path: PurePosixPath) -> bool:
@@ -558,46 +1025,72 @@ def _wheel_members(archive: zipfile.ZipFile, wheel: Path) -> list[zipfile.ZipInf
     return members
 
 
-def verify_wheel(wheel: Path) -> None:
-    _require_bounded_outer_artifact(wheel)
-    with zipfile.ZipFile(wheel) as archive:
-        members = _wheel_members(archive, wheel)
-        folded_registry_path = WHEEL_REGISTRY_PATH.casefold()
-        folded_registry_suffix = f"/{WHEEL_REGISTRY_PATH}".casefold()
-        registry_aliases = [
-            member
-            for member in members
-            if member.filename.casefold() == folded_registry_path
-            or member.filename.casefold().endswith(folded_registry_suffix)
-        ]
-        canonical_registries = [
-            member for member in registry_aliases if member.filename == WHEEL_REGISTRY_PATH
-        ]
-        if (
-            len(registry_aliases) != 1
-            or len(canonical_registries) != 1
-            or canonical_registries[0].is_dir()
+def verify_wheel(
+    wheel: Path,
+    *,
+    expected_fingerprint: _ArtifactFingerprint | None = None,
+) -> None:
+    with _verified_artifact_snapshot(wheel, expected_fingerprint) as artifact:
+        snapshot, _fingerprint = artifact
+        _verify_physical_wheel(snapshot)
+        snapshot.seek(0)
+        try:
+            with zipfile.ZipFile(cast(BinaryIO, _ZipSnapshotReader(snapshot))) as archive:
+                members = _wheel_members(archive, wheel)
+                folded_registry_path = WHEEL_REGISTRY_PATH.casefold()
+                folded_registry_suffix = f"/{WHEEL_REGISTRY_PATH}".casefold()
+                registry_aliases = [
+                    member
+                    for member in members
+                    if member.filename.casefold() == folded_registry_path
+                    or member.filename.casefold().endswith(folded_registry_suffix)
+                ]
+                canonical_registries = [
+                    member for member in registry_aliases if member.filename == WHEEL_REGISTRY_PATH
+                ]
+                if (
+                    len(registry_aliases) != 1
+                    or len(canonical_registries) != 1
+                    or canonical_registries[0].is_dir()
+                ):
+                    _fail(f"{wheel.name}: expected exactly one production registry")
+                registry = canonical_registries[0]
+                _load_empty_registry(
+                    _read_archive_member(
+                        archive,
+                        registry,
+                        f"{wheel.name}:{WHEEL_REGISTRY_PATH}",
+                    ),
+                    f"{wheel.name}:{WHEEL_REGISTRY_PATH}",
+                )
+                for member in members:
+                    if member.is_dir():
+                        continue
+                    name = member.filename
+                    if _is_tests_path(PurePosixPath(name)) or _has_forbidden_fuzzy_path(
+                        PurePosixPath(name)
+                    ):
+                        _fail(f"{wheel.name}: test-only artifact shipped: {name}")
+                    raw = _read_archive_member(archive, member, f"{wheel.name}:{name}")
+                    if any(token.encode() in raw for token in FORBIDDEN_WHEEL_TEXT):
+                        _fail(f"{wheel.name}: synthetic or candidate-like content shipped: {name}")
+                    document_kind = _qualification_document_kind(raw, f"{wheel.name}:{name}")
+                    if document_kind is not None:
+                        _fail(f"{wheel.name}: qualification {document_kind} shipped: {name}")
+        except IsolationError:
+            raise
+        except (
+            EOFError,
+            NotImplementedError,
+            OSError,
+            OverflowError,
+            RuntimeError,
+            UnicodeError,
+            ValueError,
+            zipfile.BadZipFile,
+            zlib.error,
         ):
-            _fail(f"{wheel.name}: expected exactly one production registry")
-        registry = canonical_registries[0]
-        _load_empty_registry(
-            _read_archive_member(archive, registry, f"{wheel.name}:{WHEEL_REGISTRY_PATH}"),
-            f"{wheel.name}:{WHEEL_REGISTRY_PATH}",
-        )
-        for member in members:
-            if member.is_dir():
-                continue
-            name = member.filename
-            if _is_tests_path(PurePosixPath(name)) or _has_forbidden_fuzzy_path(
-                PurePosixPath(name)
-            ):
-                _fail(f"{wheel.name}: test-only artifact shipped: {name}")
-            raw = _read_archive_member(archive, member, f"{wheel.name}:{name}")
-            if any(token.encode() in raw for token in FORBIDDEN_WHEEL_TEXT):
-                _fail(f"{wheel.name}: synthetic or candidate-like content shipped: {name}")
-            document_kind = _qualification_document_kind(raw, f"{wheel.name}:{name}")
-            if document_kind is not None:
-                _fail(f"{wheel.name}: qualification {document_kind} shipped: {name}")
+            _fail("physical wheel could not be parsed")
 
 
 def _safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
@@ -649,8 +1142,12 @@ def _sdist_root(members: list[tarfile.TarInfo]) -> str:
     return roots.pop()
 
 
-def verify_sdist(sdist: Path) -> None:
-    with _open_verified_sdist(sdist) as archive:
+def verify_sdist(
+    sdist: Path,
+    *,
+    expected_fingerprint: _ArtifactFingerprint | None = None,
+) -> None:
+    with _open_verified_sdist(sdist, expected_fingerprint) as archive:
         members = _safe_members(archive)
         root = _sdist_root(members)
         expected_registry = f"{root}/{SDIST_REGISTRY_PATH}"
@@ -683,10 +1180,14 @@ def verify_sdist(sdist: Path) -> None:
                 _fail(f"{sdist.name}: expected one test-only artifact: {suffix}")
 
 
-def run_extracted_sdist_tests(sdist: Path) -> None:
+def run_extracted_sdist_tests(
+    sdist: Path,
+    *,
+    expected_fingerprint: _ArtifactFingerprint | None = None,
+) -> None:
     with tempfile.TemporaryDirectory(prefix="wclass-sdist-isolation-") as directory:
         destination = Path(directory)
-        with _open_verified_sdist(sdist) as archive:
+        with _open_verified_sdist(sdist, expected_fingerprint) as archive:
             members = _safe_members(archive)
             root = _sdist_root(members)
             archive.extractall(destination, members=members)
@@ -729,40 +1230,9 @@ def _stat_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, i
 
 
 def _fingerprint_artifact(path: Path) -> _ArtifactFingerprint:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError:
-        _fail("distribution artifact could not be opened safely")
-    try:
-        before = os.fstat(descriptor)
-        _validate_outer_artifact_metadata(before)
-        digest = hashlib.sha256()
-        while chunk := os.read(descriptor, 1_048_576):
-            digest.update(chunk)
-        after = os.fstat(descriptor)
-    except OSError:
-        _fail("distribution artifact could not be fingerprinted")
-    finally:
-        os.close(descriptor)
-    try:
-        current = path.stat(follow_symlinks=False)
-    except OSError:
-        _fail("distribution artifact changed while it was fingerprinted")
-    if _stat_identity(before) != _stat_identity(after) or _stat_identity(after) != _stat_identity(
-        current
-    ):
-        _fail("distribution artifact changed while it was fingerprinted")
-    return _ArtifactFingerprint(
-        name=path.name,
-        device=after.st_dev,
-        inode=after.st_ino,
-        mode=after.st_mode,
-        size=after.st_size,
-        modified_ns=after.st_mtime_ns,
-        changed_ns=after.st_ctime_ns,
-        sha256=digest.hexdigest(),
-    )
+    with _verified_artifact_snapshot(path) as artifact:
+        _snapshot, fingerprint = artifact
+        return fingerprint
 
 
 def _distribution_snapshot(dist_dir: Path) -> _DistributionSnapshot:
@@ -815,14 +1285,18 @@ def verify_distribution_directory(
     run_sdist_tests_requested: bool,
 ) -> None:
     initial = _distribution_snapshot(dist_dir)
+    wheel_fingerprint, sdist_fingerprint = initial.fingerprints
     verify_source_registry(source)
-    verify_wheel(initial.wheel)
-    verify_sdist(initial.sdist)
+    verify_wheel(initial.wheel, expected_fingerprint=wheel_fingerprint)
+    verify_sdist(initial.sdist, expected_fingerprint=sdist_fingerprint)
     if _distribution_snapshot(dist_dir) != initial:
         _fail("distribution artifacts changed during verification")
     if run_sdist_tests_requested:
         try:
-            run_extracted_sdist_tests(initial.sdist)
+            run_extracted_sdist_tests(
+                initial.sdist,
+                expected_fingerprint=sdist_fingerprint,
+            )
         finally:
             try:
                 final = _distribution_snapshot(dist_dir)
