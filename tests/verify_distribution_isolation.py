@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import stat
 import struct
 import subprocess
@@ -19,6 +20,8 @@ import zlib
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, NoReturn, Protocol, cast
 
@@ -40,6 +43,7 @@ MAX_ARCHIVE_TOTAL_BYTES = 64 * 1_024 * 1_024
 MAX_DISTRIBUTION_ARTIFACT_BYTES = 72 * 1_024 * 1_024
 MAX_PHYSICAL_TAR_BYTES = MAX_ARCHIVE_TOTAL_BYTES + MAX_ARCHIVE_MEMBERS * 1_024 + tarfile.RECORDSIZE
 MAX_PHYSICAL_ZIP_METADATA_BYTES = MAX_ARCHIVE_MEMBER_NAME_BYTES
+MAX_CORE_METADATA_VALUE_BYTES = 256
 ARCHIVE_MEMBER_NAME_LIMIT_ERROR = "archive member name exceeds the safety limit"
 ARCHIVE_MEMBER_COUNT_LIMIT_ERROR = "archive member count exceeds the safety limit"
 ARCHIVE_TOTAL_SIZE_LIMIT_ERROR = "archive total size exceeds the safety limit"
@@ -47,6 +51,16 @@ ARCHIVE_DIRECTORY_SIZE_ERROR = "archive directory has nonzero size"
 WHEEL_MEMBER_SIZE_LIMIT_ERROR = "wheel member size exceeds the safety limit"
 SDIST_MEMBER_SIZE_LIMIT_ERROR = "sdist member size exceeds the safety limit"
 PHYSICAL_WHEEL_COUNT_LIMIT_ERROR = "physical wheel member count exceeds the safety limit"
+CORE_METADATA_MISSING_ERROR = "distribution core metadata is missing or duplicated"
+CORE_METADATA_MALFORMED_ERROR = "distribution core metadata is malformed"
+CORE_METADATA_PROJECT_ERROR = "distribution core metadata has an invalid project name"
+CORE_METADATA_VERSION_ERROR = "distribution core metadata has an invalid version"
+CORE_METADATA_VERSION_MISMATCH_ERROR = "wheel and sdist core metadata versions differ"
+CORE_METADATA_EXPECTED_VERSION_ERROR = (
+    "distribution core metadata does not match the expected version"
+)
+EXPECTED_VERSION_ERROR = "expected distribution version is invalid"
+DISTRIBUTION_IDENTITY_ERROR = "distribution artifact identity is invalid or inconsistent"
 _CLASSIC_ZIP_EOCD_SIGNATURE = b"PK\x05\x06"
 _CLASSIC_ZIP_CENTRAL_SIGNATURE = b"PK\x01\x02"
 _CLASSIC_ZIP_LOCAL_SIGNATURE = b"PK\x03\x04"
@@ -55,6 +69,14 @@ _ZIP64_EXTRA_FIELD_ID = 0x0001
 _SUPPORTED_ZIP_FLAGS = 0x0800
 _SUPPORTED_ZIP_METHODS = frozenset((zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED))
 _SUPPORTED_PHYSICAL_MEMBER_TYPES = frozenset((tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE))
+_CANONICAL_VERSION_PATTERN = re.compile(
+    r"(?:(?:[1-9][0-9]*)!)?"
+    r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))*"
+    r"(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?"
+    r"(?:\.post(?:0|[1-9][0-9]*))?"
+    r"(?:\.dev(?:0|[1-9][0-9]*))?"
+    r"(?:\+[a-z0-9]+(?:\.[a-z0-9]+)*)?"
+)
 CANDIDATE_SCHEMA_KEYS = frozenset(
     {
         "record_schema_version",
@@ -184,7 +206,24 @@ def _load_empty_registry(raw: bytes, location: str) -> None:
         )
     except (RecursionError, ValueError):
         _fail(f"{location}: registry is not canonical JSON")
-    if not isinstance(value, Mapping) or value != EMPTY_REGISTRY:
+    if type(value) is not dict:
+        _fail(f"{location}: registry shape is not the empty production shape")
+    try:
+        keys = frozenset(value)
+        records = value["records"]
+        registry_schema_version = value["registry_schema_version"]
+        suite_revision = value["suite_revision"]
+    except (KeyError, TypeError, ValueError):
+        _fail(f"{location}: registry shape is not the empty production shape")
+    if (
+        keys != frozenset(EMPTY_REGISTRY)
+        or type(records) is not list
+        or records != []
+        or type(registry_schema_version) is not int
+        or registry_schema_version != 1
+        or type(suite_revision) is not str
+        or suite_revision != "delegation-conformance-v2"
+    ):
         _fail(f"{location}: registry shape is not the empty production shape")
 
 
@@ -1035,6 +1074,232 @@ def _wheel_members(archive: zipfile.ZipFile, wheel: Path) -> list[zipfile.ZipInf
     return members
 
 
+def _is_canonical_version(value: str) -> bool:
+    if _CANONICAL_VERSION_PATTERN.fullmatch(value) is None:
+        return False
+    _, separator, local = value.partition("+")
+    if not separator:
+        return True
+    return all(
+        not (part.isdigit() and len(part) > 1 and part.startswith("0")) for part in local.split(".")
+    )
+
+
+def _is_bounded_printable_ascii(value: str) -> bool:
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return (
+        bool(encoded)
+        and len(encoded) <= MAX_CORE_METADATA_VALUE_BYTES
+        and all(0x21 <= byte <= 0x7E for byte in encoded)
+    )
+
+
+def _metadata_identity_value(value: str) -> str:
+    if not _is_bounded_printable_ascii(value):
+        _fail(CORE_METADATA_MALFORMED_ERROR)
+    return value
+
+
+def _canonical_metadata_line_endings(raw: bytes) -> bytes:
+    if b"\r" not in raw:
+        return raw
+    crlf_count = raw.count(b"\r\n")
+    if raw.count(b"\r") != crlf_count or raw.count(b"\n") != crlf_count:
+        _fail(CORE_METADATA_MALFORMED_ERROR)
+    return raw.replace(b"\r\n", b"\n")
+
+
+def _parse_core_metadata(raw: bytes) -> tuple[str, str]:
+    if len(raw) > MAX_ARCHIVE_TEXT_BYTES or b"\x00" in raw:
+        _fail(CORE_METADATA_MALFORMED_ERROR)
+    canonical = _canonical_metadata_line_endings(raw)
+    try:
+        message = BytesParser(policy=policy.default).parsebytes(canonical, headersonly=True)
+    except (LookupError, UnicodeError, ValueError):
+        _fail(CORE_METADATA_MALFORMED_ERROR)
+    if message.defects:
+        _fail(CORE_METADATA_MALFORMED_ERROR)
+
+    identity_fields: dict[str, list[str]] = {
+        "metadata-version": [],
+        "name": [],
+        "version": [],
+    }
+    for field, value in message.raw_items():
+        field_name = field.casefold()
+        if field_name in identity_fields:
+            identity_fields[field_name].append(value)
+    if any(len(values) != 1 for values in identity_fields.values()):
+        _fail(CORE_METADATA_MALFORMED_ERROR)
+
+    metadata_version = _metadata_identity_value(identity_fields["metadata-version"][0])
+    name = _metadata_identity_value(identity_fields["name"][0])
+    version = _metadata_identity_value(identity_fields["version"][0])
+    if re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", metadata_version) is None:
+        _fail(CORE_METADATA_MALFORMED_ERROR)
+    if name != "weightclass":
+        _fail(CORE_METADATA_PROJECT_ERROR)
+    if not _is_canonical_version(version):
+        _fail(CORE_METADATA_VERSION_ERROR)
+    return name, version
+
+
+def _is_valid_wheel_tag(value: str) -> bool:
+    if not _is_bounded_printable_ascii(value):
+        return False
+    parts = value.split(".")
+    return all(
+        part
+        and part[0].isalnum()
+        and part[-1].isalnum()
+        and part.isascii()
+        and part == part.casefold()
+        and all(character.isalnum() or character == "_" for character in part)
+        for part in parts
+    )
+
+
+def _wheel_filename_version(filename: str) -> str:
+    if not filename.endswith(".whl"):
+        _fail(DISTRIBUTION_IDENTITY_ERROR)
+    parts = filename[:-4].split("-")
+    if len(parts) != 5:
+        _fail(DISTRIBUTION_IDENTITY_ERROR)
+    project, version, python_tag, abi_tag, platform_tag = parts
+    if (
+        project != "weightclass"
+        or not _is_bounded_printable_ascii(version)
+        or not _is_canonical_version(version)
+        or not all(_is_valid_wheel_tag(tag) for tag in (python_tag, abi_tag, platform_tag))
+    ):
+        _fail(DISTRIBUTION_IDENTITY_ERROR)
+    return version
+
+
+def _sdist_filename_version(filename: str) -> str:
+    prefix = "weightclass-"
+    suffix = ".tar.gz"
+    if not filename.startswith(prefix) or not filename.endswith(suffix):
+        _fail(DISTRIBUTION_IDENTITY_ERROR)
+    version = filename[len(prefix) : -len(suffix)]
+    if not _is_bounded_printable_ascii(version) or not _is_canonical_version(version):
+        _fail(DISTRIBUTION_IDENTITY_ERROR)
+    return version
+
+
+def _read_core_metadata_member(archive: zipfile.ZipFile, member: zipfile.ZipInfo) -> bytes:
+    try:
+        return _read_archive_member(archive, member, "distribution core metadata")
+    except IsolationError:
+        _fail(CORE_METADATA_MALFORMED_ERROR)
+
+
+def _wheel_core_metadata(wheel: Path, fingerprint: _ArtifactFingerprint) -> tuple[str, str]:
+    with _verified_artifact_snapshot(wheel, fingerprint) as artifact:
+        snapshot, _snapshot_fingerprint = artifact
+        _verify_physical_wheel(snapshot)
+        snapshot.seek(0)
+        try:
+            with zipfile.ZipFile(cast(BinaryIO, _ZipSnapshotReader(snapshot))) as archive:
+                members = _wheel_members(archive, wheel)
+                candidates = [
+                    member
+                    for member in members
+                    if (
+                        len(PurePosixPath(member.filename).parts) == 2
+                        and PurePosixPath(member.filename).parts[0].endswith(".dist-info")
+                        and PurePosixPath(member.filename).parts[1] == "METADATA"
+                        and not member.is_dir()
+                    )
+                ]
+                if len(candidates) != 1:
+                    _fail(CORE_METADATA_MISSING_ERROR)
+                dist_info_root = PurePosixPath(candidates[0].filename).parts[0]
+                if any(
+                    parts
+                    and parts[0].casefold().endswith(".dist-info")
+                    and parts[0] != dist_info_root
+                    for member in members
+                    if (parts := PurePosixPath(member.filename).parts)
+                ):
+                    _fail(DISTRIBUTION_IDENTITY_ERROR)
+                raw = _read_core_metadata_member(archive, candidates[0])
+        except IsolationError:
+            raise
+        except (
+            EOFError,
+            NotImplementedError,
+            OSError,
+            OverflowError,
+            RuntimeError,
+            UnicodeError,
+            ValueError,
+            zipfile.BadZipFile,
+            zlib.error,
+        ):
+            _fail(CORE_METADATA_MALFORMED_ERROR)
+    name, version = _parse_core_metadata(raw)
+    if (
+        _wheel_filename_version(wheel.name) != version
+        or dist_info_root != f"{name}-{version}.dist-info"
+    ):
+        _fail(DISTRIBUTION_IDENTITY_ERROR)
+    return name, version
+
+
+def _sdist_core_metadata(sdist: Path, fingerprint: _ArtifactFingerprint) -> tuple[str, str]:
+    with _open_verified_sdist(sdist, fingerprint) as archive:
+        members = _safe_members(archive)
+        root = _sdist_root(members)
+        candidates = [member for member in members if member.name == f"{root}/PKG-INFO"]
+        if len(candidates) != 1 or not candidates[0].isfile():
+            _fail(CORE_METADATA_MISSING_ERROR)
+        extracted = archive.extractfile(candidates[0])
+        if extracted is None:
+            _fail(CORE_METADATA_MALFORMED_ERROR)
+        try:
+            with extracted:
+                raw = extracted.read(MAX_ARCHIVE_TEXT_BYTES + 1)
+        except (OSError, EOFError, ValueError):
+            _fail(CORE_METADATA_MALFORMED_ERROR)
+        if len(raw) > MAX_ARCHIVE_TEXT_BYTES:
+            _fail(CORE_METADATA_MALFORMED_ERROR)
+    name, version = _parse_core_metadata(raw)
+    if _sdist_filename_version(sdist.name) != version or root != f"{name}-{version}":
+        _fail(DISTRIBUTION_IDENTITY_ERROR)
+    return name, version
+
+
+def _validate_expected_version(expected_version: str | None) -> None:
+    if expected_version is None:
+        return
+    if (
+        type(expected_version) is not str
+        or not _is_bounded_printable_ascii(expected_version)
+        or not _is_canonical_version(expected_version)
+    ):
+        _fail(EXPECTED_VERSION_ERROR)
+
+
+def _verify_distribution_core_metadata(
+    wheel: Path,
+    sdist: Path,
+    *,
+    wheel_fingerprint: _ArtifactFingerprint,
+    sdist_fingerprint: _ArtifactFingerprint,
+    expected_version: str | None,
+) -> None:
+    _wheel_name, wheel_version = _wheel_core_metadata(wheel, wheel_fingerprint)
+    _sdist_name, sdist_version = _sdist_core_metadata(sdist, sdist_fingerprint)
+    if wheel_version != sdist_version:
+        _fail(CORE_METADATA_VERSION_MISMATCH_ERROR)
+    if expected_version is not None and wheel_version != expected_version:
+        _fail(CORE_METADATA_EXPECTED_VERSION_ERROR)
+
+
 def verify_wheel(
     wheel: Path,
     *,
@@ -1293,12 +1558,21 @@ def verify_distribution_directory(
     dist_dir: Path,
     *,
     run_sdist_tests_requested: bool,
+    expected_version: str | None = None,
 ) -> None:
+    _validate_expected_version(expected_version)
     initial = _distribution_snapshot(dist_dir)
     wheel_fingerprint, sdist_fingerprint = initial.fingerprints
     verify_source_registry(source)
     verify_wheel(initial.wheel, expected_fingerprint=wheel_fingerprint)
     verify_sdist(initial.sdist, expected_fingerprint=sdist_fingerprint)
+    _verify_distribution_core_metadata(
+        initial.wheel,
+        initial.sdist,
+        wheel_fingerprint=wheel_fingerprint,
+        sdist_fingerprint=sdist_fingerprint,
+        expected_version=expected_version,
+    )
     if _distribution_snapshot(dist_dir) != initial:
         _fail("distribution artifacts changed during verification")
     if run_sdist_tests_requested:
@@ -1321,12 +1595,14 @@ def main() -> int:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--dist-dir", type=Path, required=True)
     parser.add_argument("--run-sdist-tests", action="store_true")
+    parser.add_argument("--expected-version")
     args = parser.parse_args()
     try:
         verify_distribution_directory(
             args.source,
             args.dist_dir,
             run_sdist_tests_requested=args.run_sdist_tests,
+            expected_version=args.expected_version,
         )
     except IsolationError as error:
         print(f"distribution isolation failed: {error}", file=sys.stderr)

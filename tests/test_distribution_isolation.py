@@ -15,7 +15,7 @@ import warnings
 import zipfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import cast
+from typing import TypedDict, cast
 from unittest.mock import patch
 
 from tests.verify_distribution_isolation import (
@@ -33,6 +33,18 @@ from tests.verify_distribution_isolation import (
     verify_source_registry,
     verify_wheel,
 )
+
+
+class _DistributionFixtureOptions(TypedDict, total=False):
+    wheel_core_metadata: str
+    sdist_core_metadata: str
+    include_wheel_core_metadata: bool
+    include_sdist_core_metadata: bool
+    sdist_extra_members: tuple[str, ...]
+    wheel_filename: str
+    wheel_dist_info_root: str
+    sdist_filename: str
+    sdist_archive_root: str
 
 
 def _candidate_like_record() -> dict[str, object]:
@@ -101,15 +113,28 @@ def _write_sdist_fixture(
     directory: str,
     extra_members: tuple[str, ...] = (),
     extra_files: tuple[tuple[str, str], ...] = (),
+    *,
+    filename: str = "weightclass-0.tar.gz",
+    archive_root: str = "weightclass-0",
+    registry_schema_version_token: str = "1",
+    core_metadata: str | None = None,
+    include_core_metadata: bool = True,
 ) -> Path:
-    sdist = Path(directory) / "weightclass-0.tar.gz"
-    root = Path(directory) / "payload/weightclass-0"
+    sdist = Path(directory) / filename
+    root = Path(directory) / "payload" / archive_root
     registry = root / "src/weightclass/delegation_qualifications.json"
     registry.parent.mkdir(parents=True, exist_ok=True)
     registry.write_text(
-        '{"records":[],"registry_schema_version":1,"suite_revision":"delegation-conformance-v2"}',
+        '{"records":[],"registry_schema_version":'
+        f"{registry_schema_version_token}"
+        ',"suite_revision":"delegation-conformance-v2"}',
         encoding="utf-8",
     )
+    if include_core_metadata:
+        (root / "PKG-INFO").write_text(
+            core_metadata or "Metadata-Version: 2.1\nName: weightclass\nVersion: 0\n\n",
+            encoding="utf-8",
+        )
     for relative_path in (
         "tests/synthetic_descendant_containment.py",
         "tests/synthetic_probe_child.py",
@@ -127,7 +152,7 @@ def _write_sdist_fixture(
         asset.parent.mkdir(parents=True, exist_ok=True)
         asset.write_text(contents, encoding="utf-8")
     with tarfile.open(sdist, "w:gz") as archive:
-        archive.add(root, arcname="weightclass-0")
+        archive.add(root, arcname=archive_root)
         for member_name in extra_members:
             raw = b"test-only\n"
             member = tarfile.TarInfo(member_name)
@@ -140,25 +165,43 @@ def _write_distribution_fixture(
     directory: str,
     *,
     extracted_test: str | None = None,
+    registry_schema_version_token: str = "1",
+    wheel_core_metadata: str | None = None,
+    sdist_core_metadata: str | None = None,
+    include_wheel_core_metadata: bool = True,
+    include_sdist_core_metadata: bool = True,
+    sdist_extra_members: tuple[str, ...] = (),
+    wheel_filename: str = "weightclass-0-py3-none-any.whl",
+    wheel_dist_info_root: str = "weightclass-0.dist-info",
+    sdist_filename: str = "weightclass-0.tar.gz",
+    sdist_archive_root: str = "weightclass-0",
 ) -> tuple[Path, Path, Path]:
     base = Path(directory)
     source = base / "source"
     source_registry = source / "src/weightclass/delegation_qualifications.json"
     source_registry.parent.mkdir(parents=True)
     source_registry.write_text(
-        '{"records":[],"registry_schema_version":1,"suite_revision":"delegation-conformance-v2"}',
+        '{"records":[],"registry_schema_version":'
+        f"{registry_schema_version_token}"
+        ',"suite_revision":"delegation-conformance-v2"}',
         encoding="utf-8",
     )
 
     dist = base / "dist"
     dist.mkdir()
-    wheel = dist / "weightclass-0-py3-none-any.whl"
+    wheel = dist / wheel_filename
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr(
             "weightclass/delegation_qualifications.json",
-            '{"records":[],"registry_schema_version":1,'
-            '"suite_revision":"delegation-conformance-v2"}',
+            '{"records":[],"registry_schema_version":'
+            f"{registry_schema_version_token}"
+            ',"suite_revision":"delegation-conformance-v2"}',
         )
+        if include_wheel_core_metadata:
+            archive.writestr(
+                f"{wheel_dist_info_root}/METADATA",
+                wheel_core_metadata or "Metadata-Version: 2.1\nName: weightclass\nVersion: 0\n\n",
+            )
         archive.writestr("weightclass/module.py", "VALUE = 1\n")
 
     extra_files: tuple[tuple[str, str], ...] = ()
@@ -166,7 +209,16 @@ def _write_distribution_fixture(
         extra_files = (("tests/test_artifact_mutation.py", extracted_test),)
     build_directory = base / "build"
     build_directory.mkdir()
-    built_sdist = _write_sdist_fixture(str(build_directory), extra_files=extra_files)
+    built_sdist = _write_sdist_fixture(
+        str(build_directory),
+        extra_members=sdist_extra_members,
+        extra_files=extra_files,
+        filename=sdist_filename,
+        archive_root=sdist_archive_root,
+        registry_schema_version_token=registry_schema_version_token,
+        core_metadata=sdist_core_metadata,
+        include_core_metadata=include_sdist_core_metadata,
+    )
     sdist = dist / built_sdist.name
     built_sdist.replace(sdist)
     return source, wheel, sdist
@@ -227,6 +279,7 @@ def _run_distribution_verifier(
     dist: Path,
     *,
     run_sdist_tests: bool = False,
+    expected_version: str | None = None,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [
@@ -239,6 +292,8 @@ def _run_distribution_verifier(
     ]
     if run_sdist_tests:
         command.append("--run-sdist-tests")
+    if expected_version is not None:
+        command.extend(("--expected-version", expected_version))
     return subprocess.run(
         command,
         check=False,
@@ -1131,7 +1186,9 @@ class DistributionIsolationTests(unittest.TestCase):
         ]
         self.assertEqual(tests_index, release_run_indexes[-1])
         self.assertNotIn("--run-sdist-tests", release_steps[isolation_index])
+        self.assertIn('--expected-version "${GITHUB_REF_NAME#v}"', release_steps[isolation_index])
         self.assertIn("--run-sdist-tests", release_steps[tests_index])
+        self.assertIn('--expected-version "${GITHUB_REF_NAME#v}"', release_steps[tests_index])
         upload_step = release_steps[upload_index]
         self.assertIn("name: unverified-distributions", upload_step)
         self.assertIn(
@@ -1157,6 +1214,7 @@ class DistributionIsolationTests(unittest.TestCase):
         final_isolation_step = validate_steps[isolation_index]
         self.assertIn("--source . --dist-dir dist", final_isolation_step)
         self.assertNotIn("--run-sdist-tests", final_isolation_step)
+        self.assertIn('--expected-version "${GITHUB_REF_NAME#v}"', final_isolation_step)
         self.assertIn("name: unverified-distributions", validate_steps[download_index])
         release_workflow = root / ".github/workflows/release.yml"
         self.assertIn("    needs: verify", _workflow_job_block(release_workflow, "validate"))
@@ -1173,6 +1231,327 @@ class DistributionIsolationTests(unittest.TestCase):
             "          name: distributions",
             release_workflow.read_text(encoding="utf-8"),
         )
+
+        mac_steps = _workflow_step_blocks(
+            release_workflow,
+            "macos-routing-boundaries",
+        )
+        mac_boundary_step = mac_steps[
+            [_workflow_step_name(step) for step in mac_steps].index(
+                "Verify process and JSON input boundaries"
+            )
+        ]
+        self.assertIn("tests.test_delegation_conformance", mac_boundary_step)
+        self.assertIn("tests.test_delegation_runtime", mac_boundary_step)
+
+    def test_distribution_directory_binds_core_metadata_to_one_release(self) -> None:
+        cases: tuple[tuple[str, _DistributionFixtureOptions, bool, str | None], ...] = (
+            ("missing wheel metadata", {"include_wheel_core_metadata": False}, False, None),
+            ("missing sdist metadata", {"include_sdist_core_metadata": False}, False, None),
+            (
+                "wrong wheel project",
+                {"wheel_core_metadata": "Metadata-Version: 2.1\nName: private\nVersion: 0\n\n"},
+                False,
+                None,
+            ),
+            (
+                "mismatched versions",
+                {
+                    "wheel_core_metadata": (
+                        "Metadata-Version: 2.1\nName: weightclass\nVersion: 1\n\n"
+                    )
+                },
+                False,
+                None,
+            ),
+            ("duplicate wheel metadata", {}, True, None),
+            (
+                "duplicate sdist metadata",
+                {"sdist_extra_members": ("weightclass-0/PKG-INFO",)},
+                False,
+                None,
+            ),
+            ("tag mismatch", {}, False, "1"),
+        )
+        for name, options, duplicate_wheel_metadata, expected_version in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                source, wheel, _sdist = _write_distribution_fixture(
+                    directory,
+                    **options,
+                )
+                if duplicate_wheel_metadata:
+                    with zipfile.ZipFile(wheel, "a") as archive:
+                        archive.writestr(
+                            "other-0.dist-info/METADATA",
+                            "Metadata-Version: 2.1\nName: weightclass\nVersion: 0\n\n",
+                        )
+                result = _run_distribution_verifier(
+                    source,
+                    wheel.parent,
+                    expected_version=expected_version,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("distribution isolation failed", result.stderr)
+                self.assertNotIn("private", result.stderr)
+                self.assertLess(len(result.stderr), 512)
+
+    def test_distribution_directory_accepts_matching_core_metadata_and_tag(self) -> None:
+        for line_ending in ("\n", "\r\n"):
+            with (
+                self.subTest(line_ending=repr(line_ending)),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                metadata = line_ending.join(
+                    ("Metadata-Version: 2.1", "Name: weightclass", "Version: 0", "", "")
+                )
+                source, wheel, _sdist = _write_distribution_fixture(
+                    directory,
+                    wheel_core_metadata=metadata,
+                    sdist_core_metadata=metadata,
+                )
+                result = _run_distribution_verifier(
+                    source,
+                    wheel.parent,
+                    expected_version="0",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_distribution_metadata_rejects_ambiguous_header_framing_in_each_artifact(
+        self,
+    ) -> None:
+        malformed_documents = {
+            "bare CR duplicate": (
+                "Metadata-Version: 2.1\rVersion: 999\nName: weightclass\nVersion: 0\n\n"
+            ),
+            "mixed line endings": ("Metadata-Version: 2.1\r\nName: weightclass\nVersion: 0\n\n"),
+            "folded Metadata-Version": (
+                "Metadata-Version: 2.1\n ignored\nName: weightclass\nVersion: 0\n\n"
+            ),
+            "folded Name": ("Metadata-Version: 2.1\nName: weightclass\n ignored\nVersion: 0\n\n"),
+            "folded Version": (
+                "Metadata-Version: 2.1\nName: weightclass\nVersion: 0\n ignored\n\n"
+            ),
+            "duplicate Metadata-Version": (
+                "Metadata-Version: 2.1\nMetadata-Version: 2.4\nName: weightclass\nVersion: 0\n\n"
+            ),
+            "missing Metadata-Version": "Name: weightclass\nVersion: 0\n\n",
+        }
+        for artifact in ("wheel", "sdist"):
+            for case, document in malformed_documents.items():
+                with (
+                    self.subTest(artifact=artifact, case=case),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    options: _DistributionFixtureOptions
+                    if artifact == "wheel":
+                        options = {"wheel_core_metadata": document}
+                    else:
+                        options = {"sdist_core_metadata": document}
+                    source, wheel, _sdist = _write_distribution_fixture(directory, **options)
+                    result = _run_distribution_verifier(
+                        source,
+                        wheel.parent,
+                        expected_version="0",
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("distribution isolation failed", result.stderr)
+                    self.assertNotIn("999", result.stderr)
+                    self.assertLess(len(result.stderr), 512)
+
+    def test_distribution_metadata_identity_values_are_bounded_printable_ascii(self) -> None:
+        malformed_documents = {
+            "metadata version trailing whitespace": (
+                "Metadata-Version: 2.1 \nName: weightclass\nVersion: 0\n\n"
+            ),
+            "metadata version non-ASCII": (
+                "Metadata-Version: ２.１\nName: weightclass\nVersion: 0\n\n"
+            ),
+            "metadata version over bound": (
+                f"Metadata-Version: {'2' * 257}.1\nName: weightclass\nVersion: 0\n\n"
+            ),
+            "version trailing whitespace": (
+                "Metadata-Version: 2.1\nName: weightclass\nVersion: 0 \n\n"
+            ),
+            "version control whitespace": (
+                "Metadata-Version: 2.1\nName: weightclass\nVersion: 0\t\n\n"
+            ),
+            "version DEL": ("Metadata-Version: 2.1\nName: weightclass\nVersion: 0\x7f\n\n"),
+            "version non-ASCII": ("Metadata-Version: 2.1\nName: weightclass\nVersion: ０\n\n"),
+        }
+        for case, document in malformed_documents.items():
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                source, wheel, _sdist = _write_distribution_fixture(
+                    directory,
+                    wheel_core_metadata=document,
+                    sdist_core_metadata=document,
+                )
+                result = _run_distribution_verifier(source, wheel.parent)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("distribution isolation failed", result.stderr)
+                self.assertLess(len(result.stderr), 512)
+
+    def test_distribution_identity_matches_every_installer_and_archive_location(self) -> None:
+        cases: tuple[tuple[str, _DistributionFixtureOptions], ...] = (
+            (
+                "wheel filename project",
+                {"wheel_filename": "private-0-py3-none-any.whl"},
+            ),
+            (
+                "wheel filename version",
+                {"wheel_filename": "weightclass-999-py3-none-any.whl"},
+            ),
+            (
+                "dist-info project",
+                {"wheel_dist_info_root": "private-0.dist-info"},
+            ),
+            (
+                "dist-info version",
+                {"wheel_dist_info_root": "weightclass-999.dist-info"},
+            ),
+            (
+                "sdist filename project",
+                {"sdist_filename": "private-0.tar.gz"},
+            ),
+            (
+                "sdist filename version",
+                {"sdist_filename": "weightclass-999.tar.gz"},
+            ),
+            (
+                "sdist root project",
+                {"sdist_archive_root": "private-0"},
+            ),
+            (
+                "sdist root version",
+                {"sdist_archive_root": "weightclass-999"},
+            ),
+        )
+        for case, options in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                source, wheel, _sdist = _write_distribution_fixture(directory, **options)
+                result = _run_distribution_verifier(
+                    source,
+                    wheel.parent,
+                    expected_version="0",
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("distribution isolation failed", result.stderr)
+                self.assertNotIn("private", result.stderr)
+                self.assertNotIn("999", result.stderr)
+                self.assertLess(len(result.stderr), 512)
+
+    def test_distribution_rejects_alternate_dist_info_namespaces(self) -> None:
+        member_sets = (
+            ("alternate-999.dist-info/WHEEL",),
+            ("alternate-999.dist-info/RECORD",),
+            ("alternate-999.dist-info/",),
+            ("WeightClass-0.DIST-INFO/WHEEL",),
+        )
+        for members in member_sets:
+            with self.subTest(members=members), tempfile.TemporaryDirectory() as directory:
+                source, wheel, _sdist = _write_distribution_fixture(directory)
+                with zipfile.ZipFile(wheel, "a") as archive:
+                    for member in members:
+                        archive.writestr(member, b"")
+                result = _run_distribution_verifier(
+                    source,
+                    wheel.parent,
+                    expected_version="0",
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("distribution isolation failed", result.stderr)
+                self.assertNotIn("alternate", result.stderr.casefold())
+                self.assertLess(len(result.stderr), 512)
+
+    def test_distribution_rejects_malformed_or_noncanonical_wheel_tags(self) -> None:
+        filenames = (
+            "weightclass-0.whl",
+            "weightclass-0-py3-none-any-extra.whl",
+            "weightclass-0-py3!-none-any.whl",
+            "weightclass-0-Py3-none-any.whl",
+            "weightclass-0-py3..py4-none-any.whl",
+        )
+        for filename in filenames:
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as directory:
+                source, wheel, _sdist = _write_distribution_fixture(
+                    directory,
+                    wheel_filename=filename,
+                )
+                result = _run_distribution_verifier(source, wheel.parent)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("distribution isolation failed", result.stderr)
+                self.assertLess(len(result.stderr), 512)
+
+    def test_distribution_accepts_well_formed_wheel_tag_sets(self) -> None:
+        tag_sets = (
+            "py3-none-any",
+            "py2.py3-none-any",
+            "cp310-cp310-macosx_11_0_arm64",
+        )
+        for tag_set in tag_sets:
+            with self.subTest(tag_set=tag_set), tempfile.TemporaryDirectory() as directory:
+                source, wheel, _sdist = _write_distribution_fixture(
+                    directory,
+                    wheel_filename=f"weightclass-0-{tag_set}.whl",
+                )
+                result = _run_distribution_verifier(source, wheel.parent)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_distribution_accepts_canonical_pep440_release_identities(self) -> None:
+        versions = (
+            "0.4.0",
+            "1.0a1",
+            "1.0b2",
+            "1.0rc3",
+            "1.0.post4",
+            "1.0.dev5",
+            "1!2.0.post4.dev5",
+            "2.3+linux.1",
+            "3.0rc1.post2.dev3+linux.1",
+        )
+        for version in versions:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                metadata = f"Metadata-Version: 2.4\nName: weightclass\nVersion: {version}\n\n"
+                source, wheel, _sdist = _write_distribution_fixture(
+                    directory,
+                    wheel_filename=f"weightclass-{version}-py3-none-any.whl",
+                    wheel_dist_info_root=f"weightclass-{version}.dist-info",
+                    sdist_filename=f"weightclass-{version}.tar.gz",
+                    sdist_archive_root=f"weightclass-{version}",
+                    wheel_core_metadata=metadata,
+                    sdist_core_metadata=metadata,
+                )
+                result = _run_distribution_verifier(
+                    source,
+                    wheel.parent,
+                    expected_version=version,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_distribution_rejects_noncanonical_pep440_release_identities(self) -> None:
+        versions = (
+            "01.2",
+            "1.0RC1",
+            "1.0rc",
+            "1.0_post1",
+            "1.0+Local.01",
+            "0!1.0",
+        )
+        for version in versions:
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                metadata = f"Metadata-Version: 2.1\nName: weightclass\nVersion: {version}\n\n"
+                source, wheel, _sdist = _write_distribution_fixture(
+                    directory,
+                    wheel_filename=f"weightclass-{version}-py3-none-any.whl",
+                    wheel_dist_info_root=f"weightclass-{version}.dist-info",
+                    sdist_filename=f"weightclass-{version}.tar.gz",
+                    sdist_archive_root=f"weightclass-{version}",
+                    wheel_core_metadata=metadata,
+                    sdist_core_metadata=metadata,
+                )
+                result = _run_distribution_verifier(source, wheel.parent)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("distribution isolation failed", result.stderr)
+                self.assertLess(len(result.stderr), 512)
 
     def test_distribution_directory_requires_exact_regular_artifact_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1392,6 +1771,57 @@ class DistributionIsolationTests(unittest.TestCase):
             )
             with self.assertRaises(IsolationError):
                 verify_source_registry(root)
+
+    def test_registry_schema_version_requires_exact_integer_across_artifacts(self) -> None:
+        for token in ("true", "1.0", "1e0"):
+            with self.subTest(token=token), tempfile.TemporaryDirectory() as directory:
+                source, wheel, sdist = _write_distribution_fixture(
+                    directory,
+                    registry_schema_version_token=token,
+                )
+                for verifier, artifact in (
+                    (verify_source_registry, source),
+                    (verify_wheel, wheel),
+                    (verify_sdist, sdist),
+                ):
+                    with self.subTest(artifact=artifact.name):
+                        with self.assertRaisesRegex(IsolationError, "registry shape"):
+                            verifier(artifact)
+
+    def test_registry_shape_rejects_noncanonical_empty_value_types(self) -> None:
+        from tests.verify_distribution_isolation import _load_empty_registry
+
+        class RegistryObject(dict[str, object]):
+            pass
+
+        class RegistryList(list[object]):
+            pass
+
+        cases: tuple[dict[str, object], ...] = (
+            RegistryObject(
+                records=[],
+                registry_schema_version=1,
+                suite_revision="delegation-conformance-v2",
+            ),
+            {
+                "records": RegistryList(),
+                "registry_schema_version": 1,
+                "suite_revision": "delegation-conformance-v2",
+            },
+            {
+                "records": (),
+                "registry_schema_version": 1,
+                "suite_revision": "delegation-conformance-v2",
+            },
+        )
+        for value in cases:
+            with self.subTest(value_type=type(value).__name__, records_type=type(value["records"])):
+                with patch(
+                    "tests.verify_distribution_isolation.json.loads",
+                    return_value=value,
+                ):
+                    with self.assertRaisesRegex(IsolationError, "registry shape"):
+                        _load_empty_registry(b"{}", "fixture registry")
 
     def test_source_registry_rejects_symlink_without_reading_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

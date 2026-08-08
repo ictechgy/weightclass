@@ -50,16 +50,21 @@ user-provided model labels, and the no-retention boundary.
   executable, starts it once with fixed protocol argv, handles partial and
   interrupted writes, inherits environment/stdout/stderr, and waits for the
   direct child.
-- Confirmation and fingerprint mismatch exit before runtime or task access;
-  runtime unavailability and Python-visible unsafe `SIGCHLD` contexts exit
-  before task stdin is read. Module-owned `waitpid` preserves the exact child
-  status and treats ECHILD, including hidden Darwin `SA_NOCLDWAIT`, as redacted
+- Confirmation and fingerprint mismatch exit before runtime or task access.
+  Runtime execution requires the main thread and a reviewed native `SIGCHLD`
+  disposition before task stdin and again next to spawn. Darwin and reviewed
+  64-bit glibc Linux x86_64/AArch64 use the shared fail-closed `sigaction` gate;
+  hidden `SA_NOCLDWAIT`, unsupported libc/ABI/platform state, and inspection
+  failures map to pre-spawn `executor_unavailable`/exit `4`. Module-owned
+  `waitpid` preserves exact status and keeps `ECHILD` as a lower-level redacted
   post-spawn exit `7` instead of synthetic success. Framing failure uses
-  fingerprinted grace intervals and the direct-child sequence `close -> wait ->
-  terminate -> wait -> kill -> reap`; each signal is preceded by an
-  authoritative zero-time wait. Normal runtime deadline, descendants, role
-  enforcement, review, integration, provider access, and output remain
-  external-runtime duties.
+  fingerprinted grace intervals and `close -> wait -> terminate -> wait -> kill
+  -> reap`; each signal follows a zero-time owned-child observation. The caller
+  must exclusively own direct-child status throughout the invocation. Hostile
+  concurrent native mutation or a foreign `waitpid` between observation and
+  spawn, signal, or reap remains a residual reusable-PID race. Normal runtime
+  deadline, descendants, role enforcement, review, integration, provider
+  access, and output remain external-runtime duties.
 - The 13 final RALPLAN contract objections and the P0.5/P1/P2 gates are recorded
   in `docs/delegation-roadmap.md`. The five-round RALPLAN run itself ended at
   `max_rounds`/`ITERATE`; the roadmap incorporates its mandatory repairs but
@@ -73,9 +78,10 @@ user-provided model labels, and the no-retention boundary.
   frame/argv/task delivery, confirmation and acknowledgement precedence,
   unavailable-runtime precedence, invalid task, inherited output, one spawn,
   runtime nonzero mapping, partial/interrupted writes, EPIPE, and finite
-  direct-child reap, Python-visible SIGCHLD rejection, child-status-loss races,
-  and actual Darwin `SA_NOCLDWAIT`. The fake is not a production adapter or
-  qualification.
+  direct-child reap, Python-visible and native SIGCHLD rejection, glibc ABI/libc
+  fail-closed parity, spawn-adjacent native mutation, lower-level child-status
+  loss, and exact nonzero status. Actual Darwin `SA_NOCLDWAIT` stops before task
+  access or runtime spawn. The fake is not a production adapter or qualification.
 
 ## Unreleased delegation P1 foundation
 
@@ -114,21 +120,27 @@ user-provided model labels, and the no-retention boundary.
   size, response ID, exit status, and same-process-group cleanup are bounded and
   fail closed; SIGINT cleans the active group and returns redacted exit `130`.
   Python-visible unsafe `SIGCHLD` state and native `SA_NOCLDWAIT` are rejected
-  immediately before spawn. Darwin and reviewed 64-bit glibc Linux
-  x86_64/AArch64 ABIs use native `sigaction` inspection; unsupported Linux
-  libc/ABI combinations and inspection failures fail closed without creating a
-  disposable status-probe child. Real `ECHILD` releases every numeric signal
-  target; macOS Python 3.10 kqueue `ESRCH` from a normally exited, still-waitable
-  leader instead preserves the zombie PGID anchor through group cleanup and one
-  final authoritative `waitpid`. Evidence schema 2 binds the
-  runtime size/SHA-256
+  immediately before spawn by the gate shared with production runtime. Darwin
+  and reviewed 64-bit glibc Linux
+  x86_64/AArch64 ABIs use native `sigaction` inspection. The Linux gate verifies
+  the exact reviewed ctypes layout and calls `gnu_get_libc_version`; unsupported
+  libc/ABI combinations, empty or failing version calls, inspection failures,
+  and unsupported POSIX platforms fail closed without a disposable status-probe
+  child. Real `ECHILD` releases every numeric signal target. On macOS Python
+  3.10, kqueue registration `ESRCH` additionally requires one non-reaping native
+  `waitid(P_PID, WEXITED|WNOHANG|WNOWAIT)` ownership check: `ECHILD` or any
+  unreviewed failure releases every target without signaling, while a waitable
+  fast-exit leader retains its zombie PGID anchor through cleanup and one final
+  authoritative `waitpid`. Evidence schema 2 binds the runtime size/SHA-256
   observed before the suite;
   the runner rechecks it after all cases and candidate construction rechecks the
   current bytes. The runner reads no task stdin and never edits the registry.
 - Native `SIGCHLD` inspection is not atomic against hostile concurrent native
   disposition mutation between the spawn-adjacent check and process creation.
-  A later `ECHILD` fails the case and releases stale numeric signal targets
-  instead of risking PID/PGID reuse.
+  The native Darwin `WNOWAIT` check proves status ownership only at that instant;
+  an external concurrent reaper between that check and cleanup signaling or the
+  final reap remains a residual stale-target race. The runner therefore requires
+  exclusive ownership of its direct-child status for the duration of each case.
 - The runner is not an attestation mechanism. Drivers inherit the environment
   and own runtime/vendor authentication, network, quota, billing, and external
   observation. A driver can lie or escape its process group. No real Claude or
@@ -137,11 +149,16 @@ user-provided model labels, and the no-retention boundary.
 - `tests/test_delegation_conformance.py` uses real subprocesses to cover all-pass
   candidate compatibility, explicit failure, case-ID spoofing, oversized valid
   JSON, fixed case timeout, same-process-group leakage detection, cleanup, and
-  stdin independence. Its v2 indistinguishability regression compares fixed
+  stdin independence. Actual Darwin kqueue fixtures distinguish a normally
+  exited waitable child from one already reaped externally, and deterministic
+  units bind the non-reaping flags and all-target release behavior. Its v2
+  indistinguishability regression compares fixed
   runtime-invoked, runtime-skipped, marker-forged, and self-attested modes.
   Marker presence differs while complete evidence and candidates remain
   identical; this proves only v2 observer blindness, not authentic invocation
-  or misconduct. The package registry remains empty in every success test.
+  or misconduct. The package registry remains empty in every success test. CI's
+  macOS Python 3.10/3.13 boundary job runs this conformance module so kqueue and
+  native `sigaction` paths are merge-gated.
 - `tests/fixtures/delegation_claim_map_v3.json` is a test-only executable claim
   inventory, not evidence. `tests/test_delegation_claim_map_v3.py` reconciles
   its 54 permission and 13 scenario IDs with both production catalogs, enforces
@@ -247,7 +264,11 @@ user-provided model labels, and the no-retention boundary.
   fingerprint-bound private bytes. A bounded
   classic-ZIP preflight runs before `ZipFile`, rejects unsupported or ambiguous
   layouts, and verifies every stored/deflated payload's exact byte consumption,
-  output size, and CRC. Release
+  output size, and CRC. Core metadata uses one bounded strict header grammar;
+  exact project/version values must agree across the wheel filename, sole
+  `.dist-info` namespace, wheel METADATA, sdist filename/root/PKG-INFO, and the
+  release tag. Bare-CR, folded, duplicate, alternate metadata namespaces, and
+  noncanonical identities fail closed with value-free diagnostics. Release
   validation uses a fresh stdlib-only job, and publication consumes the same
   immutable artifact that job approved rather than re-uploading mutable paths.
 - `README.md`, `RELEASING.md`, `tests/eval/README.md`, and
@@ -255,26 +276,33 @@ user-provided model labels, and the no-retention boundary.
 
 ## Verification evidence
 
-- On 2026-08-09, the current PR #22 worktree passed all 404 tests under Python
-  3.14.6 in 63.738s and Python 3.10.20 in 60.326s with `ResourceWarning`
-  promoted to an error. The Linux glibc AArch64 conformance module passed 44/44
-  tests in 20.863s with one platform skip. A fresh offline wheel/sdist passed
-  the isolation gate and all 404 extracted-sdist tests under Python 3.14.6 in
-  69.097s and Python 3.10.20 in 65.877s, with one platform skip per run. Ruff
-  0.16.1 check/format, mypy 2.3.0 strict checking, both-version compileall, and
-  `git diff --check` passed. Independent process-safety, ABI, and completion
-  reviews reported no actionable critical, high, or medium findings.
-- The fresh offline exact wheel/sdist build passed the distribution-isolation
-  gate and all 404 extracted-sdist tests under both interpreters: 69.097s on
-  Python 3.14.6 and 65.877s on Python 3.10.20, with one platform skip each. The
-  gate proves exact empty source/wheel/sdist registries; rejects duplicate,
-  Unicode-normalized, case-folding, and file/implicit-directory archive
-  identities; bounds physical tar and classic-ZIP headers and payloads before
-  parsing; rejects unconsumed deflate bytes, checksum/size mismatches, ZIP64,
-  data descriptors, encryption, overlaps, and excessive physical member counts;
-  binds preflight, parsing, and extraction to one fingerprinted snapshot;
-  excludes test-only and qualification-like wheel content; and confines
-  required synthetic assets to their exact sdist `tests/` paths.
+- On 2026-08-09, the shared native `SIGCHLD` gate, delegation runtime, and
+  Darwin kqueue/Linux native-inspection conformance hardening passed all 106
+  focused runtime and conformance tests under Python 3.14.6 and Python 3.10.20
+  with `ResourceWarning` promoted to an error. Both versions exercised actual
+  Darwin pre-task and spawn-adjacent `SA_NOCLDWAIT` rejection, exact nonzero
+  runtime status, fast-exit waitability, and exact-owned externally reaped
+  children. Injected native-call argument failures also released every signal
+  target without probing, signaling, or final waiting; every spawned fixture
+  was reaped and retained no descendant. Ruff
+  check/format, strict mypy over all 40 source files, both-version `compileall`
+  over `src` and `tests`, and `git diff --check` passed.
+- The final current-tree source suite passed all 428 tests under Python 3.14.6
+  in 73.008s and Python 3.10.20 in 66.668s with `ResourceWarning` promoted to
+  an error. A fresh offline exact wheel/sdist build then passed the
+  distribution-isolation gate and all 428 extracted-sdist tests under both
+  interpreters: 74.769s on Python 3.14.6 and 67.641s on Python 3.10.20, with one
+  platform skip each. The gate proves exact empty source/wheel/sdist registries;
+  rejects duplicate, Unicode-normalized, case-folding, file/implicit-directory,
+  and alternate `.dist-info` identities; binds the exact canonical
+  project/version across filenames, archive roots, core metadata, and the
+  expected release tag; bounds physical tar and classic-ZIP headers and
+  payloads before parsing; rejects unconsumed deflate bytes, checksum/size
+  mismatches, ZIP64, data descriptors, encryption, overlaps, and excessive
+  physical member counts; binds preflight, parsing, and extraction to one
+  fingerprinted snapshot; excludes test-only and qualification-like wheel
+  content; and confines required synthetic assets to their exact sdist
+  `tests/` paths.
 - Verification did not access a credential or secret-like file, invoke a
   weightclass-selected product/vendor runtime, persist runtime task content,
   publish a release, or deploy. External review tools received only bounded,

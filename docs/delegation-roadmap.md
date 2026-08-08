@@ -110,11 +110,16 @@ The following decisions close the final Planner-Architect-Critic objections.
    kill -> reap`. Weightclass will act only on its direct child and will never
    enumerate descendants. A defective trusted runtime can still orphan them;
    descendant leakage fails P1 conformance. Runtime execution also requires a
-   main-thread, Python-visible default `SIGCHLD` disposition before task input.
-   A module-owned `waitpid` treats missing child status as a redacted runtime
-   failure rather than trusting `Popen`'s synthetic zero fallback. Hidden or
-   concurrently changed native signal state remains outside the portable
-   pre-spawn proof boundary.
+   main-thread, reviewed native `SIGCHLD` disposition before task input and
+   again immediately before `Popen`. Darwin and reviewed 64-bit glibc Linux
+   x86_64/AArch64 ABIs use the same fail-closed native `sigaction` gate as the
+   conformance runner; unsupported libc, ABI, and POSIX platforms do not run.
+   The caller must exclusively own direct-child status throughout the
+   invocation. The spawn-adjacent observation and module-owned `waitpid`
+   narrow stale-PID exposure and treat missing status as a redacted failure,
+   but neither is atomic against hostile concurrent native mutation or a
+   foreign `waitpid` between an ownership observation and later signaling or
+   reaping.
 4. **Stage-specific retention.** Worker contexts release after the worker
    stage. Runtime-owned artifacts remain available through review and
    integration and are destroyed on reviewer rejection or after integration.

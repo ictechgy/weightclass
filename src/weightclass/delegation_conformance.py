@@ -38,6 +38,7 @@ from .delegation_schema import (
     validate_runtime_path_lexically,
 )
 from .delegation_types import VendorFamily
+from .process_context import has_safe_sigchld_disposition as _has_safe_sigchld_disposition
 
 DRIVER_PROTOCOL_VERSION: Final = 1
 EVIDENCE_SCHEMA_VERSION: Final = 2
@@ -50,8 +51,10 @@ MAX_REQUEST_BYTES: Final = 32_768
 GROUP_CLEANUP_TIMEOUT_SECONDS: Final = 1.0
 DRIVER_ARGUMENTS: Final = ("--weightclass-conformance-driver", "1")
 _CHILD_STATUS_LOST: Final = -sys.maxsize
-_DARWIN_SA_NOCLDWAIT: Final = 0x20
-_LINUX_SA_NOCLDWAIT: Final = 0x02
+_DARWIN_P_PID: Final = 1
+_DARWIN_WNOHANG: Final = 0x01
+_DARWIN_WEXITED: Final = 0x04
+_DARWIN_WNOWAIT: Final = 0x20
 _LEADER_ALREADY_EXITED: Final = object()
 
 Role = Literal["orchestrator", "worker", "reviewer"]
@@ -97,26 +100,11 @@ class _DuplicateKeyError(ValueError):
     pass
 
 
-class _DarwinSigaction(ctypes.Structure):
-    _fields_ = [
-        ("handler", ctypes.c_void_p),
-        ("mask", ctypes.c_uint32),
-        ("flags", ctypes.c_int),
-    ]
-
-
-class _LinuxGlibcSigset(ctypes.Structure):
-    # glibc uses a 128-byte sigset_t on the reviewed 64-bit x86/AArch64 ABIs.
-    _fields_ = [("values", ctypes.c_ubyte * 128)]
-
-
-class _LinuxGlibcSigaction(ctypes.Structure):
-    _fields_ = [
-        ("handler", ctypes.c_void_p),
-        ("mask", _LinuxGlibcSigset),
-        ("flags", ctypes.c_int),
-        ("restorer", ctypes.c_void_p),
-    ]
+class _DarwinSiginfoBuffer(ctypes.Structure):
+    # Darwin's reviewed 64-bit siginfo_t is smaller than this aligned buffer.
+    # The runner never interprets it; waitid's return/errno is the ownership
+    # oracle, so no field offsets are duplicated here.
+    _fields_ = [("storage", ctypes.c_uint64 * 16)]
 
 
 class _SafeArgumentParser(argparse.ArgumentParser):
@@ -459,41 +447,40 @@ def _has_leader_exit_observer() -> bool:
     )
 
 
-def _has_safe_sigchld_disposition() -> bool:
-    sigchld = getattr(signal, "SIGCHLD", None)
-    if sigchld is None:
+def _darwin_child_status_waitable(pid: int) -> bool:
+    """Check Darwin child-status ownership once without consuming the status."""
+    if (
+        sys.platform != "darwin"
+        or ctypes.sizeof(ctypes.c_void_p) != 8
+        or pid <= 0
+        or pid > 0xFFFFFFFF
+    ):
         return False
     try:
-        if signal.getsignal(sigchld) != signal.SIG_DFL:
-            return False
-    except (OSError, ValueError):
-        return False
-    if sys.platform == "darwin":
-        try:
-            libc = ctypes.CDLL(None, use_errno=True)
-            action = _DarwinSigaction()
-            if libc.sigaction(sigchld, None, ctypes.byref(action)) != 0:
-                return False
-        except (AttributeError, OSError, TypeError, ValueError):
-            return False
-        return action.handler in (None, 0) and not action.flags & _DARWIN_SA_NOCLDWAIT
-    if not sys.platform.startswith("linux"):
-        return True
-    try:
-        machine = os.uname().machine.lower()
-        if machine not in ("aarch64", "amd64", "arm64", "x86_64"):
-            return False
-        if ctypes.sizeof(ctypes.c_void_p) != 8:
-            return False
         libc = ctypes.CDLL(None, use_errno=True)
-        if not callable(getattr(libc, "gnu_get_libc_version", None)):
-            return False
-        action = _LinuxGlibcSigaction()
-        if libc.sigaction(sigchld, None, ctypes.byref(action)) != 0:
-            return False
-    except (AttributeError, OSError, TypeError, ValueError):
+        waitid = libc.waitid
+        waitid.argtypes = [ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+        waitid.restype = ctypes.c_int
+        status = _DarwinSiginfoBuffer()
+        ctypes.set_errno(0)
+        result = waitid(
+            _DARWIN_P_PID,
+            pid,
+            ctypes.byref(status),
+            _DARWIN_WEXITED | _DARWIN_WNOHANG | _DARWIN_WNOWAIT,
+        )
+    except (
+        AttributeError,
+        ctypes.ArgumentError,
+        OSError,
+        OverflowError,
+        TypeError,
+        ValueError,
+    ):
         return False
-    return action.handler in (None, 0) and not action.flags & _LINUX_SA_NOCLDWAIT
+    # WNOHANG makes this a single bounded native call. ECHILD and every other
+    # failure leave ownership unproved and therefore release all signal targets.
+    return bool(result == 0)
 
 
 def _open_leader_exit_queue(pid: int) -> Any | None:
@@ -517,7 +504,7 @@ def _open_leader_exit_queue(pid: int) -> Any | None:
         if isinstance(error, ChildProcessError) or error.errno == errno.ECHILD:
             raise ChildProcessError() from None
         if isinstance(error, ProcessLookupError) or error.errno == errno.ESRCH:
-            if not _has_safe_sigchld_disposition():
+            if not _darwin_child_status_waitable(pid):
                 raise ChildProcessError() from None
             # Darwin rejects EVFILT_PROC registration for a child that already
             # exited even while its wait status and PGID anchor remain owned.

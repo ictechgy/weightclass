@@ -14,6 +14,7 @@ from types import FrameType
 from typing import Any, Final
 
 from .delegation_types import DirectChildCleanup
+from .process_context import has_safe_sigchld_disposition
 
 RUNTIME_ARGUMENTS: Final = ("--weightclass-delegation-protocol", "1")
 _SIGINT_POLL_SECONDS: Final = 0.05
@@ -99,19 +100,16 @@ def validate_delegation_runtime(runtime_path: str) -> None:
 
 
 def validate_runtime_process_context() -> None:
-    """Reject Python-visible contexts known to make child status unsafe.
+    """Require a reviewed context that preserves direct-child status.
 
-    Platform flags hidden from ``signal.getsignal`` are detected after spawn by
-    the authoritative ``waitpid`` boundary and become a redacted runtime failure.
+    This observation cannot prevent hostile concurrent native mutation. The
+    caller must retain exclusive child-status ownership throughout invocation;
+    the second check next to ``Popen`` narrows but cannot remove that residual.
     """
-    sigchld = getattr(signal, "SIGCHLD", None)
-    if sigchld is None or threading.current_thread() is not threading.main_thread():
-        raise DelegationRuntimeUnavailableError()
-    try:
-        disposition = signal.getsignal(sigchld)
-    except (OSError, ValueError):
-        raise DelegationRuntimeUnavailableError() from None
-    if disposition != signal.SIG_DFL:
+    if (
+        threading.current_thread() is not threading.main_thread()
+        or not has_safe_sigchld_disposition()
+    ):
         raise DelegationRuntimeUnavailableError()
 
 
@@ -208,7 +206,11 @@ def _close_stdin(process: subprocess.Popen[bytes]) -> None:
 
 
 def _signal_direct_child(process: subprocess.Popen[bytes], signal_number: int) -> bool:
-    """Signal only while waitpid still proves that the owned PID is live."""
+    """Signal after a zero-time owned-child wait still observes it running.
+
+    The wait-to-signal sequence narrows stale-PID exposure but is not atomic
+    against a foreign concurrent reaper.
+    """
     try:
         _wait(process, 0)
         return False

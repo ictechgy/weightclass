@@ -4,7 +4,6 @@ import fcntl
 import hashlib
 import json
 import os
-import platform
 import signal
 import stat
 import subprocess
@@ -32,6 +31,9 @@ from weightclass.delegation_qualification import (
     QualificationInvalidInputError,
     build_qualification_candidate,
     load_packaged_qualification_registry,
+)
+from weightclass.process_context import (
+    has_safe_sigchld_disposition as _has_safe_sigchld_disposition,
 )
 
 FAKE_DRIVER = Path(__file__).parent / "fixtures" / "fake_conformance_driver.py"
@@ -275,9 +277,13 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         return cast(subprocess.Popen[bytes], process)
 
     @staticmethod
-    def _mock_linux_glibc(*, native_flags: int = 0) -> mock.Mock:
+    def _mock_linux_glibc(
+        *,
+        native_flags: int = 0,
+        version: object = b"2.36",
+    ) -> mock.Mock:
         libc = mock.Mock()
-        libc.gnu_get_libc_version = lambda: b"2.36"
+        libc.gnu_get_libc_version = mock.Mock(return_value=version)
 
         def inspect_sigaction(
             _signal_number: int,
@@ -291,6 +297,17 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
 
         libc.sigaction.side_effect = inspect_sigaction
         return libc
+
+    @staticmethod
+    def _ctypes_sizeof_with_pointer_size(pointer_size: int) -> Any:
+        real_sizeof = ctypes.sizeof
+
+        def inspected_size(value: Any) -> int:
+            if value is ctypes.c_void_p:
+                return pointer_size
+            return real_sizeof(value)
+
+        return inspected_size
 
     def _wait_for_pid_publication(
         self,
@@ -1356,8 +1373,11 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             raise OSError()
 
         with (
-            mock.patch("weightclass.delegation_conformance.sys.platform", "darwin"),
-            mock.patch.object(ctypes, "CDLL", side_effect=inspect_then_fail),
+            mock.patch("weightclass.process_context.sys.platform", "darwin"),
+            mock.patch(
+                "weightclass.process_context.ctypes.CDLL",
+                side_effect=inspect_then_fail,
+            ),
             mock.patch(
                 "weightclass.delegation_conformance.subprocess.Popen",
                 side_effect=AssertionError("driver spawn must remain untouched"),
@@ -1375,45 +1395,182 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         self.assertEqual(native_checks, 2)
         popen.assert_not_called()
 
+    def test_darwin_sigaction_argument_error_fails_closed(self) -> None:
+        """Breaks if an invalid native call escapes the shared safety gate."""
+        from weightclass import process_context
+
+        libc = mock.Mock()
+        libc.sigaction.side_effect = ctypes.ArgumentError("invalid sigaction call")
+        with (
+            mock.patch("weightclass.process_context.sys.platform", "darwin"),
+            mock.patch(
+                "weightclass.process_context.signal.getsignal",
+                return_value=signal.SIG_DFL,
+            ),
+            mock.patch(
+                "weightclass.process_context.ctypes.CDLL",
+                return_value=libc,
+            ),
+        ):
+            self.assertFalse(process_context.has_safe_sigchld_disposition())
+
     def test_linux_glibc_sigaction_checks_native_no_child_wait_flag(self) -> None:
         """Breaks if Python-visible SIG_DFL hides glibc auto-reaping."""
-        from weightclass import delegation_conformance as conformance
+        from weightclass import process_context
 
         for native_flags, expected_safe in ((0, True), (0x02, False)):
             with self.subTest(native_flags=native_flags):
                 libc = self._mock_linux_glibc(native_flags=native_flags)
                 with (
                     mock.patch(
-                        "weightclass.delegation_conformance.sys.platform",
+                        "weightclass.process_context.sys.platform",
                         "linux",
                     ),
                     mock.patch(
-                        "weightclass.delegation_conformance.signal.getsignal",
+                        "weightclass.process_context.signal.getsignal",
                         return_value=signal.SIG_DFL,
                     ),
                     mock.patch(
-                        "weightclass.delegation_conformance.os.uname",
+                        "weightclass.process_context.os.uname",
                         return_value=mock.Mock(machine="x86_64"),
                     ),
                     mock.patch(
-                        "weightclass.delegation_conformance.ctypes.sizeof",
-                        return_value=8,
+                        "weightclass.process_context.ctypes.sizeof",
+                        side_effect=self._ctypes_sizeof_with_pointer_size(8),
                     ),
                     mock.patch(
-                        "weightclass.delegation_conformance.ctypes.CDLL",
+                        "weightclass.process_context.ctypes.CDLL",
                         return_value=libc,
                     ),
                 ):
                     self.assertIs(
-                        conformance._has_safe_sigchld_disposition(),
+                        process_context.has_safe_sigchld_disposition(),
                         expected_safe,
                     )
 
                 libc.sigaction.assert_called_once()
+                libc.gnu_get_libc_version.assert_called_once_with()
+
+    def test_linux_glibc_sigaction_layout_matches_reviewed_abi(self) -> None:
+        """Breaks if the declared glibc layout drifts from the reviewed ABI."""
+        from weightclass import process_context
+
+        self.assertEqual(ctypes.sizeof(process_context._LinuxGlibcSigset), 128)
+        self.assertEqual(process_context._LinuxGlibcSigaction.handler.offset, 0)
+        self.assertEqual(process_context._LinuxGlibcSigaction.mask.offset, 8)
+        self.assertEqual(process_context._LinuxGlibcSigaction.flags.offset, 136)
+        self.assertEqual(process_context._LinuxGlibcSigaction.restorer.offset, 144)
+        self.assertEqual(ctypes.sizeof(process_context._LinuxGlibcSigaction), 152)
+
+    def test_linux_glibc_sigaction_layout_mismatch_fails_closed(self) -> None:
+        """Breaks if Linux accepts a ctypes layout that was not reviewed."""
+        from weightclass import process_context
+
+        libc = self._mock_linux_glibc()
+        real_sizeof = ctypes.sizeof
+
+        def mismatched_layout_size(value: Any) -> int:
+            if value is ctypes.c_void_p:
+                return 8
+            if value is process_context._LinuxGlibcSigaction:
+                return 160
+            return real_sizeof(value)
+
+        with (
+            mock.patch("weightclass.process_context.sys.platform", "linux"),
+            mock.patch(
+                "weightclass.process_context.signal.getsignal",
+                return_value=signal.SIG_DFL,
+            ),
+            mock.patch(
+                "weightclass.process_context.os.uname",
+                return_value=mock.Mock(machine="x86_64"),
+            ),
+            mock.patch(
+                "weightclass.process_context.ctypes.sizeof",
+                side_effect=mismatched_layout_size,
+            ),
+            mock.patch(
+                "weightclass.process_context.ctypes.CDLL",
+                return_value=libc,
+            ),
+        ):
+            self.assertFalse(process_context.has_safe_sigchld_disposition())
+
+    def test_linux_glibc_version_call_must_return_nonempty_bytes(self) -> None:
+        """Breaks if symbol presence alone is accepted as proof of glibc."""
+        from weightclass import process_context
+
+        cases = (None, b"", "2.36")
+        for version in cases:
+            libc = self._mock_linux_glibc(version=version)
+            with (
+                self.subTest(version=version),
+                mock.patch("weightclass.process_context.sys.platform", "linux"),
+                mock.patch(
+                    "weightclass.process_context.signal.getsignal",
+                    return_value=signal.SIG_DFL,
+                ),
+                mock.patch(
+                    "weightclass.process_context.os.uname",
+                    return_value=mock.Mock(machine="x86_64"),
+                ),
+                mock.patch(
+                    "weightclass.process_context.ctypes.sizeof",
+                    side_effect=self._ctypes_sizeof_with_pointer_size(8),
+                ),
+                mock.patch(
+                    "weightclass.process_context.ctypes.CDLL",
+                    return_value=libc,
+                ),
+            ):
+                self.assertFalse(process_context.has_safe_sigchld_disposition())
+
+            libc.gnu_get_libc_version.assert_called_once_with()
+
+        failing_libc = self._mock_linux_glibc()
+        failing_libc.gnu_get_libc_version.side_effect = OSError()
+        with (
+            mock.patch("weightclass.process_context.sys.platform", "linux"),
+            mock.patch(
+                "weightclass.process_context.signal.getsignal",
+                return_value=signal.SIG_DFL,
+            ),
+            mock.patch(
+                "weightclass.process_context.os.uname",
+                return_value=mock.Mock(machine="x86_64"),
+            ),
+            mock.patch(
+                "weightclass.process_context.ctypes.sizeof",
+                side_effect=self._ctypes_sizeof_with_pointer_size(8),
+            ),
+            mock.patch(
+                "weightclass.process_context.ctypes.CDLL",
+                return_value=failing_libc,
+            ),
+        ):
+            self.assertFalse(process_context.has_safe_sigchld_disposition())
+
+    def test_unknown_posix_platform_sigchld_gate_fails_closed(self) -> None:
+        """Breaks if an unsupported POSIX platform bypasses native inspection."""
+        with (
+            mock.patch(
+                "weightclass.process_context.sys.platform",
+                "freebsd14",
+            ),
+            mock.patch(
+                "weightclass.process_context.signal.getsignal",
+                return_value=signal.SIG_DFL,
+            ),
+            mock.patch("weightclass.process_context.ctypes.CDLL") as cdll,
+        ):
+            self.assertFalse(_has_safe_sigchld_disposition())
+
+        cdll.assert_not_called()
 
     def test_linux_sigaction_unknown_abi_or_libc_fails_closed(self) -> None:
         """Breaks if an unreviewed Linux sigaction layout is treated as safe."""
-        from weightclass import delegation_conformance as conformance
+        from weightclass import process_context
 
         cases = (
             ("i686", 8, self._mock_linux_glibc()),
@@ -1424,27 +1581,27 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             with (
                 self.subTest(machine=machine, pointer_size=pointer_size),
                 mock.patch(
-                    "weightclass.delegation_conformance.sys.platform",
+                    "weightclass.process_context.sys.platform",
                     "linux",
                 ),
                 mock.patch(
-                    "weightclass.delegation_conformance.signal.getsignal",
+                    "weightclass.process_context.signal.getsignal",
                     return_value=signal.SIG_DFL,
                 ),
                 mock.patch(
-                    "weightclass.delegation_conformance.os.uname",
+                    "weightclass.process_context.os.uname",
                     return_value=mock.Mock(machine=machine),
                 ),
                 mock.patch(
-                    "weightclass.delegation_conformance.ctypes.sizeof",
-                    return_value=pointer_size,
+                    "weightclass.process_context.ctypes.sizeof",
+                    side_effect=self._ctypes_sizeof_with_pointer_size(pointer_size),
                 ),
                 mock.patch(
-                    "weightclass.delegation_conformance.ctypes.CDLL",
+                    "weightclass.process_context.ctypes.CDLL",
                     return_value=libc,
                 ),
             ):
-                self.assertFalse(conformance._has_safe_sigchld_disposition())
+                self.assertFalse(process_context.has_safe_sigchld_disposition())
 
     def test_linux_sigaction_inspection_failure_blocks_driver_spawn(self) -> None:
         """Breaks if the spawn-adjacent native inspection can fail open."""
@@ -1459,16 +1616,19 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             raise OSError()
 
         with (
-            mock.patch("weightclass.delegation_conformance.sys.platform", "linux"),
+            mock.patch("weightclass.process_context.sys.platform", "linux"),
             mock.patch(
-                "weightclass.delegation_conformance.os.uname",
+                "weightclass.process_context.os.uname",
                 return_value=mock.Mock(machine="x86_64"),
             ),
             mock.patch(
-                "weightclass.delegation_conformance.ctypes.sizeof",
-                return_value=8,
+                "weightclass.process_context.ctypes.sizeof",
+                side_effect=self._ctypes_sizeof_with_pointer_size(8),
             ),
-            mock.patch.object(ctypes, "CDLL", side_effect=inspect_then_fail),
+            mock.patch(
+                "weightclass.process_context.ctypes.CDLL",
+                side_effect=inspect_then_fail,
+            ),
             mock.patch(
                 "weightclass.delegation_conformance.os.posix_spawn",
                 return_value=321,
@@ -1498,17 +1658,17 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         """Breaks if conformance probes ownership by creating another child."""
         libc = self._mock_linux_glibc()
         with (
-            mock.patch("weightclass.delegation_conformance.sys.platform", "linux"),
+            mock.patch("weightclass.process_context.sys.platform", "linux"),
             mock.patch(
-                "weightclass.delegation_conformance.os.uname",
+                "weightclass.process_context.os.uname",
                 return_value=mock.Mock(machine="x86_64"),
             ),
             mock.patch(
-                "weightclass.delegation_conformance.ctypes.sizeof",
-                return_value=8,
+                "weightclass.process_context.ctypes.sizeof",
+                side_effect=self._ctypes_sizeof_with_pointer_size(8),
             ),
             mock.patch(
-                "weightclass.delegation_conformance.ctypes.CDLL",
+                "weightclass.process_context.ctypes.CDLL",
                 return_value=libc,
             ),
             mock.patch(
@@ -1575,6 +1735,10 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         """Breaks if normal fast exit is mistaken for unavailable child status."""
         process = self._mock_driver_process()
         events: list[str] = []
+        native_waitid = mock.Mock(return_value=0)
+        libc = mock.Mock(waitid=native_waitid)
+        exit_queue = mock.Mock()
+        exit_queue.control.side_effect = ProcessLookupError(errno.ESRCH, "gone")
 
         def fail_write(_stream: Any, _request: bytes, state: Any) -> None:
             state.write_failed = True
@@ -1590,6 +1754,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             return process.pid, 17 << 8
 
         with (
+            mock.patch("weightclass.delegation_conformance.sys.platform", "darwin"),
             mock.patch.object(os, "waitid", None, create=True),
             mock.patch.multiple(
                 "weightclass.delegation_conformance.select",
@@ -1601,8 +1766,21 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             ),
             mock.patch(
                 "weightclass.delegation_conformance.select.kevent",
-                side_effect=ProcessLookupError(errno.ESRCH, "gone"),
+                return_value=object(),
                 create=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.select.kqueue",
+                return_value=exit_queue,
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance._has_safe_sigchld_disposition",
+                return_value=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.ctypes.CDLL",
+                return_value=libc,
             ),
             mock.patch(
                 "weightclass.delegation_conformance.subprocess.Popen",
@@ -1639,6 +1817,17 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             )
 
         self.assertFalse(passed)
+        native_waitid.assert_called_once()
+        native_waitid_arguments = native_waitid.call_args.args
+        self.assertEqual(
+            (
+                native_waitid_arguments[0],
+                native_waitid_arguments[1],
+                native_waitid_arguments[3],
+            ),
+            (1, process.pid, 0x25),
+        )
+        exit_queue.close.assert_called_once_with()
         waitpid.assert_called_once_with(process.pid, 0)
         cast(Any, process.wait).assert_not_called()
         self.assertEqual(process.returncode, 17)
@@ -1655,11 +1844,233 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             events,
         )
 
-    def test_kqueue_esrch_with_unsafe_native_sigchld_releases_all_targets(self) -> None:
-        """Breaks if a persistent post-spawn auto-reap race retains stale targets."""
+    def test_kqueue_esrch_after_external_reap_releases_all_targets(self) -> None:
+        """Breaks if kqueue ESRCH treats an already-reaped PID as an owned anchor."""
+        from weightclass import delegation_conformance as conformance
+
+        process = self._mock_driver_process()
+        recorded_ownership: list[Any] = []
+        original_record_process = conformance._DriverCaseOwnership.record_process
+        native_waitid = mock.Mock()
+        exit_queue = mock.Mock()
+        exit_queue.control.side_effect = ProcessLookupError(errno.ESRCH, "gone")
+
+        def report_echild(*_args: Any) -> int:
+            ctypes.set_errno(errno.ECHILD)
+            return -1
+
+        native_waitid.side_effect = report_echild
+        libc = mock.Mock(waitid=native_waitid)
+
+        def record_ownership(ownership: Any, child: Any) -> None:
+            original_record_process(ownership, child)
+            recorded_ownership.append(ownership)
+
+        with (
+            mock.patch("weightclass.delegation_conformance.sys.platform", "darwin"),
+            mock.patch.object(os, "waitid", None, create=True),
+            mock.patch.multiple(
+                "weightclass.delegation_conformance.select",
+                KQ_FILTER_PROC=0,
+                KQ_EV_ADD=0,
+                KQ_EV_ONESHOT=0,
+                KQ_NOTE_EXIT=0,
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.select.kevent",
+                return_value=object(),
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.select.kqueue",
+                return_value=exit_queue,
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance._has_safe_sigchld_disposition",
+                return_value=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.ctypes.CDLL",
+                return_value=libc,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.subprocess.Popen",
+                return_value=process,
+            ),
+            mock.patch.object(
+                conformance._DriverCaseOwnership,
+                "record_process",
+                autospec=True,
+                side_effect=record_ownership,
+            ),
+            mock.patch("weightclass.delegation_conformance._write_request"),
+            mock.patch("weightclass.delegation_conformance._read_response"),
+            mock.patch("weightclass.delegation_conformance._signal_process_group") as killpg,
+            mock.patch("weightclass.delegation_conformance.os.kill") as kill,
+            mock.patch(
+                "weightclass.delegation_conformance._process_group_exists",
+                return_value=False,
+            ) as probe,
+            mock.patch("weightclass.delegation_conformance.os.waitpid") as waitpid,
+            mock.patch("weightclass.delegation_conformance._wait_after_kill") as final_wait,
+        ):
+            passed = _run_driver_case(
+                FAKE_DRIVER,
+                FIXED_SENTINEL_RUNTIME,
+                CONFORMANCE_CASES[0],
+                Path.cwd(),
+                timeout_seconds=0.1,
+            )
+
+        self.assertFalse(passed)
+        native_waitid.assert_called_once()
+        native_waitid_arguments = native_waitid.call_args.args
+        self.assertEqual(
+            (
+                native_waitid_arguments[0],
+                native_waitid_arguments[1],
+                native_waitid_arguments[3],
+            ),
+            (1, process.pid, 0x25),
+        )
+        exit_queue.close.assert_called_once_with()
+        killpg.assert_not_called()
+        kill.assert_not_called()
+        probe.assert_not_called()
+        waitpid.assert_not_called()
+        final_wait.assert_not_called()
+        self.assertEqual(len(recorded_ownership), 1)
+        ownership = recorded_ownership[0]
+        self.assertTrue(ownership.child_status_lost)
+        self.assertIsNone(ownership.process_group_id)
+        reader_signal_target = ownership.reader_signal_target
+        self.assertIsNotNone(reader_signal_target)
+        assert reader_signal_target is not None
+        self.assertIsNone(reader_signal_target._process_group_id)
+        deferred_sigint = getattr(ownership.before_final_reap, "__self__", None)
+        self.assertIsNotNone(deferred_sigint)
+        assert deferred_sigint is not None
+        self.assertIsNone(deferred_sigint.process_group_id)
+        assert process.stdin is not None
+        assert process.stdout is not None
+        self.assertTrue(process.stdin.closed)
+        self.assertTrue(process.stdout.closed)
+        cast(Any, process.wait).assert_not_called()
+
+    def test_kqueue_esrch_native_argument_error_releases_all_targets(self) -> None:
+        """Breaks if a malformed native waitid call can leave stale targets live."""
+        from weightclass import delegation_conformance as conformance
+
+        process = self._mock_driver_process()
+        recorded_ownership: list[Any] = []
+        original_record_process = conformance._DriverCaseOwnership.record_process
+        native_waitid = mock.Mock(side_effect=ctypes.ArgumentError("invalid waitid call"))
+        libc = mock.Mock(waitid=native_waitid)
+        exit_queue = mock.Mock()
+        exit_queue.control.side_effect = ProcessLookupError(errno.ESRCH, "gone")
+
+        def record_ownership(ownership: Any, child: Any) -> None:
+            original_record_process(ownership, child)
+            recorded_ownership.append(ownership)
+
+        escaped_error: ctypes.ArgumentError | None = None
+        passed: bool | None = None
+        with (
+            mock.patch("weightclass.delegation_conformance.sys.platform", "darwin"),
+            mock.patch.object(os, "waitid", None, create=True),
+            mock.patch.multiple(
+                "weightclass.delegation_conformance.select",
+                KQ_FILTER_PROC=0,
+                KQ_EV_ADD=0,
+                KQ_EV_ONESHOT=0,
+                KQ_NOTE_EXIT=0,
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.select.kevent",
+                return_value=object(),
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.select.kqueue",
+                return_value=exit_queue,
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance._has_safe_sigchld_disposition",
+                return_value=True,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.ctypes.CDLL",
+                return_value=libc,
+            ),
+            mock.patch(
+                "weightclass.delegation_conformance.subprocess.Popen",
+                return_value=process,
+            ),
+            mock.patch.object(
+                conformance._DriverCaseOwnership,
+                "record_process",
+                autospec=True,
+                side_effect=record_ownership,
+            ),
+            mock.patch("weightclass.delegation_conformance._write_request"),
+            mock.patch("weightclass.delegation_conformance._read_response"),
+            mock.patch("weightclass.delegation_conformance._signal_process_group") as killpg,
+            mock.patch("weightclass.delegation_conformance.os.kill") as kill,
+            mock.patch(
+                "weightclass.delegation_conformance._process_group_exists",
+                return_value=False,
+            ) as probe,
+            mock.patch("weightclass.delegation_conformance.os.waitpid") as waitpid,
+            mock.patch("weightclass.delegation_conformance._wait_after_kill") as final_wait,
+        ):
+            try:
+                passed = _run_driver_case(
+                    FAKE_DRIVER,
+                    FIXED_SENTINEL_RUNTIME,
+                    CONFORMANCE_CASES[0],
+                    Path.cwd(),
+                    timeout_seconds=0.1,
+                )
+            except ctypes.ArgumentError as error:
+                escaped_error = error
+
+        self.assertIsNone(escaped_error)
+        self.assertIs(passed, False)
+        native_waitid.assert_called_once()
+        exit_queue.close.assert_called_once_with()
+        killpg.assert_not_called()
+        kill.assert_not_called()
+        probe.assert_not_called()
+        waitpid.assert_not_called()
+        final_wait.assert_not_called()
+        self.assertEqual(len(recorded_ownership), 1)
+        ownership = recorded_ownership[0]
+        self.assertTrue(ownership.child_status_lost)
+        self.assertIsNone(ownership.process_group_id)
+        reader_signal_target = ownership.reader_signal_target
+        self.assertIsNotNone(reader_signal_target)
+        assert reader_signal_target is not None
+        self.assertIsNone(reader_signal_target._process_group_id)
+        deferred_sigint = getattr(ownership.before_final_reap, "__self__", None)
+        self.assertIsNotNone(deferred_sigint)
+        assert deferred_sigint is not None
+        self.assertIsNone(deferred_sigint.process_group_id)
+        assert process.stdin is not None
+        assert process.stdout is not None
+        self.assertTrue(process.stdin.closed)
+        self.assertTrue(process.stdout.closed)
+        cast(Any, process.wait).assert_not_called()
+
+    def test_kqueue_esrch_without_native_waitid_releases_all_targets(self) -> None:
+        """Breaks if a missing Darwin ownership oracle retains stale targets."""
         process = self._mock_driver_process()
 
         with (
+            mock.patch("weightclass.delegation_conformance.sys.platform", "darwin"),
             mock.patch.object(os, "waitid", None, create=True),
             mock.patch.multiple(
                 "weightclass.delegation_conformance.select",
@@ -1676,8 +2087,12 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             ),
             mock.patch(
                 "weightclass.delegation_conformance._has_safe_sigchld_disposition",
-                side_effect=(True, True, False),
+                return_value=True,
             ) as sigchld_checks,
+            mock.patch(
+                "weightclass.delegation_conformance.ctypes.CDLL",
+                return_value=object(),
+            ),
             mock.patch(
                 "weightclass.delegation_conformance.subprocess.Popen",
                 return_value=process,
@@ -1701,7 +2116,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             )
 
         self.assertFalse(passed)
-        self.assertEqual(sigchld_checks.call_count, 3)
+        self.assertEqual(sigchld_checks.call_count, 2)
         killpg.assert_not_called()
         kill.assert_not_called()
         probe.assert_not_called()
@@ -1734,6 +2149,95 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 process.wait(timeout=1)
             if process.stdout is not None and not process.stdout.closed:
                 process.stdout.close()
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin kqueue")
+    def test_real_kqueue_external_reap_releases_every_signal_target(self) -> None:
+        """Breaks if a real reaped Darwin child leaves stale signal targets."""
+        from weightclass import delegation_conformance as conformance
+
+        real_popen = cast(Any, subprocess.Popen)
+        spawned: list[tuple[subprocess.Popen[bytes], int]] = []
+        recorded_ownership: list[Any] = []
+        original_record_process = conformance._DriverCaseOwnership.record_process
+
+        def spawn_and_reap(
+            _arguments: Any,
+            *args: Any,
+            **kwargs: Any,
+        ) -> subprocess.Popen[bytes]:
+            process = cast(
+                subprocess.Popen[bytes],
+                real_popen(("/usr/bin/true",), *args, **kwargs),
+            )
+            while True:
+                try:
+                    waited_pid, wait_status = os.waitpid(process.pid, 0)
+                except InterruptedError:
+                    continue
+                break
+            self.assertEqual(waited_pid, process.pid)
+            spawned.append((process, wait_status))
+            return process
+
+        def record_ownership(ownership: Any, child: Any) -> None:
+            original_record_process(ownership, child)
+            recorded_ownership.append(ownership)
+
+        try:
+            with (
+                tempfile.TemporaryDirectory() as temporary_directory,
+                mock.patch.object(os, "waitid", None, create=True),
+                mock.patch(
+                    "weightclass.delegation_conformance.subprocess.Popen",
+                    side_effect=spawn_and_reap,
+                ),
+                mock.patch.object(
+                    conformance._DriverCaseOwnership,
+                    "record_process",
+                    autospec=True,
+                    side_effect=record_ownership,
+                ),
+                mock.patch("weightclass.delegation_conformance._signal_process_group") as killpg,
+                mock.patch("weightclass.delegation_conformance.os.kill") as kill,
+                mock.patch(
+                    "weightclass.delegation_conformance._process_group_exists",
+                    return_value=False,
+                ) as probe,
+                mock.patch("weightclass.delegation_conformance._wait_after_kill") as final_wait,
+            ):
+                passed = _run_driver_case(
+                    Path("/usr/bin/true"),
+                    FIXED_SENTINEL_RUNTIME,
+                    CONFORMANCE_CASES[0],
+                    Path(temporary_directory),
+                    timeout_seconds=0.1,
+                )
+
+            self.assertFalse(passed)
+            killpg.assert_not_called()
+            kill.assert_not_called()
+            probe.assert_not_called()
+            final_wait.assert_not_called()
+            self.assertEqual(len(spawned), 1)
+            self.assertEqual(len(recorded_ownership), 1)
+            ownership = recorded_ownership[0]
+            self.assertTrue(ownership.child_status_lost)
+            self.assertIsNone(ownership.process_group_id)
+            reader_signal_target = ownership.reader_signal_target
+            self.assertIsNotNone(reader_signal_target)
+            assert reader_signal_target is not None
+            self.assertIsNone(reader_signal_target._process_group_id)
+            deferred_sigint = getattr(ownership.before_final_reap, "__self__", None)
+            self.assertIsNotNone(deferred_sigint)
+            assert deferred_sigint is not None
+            self.assertIsNone(deferred_sigint.process_group_id)
+        finally:
+            for process, wait_status in spawned:
+                if process.returncode is None:
+                    process.returncode = os.waitstatus_to_exitcode(wait_status)
+                for stream in (process.stdin, process.stdout):
+                    if stream is not None and not stream.closed:
+                        stream.close()
 
     def test_status_echild_never_uses_popen_synthetic_zero(self) -> None:
         """Breaks if final ECHILD becomes a passing driver exit status."""
@@ -2271,14 +2775,9 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                     self._cleanup_test_process(process)
 
     @unittest.skipUnless(
-        sys.platform == "darwin"
-        or (
-            sys.platform.startswith("linux")
-            and platform.libc_ver()[0] == "glibc"
-            and ctypes.sizeof(ctypes.c_void_p) == 8
-            and platform.machine().lower() in ("aarch64", "amd64", "arm64", "x86_64")
-        ),
-        "requires Darwin or glibc Linux sigaction",
+        (sys.platform == "darwin" or sys.platform.startswith("linux"))
+        and _has_safe_sigchld_disposition(),
+        "requires the production native SIGCHLD oracle",
     )
     def test_hidden_sa_nocldwait_is_rejected_before_driver_spawn(self) -> None:
         """Breaks if Python's cached SIG_DFL hides native auto-reaping."""

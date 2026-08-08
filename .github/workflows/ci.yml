@@ -77,4 +77,5 @@ jobs:
       - name: Verify process and JSON input boundaries
         run: |
           PYTHONPATH=src python -W error::ResourceWarning -m unittest \
-            tests.test_triage tests.test_json_input
+            tests.test_triage tests.test_json_input \
+            tests.test_delegation_conformance tests.test_delegation_runtime

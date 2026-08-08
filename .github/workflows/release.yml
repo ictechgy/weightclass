@@ -57,7 +57,8 @@ jobs:
       - name: Verify distribution isolation before tests
         run: |
           python tests/verify_distribution_isolation.py \
-            --source . --dist-dir dist
+            --source . --dist-dir dist \
+            --expected-version "${GITHUB_REF_NAME#v}"
       - name: Upload unverified distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -70,7 +71,8 @@ jobs:
         run: |
           python tests/verify_distribution_isolation.py \
             --source . --dist-dir dist \
-            --run-sdist-tests
+            --run-sdist-tests \
+            --expected-version "${GITHUB_REF_NAME#v}"
 
   validate:
     name: Validate distribution isolation on a fresh runner
@@ -91,7 +93,8 @@ jobs:
       - name: Final distribution isolation verification
         run: |
           python tests/verify_distribution_isolation.py \
-            --source . --dist-dir dist
+            --source . --dist-dir dist \
+            --expected-version "${GITHUB_REF_NAME#v}"
 
   macos-routing-boundaries:
     name: Verify macOS routing boundaries
@@ -110,7 +113,8 @@ jobs:
       - name: Verify process and JSON input boundaries
         run: |
           PYTHONPATH=src python -W error::ResourceWarning -m unittest \
-            tests.test_triage tests.test_json_input
+            tests.test_triage tests.test_json_input \
+            tests.test_delegation_conformance tests.test_delegation_runtime
 
   publish:
     name: Publish to PyPI

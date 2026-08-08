@@ -1,3 +1,4 @@
+import ctypes
 import errno
 import fcntl
 import io
@@ -13,7 +14,8 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import redirect_stderr
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, redirect_stderr
 from pathlib import Path
 from types import FrameType
 from typing import Any, cast
@@ -29,7 +31,6 @@ from weightclass.cli import delegation_run_from_standard_input
 from weightclass.delegation_compile import compile_delegation_descriptor
 from weightclass.delegation_conformance import (
     _has_leader_exit_observer,
-    _has_safe_sigchld_disposition,
     _open_leader_exit_queue,
     _process_group_exists,
     _wait_for_leader_exit,
@@ -48,6 +49,7 @@ from weightclass.delegation_runtime import (
     _wait,
     _write_all,
     run_delegation_runtime,
+    validate_runtime_process_context,
 )
 from weightclass.delegation_schema import (
     current_platform_contract,
@@ -55,9 +57,49 @@ from weightclass.delegation_schema import (
     load_delegation_policy,
 )
 from weightclass.delegation_types import DirectChildCleanup
+from weightclass.process_context import (
+    has_safe_sigchld_disposition as _has_safe_sigchld_disposition,
+)
 
 EXPECTED_TASK = "Apply the reviewed change. 테스트"
 FAKE_RUNTIME = Path(__file__).parent / "fixtures" / "fake_delegation_runtime.py"
+
+
+class _DarwinSigaction(ctypes.Structure):
+    _fields_ = [
+        ("handler", ctypes.c_void_p),
+        ("mask", ctypes.c_uint32),
+        ("flags", ctypes.c_int),
+    ]
+
+
+@contextmanager
+def _darwin_hidden_no_child_wait() -> Iterator[Callable[[], None]]:
+    """Provide one restorable installer for Python-hidden SA_NOCLDWAIT."""
+    previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    libc = ctypes.CDLL(None, use_errno=True)
+    old = _DarwinSigaction()
+    if libc.sigaction(signal.SIGCHLD, None, ctypes.byref(old)) != 0:
+        raise OSError(ctypes.get_errno(), "sigaction inspection failed")
+    installed = _DarwinSigaction()
+    ctypes.memmove(ctypes.byref(installed), ctypes.byref(old), ctypes.sizeof(old))
+    installed.handler = None
+    installed.flags |= 0x20
+
+    def install() -> None:
+        if libc.sigaction(signal.SIGCHLD, ctypes.byref(installed), None) != 0:
+            raise OSError(ctypes.get_errno(), "sigaction installation failed")
+        if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
+            raise AssertionError("native SA_NOCLDWAIT must remain Python-hidden")
+
+    try:
+        yield install
+    finally:
+        try:
+            if libc.sigaction(signal.SIGCHLD, ctypes.byref(old), None) != 0:
+                raise OSError(ctypes.get_errno(), "sigaction restoration failed")
+        finally:
+            signal.signal(signal.SIGCHLD, previous_sigchld)
 
 
 class DelegationProtocolUnitTests(unittest.TestCase):
@@ -683,66 +725,123 @@ class DelegationProtocolUnitTests(unittest.TestCase):
             signal.signal(signal.SIGINT, previous_sigint)
 
     @unittest.skipUnless(sys.platform == "darwin", "requires Darwin sigaction")
-    def test_sa_nocldwait_never_becomes_success(self) -> None:
-        """Breaks if hidden auto-reaping is converted to a synthetic zero exit."""
+    def test_hidden_sa_nocldwait_fails_closed_before_runtime_spawn(self) -> None:
+        """Breaks if Python-hidden auto-reaping reaches process creation."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             start_marker = directory / "runtime.started"
             runtime_path = self._write_nonzero_runtime(directory, start_marker)
-            helper_code = (
-                "import ctypes, signal, sys\n"
-                "from weightclass.delegation_runtime import (\n"
-                " DelegationRuntimeFailedError, run_delegation_runtime,\n"
-                ")\n"
-                "from weightclass.delegation_types import DirectChildCleanup\n"
-                "class Sigaction(ctypes.Structure):\n"
-                " _fields_ = [('handler', ctypes.c_void_p), "
-                "('mask', ctypes.c_uint32), ('flags', ctypes.c_int)]\n"
-                "libc = ctypes.CDLL(None, use_errno=True)\n"
-                "old = Sigaction()\n"
-                "if libc.sigaction(signal.SIGCHLD, None, ctypes.byref(old)) != 0:\n"
-                " raise SystemExit(91)\n"
-                "installed = Sigaction()\n"
-                "ctypes.memmove(ctypes.byref(installed), ctypes.byref(old), ctypes.sizeof(old))\n"
-                "installed.handler = None\n"
-                "installed.flags |= 0x20\n"
-                "if libc.sigaction(signal.SIGCHLD, ctypes.byref(installed), None) != 0:\n"
-                " raise SystemExit(92)\n"
-                "try:\n"
-                " if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:\n"
-                "  raise SystemExit(93)\n"
-                " try:\n"
-                "  result = run_delegation_runtime(\n"
-                "   sys.argv[1], b'frame', DirectChildCleanup(1, 1),\n"
-                "  )\n"
-                " except DelegationRuntimeFailedError:\n"
-                "  status = 7\n"
-                " else:\n"
-                "  status = 80 if result.returncode == 0 else 81\n"
-                "finally:\n"
-                " if libc.sigaction(signal.SIGCHLD, ctypes.byref(old), None) != 0:\n"
-                "  raise SystemExit(94)\n"
-                "raise SystemExit(status)\n"
-            )
-            helper = subprocess.Popen(
-                [sys.executable, "-c", helper_code, str(runtime_path)],
-                close_fds=True,
-                start_new_session=True,
-                stderr=subprocess.PIPE,
-            )
-            try:
-                _, stderr = helper.communicate(timeout=8)
-                self.assertEqual(helper.returncode, 7, stderr)
-                self.assertTrue(start_marker.is_file())
-            finally:
-                if helper.returncode is None:
-                    try:
-                        os.killpg(helper.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    helper.wait()
-                if helper.stderr is not None and not helper.stderr.closed:
-                    helper.stderr.close()
+            with (
+                _darwin_hidden_no_child_wait() as install,
+                mock.patch(
+                    "weightclass.delegation_runtime.subprocess.Popen",
+                    side_effect=AssertionError("runtime spawn must remain untouched"),
+                ) as popen,
+            ):
+                install()
+                with self.assertRaises(DelegationRuntimeUnavailableError):
+                    run_delegation_runtime(
+                        str(runtime_path),
+                        b"frame",
+                        DirectChildCleanup(grace_seconds=1, terminate_grace_seconds=1),
+                    )
+
+            popen.assert_not_called()
+            self.assertFalse(start_marker.exists())
+
+    @staticmethod
+    def _mock_linux_glibc(
+        *,
+        native_flags: int = 0,
+        version: object = b"2.36",
+    ) -> mock.Mock:
+        libc = mock.Mock()
+        libc.gnu_get_libc_version = mock.Mock(return_value=version)
+
+        def inspect_sigaction(
+            _signal_number: int,
+            _new_action: Any,
+            current_action: Any,
+        ) -> int:
+            action = cast(Any, current_action)._obj
+            action.handler = None
+            action.flags = native_flags
+            return 0
+
+        libc.sigaction.side_effect = inspect_sigaction
+        return libc
+
+    @staticmethod
+    def _ctypes_sizeof_with_pointer_size(pointer_size: int) -> Any:
+        real_sizeof = ctypes.sizeof
+
+        def inspected_size(value: Any) -> int:
+            if value is ctypes.c_void_p:
+                return pointer_size
+            return real_sizeof(value)
+
+        return inspected_size
+
+    def test_linux_glibc_native_sigchld_gate_matches_reviewed_dispositions(self) -> None:
+        """Breaks if runtime and reviewed glibc native child-status policy diverge."""
+        for native_flags, expected_safe in ((0, True), (0x02, False)):
+            libc = self._mock_linux_glibc(native_flags=native_flags)
+            with (
+                self.subTest(native_flags=native_flags),
+                mock.patch("weightclass.process_context.sys.platform", "linux"),
+                mock.patch(
+                    "weightclass.process_context.signal.getsignal",
+                    return_value=signal.SIG_DFL,
+                ),
+                mock.patch(
+                    "weightclass.process_context.os.uname",
+                    return_value=mock.Mock(machine="x86_64"),
+                ),
+                mock.patch.object(
+                    ctypes,
+                    "sizeof",
+                    side_effect=self._ctypes_sizeof_with_pointer_size(8),
+                ),
+                mock.patch.object(ctypes, "CDLL", return_value=libc),
+            ):
+                if expected_safe:
+                    validate_runtime_process_context()
+                else:
+                    with self.assertRaises(DelegationRuntimeUnavailableError):
+                        validate_runtime_process_context()
+
+            libc.sigaction.assert_called_once()
+            libc.gnu_get_libc_version.assert_called_once_with()
+
+    def test_linux_unreviewed_libc_or_abi_fails_closed_in_runtime(self) -> None:
+        """Breaks if runtime trusts unsupported native sigaction layouts."""
+        cases = (
+            ("i686", 8, self._mock_linux_glibc()),
+            ("x86_64", 4, self._mock_linux_glibc()),
+            ("x86_64", 8, object()),
+            ("x86_64", 8, self._mock_linux_glibc(version=b"")),
+        )
+        for machine, pointer_size, libc in cases:
+            with (
+                self.subTest(machine=machine, pointer_size=pointer_size),
+                mock.patch("weightclass.process_context.sys.platform", "linux"),
+                mock.patch(
+                    "weightclass.process_context.signal.getsignal",
+                    return_value=signal.SIG_DFL,
+                ),
+                mock.patch(
+                    "weightclass.process_context.os.uname",
+                    return_value=mock.Mock(machine=machine),
+                ),
+                mock.patch.object(
+                    ctypes,
+                    "sizeof",
+                    side_effect=self._ctypes_sizeof_with_pointer_size(pointer_size),
+                ),
+                mock.patch.object(ctypes, "CDLL", return_value=libc),
+                self.assertRaises(DelegationRuntimeUnavailableError),
+            ):
+                validate_runtime_process_context()
 
     def test_unknown_sigchld_state_fails_closed_before_popen(self) -> None:
         """Breaks if an unreadable process signal boundary reaches spawn."""
@@ -764,7 +863,7 @@ class DelegationProtocolUnitTests(unittest.TestCase):
 
                 with (
                     mock.patch(
-                        "weightclass.delegation_runtime.signal.getsignal",
+                        "weightclass.process_context.signal.getsignal",
                         getsignal,
                     ),
                     mock.patch(
@@ -1955,6 +2054,98 @@ class DelegationRunTests(unittest.TestCase):
         self.assertEqual(result, 4)
         self.assertEqual(json.loads(diagnostic.getvalue()), {"error": "executor_unavailable"})
         read_task.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin sigaction")
+    def test_hidden_sa_nocldwait_blocks_cli_before_task_access_or_spawn(self) -> None:
+        """Breaks if the CLI pre-task gate sees only Python's cached SIG_DFL."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path, manifest_path = self._write_inputs(directory)
+            runtime_path = self._copy_runtime(directory)
+            descriptor = compile_delegation_descriptor(
+                load_delegation_policy(policy_path),
+                load_delegation_manifest(manifest_path),
+                runtime_path=str(runtime_path),
+                source_vendor="claude",
+                tier="standard",
+                target_platform=current_platform_contract(),
+            )
+            diagnostic = io.StringIO()
+            with (
+                _darwin_hidden_no_child_wait() as install,
+                mock.patch(
+                    "weightclass.cli.read_task_from_standard_input",
+                    side_effect=AssertionError("task input must remain untouched"),
+                ) as read_task,
+                mock.patch(
+                    "weightclass.delegation_runtime.subprocess.Popen",
+                    side_effect=AssertionError("runtime spawn must remain untouched"),
+                ) as popen,
+                redirect_stderr(diagnostic),
+            ):
+                install()
+                result = delegation_run_from_standard_input(
+                    policy_path,
+                    manifest_path,
+                    str(runtime_path),
+                    "claude",
+                    "standard",
+                    True,
+                    str(descriptor["route_fingerprint"]),
+                )
+
+        self.assertEqual(result, 4)
+        self.assertEqual(json.loads(diagnostic.getvalue()), {"error": "executor_unavailable"})
+        read_task.assert_not_called()
+        popen.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires Darwin sigaction")
+    def test_spawn_adjacent_recheck_blocks_new_hidden_sa_nocldwait(self) -> None:
+        """Breaks if native child-status state can change after CLI preflight."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path, manifest_path = self._write_inputs(directory)
+            runtime_path = self._copy_runtime(directory)
+            descriptor = compile_delegation_descriptor(
+                load_delegation_policy(policy_path),
+                load_delegation_manifest(manifest_path),
+                runtime_path=str(runtime_path),
+                source_vendor="claude",
+                tier="standard",
+                target_platform=current_platform_contract(),
+            )
+            diagnostic = io.StringIO()
+
+            def install_hidden_state_after_preflight() -> str:
+                install()
+                return EXPECTED_TASK
+
+            with (
+                _darwin_hidden_no_child_wait() as install,
+                mock.patch(
+                    "weightclass.cli.read_task_from_standard_input",
+                    side_effect=install_hidden_state_after_preflight,
+                ) as read_task,
+                mock.patch(
+                    "weightclass.delegation_runtime.subprocess.Popen",
+                    side_effect=AssertionError("runtime spawn must remain untouched"),
+                ) as popen,
+                redirect_stderr(diagnostic),
+            ):
+                result = delegation_run_from_standard_input(
+                    policy_path,
+                    manifest_path,
+                    str(runtime_path),
+                    "claude",
+                    "standard",
+                    True,
+                    str(descriptor["route_fingerprint"]),
+                )
+
+        self.assertEqual(result, 4)
+        self.assertEqual(json.loads(diagnostic.getvalue()), {"error": "executor_unavailable"})
+        read_task.assert_called_once_with()
+        popen.assert_not_called()
 
     @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
     def test_spawn_adjacent_sigchld_recheck_blocks_runtime(self) -> None:
