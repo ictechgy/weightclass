@@ -11,13 +11,17 @@ import argparse
 import json
 import os
 import re
+import select
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 from typing import Any, BinaryIO, Final, Literal, NoReturn, cast
 
 from .delegation_compile import canonical_json_bytes
@@ -41,6 +45,7 @@ CASE_TIMEOUT_SECONDS: Final = 60.0
 MAX_CASE_TIMEOUT_SECONDS: Final = 300.0
 MAX_DRIVER_OUTPUT_BYTES: Final = 4_096
 MAX_REQUEST_BYTES: Final = 32_768
+GROUP_CLEANUP_TIMEOUT_SECONDS: Final = 1.0
 DRIVER_ARGUMENTS: Final = ("--weightclass-conformance-driver", "1")
 
 Role = Literal["orchestrator", "worker", "reviewer"]
@@ -108,6 +113,163 @@ class _ExchangeState:
     output: bytearray
     overflow: bool = False
     write_failed: bool = False
+
+
+@dataclass
+class _DeferredSigint:
+    """Defer SIGINT without leaving the exec'd driver with a blocked mask."""
+
+    previous_handler: Any = None
+    received_frame: FrameType | None = None
+    process_group_id: int | None = None
+    active: bool = False
+    received: bool = False
+
+    def _handle(self, signal_number: int, frame: FrameType | None) -> None:
+        del signal_number
+        if self.previous_handler == signal.SIG_IGN:
+            return
+        self.received = True
+        self.received_frame = frame
+        if self.process_group_id is not None:
+            _signal_process_group(self.process_group_id, signal.SIGKILL)
+
+    def arm(self) -> None:
+        if threading.current_thread() is not threading.main_thread():
+            return
+        try:
+            self.previous_handler = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, self._handle)
+        except (OSError, ValueError):
+            return
+        self.active = True
+
+    def record_process_group(self, process_group_id: int) -> None:
+        self.process_group_id = process_group_id
+        if self.received:
+            _signal_process_group(process_group_id, signal.SIGKILL)
+
+    def clear_process_group(self) -> None:
+        self.process_group_id = None
+
+    def restore(self) -> None:
+        if not self.active:
+            return
+        previous_handler = self.previous_handler
+        signal.signal(signal.SIGINT, previous_handler)
+        self.active = False
+        received = self.received
+        received_frame = self.received_frame
+        if not received or previous_handler == signal.SIG_IGN:
+            return
+        if previous_handler == signal.SIG_DFL:
+            signal.raise_signal(signal.SIGINT)
+            return
+        if callable(previous_handler):
+            previous_handler(signal.SIGINT, received_frame)
+
+
+class _ReaderSignalTarget:
+    """Serialize reader signals with release of the owned process group."""
+
+    def __init__(self, process_group_id: int) -> None:
+        self._process_group_id: int | None = process_group_id
+        self._lock = threading.Lock()
+
+    def signal(self, signal_number: int) -> None:
+        with self._lock:
+            if self._process_group_id is not None:
+                _signal_process_group(self._process_group_id, signal_number)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._process_group_id = None
+
+
+@dataclass
+class _DriverCaseOwnership:
+    """Own one driver session and make its complete cleanup idempotent."""
+
+    process: subprocess.Popen[bytes] | None = None
+    process_group_id: int | None = None
+    reader_signal_target: _ReaderSignalTarget | None = None
+    writer: threading.Thread | None = None
+    reader: threading.Thread | None = None
+    exit_queue: Any | None = None
+    return_code: int | None = None
+    exchange_incomplete: bool = False
+    group_cleanup_incomplete: bool = False
+    cleaned: bool = False
+    before_final_reap: Callable[[], None] | None = None
+
+    def record_process(self, process: subprocess.Popen[bytes]) -> None:
+        self.process = process
+        self.process_group_id = process.pid
+        self.reader_signal_target = _ReaderSignalTarget(process.pid)
+
+    @staticmethod
+    def _thread_is_alive(thread: threading.Thread | None) -> bool:
+        return thread is not None and thread.is_alive()
+
+    def cleanup(self) -> None:
+        if self.cleaned:
+            return
+        process = self.process
+        if self.process_group_id is not None:
+            _signal_process_group(self.process_group_id, signal.SIGKILL)
+        if process is not None:
+            try:
+                os.kill(process.pid, signal.SIGKILL)
+            except (PermissionError, ProcessLookupError):
+                pass
+
+        if self.process_group_id is not None:
+            cleanup_deadline = time.monotonic() + GROUP_CLEANUP_TIMEOUT_SECONDS
+            while _process_group_exists(self.process_group_id):
+                if time.monotonic() >= cleanup_deadline:
+                    self.group_cleanup_incomplete = True
+                    break
+                time.sleep(0.005)
+
+        if self.exit_queue is not None:
+            try:
+                self.exit_queue.close()
+            except OSError:
+                pass
+
+        for thread in (self.writer, self.reader):
+            if self._thread_is_alive(thread):
+                assert thread is not None
+                thread.join(timeout=1)
+
+        if process is not None:
+            for stream in (process.stdout, process.stdin):
+                if stream is not None and not stream.closed:
+                    try:
+                        stream.close()
+                    except (OSError, ValueError):
+                        pass
+
+        for thread in (self.writer, self.reader):
+            if self._thread_is_alive(thread):
+                assert thread is not None
+                thread.join(timeout=1)
+        self.exchange_incomplete = self._thread_is_alive(self.writer) or self._thread_is_alive(
+            self.reader
+        )
+
+        if self.reader_signal_target is not None:
+            self.reader_signal_target.clear()
+        if self.before_final_reap is not None:
+            self.before_final_reap()
+        self.process_group_id = None
+
+        if process is not None:
+            try:
+                self.return_code = _wait_after_kill(process)
+            except (ChildProcessError, OSError, ValueError):
+                self.return_code = process.returncode
+        self.cleaned = True
 
 
 def _permission_cases() -> tuple[ConformanceCase, ...]:
@@ -178,14 +340,139 @@ def _signal_process_group(process_group_id: int, signal_number: int) -> None:
         pass
 
 
+def _linux_proc_stat_live_group_member(
+    stat_contents: bytes,
+    process_group_id: int,
+) -> bool | None:
+    closing_parenthesis = stat_contents.rfind(b") ")
+    fields = stat_contents[closing_parenthesis + 2 :].split()
+    if closing_parenthesis < 0 or len(fields) < 3 or len(stat_contents) > 4_096:
+        return None
+    try:
+        member_process_group_id = int(fields[2])
+    except ValueError:
+        return None
+    return member_process_group_id == process_group_id and fields[0] not in (b"Z", b"X", b"x")
+
+
+def _linux_process_group_exists(process_group_id: int) -> bool:
+    try:
+        entries = os.scandir("/proc")
+    except OSError:
+        return True
+    with entries:
+        for entry in entries:
+            if not entry.name.isascii() or not entry.name.isdecimal():
+                continue
+            try:
+                with open(f"/proc/{entry.name}/stat", "rb", buffering=0) as stat_file:
+                    stat_contents = stat_file.read(4_097)
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            except OSError:
+                return True
+            is_live_member = _linux_proc_stat_live_group_member(
+                stat_contents,
+                process_group_id,
+            )
+            if is_live_member is None:
+                return True
+            if is_live_member:
+                return True
+    return False
+
+
 def _process_group_exists(process_group_id: int) -> bool:
+    """Return whether the anchored group still has a signalable live member."""
+    if sys.platform.startswith("linux"):
+        return _linux_process_group_exists(process_group_id)
     try:
         os.killpg(process_group_id, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        # macOS reports EPERM when only an unreaped zombie session leader
+        # remains. Reviewed drivers and their descendants run as this user, so
+        # a live member of the owned group remains signalable.
+        return False
     return True
+
+
+def _has_leader_exit_observer() -> bool:
+    if callable(getattr(os, "waitid", None)):
+        return all(hasattr(os, name) for name in ("P_PID", "WEXITED", "WNOHANG", "WNOWAIT"))
+    return all(
+        hasattr(select, name)
+        for name in (
+            "kqueue",
+            "kevent",
+            "KQ_FILTER_PROC",
+            "KQ_EV_ADD",
+            "KQ_EV_ONESHOT",
+            "KQ_NOTE_EXIT",
+        )
+    )
+
+
+def _has_safe_sigchld_disposition() -> bool:
+    sigchld = getattr(signal, "SIGCHLD", None)
+    if sigchld is None:
+        return False
+    try:
+        return signal.getsignal(sigchld) == signal.SIG_DFL
+    except (OSError, ValueError):
+        return False
+
+
+def _open_leader_exit_queue(pid: int) -> Any | None:
+    """Register a non-reaping kqueue observer when waitid is unavailable."""
+    if callable(getattr(os, "waitid", None)):
+        return None
+    exit_queue: Any | None = None
+    try:
+        select_features = vars(select)
+        event = select_features["kevent"](
+            pid,
+            filter=select_features["KQ_FILTER_PROC"],
+            flags=select_features["KQ_EV_ADD"] | select_features["KQ_EV_ONESHOT"],
+            fflags=select_features["KQ_NOTE_EXIT"],
+        )
+        exit_queue = select_features["kqueue"]()
+        exit_queue.control([event], 0, 0)
+    except (OSError, ValueError):
+        if exit_queue is not None:
+            exit_queue.close()
+        raise ConformanceInvalidInputError() from None
+    return exit_queue
+
+
+def _observe_leader_exit(pid: int, exit_queue: Any | None) -> bool:
+    """Observe leader exit without releasing its process-group identity."""
+    waitid = getattr(os, "waitid", None)
+    if not callable(waitid):
+        assert exit_queue is not None
+        while True:
+            try:
+                return bool(exit_queue.control(None, 1, 0))
+            except InterruptedError:
+                continue
+    while True:
+        try:
+            result = waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except InterruptedError:
+            continue
+        return result is not None
+
+
+def _wait_for_leader_exit(pid: int, exit_queue: Any | None, timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if _observe_leader_exit(pid, exit_queue):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.01, remaining))
 
 
 def _write_request(stream: BinaryIO, request: bytes, state: _ExchangeState) -> None:
@@ -211,7 +498,7 @@ def _write_request(stream: BinaryIO, request: bytes, state: _ExchangeState) -> N
 
 def _read_response(
     stream: BinaryIO,
-    process_group_id: int,
+    signal_target: _ReaderSignalTarget,
     state: _ExchangeState,
 ) -> None:
     try:
@@ -225,7 +512,7 @@ def _read_response(
                 return
             state.output.extend(chunk)
         state.overflow = True
-        _signal_process_group(process_group_id, signal.SIGKILL)
+        signal_target.signal(signal.SIGKILL)
     except (OSError, ValueError):
         state.overflow = True
 
@@ -246,6 +533,8 @@ def _run_driver_case(
     *,
     timeout_seconds: float,
 ) -> bool:
+    if not _has_safe_sigchld_disposition():
+        return False
     request = canonical_json_bytes(
         {
             "case": conformance_case.case,
@@ -257,74 +546,71 @@ def _run_driver_case(
     )
     if len(request) > MAX_REQUEST_BYTES:
         return False
-    try:
-        process = subprocess.Popen(
-            (str(driver_path), *DRIVER_ARGUMENTS),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            cwd=workspace_path,
-            close_fds=True,
-            start_new_session=True,
-        )
-    except (OSError, ValueError):
-        return False
-
-    assert process.stdin is not None
-    assert process.stdout is not None
+    ownership = _DriverCaseOwnership()
+    deferred_sigint = _DeferredSigint()
+    ownership.before_final_reap = deferred_sigint.clear_process_group
     state = _ExchangeState(bytearray())
-    writer = threading.Thread(
-        target=_write_request,
-        args=(process.stdin, request, state),
-        daemon=True,
-    )
-    reader = threading.Thread(
-        target=_read_response,
-        args=(process.stdout, process.pid, state),
-        daemon=True,
-    )
-    writer.start()
-    reader.start()
     timed_out = False
-    interrupted = False
+    descendant_leaked = False
+    deferred_sigint.arm()
     try:
-        return_code = process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _signal_process_group(process.pid, signal.SIGKILL)
-        return_code = _wait_after_kill(process)
-    except KeyboardInterrupt:
-        interrupted = True
-        _signal_process_group(process.pid, signal.SIGKILL)
         try:
-            process.kill()
+            process = subprocess.Popen(
+                (str(driver_path), *DRIVER_ARGUMENTS),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                cwd=workspace_path,
+                close_fds=True,
+                start_new_session=True,
+            )
         except (OSError, ValueError):
-            pass
-        return_code = _wait_after_kill(process)
-    except (OSError, ValueError):
-        timed_out = True
-        _signal_process_group(process.pid, signal.SIGKILL)
-        return_code = _wait_after_kill(process)
+            return False
+        ownership.record_process(process)
+        ownership.exit_queue = _open_leader_exit_queue(process.pid)
+        deferred_sigint.record_process_group(process.pid)
 
-    descendant_leaked = _process_group_exists(process.pid)
-    if descendant_leaked:
-        _signal_process_group(process.pid, signal.SIGKILL)
-    writer.join(timeout=1)
-    reader.join(timeout=1)
-    if not process.stdout.closed:
-        process.stdout.close()
-    if not process.stdin.closed:
-        process.stdin.close()
-    exchange_incomplete = writer.is_alive() or reader.is_alive()
-    if interrupted:
-        raise KeyboardInterrupt()
+        if not deferred_sigint.received:
+            assert process.stdin is not None
+            assert process.stdout is not None
+            assert ownership.reader_signal_target is not None
+            ownership.writer = threading.Thread(
+                target=_write_request,
+                args=(process.stdin, request, state),
+                daemon=True,
+            )
+            ownership.reader = threading.Thread(
+                target=_read_response,
+                args=(process.stdout, ownership.reader_signal_target, state),
+                daemon=True,
+            )
+            ownership.writer.start()
+            ownership.reader.start()
+            try:
+                leader_observed = _wait_for_leader_exit(
+                    process.pid,
+                    ownership.exit_queue,
+                    timeout_seconds,
+                )
+            except (ChildProcessError, OSError, ValueError):
+                leader_observed = False
+            timed_out = not leader_observed
+            if leader_observed:
+                descendant_leaked = _process_group_exists(process.pid)
+    finally:
+        try:
+            ownership.cleanup()
+        finally:
+            deferred_sigint.restore()
     return (
         not timed_out
+        and not deferred_sigint.received
         and not descendant_leaked
-        and not exchange_incomplete
+        and not ownership.group_cleanup_incomplete
+        and not ownership.exchange_incomplete
         and not state.overflow
         and not state.write_failed
-        and return_code == 0
+        and ownership.return_code == 0
         and _parse_driver_response(bytes(state.output), conformance_case.case_id)
     )
 
@@ -370,6 +656,8 @@ def run_conformance(
     if (
         os.name != "posix"
         or not hasattr(os, "killpg")
+        or not _has_leader_exit_observer()
+        or not _has_safe_sigchld_disposition()
         or not 0 < CASE_TIMEOUT_SECONDS <= MAX_CASE_TIMEOUT_SECONDS
     ):
         raise ConformanceInvalidInputError()

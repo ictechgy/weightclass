@@ -12,6 +12,13 @@ MARKER_BYTES = b"weightclass-v2-marker-v1\n"
 SENTINEL_ARGUMENTS = ["--weightclass-test-sentinel", "1"]
 
 
+def _publish_pid(path_value: str, pid: int) -> None:
+    path = Path(path_value)
+    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary_path.write_text(str(pid), encoding="ascii")
+    os.replace(temporary_path, path)
+
+
 def main() -> int:
     if sys.argv[1:] != ["--weightclass-conformance-driver", "1"]:
         return 20
@@ -65,8 +72,7 @@ def main() -> int:
         pid_path = os.environ.get("WEIGHTCLASS_FAKE_CONFORMANCE_PID_PATH")
         if pid_path is None:
             return 25
-        with open(pid_path, "w", encoding="ascii") as pid_file:
-            pid_file.write(str(os.getpid()))
+        _publish_pid(pid_path, os.getpid())
         time.sleep(60)
     if case_id == target and mode == "mutate-runtime":
         runtime_path = request["runtime_path"]
@@ -88,8 +94,7 @@ def main() -> int:
         pid_path = os.environ.get("WEIGHTCLASS_FAKE_CONFORMANCE_PID_PATH")
         if pid_path is None:
             return 28
-        with open(pid_path, "w", encoding="ascii") as pid_file:
-            pid_file.write(str(descendant.pid))
+        _publish_pid(pid_path, descendant.pid)
     response_case_id = f"{case_id}-spoofed" if case_id == target and mode == "spoof" else case_id
     passed = not (case_id == target and mode == "fail")
     suffix = " " * 5_000 if case_id == target and mode == "oversized" else ""
