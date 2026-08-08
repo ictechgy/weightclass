@@ -10,6 +10,7 @@ from pathlib import Path
 
 MARKER_BYTES = b"weightclass-v2-marker-v1\n"
 SENTINEL_ARGUMENTS = ["--weightclass-test-sentinel", "1"]
+HANG_LIFETIME_SECONDS = 10
 
 
 def _publish_pid(path_value: str, pid: int) -> None:
@@ -73,7 +74,7 @@ def main() -> int:
         if pid_path is None:
             return 25
         _publish_pid(pid_path, os.getpid())
-        time.sleep(60)
+        time.sleep(HANG_LIFETIME_SECONDS)
     if case_id == target and mode == "mutate-runtime":
         runtime_path = request["runtime_path"]
         if not isinstance(runtime_path, str):
@@ -86,7 +87,7 @@ def main() -> int:
             runtime_file.write(bytes([first_byte[0] ^ 1]))
     if case_id == target and mode == "leak":
         descendant = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(60)"],
+            [sys.executable, "-c", f"import time; time.sleep({HANG_LIFETIME_SECONDS})"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
