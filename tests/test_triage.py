@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from unittest import mock
 
+from tests.runtime_guard import guarded_launch
 from weightclass import cli
 from weightclass.router import SUPPORTED_VENDORS
 from weightclass.triage import (
@@ -153,6 +154,15 @@ class AskVendorTests(unittest.TestCase):
 
     def test_accepts_a_bare_tier_word(self) -> None:
         self.assertEqual(self._ask("printf high"), "high")
+
+    @guarded_launch("triage")
+    def test_guarded_owned_absolute_vendor(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "fake_triage_vendor.py"
+        with mock.patch(
+            "weightclass.triage.triage_command",
+            return_value=(str(fixture.resolve(strict=True)),),
+        ):
+            self.assertEqual(ask_vendor_for_tier("task", "claude"), "high")
 
     def test_refuses_a_tier_at_the_end_of_a_sentence(self) -> None:
         """Breaks if prose can masquerade as the authoritative one-token output."""

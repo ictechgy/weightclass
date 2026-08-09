@@ -1,0 +1,17 @@
+{
+  "schema": "weightclass.delegation-v2-g06-cases/v1",
+  "cases": [
+    {"id": "global-output-namespace", "stage": 3, "expected_error": "invalid_input"},
+    {"id": "unknown-task-reference", "stage": 4, "expected_error": "invalid_input"},
+    {"id": "producer-output-ownership", "stage": 4, "expected_error": "invalid_input"},
+    {"id": "duplicate-dependency-pair", "stage": 5, "expected_error": "invalid_input"},
+    {"id": "gate-producer-ownership", "stage": 5, "expected_error": "invalid_input"},
+    {"id": "combined-cycle", "stage": 6, "expected_error": "invalid_input"},
+    {"id": "synthesized-terminal-reachability", "stage": 7, "expected_error": "invalid_input"},
+    {"id": "raw-terminal-nullability", "stage": 7, "expected_error": "invalid_input"},
+    {"id": "projection-one-to-one-type", "stage": 8, "expected_error": "invalid_input"},
+    {"id": "projection-strict-ancestor", "stage": 9, "expected_error": "invalid_input"},
+    {"id": "write-scope-equal", "stage": 10, "expected_error": "invalid_input"},
+    {"id": "write-scope-ancestor", "stage": 10, "expected_error": "invalid_input"}
+  ]
+}

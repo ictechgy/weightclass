@@ -21,6 +21,7 @@ from types import FrameType
 from typing import Any, cast
 from unittest import mock
 
+from tests.runtime_guard import guarded_launch
 from tests.test_delegation import _manifest, _policy
 from tests.test_delegation_qualification import (
     _evidence,
@@ -2302,6 +2303,7 @@ class DelegationRunTests(unittest.TestCase):
         self.assertEqual(result.returncode, 4)
         self.assertEqual(json.loads(result.stderr), {"error": "executor_unavailable"})
 
+    @guarded_launch("delegation_v1")
     def test_success_sends_one_reviewed_frame_and_inherits_output(self) -> None:
         """Breaks if run changes the descriptor, task bytes, argv, or spawn count."""
         with tempfile.TemporaryDirectory() as temporary_directory:

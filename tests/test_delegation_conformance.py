@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, cast
 from unittest import mock
 
+from tests.runtime_guard import guarded_launch
 from weightclass.delegation_conformance import (
     CONFORMANCE_CASES,
     ConformanceCase,
@@ -849,6 +850,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         self.assertTrue(all(candidate == candidates[0] for candidate in candidates))
         self.assertEqual(load_packaged_qualification_registry().records, ())
 
+    @guarded_launch("conformance")
     def test_full_run_emits_candidate_compatible_evidence_without_reading_stdin(self) -> None:
         """Breaks if the runner skips cases, consumes a task, or changes the evidence schema."""
         with tempfile.TemporaryDirectory() as temporary_directory:

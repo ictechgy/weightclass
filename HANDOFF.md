@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-09 by Codex_
+_Last updated: 2026-08-10 by Codex_
 
 ## Goal
 
@@ -10,6 +10,35 @@ Preserve source-vendor pinning, redacted fail-closed diagnostics, opaque
 user-provided model labels, and the no-retention boundary.
 
 ## Repository state
+
+- Durable goals g01-g12 are leader-verified. They freeze the v2 contract and
+  legacy evidence; implement pure foundations, native schema-2 routing/run,
+  delegation protocol-2 schema/graph/grants/WCD2/runtime; and enroll all claimed
+  top-level test launch paths in the named current-process guarded runtime suite.
+  Child processes below an allowed CLI or harness are outside that guard claim.
+  Protocol-1 lifecycle remains unchanged.
+- Goal g10 adds the user/security/migration documentation and machine-reviewed
+  orchestration traceability fixture. The traceability test resolves adopted
+  schema paths, importable validator symbols, and exact collected unittest
+  methods, and rejects missing paths/symbols/tests, unsupported overclaims,
+  missing non-goals, and invalid statuses. This goal changes no runtime code.
+- Goal g11 is leader-verified. It adds a canonical
+  SHA-256 three-file candidate boundary, manifest-driven private two-file test
+  and publish staging, security-preflighted normalized archive comparison, and
+  an empty versioned literal exclusion allowlist while preserving the existing
+  exact-two-artifact isolation verifier input.
+- Goal g12 is leader-verified. It adds full Linux/macOS CI and release-DAG
+  gates plus the requirement map in `docs/completion-audit-v2.md`.
+- Native schema 2 and delegation protocol 2 treat model, effort, profile/account,
+  recipient, billing, subscription, entitlement, permission, capability,
+  worktree, ownership, and orchestration labels as opaque caller declarations.
+  Provider/vendor, transport, and builder values use closed structural
+  vocabularies. Cross-vendor transitions require explicit directional
+  authorization. Review and run bind one immutable
+  descriptor/fingerprint/argv truth; execution observes and starts one
+  foreground direct child only.
+- The RALPLAN history ended `max_rounds/ITERATE`. Its Critic findings are
+  mandatory review input, never consensus approval.
 
 - The current unreleased work adds P0/P0.5 role delegation plus the P1
   qualification foundation. The offline
@@ -157,7 +186,7 @@ user-provided model labels, and the no-retention boundary.
   Marker presence differs while complete evidence and candidates remain
   identical; this proves only v2 observer blindness, not authentic invocation
   or misconduct. The package registry remains empty in every success test. CI's
-  macOS Python 3.10/3.13 boundary job runs this conformance module so kqueue and
+  macOS Python 3.10/3.14 boundary job runs this conformance module so kqueue and
   native `sigaction` paths are merge-gated.
 - `tests/fixtures/delegation_claim_map_v3.json` is a test-only executable claim
   inventory, not evidence. `tests/test_delegation_claim_map_v3.py` reconciles
@@ -253,7 +282,7 @@ user-provided model labels, and the no-retention boundary.
   redacted `invalid_input`; it no longer has an implicit V2 run fallthrough.
 - Tests bind source-vendor/provider map coverage and confirm that explanation
   reason-only changes do not alter a reviewed native route fingerprint.
-- CI and release workflows add blocking macOS Python 3.10/3.13 triage-process
+- CI and release workflows add blocking macOS Python 3.10/3.14 triage-process
   and JSON-input boundary jobs. Release verification compares source version,
   installed metadata, and `wclass --version`.
 - Distribution verification accepts exactly one regular wheel and one regular
@@ -287,12 +316,15 @@ user-provided model labels, and the no-retention boundary.
   was reaped and retained no descendant. Ruff
   check/format, strict mypy over all 40 source files, both-version `compileall`
   over `src` and `tests`, and `git diff --check` passed.
-- The final current-tree source suite passed all 428 tests under Python 3.14.6
-  in 65.399s and Python 3.10.20 in 59.351s with `ResourceWarning` promoted to
+- The final current-tree source suite passed all 610 tests under Python 3.14.6
+  in 74.661s and Python 3.10.20 in 67.754s with `ResourceWarning` promoted to
   an error. A fresh offline exact wheel/sdist build then passed the
-  distribution-isolation gate and all 428 extracted-sdist tests under both
-  interpreters: 69.532s on Python 3.14.6 and 64.994s on Python 3.10.20, with one
-  platform skip each. The gate proves exact empty source/wheel/sdist registries;
+  release-candidate, distribution-isolation, extracted-sdist, installed-wheel,
+  and normalized cross-version gates for the same tree under both interpreters.
+  The extracted sdist passed all 606 collected tests in 82.908s on Python 3.14.6
+  and 69.261s on Python 3.10.20, with eleven intentional platform/source-boundary
+  skips on each.
+  The gate proves exact empty source/wheel/sdist registries;
   rejects duplicate, Unicode-normalized, case-folding, file/implicit-directory,
   and alternate `.dist-info` identities; binds the exact canonical
   project/version across filenames, archive roots, core metadata, and the
@@ -423,16 +455,20 @@ outside the repository and are not release artifacts.
 
 ## Resume prompt
 
-Read `HANDOFF.md` and `AGENTS.md`. The published package and Homebrew formula are
-0.4.0. The working tree contains unreleased delegation P0/P0.5 and an empty P1
-qualification registry. P0.5 starts one explicitly trusted user runtime; P1
-adds opt-in exact-artifact gates and a bounded maintainer evidence runner but
-qualifies no Claude/Codex adapter and ships no real conformance driver. Do not
-describe runner or candidate output as independent evidence or proven
-delegation. The working tree also contains a test-only synthetic probe kernel;
-its runner-direct observations remain `TOCTOU-UNRESOLVED`, Linux and Darwin
-descendant containment are tested `NO-GO`, the production registry is empty,
-and no synthetic artifact ships in the wheel.
-Preserve the Codex-triage fail-closed decision, native source-vendor routing,
-transient-task boundary, and Phase 4 no-go. Re-run final verification after any
-change; release, tag, and external publishing remain explicit actions.
+Read `HANDOFF.md` and `AGENTS.md`. The 0.5.0 release candidate adds opt-in
+Protocol 2 model/effort and source-profile routing while preserving every
+Protocol 1 lifecycle. Same-vendor routing is the default; profile changes and
+directional cross-vendor routing require exact explicit grants. Model labels,
+effort labels, account/profile identifiers, and subscription availability stay
+opaque user configuration and are not entitlement or billing claims.
+
+Protocol 2 adopts bounded orchestration structure (task/dispatch provenance,
+ownership, DAG readiness, typed gates, completion versus settlement) without
+adding retries, fallback, background work, provider HTTP, credential access, or
+task persistence. Each run still starts at most one reviewed foreground child.
+The qualification registry remains empty, so do not advertise a qualified real
+Claude/Codex delegation adapter or treat synthetic evidence as independent
+attestation. Preserve the Codex-triage fail-closed decision, transient-task
+boundary, and Phase 4 no-go. Re-run final verification after any change; tag,
+release, and external publishing remain explicit actions until their workflow
+has completed successfully.

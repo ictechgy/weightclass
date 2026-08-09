@@ -186,6 +186,25 @@ class _DistributionSnapshot:
     fingerprints: tuple[_ArtifactFingerprint, ...]
 
 
+@dataclass(frozen=True, order=True)
+class NormalizedArchiveMember:
+    """Security-preflighted archive member identity for reproducibility checks."""
+
+    path: str
+    kind: str
+    mode: int
+    size: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class NormalizedDistribution:
+    archive_kind: str
+    archive_root: str
+    core_metadata: tuple[tuple[str, str], ...]
+    members: tuple[NormalizedArchiveMember, ...]
+
+
 def _fail(message: str) -> NoReturn:
     raise IsolationError(message)
 
@@ -1588,6 +1607,75 @@ def verify_distribution_directory(
                 _fail("distribution artifacts changed after extracted sdist tests")
             if final != initial:
                 _fail("distribution artifacts changed after extracted sdist tests")
+
+
+def normalized_distribution(path: Path) -> NormalizedDistribution:
+    """Return a normalized view only after the existing security preflight passes."""
+
+    fingerprint = _fingerprint_artifact(path)
+    if path.name.endswith(".whl"):
+        verify_wheel(path, expected_fingerprint=fingerprint)
+        name, version = _wheel_core_metadata(path, fingerprint)
+        normalized: list[NormalizedArchiveMember] = []
+        with _verified_artifact_snapshot(path, fingerprint) as artifact:
+            snapshot, _ = artifact
+            _verify_physical_wheel(snapshot)
+            snapshot.seek(0)
+            with zipfile.ZipFile(cast(BinaryIO, _ZipSnapshotReader(snapshot))) as archive:
+                for wheel_member in _wheel_members(archive, path):
+                    raw = b"" if wheel_member.is_dir() else archive.read(wheel_member)
+                    normalized.append(
+                        NormalizedArchiveMember(
+                            wheel_member.filename,
+                            "directory" if wheel_member.is_dir() else "file",
+                            (wheel_member.external_attr >> 16) & 0o7777,
+                            wheel_member.file_size,
+                            hashlib.sha256(raw).hexdigest(),
+                        )
+                    )
+        roots = sorted(
+            {
+                PurePosixPath(member.path).parts[0]
+                for member in normalized
+                if PurePosixPath(member.path).parts[0].endswith(".dist-info")
+            }
+        )
+        if len(roots) != 1:
+            _fail(DISTRIBUTION_IDENTITY_ERROR)
+        return NormalizedDistribution(
+            "wheel", roots[0], (("Name", name), ("Version", version)), tuple(sorted(normalized))
+        )
+    if path.name.endswith(".tar.gz"):
+        verify_sdist(path, expected_fingerprint=fingerprint)
+        name, version = _sdist_core_metadata(path, fingerprint)
+        normalized = []
+        with _open_verified_sdist(path, fingerprint) as archive:
+            members = _safe_members(archive)
+            root = _sdist_root(members)
+            for tar_member in members:
+                relative = PurePosixPath(tar_member.name).relative_to(root).as_posix()
+                if relative == ".":
+                    relative = ""
+                raw = b""
+                if tar_member.isfile():
+                    extracted = archive.extractfile(tar_member)
+                    if extracted is None:
+                        _fail("sdist member could not be inspected")
+                    with extracted:
+                        raw = extracted.read()
+                normalized.append(
+                    NormalizedArchiveMember(
+                        relative,
+                        "directory" if tar_member.isdir() else "file",
+                        tar_member.mode & 0o7777,
+                        tar_member.size,
+                        hashlib.sha256(raw).hexdigest(),
+                    )
+                )
+        return NormalizedDistribution(
+            "sdist", root, (("Name", name), ("Version", version)), tuple(sorted(normalized))
+        )
+    _fail("unsupported distribution artifact")
 
 
 def main() -> int:

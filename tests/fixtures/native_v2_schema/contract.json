@@ -1,0 +1,249 @@
+{
+  "meta": {
+    "schema": "native-policy-v2",
+    "production_enabled": false,
+    "compiler_contract_version": 1
+  },
+  "objects": {
+    "policy": {
+      "keys": ["schema_version", "profiles", "execution_targets", "routes", "profile_grants", "vendor_grants"],
+      "required": ["schema_version", "profiles", "execution_targets", "routes", "profile_grants", "vendor_grants"],
+      "nullable": [],
+      "fields": {
+        "schema_version": "integer-not-bool:2",
+        "profiles": "1..64 profile",
+        "execution_targets": "1..64 target",
+        "routes": "1..128 route",
+        "profile_grants": "0..128 profile_grant",
+        "vendor_grants": "0..128 vendor_grant"
+      },
+      "namespace": "native.policy",
+      "ownership": "caller",
+      "references": [],
+      "invariants": ["exact schema 2", "all declared grants used"],
+      "projection": "selected route only",
+      "ordering": "registered list paths",
+      "status": "caller_requested"
+    },
+    "profile": {
+      "keys": ["id", "vendor", "account_profile"],
+      "required": ["id", "vendor", "account_profile"],
+      "nullable": [],
+      "fields": {
+        "id": "id<=64B",
+        "vendor": "enum:codex|claude",
+        "account_profile": "opaque<=240B"
+      },
+      "namespace": "native.profile",
+      "ownership": "policy",
+      "references": [],
+      "invariants": ["unique id"],
+      "projection": "selected source and destination",
+      "ordering": "id",
+      "status": "caller_requested"
+    },
+    "target": {
+      "keys": ["id", "profile_id", "vendor", "executable", "builder", "allowed_model_effort_pairs"],
+      "required": ["id", "profile_id", "vendor", "executable", "builder", "allowed_model_effort_pairs"],
+      "nullable": [],
+      "fields": {
+        "id": "id<=64B",
+        "profile_id": "profile-ref",
+        "vendor": "enum:codex|claude",
+        "executable": "absolute lexical path<=4096B",
+        "builder": "builder",
+        "allowed_model_effort_pairs": "1..64 allowed_pair"
+      },
+      "namespace": "native.target",
+      "ownership": "policy",
+      "references": ["profile_id"],
+      "invariants": ["profile/vendor/builder coherent"],
+      "projection": "selected complete",
+      "ordering": "id",
+      "status": "structurally_enforced"
+    },
+    "builder": {
+      "keys": ["kind", "version"],
+      "required": ["kind", "version"],
+      "nullable": [],
+      "fields": {
+        "kind": "enum:codex-exec-v1|claude-print-v1",
+        "version": "integer-not-bool:1"
+      },
+      "namespace": "target embedded",
+      "ownership": "target",
+      "references": [],
+      "invariants": ["closed argv builder"],
+      "projection": "complete",
+      "ordering": "embedded",
+      "status": "structurally_enforced"
+    },
+    "allowed_pair": {
+      "keys": ["model", "effort"],
+      "required": ["model", "effort"],
+      "nullable": [],
+      "fields": {
+        "model": "opaque<=240B",
+        "effort": "opaque<=240B"
+      },
+      "namespace": "target-local pair",
+      "ownership": "target",
+      "references": [],
+      "invariants": ["unique exact pair"],
+      "projection": "complete",
+      "ordering": "model,effort",
+      "status": "caller_requested"
+    },
+    "route": {
+      "keys": ["id", "eligibility", "target_id", "model", "effort"],
+      "required": ["id", "eligibility", "target_id", "model", "effort"],
+      "nullable": [],
+      "fields": {
+        "id": "id<=64B",
+        "eligibility": "1..32 eligibility",
+        "target_id": "target-ref",
+        "model": "opaque<=240B",
+        "effort": "opaque<=240B"
+      },
+      "namespace": "native.route",
+      "ownership": "policy",
+      "references": ["target_id"],
+      "invariants": ["globally unique eligibility", "pair allowed by target"],
+      "projection": "selected complete",
+      "ordering": "id",
+      "status": "structurally_enforced"
+    },
+    "eligibility": {
+      "keys": ["source_vendor", "source_profile_id", "tier"],
+      "required": ["source_vendor", "source_profile_id", "tier"],
+      "nullable": [],
+      "fields": {
+        "source_vendor": "enum:codex|claude",
+        "source_profile_id": "profile-ref",
+        "tier": "enum:low|standard|high"
+      },
+      "namespace": "global selector tuple",
+      "ownership": "route",
+      "references": ["source_profile_id"],
+      "invariants": ["source profile vendor coherent", "globally unique tuple"],
+      "projection": "selected source",
+      "ordering": "source_vendor,source_profile_id,tier",
+      "status": "structurally_enforced"
+    },
+    "profile_grant": {
+      "keys": ["id", "from_profile_id", "to_profile_id"],
+      "required": ["id", "from_profile_id", "to_profile_id"],
+      "nullable": [],
+      "fields": {
+        "id": "id<=64B",
+        "from_profile_id": "profile-ref",
+        "to_profile_id": "profile-ref"
+      },
+      "namespace": "native.profile_grant",
+      "ownership": "policy",
+      "references": ["from_profile_id", "to_profile_id"],
+      "invariants": ["directional unequal endpoints", "used"],
+      "projection": "selected used grant",
+      "ordering": "id",
+      "status": "structurally_enforced"
+    },
+    "vendor_grant": {
+      "keys": ["id", "from_vendor", "to_vendor"],
+      "required": ["id", "from_vendor", "to_vendor"],
+      "nullable": [],
+      "fields": {
+        "id": "id<=64B",
+        "from_vendor": "enum:codex|claude",
+        "to_vendor": "enum:codex|claude"
+      },
+      "namespace": "native.vendor_grant",
+      "ownership": "policy",
+      "references": [],
+      "invariants": ["directional unequal endpoints", "used"],
+      "projection": "selected used grant",
+      "ordering": "id",
+      "status": "structurally_enforced"
+    },
+    "native_authorization": {
+      "keys": ["dimension", "grant_id"],
+      "required": ["dimension", "grant_id"],
+      "nullable": [],
+      "fields": {
+        "dimension": "enum:profile|vendor",
+        "grant_id": "profile_grant-ref|vendor_grant-ref"
+      },
+      "namespace": "native transition-local authorization",
+      "ownership": "compiler",
+      "references": ["grant_id"],
+      "invariants": ["one authorization per changed dimension"],
+      "projection": "complete",
+      "ordering": "profile,vendor",
+      "status": "structurally_enforced"
+    },
+    "native_transition": {
+      "keys": ["id", "source_profile", "destination_profile", "changed_dimensions", "authorizations"],
+      "required": ["id", "source_profile", "destination_profile", "changed_dimensions", "authorizations"],
+      "nullable": [],
+      "fields": {
+        "id": "id<=64B",
+        "source_profile": "profile",
+        "destination_profile": "profile",
+        "changed_dimensions": "0..2 enum:profile|vendor",
+        "authorizations": "0..2 native_authorization"
+      },
+      "namespace": "compiled native transition",
+      "ownership": "compiler",
+      "references": [],
+      "invariants": ["source and destination are explicit", "authorizations align exactly with changed dimensions"],
+      "projection": "complete derived",
+      "ordering": "single selected transition",
+      "status": "structurally_enforced"
+    },
+    "descriptor": {
+      "keys": ["descriptor_schema_version", "compiler_contract_version", "source", "route", "target", "selection", "argv", "transition", "route_fingerprint"],
+      "required": ["descriptor_schema_version", "compiler_contract_version", "source", "route", "target", "selection", "argv", "transition", "route_fingerprint"],
+      "nullable": [],
+      "fields": {
+        "descriptor_schema_version": "integer-not-bool:2",
+        "compiler_contract_version": "integer-not-bool:1",
+        "source": "profile",
+        "route": "route",
+        "target": "target",
+        "selection": "eligibility",
+        "argv": "1..32 tokens; each<=4096B; aggregate<=16384B",
+        "transition": "native_transition",
+        "route_fingerprint": "sha256:<64 lowercase hex>"
+      },
+      "namespace": "compiled native descriptor",
+      "ownership": "compiler",
+      "references": [],
+      "invariants": ["argv[0]==target.executable", "canonical<=262144B", "fingerprint excludes only route_fingerprint"],
+      "projection": "canonical selected route",
+      "ordering": "sorted keys and registered lists",
+      "status": "structurally_enforced"
+    }
+  },
+  "list_paths": {
+    "/route/eligibility": "source_vendor,source_profile_id,tier",
+    "/target/allowed_model_effort_pairs": "model,effort",
+    "/argv": "ordered",
+    "/transition/changed_dimensions": "profile,vendor",
+    "/transition/authorizations": "aligned-with-changed-dimensions"
+  },
+  "validation_order": [
+    "exact_keys_types_scalar_collection_bounds",
+    "local_uniqueness_and_enums",
+    "global_namespaces",
+    "references_and_producer_ownership",
+    "edge_pair_uniqueness_and_gate_ownership",
+    "combined_dag_cycle_and_topology",
+    "terminal_validation",
+    "input_projection_binding_and_types",
+    "strict_ancestry",
+    "write_predicate_and_scope_conflicts",
+    "structural_transitions",
+    "directional_grants_and_unused_grants",
+    "canonical_sorting_and_descriptor_size",
+    "fingerprint_binding"
+  ]
+}
