@@ -502,6 +502,16 @@ def parse_delegation_policy_v2(raw: object) -> DelegationPolicyV2:
         _validate_workflow_uniqueness(workflow)
     _unique([profile.profile_id for profile in profiles])
     _unique([workflow.workflow_id for workflow in workflows])
+    _unique(
+        [
+            (
+                workflow.eligibility.source_vendor_family,
+                workflow.eligibility.source_profile_id,
+                workflow.eligibility.tier,
+            )
+            for workflow in workflows
+        ]
+    )
     return DelegationPolicyV2(
         schema_version=2,
         manifest_schema_version=2,

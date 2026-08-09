@@ -26,6 +26,9 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
                 self.assertIn('importlib.metadata.version("weightclass")', block)
                 self.assertIn("python -m weightclass --version", block)
                 self.assertIn('PYTHONPATH="$installed_wheel"', block)
+                self.assertIn('python -m venv "$installed_venv"', block)
+                self.assertIn('"$installed_venv/bin/wclass" --version', block)
+                self.assertIn('"$installed_venv/bin/wclass" classify', block)
                 installed_wheel_checks = block.split('installed_wheel="$RUNNER_TEMP', 1)[1]
                 self.assertNotIn("PYTHONPATH=src python", installed_wheel_checks)
 

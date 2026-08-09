@@ -20,6 +20,7 @@ from tests.test_distribution_isolation import _write_distribution_fixture
 from tests.verify_release_candidate import (
     MANIFEST_NAME,
     MAX_RELEASE_ARTIFACT_BYTES,
+    ReleaseCandidate,
     ReleaseCandidateError,
     _regular_bytes,
     create_staging,
@@ -148,6 +149,39 @@ class ReleaseCandidateTests(unittest.TestCase):
                 run_sdist_tests_requested=False,
                 expected_version="0",
             )
+
+    def test_manifest_mismatch_stops_before_distribution_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            source, download = _candidate(Path(raw))
+            staging = Path(raw) / "staging"
+            original_create_staging = create_staging
+
+            def replace_then_stage(
+                directory: Path,
+                destination: Path,
+                candidate: ReleaseCandidate,
+            ) -> tuple[Path, Path]:
+                sdist_name = load_release_candidate(directory).sdist_name
+                (directory / sdist_name).write_bytes(b"unmanifested replacement")
+                return original_create_staging(directory, destination, candidate)
+
+            with (
+                mock.patch(
+                    "tests.verify_release_candidate.create_staging",
+                    side_effect=replace_then_stage,
+                ),
+                mock.patch(
+                    "tests.verify_release_candidate.verify_distribution_directory"
+                ) as verify,
+                self.assertRaises(ReleaseCandidateError),
+            ):
+                verify_and_stage(
+                    download,
+                    staging,
+                    source=source,
+                    expected_version="0",
+                )
+            verify.assert_not_called()
 
     def test_versioned_production_exclusion_allowlist_starts_empty(self) -> None:
         self.assertEqual(load_exclusions(), ())

@@ -223,6 +223,7 @@ def verify_and_stage(
     before = _snapshot(directory)
     candidate = load_release_candidate(directory)
     paths = create_staging(directory, staging, candidate)
+    verify_staging(staging, candidate)
     try:
         verify_distribution_directory(
             source,

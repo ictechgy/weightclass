@@ -72,16 +72,11 @@ class RuntimeGuard:
     @contextlib.contextmanager
     def activated(self) -> Iterator[None]:
         original_popen = subprocess.Popen
-        original_run = subprocess.run
         original_socket = socket.socket
 
         def guarded_popen(argv: object, *args: Any, **kwargs: Any) -> Any:
             self._validate(argv, kwargs)
             return original_popen(cast(Sequence[str], argv), *args, **kwargs)
-
-        def guarded_run(argv: object, *args: Any, **kwargs: Any) -> Any:
-            self._validate(argv, kwargs)
-            return original_run(cast(Sequence[str], argv), *args, **kwargs)
 
         def guarded_socket(
             family: int = socket.AF_INET,
@@ -98,7 +93,6 @@ class RuntimeGuard:
 
         with (
             mock.patch.object(subprocess, "Popen", guarded_popen),
-            mock.patch.object(subprocess, "run", guarded_run),
             mock.patch.object(socket, "socket", guarded_socket),
             mock.patch.object(socket, "create_connection", reject_connection),
         ):

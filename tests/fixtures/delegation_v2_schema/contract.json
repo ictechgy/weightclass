@@ -256,7 +256,7 @@
       "keys": ["id", "media_type"],
       "required": ["id", "media_type"],
       "nullable": [],
-      "fields": {"id": "id<=64B", "media_type": "closed reviewable media type<=240B"},
+      "fields": {"id": "id<=64B", "media_type": "reviewable media-type label<=240B"},
       "namespace": "global output-owned artifact",
       "ownership": "producer output",
       "references": [],

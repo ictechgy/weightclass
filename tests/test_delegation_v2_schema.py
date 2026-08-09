@@ -201,6 +201,17 @@ def complete_policy() -> dict[str, object]:
 
 
 class DelegationV2SchemaTests(unittest.TestCase):
+    def test_policy_rejects_duplicate_eligibility_selectors_globally(self) -> None:
+        raw = valid_policy()
+        workflows = raw["workflows"]
+        assert isinstance(workflows, list) and isinstance(workflows[0], dict)
+        duplicate = copy.deepcopy(workflows[0])
+        duplicate["id"] = "wf-duplicate"
+        duplicate["requested_run_id"] = "run-duplicate"
+        workflows.append(duplicate)
+        with self.assertRaises(DelegationV2InvalidInputError):
+            parse_delegation_policy_v2(raw)
+
     def test_closed_mapping_and_cross_vendor_adapter_binding(self) -> None:
         policy = parse_delegation_policy_v2(valid_policy())
         manifest = parse_delegation_manifest_v2(valid_manifest())

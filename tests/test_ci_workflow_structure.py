@@ -62,6 +62,13 @@ class CIWorkflowStructureTests(unittest.TestCase):
                 self.assertIn(command, quality)
         self.assertIn("PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q", quality)
 
+    def test_whitespace_gate_checks_the_committed_head_delta(self) -> None:
+        quality = self.text.split("\n  quality:\n", 1)[1].split(
+            "\n  macos-routing-boundaries:\n", 1
+        )[0]
+        self.assertIn("fetch-depth: 2", quality)
+        self.assertIn("git diff --check HEAD^1 HEAD", quality)
+
     def test_macos_boundary_matrix_and_claimed_suites_are_exact(self) -> None:
         block = self.text.split("\n  macos-routing-boundaries:\n", 1)[1]
         self.assertIn('python-version: ["3.10", "3.14"]', block)

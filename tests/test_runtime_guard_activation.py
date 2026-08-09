@@ -46,6 +46,14 @@ class RuntimeGuardActivationTests(unittest.TestCase):
             with self.assertRaises(RuntimeGuardViolation):
                 subprocess.run([str(python), "-c", "raise SystemExit(9)"], check=False)
 
+    def test_each_process_creation_is_counted_once(self) -> None:
+        python = Path(sys.executable).resolve()
+        self.guard.register_executable(python, "-c", "pass")
+        with self.guard.activated():
+            completed = subprocess.run([str(python), "-c", "pass"], check=False)
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(self.guard.validated_launch_count, 1)
+
     def test_rejects_an_explicit_executable_override(self) -> None:
         python = Path(sys.executable).resolve()
         self.guard.register_executable(python, "-c", "pass")
