@@ -1044,6 +1044,11 @@ def _native_v2_run(
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
     try:
+        validate_runtime_process_context()
+    except DelegationRuntimeUnavailableError:
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    try:
         task, tier = _v2_task_and_tier(explicit_tier)
     except V2ValidationError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)

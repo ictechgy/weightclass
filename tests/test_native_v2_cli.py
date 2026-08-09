@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 from tests.runtime_guard import guarded_launch
 from weightclass import cli
+from weightclass.delegation_runtime import DelegationRuntimeUnavailableError
 from weightclass.executable_observation import ExecutableObservation
 from weightclass.native_v2_compile import compile_native_v2
 from weightclass.native_v2_schema import parse_native_policy_v2
@@ -168,6 +169,36 @@ class NativeV2CliTests(unittest.TestCase):
                         ]
                     ),
                     6,
+                )
+            reader.assert_not_called()
+            inspect.assert_not_called()
+
+    def test_run_unsafe_process_context_stops_before_task_access(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_policy(directory)
+            with (
+                patch(
+                    "weightclass.cli.validate_runtime_process_context",
+                    side_effect=DelegationRuntimeUnavailableError,
+                ),
+                patch("weightclass.cli.read_validated_task_v2") as reader,
+                patch("weightclass.cli.observe_executable") as inspect,
+            ):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "run",
+                            "--policy",
+                            str(path),
+                            "--source-vendor",
+                            "codex",
+                            "--source-profile",
+                            "p",
+                            "--ack-route-fingerprint",
+                            "reviewed",
+                        ]
+                    ),
+                    4,
                 )
             reader.assert_not_called()
             inspect.assert_not_called()

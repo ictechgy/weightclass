@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from weightclass.delegation_runtime import DelegationRuntimeUnavailableError
 from weightclass.executable_observation import ExecutableObservation, observe_executable
 from weightclass.native_v2_runtime import run_native_v2
 from weightclass.native_v2_types import CompiledExecutionV2, FrozenCleanupV2
@@ -58,6 +59,20 @@ class NativeV2RuntimeTests(unittest.TestCase):
             self.assertIs(run_native_v2(compiled(), b"task", observation()), completed)
         inspect.assert_called_once_with("/owned/fake")
         spawn.assert_called_once_with(compiled().argv, check=False, input=b"task", shell=False)
+
+    def test_unsafe_process_context_stops_before_observation_or_spawn(self) -> None:
+        with (
+            patch(
+                "weightclass.native_v2_runtime.validate_runtime_process_context",
+                side_effect=DelegationRuntimeUnavailableError,
+            ),
+            patch("weightclass.native_v2_runtime.observe_executable") as inspect,
+            patch("weightclass.native_v2_runtime.subprocess.run") as spawn,
+            self.assertRaises(DelegationRuntimeUnavailableError),
+        ):
+            run_native_v2(compiled(), b"task", observation())
+        inspect.assert_not_called()
+        spawn.assert_not_called()
 
     def test_replacement_stops_before_spawn(self) -> None:
         spawn = Mock()

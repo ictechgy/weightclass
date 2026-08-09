@@ -36,7 +36,9 @@ user-provided model labels, and the no-retention boundary.
   vocabularies. Cross-vendor transitions require explicit directional
   authorization. Review and run bind one immutable
   descriptor/fingerprint/argv truth; execution observes and starts one
-  foreground direct child only.
+  foreground direct child only. Native schema-2 execution rejects an
+  unreviewed main-thread or native `SIGCHLD` process context before task access
+  and rechecks it immediately before executable observation and spawn.
 - The RALPLAN history ended `max_rounds/ITERATE`. Its Critic findings are
   mandatory review input, never consensus approval.
 
@@ -316,13 +318,13 @@ user-provided model labels, and the no-retention boundary.
   was reaped and retained no descendant. Ruff
   check/format, strict mypy over all 40 source files, both-version `compileall`
   over `src` and `tests`, and `git diff --check` passed.
-- The final current-tree source suite passed all 610 tests under Python 3.14.6
-  in 74.661s and Python 3.10.20 in 67.754s with `ResourceWarning` promoted to
+- The final current-tree source suite passed all 616 tests under Python 3.14.6
+  in 79.610s and Python 3.10.20 in 72.988s with `ResourceWarning` promoted to
   an error. A fresh offline exact wheel/sdist build then passed the
   release-candidate, distribution-isolation, extracted-sdist, installed-wheel,
   and normalized cross-version gates for the same tree under both interpreters.
-  The extracted sdist passed all 606 collected tests in 82.908s on Python 3.14.6
-  and 69.261s on Python 3.10.20, with eleven intentional platform/source-boundary
+  The extracted sdist passed all 611 collected tests in 82.730s on Python 3.14.6
+  and 71.693s on Python 3.10.20, with eleven intentional platform/source-boundary
   skips on each.
   The gate proves exact empty source/wheel/sdist registries;
   rejects duplicate, Unicode-normalized, case-folding, file/implicit-directory,
