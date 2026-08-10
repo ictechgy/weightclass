@@ -46,7 +46,7 @@ from weightclass.delegation_runtime import (
     DelegationRuntimeFailedError,
     DelegationRuntimeUnavailableError,
     _cleanup_direct_child,
-    _DeferredSigint,
+    _SigintDeferredUntilChildOwned,
     _wait,
     _write_all,
     run_delegation_runtime,
@@ -693,9 +693,9 @@ class DelegationProtocolUnitTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
     def test_spawn_adjacent_sigchld_check_follows_sigint_arming(self) -> None:
         """Breaks if SIGINT setup can invalidate SIGCHLD ownership before spawn."""
-        original_arm = _DeferredSigint.arm
+        original_arm = _SigintDeferredUntilChildOwned.arm
 
-        def arm_then_enable_auto_reap(deferred_sigint: _DeferredSigint) -> None:
+        def arm_then_enable_auto_reap(deferred_sigint: _SigintDeferredUntilChildOwned) -> None:
             original_arm(deferred_sigint)
             signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
@@ -704,7 +704,7 @@ class DelegationProtocolUnitTests(unittest.TestCase):
         try:
             with (
                 mock.patch.object(
-                    _DeferredSigint,
+                    _SigintDeferredUntilChildOwned,
                     "arm",
                     arm_then_enable_auto_reap,
                 ),
@@ -1037,7 +1037,7 @@ class DelegationProtocolUnitTests(unittest.TestCase):
 
         real_signal = signal.signal
         original_handler = real_signal(signal.SIGINT, previous_handler)
-        deferred_sigint = _DeferredSigint()
+        deferred_sigint = _SigintDeferredUntilChildOwned()
         deferred_sigint.arm()
         injected = False
 
