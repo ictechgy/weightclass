@@ -1,5 +1,25 @@
 # Claude and Codex Delegation Roadmap
 
+## Protocol 2 implementation status
+
+Protocol 2 now has strict version-tuple parsing, source-profile coherence,
+combined-DAG and terminal validation, typed gates and projections, centralized
+write/scope checks, five-dimensional transitions and grants, an immutable
+canonical descriptor, WCD2, exact review acknowledgement, executable
+reobservation, and one foreground direct-child runtime integration. Protocol 1
+lifecycle and qualification remain unchanged; protocol 2 is not qualification
+eligible.
+
+The machine-reviewed orchestration mappings live in
+`tests/fixtures/orchestration_traceability.json`. They distinguish structural
+adoption, opaque caller requests, direct-child observation, runtime-owned
+features, and ideas not adopted. No row claims effective provider behavior,
+semantic authorship, persistence, background supervision, or sandbox parity.
+
+The five-round RALPLAN ended `max_rounds/ITERATE`, not approval. Its Critic
+findings were mandatory review input. Protocol-2 rollback removes only v2
+dispatch; it does not refactor or remove protocol-1 lifecycle behavior.
+
 ## Purpose
 
 Add role-based routing without pretending that a model label proves who did

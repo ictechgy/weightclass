@@ -18,6 +18,14 @@ the project directory after installing `weightclass`.
 Do not put task text, credentials, tokens, or personal information on a command
 line, in a policy, or in vendor-global configuration.
 
+For schema 2, `route` and `run` additionally require `--source-profile`. Review
+the canonical source/destination profiles, exact model/effort pair, executable,
+argv, transitions, and directional grants. Then provide the emitted fingerprint
+to `run` with `--ack-route-fingerprint`. Missing acknowledgement stops before
+task access; mismatch stops before executable inspection or spawn. Account,
+recipient, billing, subscription, entitlement, model, and effort labels are
+opaque declarations, not facts verified by weightclass.
+
 ## Codex
 
 ```sh
@@ -119,6 +127,47 @@ The runtime receives the exact canonical descriptor and transient task through
 the WCD1 stdin frame and owns all Claude/Codex process creation, authentication,
 network, billing, permissions, review, integration, descendant cleanup, and
 output. weightclass bundles no runtime and cannot detect a dishonest zero exit.
+
+Protocol 2 uses an independent WCD2 byte frame and requires the exact
+policy/manifest/descriptor/runtime/frame version-2 tuple plus
+`--source-profile`. It can express authorized same-vendor account-profile and
+cross-vendor transitions. It is not eligible for qualified-runtime mode. The
+runtime executable is observed twice using lexical path, device, inode,
+type/mode, size, nanosecond modification/change times, and POSIX execute bits.
+A zero-size executable is structurally allowed; final symlinks are rejected,
+while intermediate-component symlinks and replacement after the second check
+remain residuals. Execution is path-based and direct-child-only.
+
+## Orchestration patterns reflected in protocol 2
+
+Protocol 2 borrows reviewable structure, not another tool's runtime claims:
+
+- Orca informs requested run/task/dispatch provenance, requested ownership,
+  DAG readiness, typed gates, and the separation of direct-child completion
+  from task settlement.
+- Codex informs bounded independent workstreams, explicit projections,
+  synthesized terminal structure, mutable-scope ownership, and a separately
+  selected model/effort for each task.
+- Claude informs typed model/effort, tool, permission, and turn requests.
+  Hooks, memory, background work, and peer messaging remain runtime-owned and
+  are not router features.
+- Cursor informs explicit allowed model/effort pools and task-mode binding,
+  without any network, background, or retention guarantee.
+- LangGraph informs typed transitions, gates, and projections, but protocol 2
+  deliberately adds no persisted graph state or resume mechanism.
+- AutoGen informs structural fanout/join and synthesis-terminal validation;
+  message selection/filtering is not adopted.
+- CrewAI topology labels are not adopted because protocol 2 does not derive
+  them deterministically. A caller may describe a typed approved-value gate as
+  human-in-the-loop, but the human involvement itself is not structurally
+  verified and there is no callback or user interface.
+- OpenHands informs provider-neutral capability and workspace vocabulary,
+  without claiming sandbox parity.
+
+The exact schema path, validator, regression test, enforcement status, and
+non-goal for every row are machine-checked in
+`tests/fixtures/orchestration_traceability.json` by
+`tests/test_orchestration_traceability.py`.
 
 For the P1 gate, add `--require-qualified-runtime` to both the review and run
 commands. Production consults only the registry shipped inside the weightclass

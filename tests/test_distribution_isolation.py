@@ -28,6 +28,7 @@ from tests.verify_distribution_isolation import (
     _safe_members,
     _verify_physical_sdist,
     _wheel_members,
+    normalized_distribution,
     run_extracted_sdist_tests,
     verify_sdist,
     verify_source_registry,
@@ -402,6 +403,21 @@ def _workflow_step_name(block: str) -> str:
 
 
 class DistributionIsolationTests(unittest.TestCase):
+    def test_normalized_views_require_preflight_and_bind_member_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _source, wheel, sdist = _write_distribution_fixture(directory)
+            wheel_view = normalized_distribution(wheel)
+            sdist_view = normalized_distribution(sdist)
+            self.assertEqual(wheel_view.archive_kind, "wheel")
+            self.assertEqual(sdist_view.archive_kind, "sdist")
+            self.assertTrue(wheel_view.archive_root.endswith(".dist-info"))
+            self.assertEqual(sdist_view.archive_root, "weightclass-0")
+            for view in (wheel_view, sdist_view):
+                self.assertTrue(view.members)
+                for member in view.members:
+                    self.assertIn(member.kind, ("file", "directory"))
+                    self.assertEqual(len(member.sha256), 64)
+
     def test_outer_artifact_size_is_rejected_before_hashing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             for suffix in (".whl", ".tar.gz"):
@@ -1172,77 +1188,24 @@ class DistributionIsolationTests(unittest.TestCase):
                 self.assertNotIn("--sdist", isolation_step)
                 self.assertIn("--run-sdist-tests", isolation_step)
 
-        release_steps = _workflow_step_blocks(root / ".github/workflows/release.yml", "verify")
-        release_names = [_workflow_step_name(step) for step in release_steps]
-        metadata_index = release_names.index("Verify distribution metadata")
-        isolation_index = release_names.index("Verify distribution isolation before tests")
-        upload_index = release_names.index("Upload unverified distributions")
-        tests_index = release_names.index("Run extracted sdist tests against local artifacts")
-        self.assertLess(metadata_index, isolation_index)
-        self.assertLess(isolation_index, upload_index)
-        self.assertLess(upload_index, tests_index)
-        release_run_indexes = [
-            index for index, step in enumerate(release_steps) if "\n        run:" in step
-        ]
-        self.assertEqual(tests_index, release_run_indexes[-1])
-        self.assertNotIn("--run-sdist-tests", release_steps[isolation_index])
-        self.assertIn('--expected-version "${GITHUB_REF_NAME#v}"', release_steps[isolation_index])
-        self.assertIn("--run-sdist-tests", release_steps[tests_index])
-        self.assertIn('--expected-version "${GITHUB_REF_NAME#v}"', release_steps[tests_index])
-        upload_step = release_steps[upload_index]
-        self.assertIn("name: unverified-distributions", upload_step)
-        self.assertIn(
-            "          path: |\n            dist/*.whl\n            dist/*.tar.gz\n"
-            "          if-no-files-found: error",
-            upload_step,
-        )
-        self.assertNotIn("          path: dist/", upload_step)
-
-        validate_steps = _workflow_step_blocks(root / ".github/workflows/release.yml", "validate")
-        validate_names = [_workflow_step_name(step) for step in validate_steps]
-        download_index = validate_names.index("Download unverified distributions")
-        isolation_index = validate_names.index("Final distribution isolation verification")
-        self.assertLess(download_index, isolation_index)
-        self.assertEqual(isolation_index, len(validate_steps) - 1)
-        self.assertNotIn("Install metadata verifier", validate_names)
-        self.assertNotIn("Verify distribution metadata", validate_names)
-        self.assertNotIn("Upload validated distributions", validate_names)
-        validate_run_indexes = [
-            index for index, step in enumerate(validate_steps) if "\n        run:" in step
-        ]
-        self.assertEqual(validate_run_indexes, [isolation_index])
-        final_isolation_step = validate_steps[isolation_index]
-        self.assertIn("--source . --dist-dir dist", final_isolation_step)
-        self.assertNotIn("--run-sdist-tests", final_isolation_step)
-        self.assertIn('--expected-version "${GITHUB_REF_NAME#v}"', final_isolation_step)
-        self.assertIn("name: unverified-distributions", validate_steps[download_index])
         release_workflow = root / ".github/workflows/release.yml"
-        self.assertIn("    needs: verify", _workflow_job_block(release_workflow, "validate"))
+        release_text = release_workflow.read_text(encoding="utf-8")
+        self.assertEqual(release_text.count("python -m build"), 1)
+        self.assertNotIn("dist/*.whl", release_text)
+        self.assertNotIn("dist/*.tar.gz", release_text)
+        build_steps = _workflow_step_blocks(release_workflow, "build-candidate")
+        self.assertTrue(any("--create-manifest-from" in step for step in build_steps))
+        for job in ("validate-python-310", "validate-python-314"):
+            block = _workflow_job_block(release_workflow, job)
+            self.assertIn("needs: build-candidate", block)
+            self.assertIn("--create-staging dist-under-test", block)
+            self.assertIn("tests/compare_release_candidates.py", block)
         self.assertIn(
-            "    needs: [validate, macos-routing-boundaries]",
+            "    needs: [validate-python-310, validate-python-314, macos-routing-boundaries]",
             _workflow_job_block(release_workflow, "publish"),
         )
-        publish_steps = _workflow_step_blocks(release_workflow, "publish")
-        publish_download = publish_steps[
-            [_workflow_step_name(step) for step in publish_steps].index("Download distributions")
-        ]
-        self.assertIn("name: unverified-distributions", publish_download)
-        self.assertNotIn(
-            "          name: distributions",
-            release_workflow.read_text(encoding="utf-8"),
-        )
-
-        mac_steps = _workflow_step_blocks(
-            release_workflow,
-            "macos-routing-boundaries",
-        )
-        mac_boundary_step = mac_steps[
-            [_workflow_step_name(step) for step in mac_steps].index(
-                "Verify process and JSON input boundaries"
-            )
-        ]
-        self.assertIn("tests.test_delegation_conformance", mac_boundary_step)
-        self.assertIn("tests.test_delegation_runtime", mac_boundary_step)
+        self.assertIn("--create-publish-staging publish-staging", release_text)
+        self.assertIn("packages-dir: publish-staging", release_text)
 
     def test_distribution_directory_binds_core_metadata_to_one_release(self) -> None:
         cases: tuple[tuple[str, _DistributionFixtureOptions, bool, str | None], ...] = (

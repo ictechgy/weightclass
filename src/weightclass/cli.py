@@ -51,7 +51,25 @@ from .delegation_schema import (
     validate_runtime_path_lexically,
 )
 from .delegation_types import DelegationTier, DirectChildCleanup, VendorFamily
+from .delegation_v2_compile import compile_delegation_v2
+from .delegation_v2_protocol import DelegationFrameV2Error, encode_delegation_frame_v2
+from .delegation_v2_runtime import run_delegation_v2_runtime
+from .delegation_v2_schema import (
+    DelegationV2InvalidInputError,
+    parse_delegation_manifest_v2,
+    parse_delegation_policy_v2,
+)
+from .delegation_v2_versions import DelegationVersionError, dispatch_delegation_versions
+from .executable_observation import observe_executable
 from .json_input import JsonInputError, load_json_object
+from .native_v2_compile import compile_native_v2
+from .native_v2_runtime import run_native_v2
+from .native_v2_schema import (
+    NativePolicyV2,
+    dispatch_native_policy_schema,
+    validate_native_selector,
+)
+from .native_v2_types import CompiledExecutionV2
 from .router import (
     DEFAULT_ROUTES,
     SUPPORTED_VENDORS,
@@ -64,6 +82,7 @@ from .router import (
     select_route,
     select_tier_route,
 )
+from .task_v2 import ValidatedTaskV2, read_validated_task_v2
 from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
 from .v2 import (
     V2InvalidInputError,
@@ -73,6 +92,7 @@ from .v2 import (
     select_api_route,
     validate_api_runtime,
 )
+from .v2_validation import V2ValidationError
 
 EXECUTOR_FAILED_EXIT_CODE: Final = 7
 MAX_NATIVE_POLICY_BYTES: Final = 262_144
@@ -212,6 +232,18 @@ def load_routes(policy_path: Path) -> tuple[Route, ...]:
 def load_routing_policy(policy_path: Path) -> RoutingPolicy:
     """Load routing options and strictly shaped trusted-local routes."""
     policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
+    try:
+        version, dispatched = dispatch_native_policy_schema(policy)
+    except V2ValidationError:
+        raise InvalidInputError() from None
+    if version != 1:
+        raise InvalidInputError()
+    assert isinstance(dispatched, dict)
+    return _parse_routing_policy(dispatched)
+
+
+def _parse_routing_policy(policy: dict[str, Any]) -> RoutingPolicy:
+    """Parse an already bounded and version-dispatched schema-1 policy."""
     if not {"routes"} <= set(policy) <= {"routes", "allow_mixed_vendors", "posture"}:
         raise InvalidInputError()
     allow_mixed_vendors = policy.get("allow_mixed_vendors", False)
@@ -255,6 +287,7 @@ def _add_delegation_route_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--runtime-manifest", required=True, type=Path)
     parser.add_argument("--delegation-runtime", required=True)
     parser.add_argument("--source-vendor", required=True, choices=("claude", "codex"))
+    parser.add_argument("--source-profile")
     parser.add_argument("--tier", required=True, choices=("low", "standard", "high"))
     parser.add_argument(
         "--require-qualified-runtime",
@@ -301,6 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
         native = subcommands.add_parser(name, allow_abbrev=False, description=description)
         native.add_argument("--policy", type=Path)
         native.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
+        native.add_argument("--source-profile")
         # wclass classify 가 낸 티어를 그대로 받는다. route 와 run 은 이 경로에서도
         # 네트워크를 쓰지 않는다. 판정은 별도 명령에서 이미 끝났다.
         native.add_argument("--tier", choices=("low", "standard", "high"))
@@ -396,6 +430,64 @@ def _compile_delegation_inputs(
     return descriptor, render_review_descriptor(descriptor), qualification
 
 
+def _dispatch_delegation_cli_version(
+    policy_path: Path,
+    manifest_path: Path,
+    runtime_path: str,
+    source_vendor: str,
+    source_profile: str | None,
+    tier: str,
+    require_qualified_runtime: bool,
+) -> int | CompiledExecutionV2 | None:
+    """Dispatch v2 parsing while leaving the protocol-1 compiler untouched."""
+    try:
+        raw_policy = _read_json_object(policy_path, max_bytes=262_144)
+        raw_manifest = _read_json_object(manifest_path, max_bytes=262_144)
+        policy_version = raw_policy.get("schema_version")
+        if policy_version == 1 and raw_manifest.get("manifest_schema_version") == 1:
+            version = dispatch_delegation_versions((1, 1, 1, 1, "WCD1"))
+        else:
+            version = dispatch_delegation_versions(
+                (
+                    policy_version,
+                    raw_manifest.get("schema_version"),
+                    raw_policy.get("compiler_contract_version"),
+                    raw_policy.get("runtime_protocol_version"),
+                    raw_policy.get("frame_version"),
+                )
+            )
+        if version == 1:
+            if source_profile is not None:
+                raise DelegationV2InvalidInputError()
+            return None
+        if source_profile is None:
+            raise DelegationV2InvalidInputError()
+        # Protocol 2 has no qualification semantics. This precedence is before
+        # confirmation, acknowledgement, executable inspection, or task input.
+        if require_qualified_runtime:
+            print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+            return 3
+        policy = parse_delegation_policy_v2(raw_policy)
+        manifest = parse_delegation_manifest_v2(raw_manifest)
+        return compile_delegation_v2(
+            policy,
+            manifest,
+            source_vendor_family=source_vendor,
+            source_profile_id=source_profile,
+            tier=tier,
+            runtime_path=runtime_path,
+        )
+    except (
+        InvalidInputError,
+        DelegationVersionError,
+        DelegationV2InvalidInputError,
+        RecursionError,
+    ):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    raise AssertionError("unreachable")
+
+
 def delegation_route(
     policy_path: Path,
     manifest_path: Path,
@@ -403,8 +495,27 @@ def delegation_route(
     source_vendor: VendorFamily,
     tier: DelegationTier,
     require_qualified_runtime: bool = False,
+    source_profile: str | None = None,
 ) -> int:
     """Compile a descriptor without reading task stdin or inspecting a runtime."""
+    version_result = (
+        _dispatch_delegation_cli_version(
+            policy_path,
+            manifest_path,
+            runtime_path,
+            source_vendor,
+            source_profile,
+            tier,
+            require_qualified_runtime,
+        )
+        if source_profile is not None
+        else None
+    )
+    if version_result is not None:
+        if isinstance(version_result, CompiledExecutionV2):
+            print(version_result.canonical_descriptor_bytes.decode("ascii"))
+            return 0
+        return version_result
     try:
         _, rendered, _ = _compile_delegation_inputs(
             policy_path,
@@ -433,8 +544,30 @@ def delegation_run_from_standard_input(
     confirm_trusted_runtime: bool,
     acknowledged_fingerprint: str | None,
     require_qualified_runtime: bool = False,
+    source_profile: str | None = None,
 ) -> int:
     """Run one acknowledged external orchestrator without handling credentials."""
+    version_result = (
+        _dispatch_delegation_cli_version(
+            policy_path,
+            manifest_path,
+            runtime_path,
+            source_vendor,
+            source_profile,
+            tier,
+            require_qualified_runtime,
+        )
+        if source_profile is not None
+        else None
+    )
+    if version_result is not None:
+        if isinstance(version_result, CompiledExecutionV2):
+            return _delegation_v2_run(
+                version_result,
+                confirm_trusted_runtime,
+                acknowledged_fingerprint,
+            )
+        return version_result
     try:
         descriptor, rendered, qualification = _compile_delegation_inputs(
             policy_path,
@@ -492,6 +625,46 @@ def delegation_run_from_standard_input(
         print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
         return EXECUTOR_FAILED_EXIT_CODE
     return _report_executor_result(completed_process)
+
+
+def _delegation_v2_run(
+    compiled: CompiledExecutionV2,
+    confirm_trusted_runtime: bool,
+    acknowledged_fingerprint: str | None,
+) -> int:
+    """Run one already-compiled protocol-2 route without v1 lifecycle calls."""
+    if not confirm_trusted_runtime:
+        print(json.dumps({"error": "delegation_confirmation_required"}), file=sys.stderr)
+        return 5
+    if acknowledged_fingerprint is None:
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
+    try:
+        task = read_validated_task_v2(getattr(sys.stdin, "buffer", sys.stdin))
+    except V2ValidationError:
+        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
+        return 2
+    if acknowledged_fingerprint != compiled.route_fingerprint:
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
+    try:
+        first_observation = observe_executable(compiled.executable)
+    except (V2ValidationError, OSError, ValueError):
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    try:
+        frame = encode_delegation_frame_v2(
+            compiled.canonical_descriptor_bytes, task.delivery_bytes()
+        )
+    except (DelegationFrameV2Error, V2ValidationError):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    try:
+        completed = run_delegation_v2_runtime(compiled, frame, first_observation)
+    except (V2ValidationError, OSError, ValueError):
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    return _report_executor_result(completed)
 
 
 def delegation_qualification_candidate(evidence_path: Path, runtime_path: Path) -> int:
@@ -687,11 +860,26 @@ def route_from_standard_input(
     policy_path: Path | None,
     source_vendor: str | None,
     explicit_tier: Tier | None = None,
+    source_profile: str | None = None,
 ) -> int:
     """Select and render a command without echoing or persisting the task."""
+    if policy_path is not None:
+        try:
+            raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
+            version, dispatched = dispatch_native_policy_schema(raw_policy)
+        except (InvalidInputError, V2ValidationError):
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        if version == 2:
+            return _native_v2_route(dispatched, source_vendor, source_profile, explicit_tier)
+    else:
+        dispatched = None
+    if source_profile is not None:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
     try:
         policy = (
-            load_routing_policy(policy_path)
+            _parse_routing_policy(cast(dict[str, Any], dispatched))
             if policy_path is not None
             else RoutingPolicy(DEFAULT_ROUTES)
         )
@@ -732,11 +920,32 @@ def run_from_standard_input(
     source_vendor: str | None,
     acknowledged_fingerprint: str | None = None,
     explicit_tier: Tier | None = None,
+    source_profile: str | None = None,
 ) -> int:
     """Run a selected native command without a shell or output capture."""
+    if policy_path is not None:
+        try:
+            raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
+            version, dispatched = dispatch_native_policy_schema(raw_policy)
+        except (InvalidInputError, V2ValidationError):
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        if version == 2:
+            return _native_v2_run(
+                dispatched,
+                source_vendor,
+                source_profile,
+                acknowledged_fingerprint,
+                explicit_tier,
+            )
+    else:
+        dispatched = None
+    if source_profile is not None:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
     try:
         policy = (
-            load_routing_policy(policy_path)
+            _parse_routing_policy(cast(dict[str, Any], dispatched))
             if policy_path is not None
             else RoutingPolicy(DEFAULT_ROUTES)
         )
@@ -770,6 +979,100 @@ def run_from_standard_input(
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
     return _report_executor_result(completed_process)
+
+
+def _v2_task_and_tier(explicit_tier: Tier | None) -> tuple[ValidatedTaskV2, Tier]:
+    stream = getattr(sys.stdin, "buffer", sys.stdin)
+    task = read_validated_task_v2(stream)
+    tier = explicit_tier if explicit_tier is not None else classify_task(task.classification_text())
+    return task, tier
+
+
+def _native_v2_route(
+    policy: object,
+    source_vendor: str | None,
+    source_profile: str | None,
+    explicit_tier: Tier | None,
+) -> int:
+    if source_vendor is None or source_profile is None or not isinstance(policy, NativePolicyV2):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    try:
+        validated_vendor, validated_profile = validate_native_selector(
+            source_vendor, source_profile
+        )
+    except V2ValidationError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    try:
+        _, tier = _v2_task_and_tier(explicit_tier)
+    except V2ValidationError:
+        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
+        return 2
+    try:
+        compiled = compile_native_v2(
+            policy,
+            source_vendor=validated_vendor,
+            source_profile_id=validated_profile,
+            tier=tier,
+        )
+    except V2ValidationError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+    print(compiled.canonical_descriptor_bytes.decode("ascii"))
+    return 0
+
+
+def _native_v2_run(
+    policy: object,
+    source_vendor: str | None,
+    source_profile: str | None,
+    acknowledged_fingerprint: str | None,
+    explicit_tier: Tier | None,
+) -> int:
+    if source_vendor is None or source_profile is None or not isinstance(policy, NativePolicyV2):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    try:
+        validated_vendor, validated_profile = validate_native_selector(
+            source_vendor, source_profile
+        )
+    except V2ValidationError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    if acknowledged_fingerprint is None:
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
+    try:
+        validate_runtime_process_context()
+    except DelegationRuntimeUnavailableError:
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    try:
+        task, tier = _v2_task_and_tier(explicit_tier)
+    except V2ValidationError:
+        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
+        return 2
+    try:
+        compiled = compile_native_v2(
+            policy,
+            source_vendor=validated_vendor,
+            source_profile_id=validated_profile,
+            tier=tier,
+        )
+    except V2ValidationError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+    if acknowledged_fingerprint != compiled.route_fingerprint:
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
+    try:
+        first_observation = observe_executable(compiled.executable)
+        completed = run_native_v2(compiled, task.delivery_bytes(), first_observation)
+    except (V2ValidationError, OSError, ValueError):
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    return _report_executor_result(completed)
 
 
 def render_workflow_route(policy_path: Path, descriptor_path: Path) -> int:
@@ -814,13 +1117,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.explain,
         )
     if arguments.command == "route":
-        return route_from_standard_input(arguments.policy, arguments.source_vendor, arguments.tier)
+        return route_from_standard_input(
+            arguments.policy, arguments.source_vendor, arguments.tier, arguments.source_profile
+        )
     if arguments.command == "run":
         return run_from_standard_input(
             arguments.policy,
             arguments.source_vendor,
             arguments.ack_route_fingerprint,
             arguments.tier,
+            arguments.source_profile,
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
@@ -832,6 +1138,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.source_vendor,
             arguments.tier,
             arguments.require_qualified_runtime,
+            arguments.source_profile,
         )
     if arguments.command == "delegate" and arguments.delegate_command == "run":
         return delegation_run_from_standard_input(
@@ -843,6 +1150,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.confirm_trusted_delegation_runtime,
             arguments.ack_route_fingerprint,
             arguments.require_qualified_runtime,
+            arguments.source_profile,
         )
     if arguments.command == "delegate" and arguments.delegate_command == "qualification-candidate":
         return delegation_qualification_candidate(

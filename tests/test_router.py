@@ -10,11 +10,34 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from tests.runtime_guard import guarded_launch
 from weightclass import cli
 from weightclass.router import DEFAULT_ROUTES, Route, RouteRequest, select_route
 
 
 class DefaultRouteTests(unittest.TestCase):
+    def test_explicit_schema_one_policy_preserves_legacy_route_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "routes": [
+                            {
+                                "id": "legacy",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": ["owned-fake"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            loaded = cli.load_routing_policy(policy_path)
+        self.assertEqual(loaded.routes[0].route_id, "legacy")
+
     def test_every_vendor_differentiates_all_three_tiers(self) -> None:
         """Breaks if a vendor's tiers collapse back to one indistinguishable command."""
         for vendor in ("codex", "claude"):
@@ -1516,6 +1539,7 @@ class CommandLineTests(unittest.TestCase):
             {"error": "executor_failed", "executor_exit_code": 2},
         )
 
+    @guarded_launch("native_v1")
     def test_passes_through_a_successful_child(self) -> None:
         """Breaks if a successful run stops reporting success."""
         result = self._run_worker_exiting_with(

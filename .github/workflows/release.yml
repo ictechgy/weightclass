@@ -1,8 +1,5 @@
 name: Release
 
-# 태그를 밀면 배포한다. 태그 푸시는 사람이 하는 명시적 행위이므로 그것이
-# 배포 승인 지점이다. 자격증명은 저장하지 않는다. PyPI Trusted Publishing 이
-# OIDC 로 이 워크플로를 직접 신뢰하므로 리포지토리에 토큰이 없다.
 on:
   push:
     tags: ["v*"]
@@ -11,128 +8,178 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Verify the tagged commit
+  build-candidate:
+    name: Build immutable Python 3.13 candidate
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
-      # 태그와 패키지 버전이 어긋난 채 배포되면 되돌릴 수 없다. PyPI 는 같은
-      # 버전 번호를 다시 올릴 수 없기 때문이다. 배포 전에 먼저 막는다.
-      - name: Require the tag to match the package version
-        run: |
-          declared="$(PYTHONPATH=src python -c 'import weightclass; print(weightclass.__version__)')"
-          tagged="${GITHUB_REF_NAME#v}"
-          echo "declared=${declared} tagged=${tagged}"
-          test "${declared}" = "${tagged}"
-      - name: Install package
-        run: python -m pip install .
-      - name: Verify installed CLI
-        run: |
-          expected="$(PYTHONPATH=src python -c 'import weightclass; print(weightclass.__version__)')"
-          installed="$(wclass --version)"
-          test "$installed" = "weightclass $expected"
-          metadata="$(python -c 'import importlib.metadata; print(importlib.metadata.version("weightclass"))')"
-          test "$metadata" = "$expected"
-          output="$(printf '%s' 'Fix a spelling typo in the README heading.' | wclass classify)"
-          test "$output" = '{"tier": "low"}'
-      - name: Run test suite
-        run: python -m unittest discover -s tests
-      - name: Install development tooling
+      - name: Networked CI dependency installation
         run: python -m pip install ruff mypy build twine
-      - name: Lint
-        run: ruff check src tests
-      - name: Check formatting
-        run: ruff format --check src tests
-      - name: Type check
-        run: mypy
-      - name: Build distributions
-        run: python -m build
-      - name: Verify distribution metadata
-        run: twine check --strict dist/*.whl dist/*.tar.gz
-      - name: Verify distribution isolation before tests
+      - name: Verify source and tag
         run: |
-          python tests/verify_distribution_isolation.py \
-            --source . --dist-dir dist \
+          test "$(PYTHONPATH=src python -c 'import weightclass; print(weightclass.__version__)')" = "${GITHUB_REF_NAME#v}"
+          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -W error::ResourceWarning -m unittest discover -s tests
+          ruff check src tests
+          ruff format --check src tests
+          mypy
+      - name: Build distributions once
+        run: python -m build --outdir build-output
+      - name: Create and verify canonical manifest candidate
+        run: |
+          python tests/verify_release_candidate.py \
+            --create-manifest-from build-output \
+            --artifact-download artifact-download
+          python tests/verify_release_candidate.py \
+            --artifact-download artifact-download \
+            --create-publish-staging dist-under-test \
             --expected-version "${GITHUB_REF_NAME#v}"
-      - name: Upload unverified distributions
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          python tests/compare_release_candidates.py \
+            --artifact-download artifact-download \
+            --reference release-normalized-v1.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: unverified-distributions
-          path: |
-            dist/*.whl
-            dist/*.tar.gz
+          name: release-candidate-v1
+          path: artifact-download
           if-no-files-found: error
-      - name: Run extracted sdist tests against local artifacts
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-normalized-v1
+          path: release-normalized-v1.json
+          if-no-files-found: error
+      - name: Check immutable candidate metadata
         run: |
-          python tests/verify_distribution_isolation.py \
-            --source . --dist-dir dist \
-            --run-sdist-tests \
-            --expected-version "${GITHUB_REF_NAME#v}"
+          mapfile -t packages < <(python tests/verify_release_candidate.py \
+            --artifact-download artifact-download \
+            --print-staging-paths dist-under-test)
+          test "${#packages[@]}" -eq 2
+          python -m twine check --strict "${packages[@]}"
 
-  validate:
-    name: Validate distribution isolation on a fresh runner
-    needs: verify
+  validate-python-310:
+    name: Validate candidate on Python 3.10
+    needs: build-candidate
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.13"
-      - name: Download unverified distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+          python-version: "3.10"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: unverified-distributions
-          path: dist/
-      - name: Final distribution isolation verification
+          name: release-candidate-v1
+          path: artifact-download
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-normalized-v1
+          path: reference
+      - name: Validate immutable download and descriptor goldens
         run: |
-          python tests/verify_distribution_isolation.py \
-            --source . --dist-dir dist \
-            --expected-version "${GITHUB_REF_NAME#v}"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -W error::ResourceWarning -m unittest discover -s tests
+          python tests/verify_release_candidate.py --artifact-download artifact-download --create-staging dist-under-test --expected-version "${GITHUB_REF_NAME#v}"
+          python tests/compare_release_candidates.py --artifact-download artifact-download --reference reference/release-normalized-v1.json
+          mapfile -t packages < <(python tests/verify_release_candidate.py --artifact-download artifact-download --print-staging-paths dist-under-test)
+          test "${#packages[@]}" -eq 2
+          case "${packages[0]}:${packages[1]}" in *.whl:*.tar.gz) ;; *) exit 1 ;; esac
+          installed_wheel="$RUNNER_TEMP/weightclass-installed-wheel"
+          test ! -e "$installed_wheel"
+          python -m pip install --no-index --no-deps --target "$installed_wheel" "${packages[0]}"
+          installed_venv="$RUNNER_TEMP/weightclass-installed-venv"
+          test ! -e "$installed_venv"
+          python -m venv "$installed_venv"
+          "$installed_venv/bin/python" -m pip install --no-index --no-deps "${packages[0]}"
+          test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
+          test "$(printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" classify)" = '{"tier": "low"}'
+          PYTHONPATH="$installed_wheel" python -m compileall -q "$installed_wheel/weightclass"
+          test "$(PYTHONPATH="$installed_wheel" python -c 'import importlib.metadata; print(importlib.metadata.version("weightclass"))')" = "${GITHUB_REF_NAME#v}"
+          test "$(PYTHONPATH="$installed_wheel" python -m weightclass --version)" = "weightclass ${GITHUB_REF_NAME#v}"
+          PYTHONPATH="$installed_wheel" python -W error::ResourceWarning -m unittest tests.test_native_v2_compile.NativeV2CompileTests.test_claude_builder_and_golden_fingerprint tests.test_delegation_v2_compile.DelegationV2CompileTests.test_descriptor_matches_canonical_golden
+          python tests/verify_release_candidate.py --artifact-download artifact-download --print-staging-paths dist-under-test >/dev/null
+
+  validate-python-314:
+    name: Validate candidate on Python 3.14
+    needs: build-candidate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.14"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate-v1
+          path: artifact-download
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-normalized-v1
+          path: reference
+      - name: Validate immutable download and descriptor goldens
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -W error::ResourceWarning -m unittest discover -s tests
+          python tests/verify_release_candidate.py --artifact-download artifact-download --create-staging dist-under-test --expected-version "${GITHUB_REF_NAME#v}"
+          python tests/compare_release_candidates.py --artifact-download artifact-download --reference reference/release-normalized-v1.json
+          mapfile -t packages < <(python tests/verify_release_candidate.py --artifact-download artifact-download --print-staging-paths dist-under-test)
+          test "${#packages[@]}" -eq 2
+          case "${packages[0]}:${packages[1]}" in *.whl:*.tar.gz) ;; *) exit 1 ;; esac
+          installed_wheel="$RUNNER_TEMP/weightclass-installed-wheel"
+          test ! -e "$installed_wheel"
+          python -m pip install --no-index --no-deps --target "$installed_wheel" "${packages[0]}"
+          installed_venv="$RUNNER_TEMP/weightclass-installed-venv"
+          test ! -e "$installed_venv"
+          python -m venv "$installed_venv"
+          "$installed_venv/bin/python" -m pip install --no-index --no-deps "${packages[0]}"
+          test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
+          test "$(printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" classify)" = '{"tier": "low"}'
+          PYTHONPATH="$installed_wheel" python -m compileall -q "$installed_wheel/weightclass"
+          test "$(PYTHONPATH="$installed_wheel" python -c 'import importlib.metadata; print(importlib.metadata.version("weightclass"))')" = "${GITHUB_REF_NAME#v}"
+          test "$(PYTHONPATH="$installed_wheel" python -m weightclass --version)" = "weightclass ${GITHUB_REF_NAME#v}"
+          PYTHONPATH="$installed_wheel" python -W error::ResourceWarning -m unittest tests.test_native_v2_compile.NativeV2CompileTests.test_claude_builder_and_golden_fingerprint tests.test_delegation_v2_compile.DelegationV2CompileTests.test_descriptor_matches_canonical_golden
+          python tests/verify_release_candidate.py --artifact-download artifact-download --print-staging-paths dist-under-test >/dev/null
 
   macos-routing-boundaries:
-    name: Verify macOS routing boundaries
     runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.13"]
+        python-version: ["3.10", "3.14"]
     steps:
-      - name: Check out source
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Verify process and JSON input boundaries
+      - name: Verify routing, observation, process, guarded, and conformance boundaries
         run: |
           PYTHONPATH=src python -W error::ResourceWarning -m unittest \
-            tests.test_triage tests.test_json_input \
-            tests.test_delegation_conformance tests.test_delegation_runtime
+            tests.test_router tests.test_native_v2_runtime \
+            tests.test_executable_observation tests.test_triage tests.test_json_input \
+            tests.test_delegation_runtime tests.test_delegation_v2_runtime \
+            tests.test_guarded_runtime_suite tests.test_delegation_conformance
 
   publish:
-    name: Publish to PyPI
-    needs: [validate, macos-routing-boundaries]
+    name: Publish exact reviewed candidate
+    needs: [validate-python-310, validate-python-314, macos-routing-boundaries]
     runs-on: ubuntu-latest
-    # 이 environment 에 required reviewer 를 걸면 배포 직전에 한 번 더 사람이
-    # 승인해야 한다. PyPI Trusted Publisher 등록 시에도 같은 이름을 쓴다.
     environment:
       name: pypi
       url: https://pypi.org/project/weightclass/
     permissions:
-      # Trusted Publishing 이 요구하는 유일한 권한. API 토큰을 쓰지 않는다.
+      contents: read
       id-token: write
     steps:
-      - name: Download distributions
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: unverified-distributions
-          path: dist/
-      - name: Publish
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+          name: release-candidate-v1
+          path: artifact-download
+      - name: Create exact manifest-named publish staging
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python tests/verify_release_candidate.py --artifact-download artifact-download --create-publish-staging publish-staging --expected-version "${GITHUB_REF_NAME#v}"
+          mapfile -t packages < <(python tests/verify_release_candidate.py --artifact-download artifact-download --print-staging-paths publish-staging)
+          test "${#packages[@]}" -eq 2
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: publish-staging

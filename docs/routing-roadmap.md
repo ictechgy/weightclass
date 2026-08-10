@@ -12,6 +12,22 @@ high-stakes classifier. It catches documented signals and narrow outcomes, but
 the public evaluation fixture shows meaningful high-tier under-routing for
 ordinary-language security, data-integrity, concurrency, and reliability work.
 
+## Protocol 2 implementation status
+
+Native schema 2 is implemented as an additive path: explicit profiles and
+source-profile selectors, exact allowed model/effort pairs, closed Codex and
+Claude argv builders, directional profile/vendor grants, canonical review
+descriptors, acknowledgement-bound run, two executable observations, and one
+exact foreground spawn. Model, effort, profile/account, subscription, and
+entitlement labels remain opaque declarations; vendor and builder values are
+closed structural vocabularies. Cross-vendor routing remains policy-authorized
+only. See `protocol-v2-security.md` and `protocol-v2-migration.md`.
+
+The earlier five-round RALPLAN ended `max_rounds/ITERATE`; mandatory Critic
+findings informed this implementation, but there was no consensus approval.
+Rollback removes only schema-2 dispatch and leaves schema 1 and legacy render
+unchanged.
+
 ## Non-negotiable constraints
 
 - Runtime task text remains transient standard input only: never persist, log,

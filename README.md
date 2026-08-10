@@ -42,6 +42,14 @@ Releases are cut by pushing a tag; see [RELEASING.md](RELEASING.md).
 For reviewable native Codex and Claude Code invocation examples, see
 [Native integrations](docs/integrations.md).
 
+Native schema 2 and delegation protocol 2 add explicit source/account profiles,
+closed model-and-effort builders, directional profile/vendor authorization, and
+fingerprint-bound review before one foreground execution. All profile, account,
+recipient, billing, subscription, entitlement, model, effort, permission, and
+ownership labels remain opaque caller declarations. See the
+[protocol 2 security boundary](docs/protocol-v2-security.md) and
+[migration guide](docs/protocol-v2-migration.md).
+
 ## Run locally
 
 `wclass --help` lists the whole surface:
@@ -96,6 +104,12 @@ Inspect a route before running it:
 printf '%s' 'Fix a spelling typo in the README.' | wclass route --source-vendor codex
 printf '%s' 'Fix a spelling typo in the README.' | wclass run --source-vendor codex
 ```
+
+For schema-2 `run`, pass the exact `route_fingerprint` from the reviewed route
+as `--ack-route-fingerprint`; a missing acknowledgement stops before task
+access. Cross-profile and cross-vendor changes must be explicitly and
+directionally granted by the reviewed policy. weightclass observes only the
+one direct child's exit, never task or orchestration success.
 
 The built-in routes are intentionally conservative:
 
@@ -644,6 +658,28 @@ fingerprints. The classic-ZIP preflight rejects ZIP64, multidisk, encrypted,
 data-descriptor, gapped, overlapping, or inconsistent layouts before `ZipFile`;
 it also requires exact stored/raw-deflate input consumption, output size, and
 CRC for every wheel member.
+
+### Offline/preprovisioned release verification
+
+The following release-candidate commands are offline only after Python 3.13,
+`build`, and the project test dependencies have already been provisioned. CI's
+separate dependency-install steps are networked. The candidate download remains
+an exact wheel, sdist, and `SHA256SUMS`; the isolation verifier still receives a
+private directory containing exactly the two manifest-named distributions.
+
+```sh
+python3.13 -m build --outdir artifact-download/build-output
+python3.13 tests/verify_release_candidate.py \
+  --create-manifest-from artifact-download/build-output \
+  --artifact-download artifact-download/candidate
+python3.13 tests/verify_release_candidate.py \
+  --artifact-download artifact-download/candidate \
+  --create-staging dist-under-test
+python3.10 tests/compare_release_candidates.py \
+  --artifact-download artifact-download/candidate
+python3.14 tests/compare_release_candidates.py \
+  --artifact-download artifact-download/candidate
+```
 
 ```sh
 set -eu
