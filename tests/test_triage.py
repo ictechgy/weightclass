@@ -553,6 +553,23 @@ class ExplicitTierTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            review = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--policy",
+                    str(policy_path),
+                    "--tier",
+                    "high",
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
             result = subprocess.run(
                 [
                     sys.executable,
@@ -563,6 +580,8 @@ class ExplicitTierTests(unittest.TestCase):
                     str(policy_path),
                     "--tier",
                     "high",
+                    "--ack-route-fingerprint",
+                    json.loads(review.stdout)["route_fingerprint"],
                 ],
                 capture_output=True,
                 check=False,

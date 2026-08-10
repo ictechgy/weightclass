@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 from tests.test_delegation_v2_compile import compilable_inputs
 from weightclass import cli
+from weightclass.delegation_runtime import DelegationRuntimeUnavailableError
 from weightclass.delegation_v2_compile import compile_delegation_v2
 from weightclass.delegation_v2_protocol import DelegationFrameV2Error
 from weightclass.delegation_v2_schema import (
@@ -171,6 +172,36 @@ class DelegationV2CliTests(unittest.TestCase):
                     ]
                 )
         self.assertEqual(result, 2)
+        spawn.assert_not_called()
+
+    def test_unreviewed_process_context_stops_before_task_access(self) -> None:
+        """Breaks if protocol 2 reads the task before proving it can reap its child.
+
+        native schema-2 run 과 delegation protocol-1 run 이 이미 이렇게 한다.
+        이 경로만 spawn 지점에서 처음 확인해 태스크를 먼저 읽고 있었다.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path, manifest_path = self.write_inputs(directory)
+            with (
+                patch(
+                    "weightclass.cli.validate_runtime_process_context",
+                    side_effect=DelegationRuntimeUnavailableError(),
+                ),
+                patch("weightclass.cli.read_validated_task_v2") as reader,
+                patch("weightclass.cli.observe_executable") as inspect,
+                patch("weightclass.cli.run_delegation_v2_runtime") as spawn,
+            ):
+                result = cli.main(
+                    [
+                        *self.arguments(policy_path, manifest_path, "run"),
+                        "--confirm-trusted-delegation-runtime",
+                        "--ack-route-fingerprint",
+                        "any",
+                    ]
+                )
+        self.assertEqual(result, 4)
+        reader.assert_not_called()
+        inspect.assert_not_called()
         spawn.assert_not_called()
 
 

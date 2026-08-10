@@ -12,7 +12,49 @@ from unittest import mock
 
 from tests.runtime_guard import guarded_launch
 from weightclass import cli
-from weightclass.router import DEFAULT_ROUTES, Route, RouteRequest, select_route
+from weightclass.router import (
+    DEFAULT_ROUTES,
+    Route,
+    RouteRequest,
+    native_route_fingerprint,
+    select_route,
+)
+
+
+def _weightclass(*arguments: str, task: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "weightclass", *arguments],
+        capture_output=True,
+        check=False,
+        input=task,
+        text=True,
+    )
+
+
+def reviewed_run(
+    policy_path: Path,
+    task: str,
+    *extra: str,
+) -> subprocess.CompletedProcess[str]:
+    """Review a policy, then run exactly what that review bound.
+
+    `run --policy` 는 검토한 지문을 요구하므로 실제 사용 흐름은 언제나 두 단계다.
+    정책 자체가 거부되면 검토 결과가 곧 답이므로 그것을 돌려준다. 그래야 정책
+    거부를 확인하는 테스트와 실행 결과를 확인하는 테스트가 같은 헬퍼를 쓴다.
+    """
+    review = _weightclass("route", "--policy", str(policy_path), *extra, task=task)
+    if review.returncode != 0:
+        return review
+    fingerprint = json.loads(review.stdout)["route_fingerprint"]
+    return _weightclass(
+        "run",
+        "--policy",
+        str(policy_path),
+        "--ack-route-fingerprint",
+        fingerprint,
+        *extra,
+        task=task,
+    )
 
 
 class DefaultRouteTests(unittest.TestCase):
@@ -99,6 +141,18 @@ class ExecutorSpawnFailureTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            # 정책으로 실행하려면 검토한 지문이 필요하다. spawn 방어선을 보려면
+            # 그 앞의 결합을 정상적으로 통과해야 하므로 지문을 실제로 계산한다.
+            fingerprint = native_route_fingerprint(
+                Route(
+                    route_id="codex-low",
+                    vendor="codex",
+                    workflow="",
+                    command=("/bin/echo", "ok"),
+                    tier="low",
+                ),
+                False,
+            )
             errors = io.StringIO()
             with (
                 mock.patch("weightclass.cli.subprocess.run", side_effect=raised),
@@ -107,7 +161,7 @@ class ExecutorSpawnFailureTests(unittest.TestCase):
                 ),
                 contextlib.redirect_stderr(errors),
             ):
-                exit_code = cli.run_from_standard_input(policy_path, None)
+                exit_code = cli.run_from_standard_input(policy_path, None, fingerprint)
 
         self.assertEqual(exit_code, 4)
         self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_unavailable"})
@@ -119,6 +173,101 @@ class ExecutorSpawnFailureTests(unittest.TestCase):
     def test_maps_a_missing_executable_to_a_redacted_diagnostic(self) -> None:
         """Breaks if the pre-existing OSError path stops being handled."""
         self._assert_maps_to_executor_unavailable(FileNotFoundError("no such file"))
+
+
+class PolicyRunBindingTests(unittest.TestCase):
+    """정책으로 실행하려면 검토한 지문이 반드시 있어야 한다.
+
+    파일 권한 검사로는 route 와 run 사이의 교체를 막을 수 없다. 부모 디렉터리에
+    쓸 수 있는 쪽은 모드와 무관하게 rename 으로 파일을 갈아치울 수 있고, 두 번째
+    읽기는 애초에 첫 번째와 다른 파일일 수 있다. 지문만이 선택된 명령까지 묶는다.
+    """
+
+    def _policy(self, directory: Path) -> Path:
+        policy_path = directory / "policy.json"
+        policy_path.write_text(
+            json.dumps(
+                {
+                    "routes": [
+                        {
+                            "id": "codex-low",
+                            "vendor": "codex",
+                            "tier": "low",
+                            "command": ["/bin/echo", "ok"],
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return policy_path
+
+    def test_a_policy_run_without_an_acknowledgement_is_refused(self) -> None:
+        """Breaks if an unreviewed policy can still start a command."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result = _weightclass(
+                "run",
+                "--policy",
+                str(self._policy(Path(temporary_directory))),
+                task="Fix a typo.",
+            )
+
+        self.assertEqual(result.returncode, 6)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+
+    def test_the_refusal_happens_before_the_task_is_read(self) -> None:
+        """Breaks if a doomed run consumes the task before failing closed."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = self._policy(Path(temporary_directory))
+            errors = io.StringIO()
+            with (
+                mock.patch("weightclass.cli.read_task_from_standard_input") as reader,
+                mock.patch("weightclass.cli.subprocess.run") as spawn,
+                contextlib.redirect_stderr(errors),
+            ):
+                exit_code = cli.run_from_standard_input(policy_path, None)
+
+        self.assertEqual(exit_code, 6)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "route_fingerprint_mismatch"})
+        reader.assert_not_called()
+        spawn.assert_not_called()
+
+    def test_built_in_routes_still_run_without_an_acknowledgement(self) -> None:
+        """Breaks if the requirement spreads to routes that live in code.
+
+        기본 라우트는 코드에 고정되어 교체할 수 없으므로 묶을 대상이 없다.
+        여기까지 지문을 요구하면 검토와 무관한 마찰만 생긴다.
+        """
+        errors = io.StringIO()
+        with (
+            mock.patch("weightclass.cli.read_task_from_standard_input", return_value="Fix a typo."),
+            mock.patch(
+                "weightclass.cli.subprocess.run",
+                return_value=subprocess.CompletedProcess((), 0),
+            ) as spawn,
+            contextlib.redirect_stderr(errors),
+        ):
+            exit_code = cli.run_from_standard_input(None, "codex")
+
+        self.assertEqual(exit_code, 0, errors.getvalue())
+        spawn.assert_called_once()
+
+    def test_a_stale_acknowledgement_is_still_refused(self) -> None:
+        """Breaks if requiring the flag replaced verifying its value."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result = _weightclass(
+                "run",
+                "--policy",
+                str(self._policy(Path(temporary_directory))),
+                "--ack-route-fingerprint",
+                "sha256:" + "0" * 64,
+                task="Fix a typo.",
+            )
+
+        self.assertEqual(result.returncode, 6)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
 
 
 class CommandSurfaceTests(unittest.TestCase):
@@ -533,13 +682,7 @@ class CommandLineTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            run = subprocess.run(
-                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
-                capture_output=True,
-                check=False,
-                input="Fix the typo.",
-                text=True,
-            )
+            run = reviewed_run(policy_path, "Fix the typo.")
 
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(run.stdout, "")
@@ -1343,13 +1486,7 @@ class CommandLineTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
-                capture_output=True,
-                check=False,
-                input="Fix a typo.",
-                text=True,
-            )
+            result = reviewed_run(policy_path, "Fix a typo.")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "worker-received-task\n")
@@ -1388,12 +1525,31 @@ class CommandLineTests(unittest.TestCase):
 
             # LC_ALL=C 는 cron, systemd, Docker, CI 러너에서 흔한 기본값이다.
             ascii_only_environment = dict(os.environ, LC_ALL="C", PYTHONUTF8="0")
-            result = subprocess.run(
-                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
+            task = "개인정보 처리 방침 오타 수정"
+            review = subprocess.run(
+                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
                 capture_output=True,
                 check=False,
                 env=ascii_only_environment,
-                input="개인정보 처리 방침 오타 수정".encode(),
+                input=task.encode(),
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+            fingerprint = json.loads(review.stdout)["route_fingerprint"]
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "run",
+                    "--policy",
+                    str(policy_path),
+                    "--ack-route-fingerprint",
+                    fingerprint,
+                ],
+                capture_output=True,
+                check=False,
+                env=ascii_only_environment,
+                input=task.encode(),
             )
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1431,22 +1587,7 @@ class CommandLineTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "weightclass",
-                    "run",
-                    "--policy",
-                    str(policy_path),
-                    "--source-vendor",
-                    "claude",
-                ],
-                capture_output=True,
-                check=False,
-                input="Fix a typo.",
-                text=True,
-            )
+            result = reviewed_run(policy_path, "Fix a typo.", "--source-vendor", "claude")
 
         # codex-low 가 먼저 선언되어 있으므로, 벤더 필터가 없으면 그쪽이 실행된다.
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1477,13 +1618,7 @@ class CommandLineTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            return subprocess.run(
-                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
-                capture_output=True,
-                check=False,
-                input=task,
-                text=True,
-            )
+            return reviewed_run(policy_path, task)
 
     def test_reports_a_failing_child_without_colliding_with_router_codes(self) -> None:
         """Breaks if a child's exit status can be mistaken for a router diagnostic.
@@ -1628,22 +1763,20 @@ class CommandLineTests(unittest.TestCase):
                 input="Fix a typo.",
                 text=True,
             )
-            unbound = subprocess.run(
-                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
-                capture_output=True,
-                check=False,
-                input="Fix a typo.",
-                text=True,
-            )
+            # 여기서만은 헬퍼를 쓰지 않는다. 지문을 아예 제시하지 않는 호출이
+            # 무엇을 하는지가 이 단언의 대상이다.
+            unbound = _weightclass("run", "--policy", str(policy_path), task="Fix a typo.")
 
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         self.assertEqual(accepted.stdout, "reviewed-worker\n")
         self.assertEqual(refused.returncode, 6)
         self.assertEqual(json.loads(refused.stderr), {"error": "route_fingerprint_mismatch"})
         self.assertEqual(refused.stdout, "")
-        # 지문을 제시하지 않으면 구속력이 없다는 점도 함께 고정한다.
-        self.assertEqual(unbound.returncode, 0, unbound.stderr)
-        self.assertEqual(unbound.stdout, "swapped-worker\n")
+        # 지문을 생략하면 실행 자체가 성립하지 않는다. 정책이 바뀌었는지와 무관하게,
+        # 검토를 거치지 않은 실행 경로가 남아 있으면 이 결합 전체가 선택 사항이 된다.
+        self.assertEqual(unbound.returncode, 6)
+        self.assertEqual(json.loads(unbound.stderr), {"error": "route_fingerprint_mismatch"})
+        self.assertEqual(unbound.stdout, "")
 
     def test_binds_every_field_the_fingerprint_claims_to_cover(self) -> None:
         """Breaks if a bound field is dropped from the fingerprint.
@@ -1813,13 +1946,7 @@ class CommandLineTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
-                capture_output=True,
-                check=False,
-                input="Fix a typo.",
-                text=True,
-            )
+            result = reviewed_run(policy_path, "Fix a typo.")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "be terse\n")
@@ -1864,13 +1991,7 @@ class CommandLineTests(unittest.TestCase):
                         encoding="utf-8",
                     )
 
-                    result = subprocess.run(
-                        [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
-                        capture_output=True,
-                        check=False,
-                        input="Fix a typo.",
-                        text=True,
-                    )
+                    result = reviewed_run(policy_path, "Fix a typo.")
 
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
@@ -1897,13 +2018,7 @@ class CommandLineTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = subprocess.run(
-                [sys.executable, "-m", "weightclass", "run", "--policy", str(policy_path)],
-                capture_output=True,
-                check=False,
-                input="Fix a typo.",
-                text=True,
-            )
+            result = reviewed_run(policy_path, "Fix a typo.")
 
         self.assertEqual(result.returncode, 4)
         self.assertEqual(json.loads(result.stderr), {"error": "executor_unavailable"})

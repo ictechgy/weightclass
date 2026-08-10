@@ -282,9 +282,11 @@ Three rules make the outcome predictable:
 
 ## Override the routes
 
-Use `wclass route --policy policy.json` or `wclass run --policy policy.json` to
-use a reviewed local policy. Routes are considered in listed order, so the
-first matching `tier` is selected. Add `--source-vendor codex` or
+Use `wclass route --policy policy.json` to review a local policy, then
+`wclass run --policy policy.json --ack-route-fingerprint <fingerprint>` to run
+what that review selected. `run` refuses a policy without the acknowledgement;
+see [Bind a run to the selection you reviewed](#bind-a-run-to-the-selection-you-reviewed).
+Routes are considered in listed order, so the first matching `tier` is selected. Add `--source-vendor codex` or
 `--source-vendor claude` when invoking it from that vendor. Configure model
 labels and vendor-specific effort arguments only with labels you know are
 available to you.
@@ -347,7 +349,9 @@ whitespace. The same rule applies to V2's `model` and `effort` labels.
 
 `wclass route` prints a `route_fingerprint` over the selected route id, vendor,
 command, tier, the policy's `allow_mixed_vendors` setting, and an explicitly
-declared posture. Pass it back to bind the run to that selection:
+declared posture. `wclass run --policy` requires it — running a policy without
+one exits `6` before the task is read. Pass it back to bind the run to that
+selection:
 
 ```sh
 task='Review this authorization change.'
@@ -361,12 +365,8 @@ If the policy, the selected route, or the task's tier changed since the review,
 the run stops with exit `6` and `{"error": "route_fingerprint_mismatch"}` rather
 than executing an unreviewed command.
 
-Three limits are worth stating plainly:
+Two limits are worth stating plainly:
 
-- **The flag is optional, and omitting it binds nothing.** `wclass run` without
-  `--ack-route-fingerprint` re-selects from the policy as it finds it. This
-  differs from `wclass v2 run`, where the acknowledgement is mandatory because
-  that path can send your task to a paid API.
 - **The task is not bound, only its tier.** A fingerprint reviewed for one
   `low` task will run any other `low` task that selects the same route. Binding
   the task would mean retaining a hash of it, and weightclass does not hash task
@@ -642,12 +642,19 @@ credential management, background execution, or a bundled provider runtime.
   it is equivalent to world-writable. `stat` cannot tell the two apart, and
   rejecting it would fail every file created under the common `umask 002`. If
   your policy lives in a shared group, keep it at `0o644`.
-- `wclass route` binds a later `wclass run` only when you pass the fingerprint
-  it prints, and only to the policy's selection — see
+- `wclass run --policy` requires the fingerprint that `wclass route` printed.
+  Running a policy is always two steps; there is no unreviewed shortcut. A
+  missing acknowledgement exits `6` before the task is read. This is the boundary
+  that actually closes the gap between review and execution, because the
+  fingerprint covers the selected command itself: if the policy changes, the
+  fingerprint changes and the run refuses. File permissions cannot close that
+  gap — anyone who can write the containing directory can replace the file
+  regardless of its mode. See
   [Bind a run to the selection you reviewed](#bind-a-run-to-the-selection-you-reviewed)
-  for what that does and does not cover. Your control of the policy file, plus
-  the built-in routes that live in code and cannot be swapped, is the boundary
-  that always applies. Treat a policy file the way you treat a shell script.
+  for what the binding does and does not cover.
+- The built-in routes need no acknowledgement. They live in code, cannot be
+  swapped, and there is nothing to bind them to. Treat a policy file the way you
+  treat a shell script.
 - A selected command receives the task on standard input and inherits standard
   output and error. Whatever it does with the task — including writing it
   somewhere — is outside weightclass's control, and its exit status is its own.

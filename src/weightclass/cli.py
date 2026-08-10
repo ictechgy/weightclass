@@ -640,6 +640,14 @@ def _delegation_v2_run(
     if acknowledged_fingerprint is None:
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
+    # 환경을 먼저 확인하고 페이로드를 만진다. native schema-2 run 과 delegation
+    # protocol-1 run 이 이미 이렇게 하고 있었고, 이 경로만 빠져 있었다. 자식의
+    # 종료 상태를 신뢰할 수 없는 컨텍스트라면 태스크를 읽기 전에 닫는다.
+    try:
+        validate_runtime_process_context()
+    except DelegationRuntimeUnavailableError:
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
     try:
         task = read_validated_task_v2(getattr(sys.stdin, "buffer", sys.stdin))
     except V2ValidationError:
@@ -944,6 +952,18 @@ def run_from_standard_input(
     if source_profile is not None:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
+    # 정책 파일로 실행할 때는 검토한 지문을 반드시 받는다. route 와 run 은 정책을
+    # 각각 다른 프로세스에서 읽으므로, 그 사이에 파일이 바뀌면 검토한 것과 다른
+    # 명령이 실행된다. 파일 권한 검사로는 이 창을 닫을 수 없다. 부모 디렉터리에
+    # 쓸 수 있는 쪽은 모드와 무관하게 rename 으로 파일을 통째로 갈아치울 수 있고,
+    # 애초에 두 번째 읽기는 첫 번째와 다른 파일일 수 있기 때문이다. 지문은 선택된
+    # 명령까지 묶으므로 그 교체를 실행 직전에 잡아낸다.
+    #
+    # 코드에 고정되어 교체할 수 없는 기본 라우트에는 이 요구가 없다. 검토 대상이
+    # 되는 사용자 소유 파일이 관여할 때만 적용한다.
+    if policy_path is not None and acknowledged_fingerprint is None:
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
     try:
         policy = (
             _parse_routing_policy(cast(dict[str, Any], dispatched))
