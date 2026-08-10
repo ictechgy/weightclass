@@ -31,6 +31,8 @@ Their invocation cannot be verified, so they are not part of this design.
 - `wclass run --source-vendor agy` and `--source-vendor grok` work with no
   policy file.
 - A policy may place the task at an explicit position in its own `command`.
+- A policy may name any vendor, so an agent this package ships no command for is
+  still usable by whoever has it installed.
 - Review output and route fingerprints continue to contain no task content.
 - Existing policies and the existing stdin path change in no observable way.
 
@@ -41,7 +43,9 @@ Their invocation cannot be verified, so they are not part of this design.
   them, for the same reason the qualification registry stays empty: an
   unreviewed adapter that sends untrusted task text to a tool under unknown
   permissions is worse than no adapter.
-- Vendors whose CLI cannot be exercised locally.
+- A **built-in command** for any CLI that cannot be exercised locally. Those
+  vendors are reachable by policy, where the person who has the tool writes the
+  argv. This package never guesses another program's flags.
 - Any change to delegation protocol 1 or 2, or to native schema 2. Both keep
   their closed vendor vocabularies.
 
@@ -113,9 +117,29 @@ documentation next to the executable-replacement residual, not buried.
 
 ### Built-in routes
 
-`SUPPORTED_VENDORS` grows from `{claude, codex}` to
-`{claude, codex, agy, grok}`. It stays a closed set; this is not an open vendor
-namespace.
+`SUPPORTED_VENDORS` is replaced by two separate things it was conflating:
+
+- `BUILT_IN_VENDORS` — the vendors this package ships a command for. It grows
+  from `{claude, codex}` to `{claude, codex, agy, grok}`.
+- `validate_vendor_label` — a format check on the label itself. Any printable,
+  whitespace-free identifier of at most 64 bytes is a valid vendor.
+
+The label was never a list of tools this package knows. `select_tier_route`
+compares it as a string and `native_route_fingerprint` hashes it as a string;
+neither holds vendor-specific knowledge. Closing it only ever gated which
+containment boundaries a user was allowed to name.
+
+Opening it is what makes this design usable for agents nobody here can verify.
+Someone who has `qwen` installed writes a three-line route using the `{{task}}`
+slot and it works, with no code change and without that CLI being installed on a
+maintainer's machine to measure. That matters: an agentic CLI takes broad local
+access and sends telemetry, and installing one purely to read its flags is a
+real cost that should not be a precondition for supporting it.
+
+The cost is stated rather than hidden: `--source-vendor` can no longer reject a
+typo. `--source-vendor codx` was an argparse error and now selects nothing and
+exits `unsupported_route`. That is the price of not maintaining a registry of
+every agent that exists.
 
 Six new default routes, three per vendor, following the existing tier pattern.
 Exact flags are confirmed against the installed CLI before the change lands:

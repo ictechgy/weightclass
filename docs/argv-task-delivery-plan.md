@@ -432,7 +432,7 @@ stdin 전달 라우트의 출력은 그대로 두어 기존 소비자를 깨지 
 - Consumes: nothing from earlier tasks.
 - Produces: `v2.API_SOURCE_VENDORS: Final[frozenset[str]]`, the vendors whose provider and billing boundary are known.
 
-This task must land before Task 5. `select_api_route` currently admits anything in `SUPPORTED_VENDORS` and then indexes `SOURCE_PROVIDER`, so the first vendor added without a provider entry turns a diagnostic into a `KeyError` traceback.
+This task must land before Task 5. `select_api_route` currently admits anything in `SUPPORTED_VENDORS` and then indexes `SOURCE_PROVIDER`, so the first vendor added without a provider entry turns a diagnostic into a `KeyError` traceback. Task 5 opens the vendor label entirely, which makes that reachable from any policy, so the API path needs its own gate first.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -500,6 +500,14 @@ In `select_api_route`, replace the guard:
 
 Remove the now-unused `SUPPORTED_VENDORS` import from `v2.py` only if nothing else in the file uses it. Check with `grep -n SUPPORTED_VENDORS src/weightclass/v2.py` before editing the import.
 
+Gate the V2 subcommand's argument too. In `src/weightclass/cli.py`, `_add_api_route_arguments` currently offers `choices=sorted(SUPPORTED_VENDORS)`; change it to the API set so an unknown vendor is refused at parse time:
+
+```python
+    parser.add_argument("--source-vendor", required=True, choices=sorted(API_SOURCE_VENDORS))
+```
+
+Import `API_SOURCE_VENDORS` from `.v2` in `cli.py`. Two layers now hold: the CLI refuses the argument as `invalid_input` (exit 2), and `select_api_route` still refuses a programmatic caller with `RouteSelectionError` (exit 3).
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest tests.test_v2 -q`
@@ -527,16 +535,243 @@ SUPPORTED_VENDORS 를 통과시킨 뒤 SOURCE_PROVIDER 를 인덱싱하므로, p
 
 ---
 
-### Task 5: Add `agy` as a built-in vendor
+### Task 5: Open the vendor label
 
 **Files:**
-- Modify: `src/weightclass/router.py` (`SUPPORTED_VENDORS`, new prefix and builder, `DEFAULT_ROUTES`)
+- Modify: `src/weightclass/router.py` (`SUPPORTED_VENDORS` becomes `BUILT_IN_VENDORS`; add `validate_vendor_label`)
+- Modify: `src/weightclass/cli.py` (`_parse_route`, `load_request`, `--source-vendor` arguments on `classify`/`route`/`run`)
+- Modify: `src/weightclass/triage.py` (nothing structural; confirm unknown vendors still fail closed)
+- Test: `tests/test_router.py`, `tests/test_triage.py`
+
+**Interfaces:**
+- Consumes: `v2.API_SOURCE_VENDORS` from Task 4 — the V2 path must already have its own gate before arbitrary labels exist.
+- Produces:
+  - `router.BUILT_IN_VENDORS: Final[frozenset[str]]` — vendors this package ships a command for.
+  - `router.validate_vendor_label(value: object) -> str` — raises `router.InvalidVendorLabelError` for anything that is not a usable identifier.
+  - `router.InvalidVendorLabelError(ValueError)`.
+
+`SUPPORTED_VENDORS` disappears as a gate. It exists today because the package ships a command for each vendor, but the label and the command are separate concerns: the label is a containment identifier that `select_tier_route` only ever compares as a string, and `native_route_fingerprint` only ever hashes as a string. Neither holds vendor-specific knowledge.
+
+Opening it means a user with an agent this package has never heard of writes their own route, using the `{{task}}` slot from Task 1 when that agent takes its prompt in argv. Nothing has to be installed here to verify a CLI this package does not ship a command for.
+
+Cost, stated plainly: `--source-vendor` can no longer reject a typo. `--source-vendor codx` used to be an argparse error; it now selects nothing and exits `unsupported_route`. That is the price of not maintaining a registry of every agent that exists.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `tests/test_router.py`, after `TaskPlaceholderTests`:
+
+```python
+class OpenVendorLabelTests(unittest.TestCase):
+    """벤더 라벨은 격리 식별자이지 이 패키지가 아는 도구 목록이 아니다.
+
+    select_tier_route 는 문자열을 비교하고 native_route_fingerprint 는 문자열을
+    해싱할 뿐이다. 둘 다 벤더별 지식을 갖고 있지 않으므로, 목록을 닫아둘 근거는
+    "명령을 함께 배포한다"뿐인데 그건 라벨과 별개다.
+    """
+
+    def _policy(self, directory: Path, routes: list[dict[str, object]]) -> Path:
+        policy_path = directory / "policy.json"
+        policy_path.write_text(json.dumps({"routes": routes}), encoding="utf-8")
+        return policy_path
+
+    def test_an_unknown_vendor_label_is_accepted(self) -> None:
+        """Breaks if a user cannot bring an agent this package never heard of."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(
+                Path(directory),
+                [{"id": "r", "vendor": "qwen", "tier": "low",
+                  "command": ["/bin/echo", "{{task}}"]}],
+            )
+            routes = cli.load_routes(path)
+
+        self.assertEqual(routes[0].vendor, "qwen")
+
+    def test_a_malformed_vendor_label_is_rejected(self) -> None:
+        """Breaks if the label stops being a reviewable identifier."""
+        for label in ("", "two words", "a" * 65, "tab\there", "  padded  "):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                path = self._policy(
+                    Path(directory),
+                    [{"id": "r", "vendor": label, "tier": "low", "command": ["/bin/echo"]}],
+                )
+                with self.assertRaises(cli.InvalidInputError):
+                    cli.load_routes(path)
+
+    def test_containment_still_holds_for_unknown_labels(self) -> None:
+        """Breaks if opening the label also opened the boundary it exists to enforce."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(
+                Path(directory),
+                [
+                    {"id": "a", "vendor": "qwen", "tier": "low", "command": ["/bin/echo"]},
+                    {"id": "b", "vendor": "kimi", "tier": "high", "command": ["/bin/echo"]},
+                ],
+            )
+            routes = cli.load_routes(path)
+
+            with self.assertRaises(RouteSelectionError):
+                select_tier_route(routes, "high", "qwen")
+
+    def test_the_fingerprint_still_separates_two_unknown_vendors(self) -> None:
+        """Breaks if the vendor stops being bound, letting a review cover another vendor."""
+        shared = {"tier": "low", "command": ("/bin/echo", "ok"), "workflow": ""}
+        first = native_route_fingerprint(Route(route_id="r", vendor="qwen", **shared), False)
+        second = native_route_fingerprint(Route(route_id="r", vendor="kimi", **shared), False)
+
+        self.assertNotEqual(first, second)
+
+    def test_the_built_in_vendors_are_still_named(self) -> None:
+        """Breaks if the shipped commands lose the set that documents them."""
+        self.assertLessEqual(frozenset({"claude", "codex"}), BUILT_IN_VENDORS)
+```
+
+Extend the `weightclass.router` import in `tests/test_router.py` to include `BUILT_IN_VENDORS` and `select_tier_route`.
+
+Replace the triage contract test in `tests/test_triage.py`. It currently iterates `SUPPORTED_VENDORS`, which no longer exists:
+
+```python
+    def test_every_built_in_vendor_has_a_reviewable_triage_descriptor(self) -> None:
+        """Breaks if a shipped vendor has an implicit triage policy."""
+        for vendor in BUILT_IN_VENDORS:
+            with self.subTest(vendor=vendor):
+                descriptor = triage_descriptor(vendor)
+                self.assertEqual(descriptor["source_vendor"], vendor)
+                self.assertIn("available", descriptor)
+
+    def test_a_vendor_this_package_ships_no_command_for_has_no_triage(self) -> None:
+        """Breaks if an unreviewed adapter is invented for an unknown vendor."""
+        with self.assertRaises(TriageUnavailableError):
+            triage_descriptor("qwen")
+```
+
+Update the `weightclass.router` import in `tests/test_triage.py` from `SUPPORTED_VENDORS` to `BUILT_IN_VENDORS`.
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest tests.test_router.OpenVendorLabelTests -v`
+Expected: FAIL with `ImportError: cannot import name 'BUILT_IN_VENDORS'`.
+
+- [ ] **Step 3: Replace the closed set with a label validator**
+
+In `src/weightclass/router.py`, replace the `SUPPORTED_VENDORS` definition:
+
+```python
+# 이 패키지가 명령까지 함께 배포하는 벤더. 라벨을 제한하는 목록이 아니라,
+# 내장 라우트와 판정 어댑터가 존재하는 벤더를 적어둔 것이다.
+BUILT_IN_VENDORS: Final = frozenset({"claude", "codex"})
+
+MAX_VENDOR_LABEL_BYTES: Final = 64
+
+
+class InvalidVendorLabelError(ValueError):
+    """Raised without the offending value when a vendor label is unusable."""
+
+
+def validate_vendor_label(value: object) -> str:
+    """Require a reviewable containment identifier, not a known tool name.
+
+    벤더 라벨이 하는 일은 격리다. select_tier_route 는 이 문자열을 비교하고
+    native_route_fingerprint 는 해싱할 뿐이며, 어느 쪽도 벤더별 지식을 갖지
+    않는다. 그래서 목록을 닫아둘 이유가 없다. 다만 검토 출력과 지문에 들어가는
+    값이므로 눈으로 확인 가능한 형태여야 한다.
+    """
+    if not isinstance(value, str):
+        raise InvalidVendorLabelError()
+    encoded = value.encode("utf-8", errors="replace")
+    if not 1 <= len(encoded) <= MAX_VENDOR_LABEL_BYTES:
+        raise InvalidVendorLabelError()
+    if any(character.isspace() or not character.isprintable() for character in value):
+        raise InvalidVendorLabelError()
+    return value
+```
+
+- [ ] **Step 4: Use the validator at every entry point**
+
+In `src/weightclass/cli.py`, `_parse_route`, replace the vendor check:
+
+```python
+    route_id = _require_nonempty_string(value["id"])
+    try:
+        vendor = validate_vendor_label(value["vendor"])
+    except InvalidVendorLabelError:
+        raise InvalidInputError() from None
+    command = value["command"]
+    if not isinstance(command, list) or not command:
+        raise InvalidInputError()
+```
+
+In `load_request`, the same replacement for the descriptor's `vendor`.
+
+For the `classify`, `route`, and `run` subcommands, drop `choices=` and validate after parsing. Replace each `add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))` with:
+
+```python
+        native.add_argument("--source-vendor")
+```
+
+and add this guard at the top of `main`, immediately after `arguments.command` is known to be one of `classify`, `route`, `run`:
+
+```python
+    # 라벨이 열려 있으므로 argparse 가 오타를 잡아주지 못한다. 형식만이라도
+    # 여기서 닫아, 잘못된 라벨이 라우트 선택까지 내려가지 않게 한다.
+    source_vendor = getattr(arguments, "source_vendor", None)
+    if source_vendor is not None:
+        try:
+            validate_vendor_label(source_vendor)
+        except InvalidVendorLabelError:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+```
+
+Place it after the `--version` and `arguments.command is None` handling and before the subcommand dispatch, so it covers `classify`, `route`, and `run` without touching `delegate` or `v2`, whose parsers keep their own closed `choices`.
+
+Import `validate_vendor_label` and `InvalidVendorLabelError` from `.router` in `cli.py`, and remove the `SUPPORTED_VENDORS` import.
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest tests.test_router tests.test_triage -q`
+Expected: OK.
+
+- [ ] **Step 6: Run the full suite and the gates**
+
+Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests -t . -q`
+Expected: OK, 650 tests.
+
+Some existing tests assert that a bad `--source-vendor` is an argparse rejection. Those now exit `unsupported_route` instead of `invalid_input` when the label is well-formed but unknown. Update each to the behavior the new gate defines: malformed label stays exit 2, well-formed-but-unrouted becomes exit 3. Do not weaken an assertion to make it pass; change it to the value the design specifies and leave a comment saying why.
+
+Run: `ruff check . && ruff format --check . && mypy --strict src/weightclass tests`
+Expected: all clean.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/weightclass/router.py src/weightclass/cli.py tests/test_router.py tests/test_triage.py
+git commit -m "feat: 벤더 라벨을 닫힌 목록에서 형식 검증으로 전환
+
+벤더 라벨이 하는 일은 격리다. select_tier_route 는 문자열을 비교하고
+native_route_fingerprint 는 해싱할 뿐, 어느 쪽도 벤더별 지식을 갖지 않는다.
+목록을 닫아둘 근거는 '명령을 함께 배포한다'뿐인데 그건 라벨과 별개 문제다.
+
+이제 이 패키지가 모르는 에이전트도 사용자가 직접 라우트를 쓸 수 있다. 그
+에이전트가 프롬프트를 argv 로 받으면 {{task}} 슬롯을 쓰면 된다. 검증을 위해
+개발 머신에 그 CLI 를 설치할 필요가 없어진다.
+
+대가는 명시한다. --source-vendor 가 오타를 잡지 못한다. codx 는 이제 argparse
+오류가 아니라 unsupported_route 로 닫힌다. 존재하는 모든 에이전트의 목록을
+유지하지 않는 값이다."
+```
+
+---
+
+### Task 6: Add `agy` as a built-in vendor
+
+**Files:**
+- Modify: `src/weightclass/router.py` (`BUILT_IN_VENDORS`, new prefix and builder, `DEFAULT_ROUTES`)
 - Modify: `src/weightclass/triage.py:90` (`TRIAGE_UNAVAILABLE_REASONS`)
 - Test: `tests/test_router.py`, `tests/test_triage.py`
 
 **Interfaces:**
 - Consumes: `router.TASK_PLACEHOLDER` from Task 1; the substitution path from Task 2; `v2.API_SOURCE_VENDORS` from Task 4.
-- Produces: `router.agy_command(reasoning_effort: str) -> tuple[str, ...]`, and `"agy"` in `router.SUPPORTED_VENDORS`.
+- Produces: `router.agy_command(reasoning_effort: str) -> tuple[str, ...]`, and `"agy"` in `router.BUILT_IN_VENDORS`.
 
 Verified against the installed build on 2026-08-10: `agy --print <PROMPT>` runs one non-interactive prompt, `--effort` accepts `low|medium|high`, and `--mode accept-edits` auto-approves edits. `agy --print ""` fails with `Error: empty prompt`, which is why the token is a separate argv element rather than an empty one.
 
@@ -561,7 +796,7 @@ class AgyBuiltInRouteTests(unittest.TestCase):
 
     def test_agy_is_a_supported_source_vendor(self) -> None:
         """Breaks if the vendor label is rejected by the surfaces that gate routing."""
-        self.assertIn("agy", SUPPORTED_VENDORS)
+        self.assertIn("agy", BUILT_IN_VENDORS)
 
     def test_the_default_vendor_is_still_codex(self) -> None:
         """Breaks if adding a vendor changed which route an unqualified call selects."""
@@ -570,7 +805,7 @@ class AgyBuiltInRouteTests(unittest.TestCase):
         self.assertEqual(route.vendor, "codex")
 ```
 
-Extend the `weightclass.router` import in `tests/test_router.py` to include `SUPPORTED_VENDORS` and `select_tier_route`.
+Extend the `weightclass.router` import in `tests/test_router.py` to include `BUILT_IN_VENDORS` and `select_tier_route`.
 
 Add to `tests/test_triage.py`, inside `TriageCommandTests`:
 
@@ -596,7 +831,7 @@ Expected: FAIL with `RouteSelectionError` for the agy tiers, and `KeyError`/asse
 In `src/weightclass/router.py`, extend the vendor set:
 
 ```python
-SUPPORTED_VENDORS: Final = frozenset({"claude", "codex", "agy"})
+BUILT_IN_VENDORS: Final = frozenset({"claude", "codex", "agy"})
 ```
 
 Add after `codex_command` and the placeholder helpers:
@@ -663,7 +898,7 @@ Expected: OK.
 - [ ] **Step 5: Run the full suite and the gates**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests -t . -q`
-Expected: OK, 649 tests.
+Expected: OK, 654 tests.
 
 Run: `ruff check . && ruff format --check . && mypy --strict src/weightclass tests`
 Expected: all clean.
@@ -684,16 +919,16 @@ empty prompt 오류로 닫히므로, 태스크 자리를 argv 에 둔다. --effo
 
 ---
 
-### Task 6: Add `grok` as a built-in vendor
+### Task 7: Add `grok` as a built-in vendor
 
 **Files:**
-- Modify: `src/weightclass/router.py` (`SUPPORTED_VENDORS`, new prefix and builder, `DEFAULT_ROUTES`)
+- Modify: `src/weightclass/router.py` (`BUILT_IN_VENDORS`, new prefix and builder, `DEFAULT_ROUTES`)
 - Modify: `src/weightclass/triage.py` (`TRIAGE_UNAVAILABLE_REASONS`)
 - Test: `tests/test_router.py`, `tests/test_triage.py`
 
 **Interfaces:**
 - Consumes: `router.TASK_PLACEHOLDER` from Task 1; the substitution path from Task 2; `v2.API_SOURCE_VENDORS` from Task 4.
-- Produces: `router.grok_command(reasoning_effort: str) -> tuple[str, ...]`, and `"grok"` in `router.SUPPORTED_VENDORS`.
+- Produces: `router.grok_command(reasoning_effort: str) -> tuple[str, ...]`, and `"grok"` in `router.BUILT_IN_VENDORS`.
 
 Verified against the installed build on 2026-08-10: `grok -p <PROMPT>` is the single-turn form, `grok -p ""` fails with `Error: --single: prompt is empty`, `--reasoning-effort` reports `use one of: high, medium, low`, and `--permission-mode` lists `acceptEdits` among its values. `--sandbox` takes a profile whose vocabulary is not enumerated by `--help`, so the built-in leaves it at grok's own default rather than asserting a profile that was never verified.
 
@@ -719,7 +954,7 @@ class GrokBuiltInRouteTests(unittest.TestCase):
 
     def test_grok_is_a_supported_source_vendor(self) -> None:
         """Breaks if the vendor label is rejected by the surfaces that gate routing."""
-        self.assertIn("grok", SUPPORTED_VENDORS)
+        self.assertIn("grok", BUILT_IN_VENDORS)
 
     def test_the_built_in_does_not_assert_an_unverified_sandbox_profile(self) -> None:
         """Breaks if a profile value nobody measured is baked into a shipped command."""
@@ -752,7 +987,7 @@ Expected: FAIL with `RouteSelectionError` for the grok tiers.
 In `src/weightclass/router.py`, extend the vendor set:
 
 ```python
-SUPPORTED_VENDORS: Final = frozenset({"claude", "codex", "agy", "grok"})
+BUILT_IN_VENDORS: Final = frozenset({"claude", "codex", "agy", "grok"})
 ```
 
 Add after `agy_command`:
@@ -821,7 +1056,7 @@ Expected: OK.
 - [ ] **Step 5: Run the full suite and the gates**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests -t . -q`
-Expected: OK, 653 tests.
+Expected: OK, 658 tests.
 
 Run: `ruff check . && ruff format --check . && mypy --strict src/weightclass tests`
 Expected: all clean.
@@ -842,7 +1077,7 @@ high/medium/low 를, --permission-mode 는 acceptEdits 를 받는다.
 
 ---
 
-### Task 7: Document the exposure and the new vendors
+### Task 8: Document the exposure and the new vendors
 
 **Files:**
 - Modify: `README.md` (route documentation and the boundary list near line 630)
@@ -944,7 +1179,7 @@ Expected: no output.
 - [ ] **Step 5: Run the full suite and the gates**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests -t . -q`
-Expected: OK, 653 tests.
+Expected: OK, 658 tests.
 
 Run: `ruff check . && ruff format --check . && mypy --strict src/weightclass tests`
 Expected: all clean.
