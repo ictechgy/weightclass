@@ -628,6 +628,20 @@ credential management, background execution, or a bundled provider runtime.
   subscription checker, bundled provider runtime, or unattended multi-agent
   supervisor.
 - Policies must be reviewed before use. Do not place secrets in a policy.
+- Every policy, runtime manifest, workflow descriptor, and evidence file you
+  pass on the command line must be owned by you or by root, and must not be
+  world-writable. Either violation is rejected with
+  `{"error": "invalid_input"}` before the file is parsed, because whoever can
+  rewrite it can choose both the argv and the vendor boundary between the
+  `route` you reviewed and the `run` you start. `chmod o-w <file>` if you hit
+  this. The check reads the already-opened file, so no swap between check and
+  read is possible, and it does not apply to package-owned resources.
+- Group-writable files are **not** rejected, and that residual is yours to
+  manage. Under the user private group convention the group holds only you, so
+  group write is harmless; under a shared primary group such as macOS `staff`
+  it is equivalent to world-writable. `stat` cannot tell the two apart, and
+  rejecting it would fail every file created under the common `umask 002`. If
+  your policy lives in a shared group, keep it at `0o644`.
 - `wclass route` binds a later `wclass run` only when you pass the fingerprint
   it prints, and only to the policy's selection — see
   [Bind a run to the selection you reviewed](#bind-a-run-to-the-selection-you-reviewed)

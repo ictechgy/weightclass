@@ -67,7 +67,11 @@ def _require_label(value: object) -> str:
 
 def _read_json_object(path: Path) -> dict[str, Any]:
     try:
-        return load_json_object(path, max_bytes=MAX_POLICY_BYTES)
+        return load_json_object(
+            path,
+            max_bytes=MAX_POLICY_BYTES,
+            require_exclusive_write_owner=True,
+        )
     except JsonInputError:
         raise V2InvalidInputError() from None
 
