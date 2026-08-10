@@ -325,6 +325,59 @@ class TaskPlaceholderTests(unittest.TestCase):
 
         self.assertEqual(filled, ("agy", "--print", "긴 태스크", "--effort"))
 
+    def _recorder(self, directory: Path) -> Path:
+        """자식이 받은 argv 와 stdin 을 그대로 파일에 적는 가짜 실행 파일."""
+        recorder = directory / "recorder.py"
+        recorder.write_text(
+            "import json, sys\n"
+            "record = {'argv': sys.argv[1:], 'stdin': sys.stdin.read()}\n"
+            "open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps(record))\n",
+            encoding="utf-8",
+        )
+        return recorder
+
+    def test_argv_delivery_puts_the_task_in_argv_and_leaves_stdin_empty(self) -> None:
+        """Breaks if the task is delivered twice or in the wrong channel."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = self._recorder(root)
+            record_path = root / "record.json"
+            policy_path = self._policy(
+                root,
+                [sys.executable, str(recorder), str(record_path), "{{task}}"],
+            )
+
+            result = reviewed_run(policy_path, "Fix a typo.")
+            recorded = json.loads(record_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(recorded["argv"][-1], "Fix a typo.")
+        self.assertEqual(recorded["stdin"], "")
+
+    def test_stdin_delivery_is_unchanged(self) -> None:
+        """Breaks if adding argv delivery altered the path every existing policy uses."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = self._recorder(root)
+            record_path = root / "record.json"
+            policy_path = self._policy(root, [sys.executable, str(recorder), str(record_path)])
+
+            result = reviewed_run(policy_path, "Fix a typo.")
+            recorded = json.loads(record_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(recorded["stdin"], "Fix a typo.")
+        self.assertNotIn("Fix a typo.", recorded["argv"])
+
+    def test_a_task_carrying_nul_is_refused_before_spawn(self) -> None:
+        """Breaks if an argv-delivery run reaches execve with a byte it cannot carry."""
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
+            result = reviewed_run(policy_path, "before\x00after")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
+
 
 class CommandSurfaceTests(unittest.TestCase):
     def test_help_lists_every_reachable_subcommand(self) -> None:

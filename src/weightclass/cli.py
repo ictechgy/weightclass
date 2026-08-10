@@ -82,6 +82,8 @@ from .router import (
     native_route_fingerprint,
     select_route,
     select_tier_route,
+    substitute_task,
+    uses_argv_task_delivery,
 )
 from .task_v2 import ValidatedTaskV2, read_validated_task_v2
 from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
@@ -994,12 +996,23 @@ def run_from_standard_input(
         ):
             print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
             return 6
+        # 치환은 spawn 직전에 한 번만 한다. 검토 출력과 지문은 이미 치환 전
+        # 명령으로 계산되었으므로 태스크가 그 둘에 들어가지 않는다.
+        argv = route.command
+        child_input = task.encode("utf-8")
+        if uses_argv_task_delivery(route.command):
+            # execve 는 NUL 을 실을 수 없다. stdin 전달은 실을 수 있으므로 이
+            # 거부는 argv 전달에만 적용한다.
+            if "\x00" in task:
+                raise InvalidTaskError()
+            argv = substitute_task(route.command, task)
+            child_input = b""
         # text 모드는 로케일 인코딩을 사용하므로 LC_ALL=C 환경에서 비ASCII 태스크가
         # UnicodeEncodeError로 새어 나간다. 자식 출력을 읽지 않으므로 바이트로 전달한다.
         completed_process = subprocess.run(
-            route.command,
+            argv,
             check=False,
-            input=task.encode("utf-8"),
+            input=child_input,
         )
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
