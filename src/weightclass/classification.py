@@ -263,11 +263,7 @@ def validate_task(task: str) -> str:
     상한 초과 입력이 그대로 벤더 프로세스로 넘어간다.
     """
     normalized_task = task.strip().casefold()
-    if (
-        not normalized_task
-        or len(normalized_task) > MAX_TASK_CHARACTERS
-        or "\x00" in normalized_task
-    ):
+    if not normalized_task or len(normalized_task) > MAX_TASK_CHARACTERS:
         raise InvalidTaskError()
     return normalized_task
 

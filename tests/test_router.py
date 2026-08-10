@@ -373,10 +373,24 @@ class TaskPlaceholderTests(unittest.TestCase):
         """Breaks if an argv-delivery run reaches execve with a byte it cannot carry."""
         with tempfile.TemporaryDirectory() as directory:
             policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
-            result = reviewed_run(policy_path, "before\x00after")
+            result = reviewed_run(policy_path, "Fix a typo.\x00second part")
 
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
+
+    def test_stdin_delivery_accepts_nul_bytes(self) -> None:
+        """Breaks if stdin-delivery path rejects valid input that execve never sees."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = self._recorder(root)
+            record_path = root / "record.json"
+            policy_path = self._policy(root, [sys.executable, str(recorder), str(record_path)])
+
+            result = reviewed_run(policy_path, "Fix a typo.\x00second part")
+            recorded = json.loads(record_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(recorded["stdin"], "Fix a typo.\x00second part")
 
 
 class CommandSurfaceTests(unittest.TestCase):
