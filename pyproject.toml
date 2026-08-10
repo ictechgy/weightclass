@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "weightclass"
 dynamic = ["version"]
-description = "Local, policy-driven routing for Codex and Claude workflows."
+description = "Local, policy-driven routing for agent CLI workflows."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
-keywords = ["cli", "codex", "claude", "router", "task-classification"]
+keywords = ["cli", "codex", "claude", "antigravity", "grok", "router", "task-classification"]
 dependencies = []
 classifiers = [
     "Development Status :: 3 - Alpha",

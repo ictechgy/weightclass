@@ -1,6 +1,6 @@
 # Design: argv task delivery and additional native vendors
 
-_Status: approved design, not yet implemented. Written 2026-08-10._
+_Status: implemented. Written 2026-08-10._
 
 ## Problem
 
@@ -190,9 +190,17 @@ never logged, never hashed, and never included in review output or diagnostics.
 
 ## Compatibility
 
-Additive. A policy with no `{{task}}` token behaves identically, byte for byte.
-The stdin path is untouched. `SUPPORTED_VENDORS` grows, which widens
-`--source-vendor` acceptance but rejects nothing that was previously accepted.
+Additive for the placeholder: a policy with no `{{task}}` token behaves
+identically, byte for byte, and the stdin path is untouched.
+
+The vendor label is not additive in the same way. `SUPPORTED_VENDORS` is
+**replaced**, not grown, by `BUILT_IN_VENDORS` plus `validate_vendor_label`, a
+format check that carries no vendor vocabulary. Nothing previously accepted is
+now rejected, but `--source-vendor` does more than widen: a typo that used to
+fail at parse time against the closed `choices` list (`invalid_input`, exit 2)
+now passes the format check and fails later, at route selection
+(`unsupported_route`, exit 3) — the same cost already named in "Built-in
+routes" above.
 
 Under the `0.x` policy in `RELEASING.md` this is a minor bump: new command-line
 surface, no removal.
@@ -207,8 +215,12 @@ surface, no removal.
   different tasks at one tier produce one fingerprint, and neither task appears
   in `route` output.
 - `U+0000` in a task is refused before spawn for argv delivery.
-- `v2 route`/`v2 run` with `agy` or `grok` exits `unsupported_route`, not a
-  traceback.
+- `v2 route`/`v2 run` with `agy` or `grok` exits `invalid_input` (exit 2), not
+  a traceback. The V2 API subcommands keep closed argparse `choices` on
+  `--source-vendor` (`API_SOURCE_VENDORS`, still just `{claude, codex}`), so an
+  unlisted vendor is rejected at parse time and never reaches route selection.
+  This is a stricter, earlier gate than the native path's `unsupported_route`,
+  not a weaker one.
 - `triage_descriptor` answers for all four vendors.
 - Every new built-in route is exercised against a fake executable that records
   its argv and stdin, in the pattern the existing native tests use.

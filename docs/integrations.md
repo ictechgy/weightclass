@@ -15,8 +15,17 @@ the project directory after installing `weightclass`.
 3. Keep a Codex-originated task on Codex and a Claude-originated task on Claude
    unless a reviewed policy explicitly enables cross-vendor routing.
 
-Do not put task text, credentials, tokens, or personal information on a command
-line, in a policy, or in vendor-global configuration.
+Do not put credentials, tokens, or personal information on a command line, in
+a policy, or in vendor-global configuration. Task text is a deliberate
+exception to that rule, not an oversight: the built-in `agy` and `grok` routes,
+and any policy route that declares the reserved `{{task}}` token, put the task
+on the command line by design, because those CLIs accept a prompt only as an
+argument. Command lines are readable by every user on the machine — anyone who
+can run `ps` sees the task for as long as the child runs. On a single-user
+machine this is inconsequential; on a shared host it is not. This is a real
+exposure you accept each time you write `{{task}}` into a policy or select an
+`agy`/`grok` built-in route, stated the same way in `README.md` next to the
+route documentation.
 
 For schema 2, `route` and `run` additionally require `--source-profile`. Review
 the canonical source/destination profiles, exact model/effort pair, executable,

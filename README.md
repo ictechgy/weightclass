@@ -35,9 +35,11 @@ cd weightclass
 python3 -m pip install .
 ```
 
-All three install the `wclass` command. The native Codex and Claude CLIs must
-already be installed and authenticated; weightclass never reads or changes
-their authentication or subscription state.
+All three install the `wclass` command. weightclass bundles no vendor CLI
+itself: whichever built-in route you use — `codex`, `claude`, `agy`, or
+`grok` — that vendor's own CLI must already be installed and authenticated on
+the machine that runs it. weightclass never reads or changes their
+authentication or subscription state.
 
 Releases are cut by pushing a tag; see [RELEASING.md](RELEASING.md).
 
@@ -299,10 +301,12 @@ Use `wclass route --policy policy.json` to review a local policy, then
 `wclass run --policy policy.json --ack-route-fingerprint <fingerprint>` to run
 what that review selected. `run` refuses a policy without the acknowledgement;
 see [Bind a run to the selection you reviewed](#bind-a-run-to-the-selection-you-reviewed).
-Routes are considered in listed order, so the first matching `tier` is selected. Add `--source-vendor codex` or
-`--source-vendor claude` when invoking it from that vendor. Configure model
-labels and vendor-specific effort arguments only with labels you know are
-available to you.
+Routes are considered in listed order, so the first matching `tier` is selected. Add
+`--source-vendor <vendor>` matching the route's vendor label when invoking it
+from that vendor — `codex` or `claude` for the example policy below, but any
+label a route declares works the same way. Configure model labels and
+vendor-specific effort arguments only with labels you know are available to
+you.
 
 ```json
 {
@@ -720,6 +724,17 @@ credential management, background execution, or a bundled provider runtime.
 - The built-in `agy` and `grok` routes deliver the task on the command line, so
   the `ps` exposure above applies to them. `claude` and `codex` routes deliver
   it on standard input and do not.
+- Argv delivery puts the task in a value position among flags, so a task
+  beginning with `-` reaches the child's own argument parser. This is not an
+  adversarial case — an ordinary task written as a markdown bullet list starts
+  with `-` routinely. Measured directly: the built-in `grok` route fails
+  closed on such a task with an argument-parser error from `grok` itself
+  (`error: a value is required for '--single <PROMPT>' but none was
+  supplied`); the built-in `agy` route is unaffected and accepts it. Neither
+  `--` nor any other change to the command helps — for `grok` it produces the
+  same error, and `agy` does not need it. weightclass does not validate,
+  escape, or reject a task for this; it delivers exactly the bytes you gave
+  it.
 - A selected command receives the task on standard input — or, for a route that
   declares `{{task}}`, at that argv position with empty standard input instead
   — and inherits standard output and error. Whatever it does with the task —
