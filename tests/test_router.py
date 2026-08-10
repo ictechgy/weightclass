@@ -8,11 +8,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 from tests.runtime_guard import guarded_launch
 from weightclass import cli, router
+from weightclass.classification import Tier
 from weightclass.router import (
     BUILT_IN_VENDORS,
     DEFAULT_ROUTES,
@@ -461,6 +462,31 @@ class TaskPlaceholderTests(unittest.TestCase):
             json.loads(first.stdout)["route_fingerprint"],
             json.loads(second.stdout)["route_fingerprint"],
         )
+
+
+class AgyBuiltInRouteTests(unittest.TestCase):
+    def test_every_tier_has_an_agy_route_that_carries_the_task_in_argv(self) -> None:
+        """Breaks if a tier is missing or the built-in stops declaring its task slot."""
+        for tier, effort in (("low", "low"), ("standard", "medium"), ("high", "high")):
+            with self.subTest(tier=tier):
+                route = select_tier_route(DEFAULT_ROUTES, cast(Tier, tier), "agy")
+
+                self.assertEqual(route.vendor, "agy")
+                self.assertEqual(route.command[0], "agy")
+                self.assertIn(router.TASK_PLACEHOLDER, route.command)
+                self.assertEqual(route.command[route.command.index("--effort") + 1], effort)
+                self.assertIn("--mode", route.command)
+                self.assertEqual(route.command[route.command.index("--mode") + 1], "accept-edits")
+
+    def test_agy_is_a_supported_source_vendor(self) -> None:
+        """Breaks if the vendor label is rejected by the surfaces that gate routing."""
+        self.assertIn("agy", BUILT_IN_VENDORS)
+
+    def test_the_default_vendor_is_still_codex(self) -> None:
+        """Breaks if adding a vendor changed which route an unqualified call selects."""
+        route = select_tier_route(DEFAULT_ROUTES, "low")
+
+        self.assertEqual(route.vendor, "codex")
 
 
 class OpenVendorLabelTests(unittest.TestCase):

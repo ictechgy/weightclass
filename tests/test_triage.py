@@ -143,6 +143,16 @@ class TriageCommandTests(unittest.TestCase):
         with self.assertRaises(TriageUnavailableError):
             triage_command("gemini")
 
+    def test_agy_has_no_reviewed_triage_adapter(self) -> None:
+        """Breaks if an unreviewed adapter starts sending task text to a new vendor."""
+        with self.assertRaises(TriageUnavailableError):
+            triage_command("agy")
+
+        descriptor = triage_descriptor("agy")
+        self.assertFalse(descriptor["available"])
+        self.assertEqual(descriptor["unavailable_reason"], "no_reviewed_triage_adapter")
+        self.assertNotIn("command", descriptor)
+
 
 class AskVendorTests(unittest.TestCase):
     """실제 claude/codex 는 부르지 않는다. PATH 앞에 가짜를 놓아 가로챈다.

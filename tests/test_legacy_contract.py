@@ -145,7 +145,16 @@ EXPECTED_BUILTINS = (
     b'"sha256:2cff910e26bf1d2de7ffe74cbe2a78331428f42292701a64890da8fcb0e727e8"],'
     b'["claude-high","claude","high",["claude","--print","--no-session-persistence",'
     b'"--permission-mode","acceptEdits","--effort","high"],'
-    b'"sha256:b4fdc8fc64becdc93cf5cc438c058550cca6d00e33f42535e0b63d1edbda18b0"]]'
+    b'"sha256:b4fdc8fc64becdc93cf5cc438c058550cca6d00e33f42535e0b63d1edbda18b0"],'
+    b'["agy-low","agy","low",["agy","--print","{{task}}","--mode","accept-edits",'
+    b'"--effort","low"],'
+    b'"sha256:7145e8378541f2b64e5cf4f811fcb78d08354dba98066cf24a859e1a29906ca9"],'
+    b'["agy-standard","agy","standard",["agy","--print","{{task}}","--mode",'
+    b'"accept-edits","--effort","medium"],'
+    b'"sha256:5de03b92f50a013e8e318e1e2bb1791d07d52210dc3a6594e3a981ec2d39a41b"],'
+    b'["agy-high","agy","high",["agy","--print","{{task}}","--mode","accept-edits",'
+    b'"--effort","high"],'
+    b'"sha256:6294541a7054de64e5bf89da85c3cbd85941c562c0c831af43eeaed38f058b64"]]'
 )
 
 

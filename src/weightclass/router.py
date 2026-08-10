@@ -13,7 +13,7 @@ Posture = Literal["balanced", "cautious"]
 
 # 이 패키지가 명령까지 함께 배포하는 벤더. 라벨을 제한하는 목록이 아니라,
 # 내장 라우트와 판정 어댑터가 존재하는 벤더를 적어둔 것이다.
-BUILT_IN_VENDORS: Final = frozenset({"claude", "codex"})
+BUILT_IN_VENDORS: Final = frozenset({"claude", "codex", "agy"})
 
 MAX_VENDOR_LABEL_BYTES: Final = 64
 
@@ -39,6 +39,11 @@ def validate_vendor_label(value: object) -> str:
         raise InvalidVendorLabelError()
     return value
 
+
+# 프롬프트를 stdin 이 아니라 인자로만 받는 CLI 가 있다. 그런 명령에서 태스크가
+# 들어갈 자리를 이 토큰으로 표시한다. 이 토큰이 없으면 지금까지처럼 stdin 으로
+# 전달한다.
+TASK_PLACEHOLDER: Final = "{{task}}"
 
 # manual 은 사람에게 승인을 묻는 모드다. --print 는 비대화형이라 물어볼 상대가
 # 없어 모든 편집이 거부되고, 그런데도 claude 는 0으로 종료한다. 즉 라우터가
@@ -81,10 +86,22 @@ def codex_command(reasoning_effort: str) -> tuple[str, ...]:
     return CODEX_COMMAND_PREFIX + (f"model_reasoning_effort={reasoning_effort}", "-")
 
 
-# 프롬프트를 stdin 이 아니라 인자로만 받는 CLI 가 있다. 그런 명령에서 태스크가
-# 들어갈 자리를 이 토큰으로 표시한다. 이 토큰이 없으면 지금까지처럼 stdin 으로
-# 전달한다.
-TASK_PLACEHOLDER: Final = "{{task}}"
+# agy 는 프롬프트를 stdin 에서 읽지 않는다. --print 가 프롬프트를 인자로 요구하고,
+# 빈 문자열을 주면 empty prompt 오류로 닫힌다. 그래서 태스크 자리를 argv 에 둔다.
+# --effort 어휘가 이 저장소의 티어 어휘와 같아 그대로 대응된다.
+AGY_COMMAND_PREFIX: Final = (
+    "agy",
+    "--print",
+    TASK_PLACEHOLDER,
+    "--mode",
+    "accept-edits",
+    "--effort",
+)
+
+
+def agy_command(reasoning_effort: str) -> tuple[str, ...]:
+    """Build the built-in Antigravity command for one reasoning effort label."""
+    return AGY_COMMAND_PREFIX + (reasoning_effort,)
 
 
 def uses_argv_task_delivery(command: tuple[str, ...]) -> bool:
@@ -172,6 +189,27 @@ DEFAULT_ROUTES: Final = (
         workflow="",
         tier="high",
         command=CLAUDE_COMMAND_PREFIX + ("high",),
+    ),
+    Route(
+        route_id="agy-low",
+        vendor="agy",
+        workflow="",
+        tier="low",
+        command=agy_command("low"),
+    ),
+    Route(
+        route_id="agy-standard",
+        vendor="agy",
+        workflow="",
+        tier="standard",
+        command=agy_command("medium"),
+    ),
+    Route(
+        route_id="agy-high",
+        vendor="agy",
+        workflow="",
+        tier="high",
+        command=agy_command("high"),
     ),
 )
 
