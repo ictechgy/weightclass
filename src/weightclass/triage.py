@@ -13,7 +13,6 @@ weightclass 자신은 HTTP 를 하지 않는다. 벤더 CLI 를 전면에서 한
 """
 
 import os
-import select
 import selectors
 import signal
 import subprocess
@@ -23,6 +22,13 @@ from pathlib import Path
 from typing import Any, Final
 
 from .classification import Tier
+from .process_context import (
+    close_leader_exit_queue,
+    has_leader_exit_observer,
+    observe_leader_exit,
+    open_leader_exit_queue,
+    signal_process_group,
+)
 
 # 판정 기준은 이 저장소가 소유한다. 벤더 쪽 프롬프트에 의존하면 두 저장소
 # 사이에서 기준이 조용히 갈라진다. 버전을 붙여 변경을 추적한다.
@@ -104,75 +110,6 @@ def triage_command(source_vendor: str) -> tuple[str, ...]:
         raise TriageUnavailableError() from None
 
 
-def _has_leader_exit_observer() -> bool:
-    """Return whether this POSIX runtime can observe exit without reaping."""
-    if callable(getattr(os, "waitid", None)):
-        return all(hasattr(os, name) for name in ("P_PID", "WEXITED", "WNOHANG", "WNOWAIT"))
-    return all(
-        hasattr(select, name)
-        for name in (
-            "kqueue",
-            "kevent",
-            "KQ_FILTER_PROC",
-            "KQ_EV_ADD",
-            "KQ_EV_ONESHOT",
-            "KQ_NOTE_EXIT",
-        )
-    )
-
-
-def _open_leader_exit_queue(pid: int) -> Any | None:
-    """Register a non-reaping kqueue observer when waitid is unavailable."""
-    if callable(getattr(os, "waitid", None)):
-        return None
-    exit_queue: Any | None = None
-    try:
-        select_features = vars(select)
-        kqueue_factory = select_features["kqueue"]
-        kevent_factory = select_features["kevent"]
-        event = kevent_factory(
-            pid,
-            filter=select_features["KQ_FILTER_PROC"],
-            flags=select_features["KQ_EV_ADD"] | select_features["KQ_EV_ONESHOT"],
-            fflags=select_features["KQ_NOTE_EXIT"],
-        )
-        exit_queue = kqueue_factory()
-        exit_queue.control([event], 0, 0)
-    except (OSError, ValueError):
-        if exit_queue is not None:
-            exit_queue.close()
-        raise TriageUnavailableError() from None
-    return exit_queue
-
-
-def _observe_leader_exit(pid: int, exit_queue: Any | None) -> bool:
-    """Observe a child exit without reaping it so its process group stays stable."""
-    waitid = getattr(os, "waitid", None)
-    if not callable(waitid):
-        assert exit_queue is not None
-        while True:
-            try:
-                return bool(exit_queue.control(None, 1, 0))
-            except InterruptedError:
-                continue
-    while True:
-        try:
-            result = waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-        except InterruptedError:
-            continue
-        return result is not None
-
-
-def _signal_process_group(process_group_id: int, signal_number: int) -> None:
-    """Signal only the captured vendor process group."""
-    try:
-        os.killpg(process_group_id, signal_number)
-    except (PermissionError, ProcessLookupError):
-        # macOS can report EPERM when only an unreaped zombie leader remains in
-        # the session. Real descendant tests verify that a live group is killed.
-        pass
-
-
 def _read_available_output(file_descriptor: int, answer: bytearray) -> tuple[bool, bool]:
     """Drain immediately available bytes, returning (eof, overflow)."""
     while len(answer) <= MAX_TRIAGE_OUTPUT_BYTES:
@@ -191,7 +128,7 @@ def _read_available_output(file_descriptor: int, answer: bytearray) -> tuple[boo
 
 def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
     """Run one vendor CLI with bounded I/O and process-group teardown."""
-    if os.name != "posix" or not hasattr(os, "killpg") or not _has_leader_exit_observer():
+    if os.name != "posix" or not hasattr(os, "killpg") or not has_leader_exit_observer():
         raise TriageUnavailableError()
 
     prompt = TRIAGE_PROMPT.format(task=task).encode("utf-8")
@@ -231,11 +168,14 @@ def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
         try:
             os.set_blocking(stdin_descriptor, False)
             os.set_blocking(stdout_descriptor, False)
-            exit_queue = _open_leader_exit_queue(process.pid)
+            # 이미 종료한 자식(LEADER_ALREADY_EXITED)은 실패가 아니다. 벤더 CLI 가
+            # 등록보다 먼저 답하고 죽는 경우가 실제로 있고, 그때 버퍼에 남은 답을
+            # 버리면 안 된다. 관찰 불가와 상태 소유권 상실만 실패로 닫는다.
+            exit_queue = open_leader_exit_queue(process.pid)
             selector.register(process.stdout, selectors.EVENT_READ, "stdout")
             selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
             while time.monotonic() < exchange_deadline:
-                leader_observed = _observe_leader_exit(process.pid, exit_queue)
+                leader_observed = observe_leader_exit(process.pid, exit_queue)
                 if leader_observed:
                     break
 
@@ -278,7 +218,7 @@ def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
                     pass
                 process.stdin.close()
 
-            _signal_process_group(process_group_id, signal.SIGTERM)
+            signal_process_group(process_group_id, signal.SIGTERM)
             term_deadline = time.monotonic() + max(0.0, cleanup_budget / 2)
             while not stdout_eof and time.monotonic() < min(term_deadline, overall_deadline):
                 try:
@@ -293,7 +233,7 @@ def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
                 if overflow:
                     stdout_eof = True
 
-            _signal_process_group(process_group_id, signal.SIGKILL)
+            signal_process_group(process_group_id, signal.SIGKILL)
             while not stdout_eof and time.monotonic() < overall_deadline:
                 stdout_eof, overflow = _read_available_output(stdout_descriptor, answer)
                 failed = failed or overflow
@@ -303,8 +243,7 @@ def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
                     time.sleep(0.005)
 
             selector.close()
-            if exit_queue is not None:
-                exit_queue.close()
+            close_leader_exit_queue(exit_queue)
             if not process.stdout.closed:
                 process.stdout.close()
             if not process.stdin.closed:

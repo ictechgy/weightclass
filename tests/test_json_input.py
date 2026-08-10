@@ -358,5 +358,100 @@ class RuntimeJsonInputTests(unittest.TestCase):
                     self.assertFalse(task_was_read)
 
 
+class ExclusiveWriteOwnerTests(unittest.TestCase):
+    """정책·매니페스트·디스크립터는 무엇이 실행될지를 고른다.
+
+    그 파일을 고쳐 쓸 수 있는 사람은 argv 와 벤더 경계를 고를 수 있다. `route` 와
+    `run` 은 파일을 각각 따로 읽으므로, 쓰기 가능한 주체 집합이 닫혀 있지 않으면
+    첫 읽기에 대한 검토가 두 번째 읽기를 보장하지 못한다.
+    """
+
+    def _run(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "weightclass", *arguments],
+            capture_output=True,
+            check=False,
+            input="Fix a typo.",
+            text=True,
+            timeout=10,
+        )
+
+    def test_a_world_writable_policy_is_rejected(self) -> None:
+        """Breaks if a file every user can rewrite can still choose the argv."""
+        for mode in (0o666, 0o646, 0o622, 0o602):
+            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "policy.json"
+                path.write_text(json.dumps(_native_policy()), encoding="utf-8")
+                os.chmod(path, mode)
+
+                result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+
+    def test_a_policy_no_other_user_can_rewrite_is_accepted(self) -> None:
+        """Breaks if the gate rejects the ordinary umask-022 and private cases."""
+        for mode in (0o644, 0o600, 0o640, 0o604):
+            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "policy.json"
+                path.write_text(json.dumps(_native_policy()), encoding="utf-8")
+                os.chmod(path, mode)
+
+                result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_group_writable_policy_is_accepted_as_a_documented_residual(self) -> None:
+        """Breaks if the gate starts firing on every file created under umask 002.
+
+        그룹 쓰기 가능이 위험한지는 그룹 구성에 달렸고, stat 만으로는 사용자
+        전용 그룹과 공유 그룹을 구별할 수 없다. 거부하면 정상 설정에서 훨씬 자주
+        터진다. 이 선택이 조용히 뒤집히지 않도록 고정한다.
+        """
+        for mode in (0o664, 0o660, 0o620):
+            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "policy.json"
+                path.write_text(json.dumps(_native_policy()), encoding="utf-8")
+                os.chmod(path, mode)
+
+                result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_file_owned_by_a_third_party_is_rejected_even_when_unwritable(self) -> None:
+        """Breaks if only the mode bits are checked and the owner is ignored."""
+        foreign_uid = 0 if os.geteuid() != 0 else 1
+        readable_but_foreign = os.stat_result(
+            (0o100644, 0, 0, 1, foreign_uid + 1000, 0, 0, 0, 0, 0)
+        )
+
+        self.assertFalse(json_input._has_exclusive_write_owner(readable_but_foreign))
+
+    def test_root_owned_configuration_stays_loadable(self) -> None:
+        """Breaks if a system-wide install is refused for being root-owned."""
+        root_owned = os.stat_result((0o100644, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+
+        self.assertTrue(json_input._has_exclusive_write_owner(root_owned))
+
+    def test_package_owned_resources_do_not_require_the_gate(self) -> None:
+        """Breaks if installation-owned files start failing on a shared site-packages."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "registry.json"
+            path.write_text('{"records":[]}', encoding="utf-8")
+            os.chmod(path, 0o666)  # world-writable: rejected only when the gate is on
+
+            self.assertEqual(
+                json_input.load_json_object(path, max_bytes=MAX_RUNTIME_JSON_BYTES),
+                {"records": []},
+            )
+            with self.assertRaises(json_input.JsonInputError):
+                json_input.load_json_object(
+                    path,
+                    max_bytes=MAX_RUNTIME_JSON_BYTES,
+                    require_exclusive_write_owner=True,
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

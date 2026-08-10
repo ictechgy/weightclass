@@ -141,8 +141,9 @@ class SafeArgumentParser(argparse.ArgumentParser):
 
 
 def _read_json_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
+    """Read one caller-supplied document that selects what this process runs."""
     try:
-        return load_json_object(path, max_bytes=max_bytes)
+        return load_json_object(path, max_bytes=max_bytes, require_exclusive_write_owner=True)
     except JsonInputError:
         raise InvalidInputError() from None
 

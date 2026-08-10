@@ -13,15 +13,21 @@ class JsonInputError(ValueError):
     """Raised without source values when a runtime JSON document is unsafe."""
 
 
-class _DuplicateKeyError(ValueError):
-    """Internal marker that deliberately carries no duplicated key."""
+class DuplicateJsonKeyError(ValueError):
+    """Marker that deliberately carries no duplicated key."""
 
 
-def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+def json_object_pairs_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build a JSON object, rejecting any repeated key without naming it.
+
+    `json.loads` keeps the last value for a repeated key, so a document can carry
+    one value past review and a different value into use. This is the shared
+    `object_pairs_hook` for every JSON document this package parses.
+    """
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise _DuplicateKeyError()
+            raise DuplicateJsonKeyError()
         result[key] = value
     return result
 
@@ -42,7 +48,43 @@ def _read_bounded_bytes(file_descriptor: int, max_bytes: int) -> bytes:
     raise JsonInputError()
 
 
-def _load_json_object_from_open_fd(file_descriptor: int, *, max_bytes: int) -> dict[str, Any]:
+def _has_exclusive_write_owner(metadata: os.stat_result) -> bool:
+    """Report whether the opened file is closed to writers other than its owner.
+
+    A policy, manifest, or descriptor decides which argv runs and which vendor
+    boundary a task crosses, so whoever can write it can choose both. `route`
+    and `run` read the file in separate processes, so a review of the first read
+    says nothing about the second unless the set of writers is closed.
+
+    Two conditions are rejected, both unambiguous on every supported platform:
+    world-writable, and ownership by neither this user nor root. Root ownership
+    is accepted because a root-writable file is already outside any boundary
+    this tool could defend.
+
+    Group-writable is deliberately **not** rejected, and that is a documented
+    residual. Whether it is dangerous depends on the group: under the user
+    private group convention the group holds only the owner and group-write is
+    harmless, while a shared primary group such as Darwin's `staff` makes it
+    equivalent to world-writable. Nothing in `stat` distinguishes the two —
+    `grp` misses members who hold the group as their primary. Rejecting it
+    outright would fail every file created under `umask 002`, which is a common
+    default, so the check would fire on correct setups far more often than on
+    dangerous ones. Keep a shared-group policy at `0o644`.
+
+    The check runs on `fstat` of the already-open descriptor, not on the path,
+    so nothing can be swapped between the check and the read.
+    """
+    if metadata.st_mode & stat.S_IWOTH:
+        return False
+    return metadata.st_uid in (os.geteuid(), 0)
+
+
+def _load_json_object_from_open_fd(
+    file_descriptor: int,
+    *,
+    max_bytes: int,
+    require_exclusive_write_owner: bool = False,
+) -> dict[str, Any]:
     """Consume one opened descriptor and validate that exact file description."""
     try:
         if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
@@ -51,9 +93,11 @@ def _load_json_object_from_open_fd(file_descriptor: int, *, max_bytes: int) -> d
         metadata = os.fstat(file_descriptor)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > max_bytes:
             raise JsonInputError()
+        if require_exclusive_write_owner and not _has_exclusive_write_owner(metadata):
+            raise JsonInputError()
         contents = _read_bounded_bytes(file_descriptor, max_bytes)
         decoded = contents.decode("utf-8")
-        value = json.loads(decoded, object_pairs_hook=_object_without_duplicate_keys)
+        value = json.loads(decoded, object_pairs_hook=json_object_pairs_without_duplicates)
     except (OSError, ValueError):
         raise JsonInputError() from None
     finally:
@@ -64,8 +108,18 @@ def _load_json_object_from_open_fd(file_descriptor: int, *, max_bytes: int) -> d
     return value
 
 
-def load_json_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
-    """Load one bounded regular-file JSON object without exposing its values."""
+def load_json_object(
+    path: Path,
+    *,
+    max_bytes: int,
+    require_exclusive_write_owner: bool = False,
+) -> dict[str, Any]:
+    """Load one bounded regular-file JSON object without exposing its values.
+
+    Set `require_exclusive_write_owner` for any document that selects what gets
+    executed; leave it off for package-owned resources, whose integrity is the
+    installation's concern rather than this check's.
+    """
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
         raise JsonInputError()
 
@@ -75,4 +129,8 @@ def load_json_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
         file_descriptor = os.open(path, flags)
     except OSError:
         raise JsonInputError() from None
-    return _load_json_object_from_open_fd(file_descriptor, max_bytes=max_bytes)
+    return _load_json_object_from_open_fd(
+        file_descriptor,
+        max_bytes=max_bytes,
+        require_exclusive_write_owner=require_exclusive_write_owner,
+    )

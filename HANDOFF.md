@@ -1,476 +1,247 @@
 # Handoff
 
-_Last updated: 2026-08-10 by Codex_
+_Last updated: 2026-08-10 by Claude Code_
 
 ## Goal
 
-Maintain public, local `weightclass`: deterministically classify transient task
-stdin and select or start one reviewed native Codex or Claude Code workflow.
-Preserve source-vendor pinning, redacted fail-closed diagnostics, opaque
-user-provided model labels, and the no-retention boundary.
+- Maintain `weightclass` as a public, local router that deterministically selects
+  a reviewed native Codex or Claude workflow from explicit user policy.
+- Version 0.5.0 added explicit model and effort routing, same-vendor profile
+  routing, and directional opt-in cross-vendor/profile routing.
+- Preserve the local privacy boundary: task content is transient stdin only;
+  weightclass does not retain it or own provider credentials, HTTP, billing, or
+  subscription entitlement discovery.
 
-## Repository state
+## Current Status
 
-- Durable goals g01-g12 are leader-verified. They freeze the v2 contract and
-  legacy evidence; implement pure foundations, native schema-2 routing/run,
-  delegation protocol-2 schema/graph/grants/WCD2/runtime; and enroll all claimed
-  top-level test launch paths in the named current-process guarded runtime suite.
-  Child processes below an allowed CLI or harness are outside that guard claim.
-  Protocol-1 lifecycle remains unchanged.
-- Goal g10 adds the user/security/migration documentation and machine-reviewed
-  orchestration traceability fixture. The traceability test resolves adopted
-  schema paths, importable validator symbols, and exact collected unittest
-  methods, and rejects missing paths/symbols/tests, unsupported overclaims,
-  missing non-goals, and invalid statuses. This goal changes no runtime code.
-- Goal g11 is leader-verified. It adds a canonical
-  SHA-256 three-file candidate boundary, manifest-driven private two-file test
-  and publish staging, security-preflighted normalized archive comparison, and
-  an empty versioned literal exclusion allowlist while preserving the existing
-  exact-two-artifact isolation verifier input.
-- Goal g12 is leader-verified. It adds full Linux/macOS CI and release-DAG
-  gates plus the requirement map in `docs/completion-audit-v2.md`.
-- Native schema 2 and delegation protocol 2 treat model, effort, profile/account,
-  recipient, billing, subscription, entitlement, permission, capability,
-  worktree, ownership, and orchestration labels as opaque caller declarations.
-  Provider/vendor, transport, and builder values use closed structural
-  vocabularies. Cross-vendor transitions require explicit directional
-  authorization. Review and run bind one immutable
-  descriptor/fingerprint/argv truth; execution observes and starts one
-  foreground direct child only. Native schema-2 execution rejects an
-  unreviewed main-thread or native `SIGCHLD` process context before task access
-  and rechecks it immediately before executable observation and spawn.
-- The RALPLAN history ended `max_rounds/ITERATE`. Its Critic findings are
-  mandatory review input, never consensus approval.
+- The requested 0.5.0 scope is complete, reviewed, merged, and deployed.
+- PR [#23](https://github.com/ictechgy/weightclass/pull/23) is merged.
+- Merge commit: `3f0167abab2a4d79d2252aef0b75fa067d3c7337`.
+- Annotated tag `v0.5.0` points to that merge commit and is on `origin`.
+- GitHub Release workflow run
+  [31344056294](https://github.com/ictechgy/weightclass/actions/runs/31344056294)
+  completed successfully.
+- PyPI publishes
+  [`weightclass 0.5.0`](https://pypi.org/project/weightclass/0.5.0/)
+  as exactly one wheel and one sdist; neither is yanked.
+- No mandatory 0.5.0 implementation, merge, or deployment work remains.
+- Branch `fix/review-followups` is open from `origin/main`
+  (`3f0167abab2a4d79d2252aef0b75fa067d3c7337`). It carries four unreleased
+  review follow-ups, listed under Completed. Nothing on this branch has been
+  committed, pushed, tagged, or published.
+- This branch changes no routing decision, descriptor, fingerprint, frame, or
+  protocol stage. It is a correctness, deduplication, and documentation change
+  plus one new fail-closed gate on caller-supplied file permissions.
 
-- The current unreleased work adds P0/P0.5 role delegation plus the P1
-  qualification foundation. The offline
-  `wclass delegate route` command compiles strict Claude- or Codex-native
-  planner/worker/reviewer policy
-  offline. `wclass delegate run` can start exactly one reviewed user-supplied
-  runtime after explicit trust confirmation and exact fingerprint
-  acknowledgement. Opt-in qualified route/run consult only a package-owned
-  registry and bind/verify an exact runtime artifact. That registry is empty:
-  no Claude/Codex adapter runtime is bundled or qualified.
-- PR #19 delivered routing hardening and version 0.4.0 at merge commit
-  `786824cc74819e3bd8b254b615c3beb21f2fdd32`.
-- Tag `v0.4.0` published PyPI version 0.4.0 through Release workflow run
-  `31076506680`.
-- PR #20 updated the canonical Homebrew formula at `7da697e`; tap PR #10
-  published the identical formula at `36134c4` in `ictechgy/homebrew-tap`.
-- Published PyPI, canonical formula, tap formula, and local Homebrew installation
-  are all version 0.4.0.
-- Phase 4 local semantic-model adoption remains **no-go**. No independent fresh
-  blind-corpus, resource, or supply-chain evidence has satisfied the gate.
+## Completed
 
-## Unreleased delegation P0/P0.5
+- `03aea8a` — `feat: add protocol 2 model and profile routing`
+- `9c7b7f8` — `fix: close protocol 2 review gaps`
+- `8121f52` — `fix: validate native v2 child status context`
+- Goal g12 is leader-verified. It adds full Linux/macOS CI and release-DAG gates
+  plus the requirement map in `docs/completion-audit-v2.md`.
 
-- `src/weightclass/delegation_types.py`, `delegation_schema.py`, and
-  `delegation_compile.py` isolate the new schema and pure compiler from native
-  routing and V2 API routing.
-- Protocol 1 selects exactly one workflow by source vendor and tier, fully
-  inlines orchestrator, worker, reviewer, adapter, action, retention, stage,
-  artifact, cleanup, output, capacity, and byte contracts, then emits canonical
-  JSON with a descriptor-only reproducible fingerprint.
-- Claude and Codex use the same role contract. Every selected role must equal
-  the explicit source vendor and use native transport. Cross-boundary lists
-  must be empty; model and effort labels remain opaque user configuration.
-- `assurance` is only `declared_enforcement`. The offline manifest is not a
-  handshake or enforcement proof, and P0 never claims semantic authorship.
-- `src/weightclass/delegation_protocol.py` builds one bounded WCD1 frame before
-  spawn. `delegation_runtime.py` verifies the exact path is currently a regular
-  executable, starts it once with fixed protocol argv, handles partial and
-  interrupted writes, inherits environment/stdout/stderr, and waits for the
-  direct child.
-- Confirmation and fingerprint mismatch exit before runtime or task access.
-  Runtime execution requires the main thread and a reviewed native `SIGCHLD`
-  disposition before task stdin and again next to spawn. Darwin and reviewed
-  64-bit glibc Linux x86_64/AArch64 use the shared fail-closed `sigaction` gate;
-  hidden `SA_NOCLDWAIT`, unsupported libc/ABI/platform state, and inspection
-  failures map to pre-spawn `executor_unavailable`/exit `4`. Module-owned
-  `waitpid` preserves exact status and keeps `ECHILD` as a lower-level redacted
-  post-spawn exit `7` instead of synthetic success. Framing failure uses
-  fingerprinted grace intervals and `close -> wait -> terminate -> wait -> kill
-  -> reap`; each signal follows a zero-time owned-child observation. The caller
-  must exclusively own direct-child status throughout the invocation. Hostile
-  concurrent native mutation or a foreign `waitpid` between observation and
-  spawn, signal, or reap remains a residual reusable-PID race. Normal runtime
-  deadline, descendants, role enforcement, review, integration, provider
-  access, and output remain external-runtime duties.
-- The 13 final RALPLAN contract objections and the P0.5/P1/P2 gates are recorded
-  in `docs/delegation-roadmap.md`. The five-round RALPLAN run itself ended at
-  `max_rounds`/`ITERATE`; the roadmap incorporates its mandatory repairs but
-  must not be described as an approved consensus plan.
-- `tests/test_delegation.py` covers offline/nonexistent runtime behavior,
-  Claude/Codex parity, fingerprint reproduction and ordering independence,
-  ambiguity, source-vendor pinning, crossed-boundary rejection, mode-specific
-  primitives, integer validation, platform uniqueness, lexical paths, task
-  privacy, and Python 3.10 deep-JSON failure redaction.
-- `tests/test_delegation_runtime.py` and its test-only fake runtime cover exact
-  frame/argv/task delivery, confirmation and acknowledgement precedence,
-  unavailable-runtime precedence, invalid task, inherited output, one spawn,
-  runtime nonzero mapping, partial/interrupted writes, EPIPE, and finite
-  direct-child reap, Python-visible and native SIGCHLD rejection, glibc ABI/libc
-  fail-closed parity, spawn-adjacent native mutation, lower-level child-status
-  loss, and exact nonzero status. Actual Darwin `SA_NOCLDWAIT` stops before task
-  access or runtime spawn. The fake is not a production adapter or qualification.
+Unreleased, on `fix/review-followups`:
 
-## Unreleased delegation P1 foundation
+- Restored the `Goal g12 is leader-verified` statement this file must contain.
+  A previous refresh dropped it and left
+  `tests/test_completion_audit_v2.py::test_handoff_points_to_current_g12_audit`
+  failing in the working tree.
+- Backported a Darwin child-process race fix from the conformance runner to
+  `triage.py`. Where `os.waitid` is unavailable, Darwin refuses `EVFILT_PROC`
+  registration with `ESRCH` for a child that has already exited even while its
+  wait status is still owned. The runner returned an already-exited sentinel;
+  the triage copy raised `TriageUnavailableError` and discarded whatever the
+  vendor had already written. Reproduced directly before fixing.
+- Moved the child-lifecycle observers (`has_leader_exit_observer`,
+  `open_leader_exit_queue`, `observe_leader_exit`, `close_leader_exit_queue`,
+  `signal_process_group`, `darwin_child_status_waitable`) into
+  `process_context.py`, and the duplicate-JSON-key hook into `json_input.py`.
+  These were forked copies that had already drifted; the drift is what produced
+  the bug above. `_DeferredSigint` is deliberately **not** merged: the runtime
+  and runner versions have genuinely different lifecycles.
+- Corrected the process-context claim under Facts, which overstated a native-run
+  guarantee as covering delegation protocol 2.
+- Added a fail-closed permission gate on caller-supplied JSON: a policy,
+  manifest, descriptor, or evidence file that is world-writable, or owned by
+  neither the caller nor root, is rejected before parsing. Package-owned
+  resources are exempt.
+  The first attempt also rejected group-writable files. That failed 98 tests
+  under `umask 002`, which is a correct simulation of real use rather than a
+  test defect: `stat` cannot distinguish a user private group from a shared one
+  such as Darwin's `staff`, so the check fired on correct setups far more often
+  than on dangerous ones. Group-write is now a documented residual in
+  `README.md` and in `json_input._has_exclusive_write_owner`. Both umasks are
+  covered by tests; do not re-tighten this without rerunning under `umask 002`.
+- Pinned the classifier's backtracking bound. The length floor is what keeps the
+  nested bounded wildcards off full-length input; that ordering is now a
+  documented contract with a regression test.
+- Protocol 2 now binds model, effort, source profile, provider family,
+  transport, capability, and directional cross-vendor grants into one reviewed
+  descriptor/fingerprint.
+- Same-vendor routing remains the default. Cross-vendor routing is never
+  inferred and requires an exact explicit directional grant.
+- Model, effort, account/profile, subscription, entitlement, and billing labels
+  remain opaque user configuration; the router does not infer availability or
+  quota.
+- Orca-inspired orchestration structure was adopted where locally enforceable:
+  task/dispatch provenance, explicit ownership, DAG readiness, typed gates,
+  projections, write-conflict declarations, and completion-versus-settlement
+  distinctions.
+- Traceability covers Orca plus seven external orchestration tools and binds
+  each adopted/non-goal claim to a schema path, importable validator, and
+  collected test. This is design traceability, not a claim that weightclass
+  reproduces every external tool.
+- Protocol 1 behavior remains compatible. Protocol 2 still starts at most one
+  reviewed foreground direct child and adds no retry, fallback, background
+  execution, provider HTTP, credential access, or task persistence.
+- The packaged qualification registry remains empty. Do not advertise a
+  bundled, independently qualified real Claude/Codex delegation adapter.
 
-- `src/weightclass/delegation_qualification.py` defines a strict task-free
-  evidence schema and a bounded package qualification registry. A record binds
-  exact executable SHA-256 and size, runtime build ID, normalized platform,
-  protocol, suite revision, adapter ID, vendor family, all 54
-  role/category/action/mode observations, and all required scenario results.
-- `src/weightclass/delegation_qualifications.json` is package data and contains
-  zero records. Production has no CLI, environment, or user-path registry
-  override. `delegate route/run --require-qualified-runtime` therefore
-  currently fail closed with exit `3` for every adapter.
-- A matching record changes only `run_requirement` and the reproducible route
-  fingerprint; `assurance` remains `declared_enforcement` because offline route
-  does not inspect the current runtime path.
-- Qualified run opens the executable without following a final symlink, checks
-  regular/executable state, exact bounded size and SHA-256, and concurrent
-  metadata stability before reading task stdin. A mismatch returns redacted
-  `executor_unavailable`. Spawn remains path-based, so hash-to-spawn replacement
-  is a documented residual race.
-- `wclass delegate qualification-candidate` validates complete task-free
-  evidence and hashes one local executable, but outputs only an untrusted review
-  candidate. It never updates the package registry and cannot establish that
-  evidence was independently collected.
-- `tests/test_delegation_qualification.py` covers the 54-cell matrix, required
-  scenarios, unknown/incomplete/duplicate/failed input, exact evidence and
-  artifact digests, record ambiguity, build selection, fingerprint rebinding,
-  candidate CLI stdin independence, and changed/non-executable artifacts.
-  Runtime integration tests confirm an empty registry and changed artifact both
-  stop before task access.
-- `src/weightclass/delegation_conformance.py` is a maintainer-only evidence
-  runner, invoked with `python -m weightclass.delegation_conformance`. It owns a
-  separately declared copy of the 54 permission cases and 13 scenarios, creates
-  one private temporary workspace per case, and invokes an external reviewed
-  driver with fixed protocol argv. Driver stdin/stdout, case deadline, output
-  size, response ID, exit status, and same-process-group cleanup are bounded and
-  fail closed; SIGINT cleans the active group and returns redacted exit `130`.
-  Python-visible unsafe `SIGCHLD` state and native `SA_NOCLDWAIT` are rejected
-  immediately before spawn by the gate shared with production runtime. Darwin
-  and reviewed 64-bit glibc Linux
-  x86_64/AArch64 ABIs use native `sigaction` inspection. The Linux gate verifies
-  the exact reviewed ctypes layout and calls `gnu_get_libc_version`; unsupported
-  libc/ABI combinations, empty or failing version calls, inspection failures,
-  and unsupported POSIX platforms fail closed without a disposable status-probe
-  child. Real `ECHILD` releases every numeric signal target. On macOS Python
-  3.10, kqueue registration `ESRCH` additionally requires one non-reaping native
-  `waitid(P_PID, WEXITED|WNOHANG|WNOWAIT)` ownership check: `ECHILD` or any
-  unreviewed failure releases every target without signaling, while a waitable
-  fast-exit leader retains its zombie PGID anchor through cleanup and one final
-  authoritative `waitpid`. Evidence schema 2 binds the runtime size/SHA-256
-  observed before the suite;
-  the runner rechecks it after all cases and candidate construction rechecks the
-  current bytes. The runner reads no task stdin and never edits the registry.
-- Native `SIGCHLD` inspection is not atomic against hostile concurrent native
-  disposition mutation between the spawn-adjacent check and process creation.
-  The native Darwin `WNOWAIT` check proves status ownership only at that instant;
-  an external concurrent reaper between that check and cleanup signaling or the
-  final reap remains a residual stale-target race. The runner therefore requires
-  exclusive ownership of its direct-child status for the duration of each case.
-- The runner is not an attestation mechanism. Drivers inherit the environment
-  and own runtime/vendor authentication, network, quota, billing, and external
-  observation. A driver can lie or escape its process group. No real Claude or
-  Codex conformance driver is shipped; the test fixture exercises only runner
-  defenses and must never support a package qualification record.
-- `tests/test_delegation_conformance.py` uses real subprocesses to cover all-pass
-  candidate compatibility, explicit failure, case-ID spoofing, oversized valid
-  JSON, fixed case timeout, same-process-group leakage detection, cleanup, and
-  stdin independence. Actual Darwin kqueue fixtures distinguish a normally
-  exited waitable child from one already reaped externally, and deterministic
-  units bind the non-reaping flags and all-target release behavior. Its v2
-  indistinguishability regression compares fixed
-  runtime-invoked, runtime-skipped, marker-forged, and self-attested modes.
-  Marker presence differs while complete evidence and candidates remain
-  identical; this proves only v2 observer blindness, not authentic invocation
-  or misconduct. The package registry remains empty in every success test. CI's
-  macOS Python 3.10/3.14 boundary job runs this conformance module so kqueue and
-  native `sigaction` paths are merge-gated.
-- `tests/fixtures/delegation_claim_map_v3.json` is a test-only executable claim
-  inventory, not evidence. `tests/test_delegation_claim_map_v3.py` reconciles
-  its 54 permission and 13 scenario IDs with both production catalogs, enforces
-  bounded identifier-only rows, keeps every claim blocked behind
-  `no-independent-oracle-v1`, and proves the file is rejected as both v2
-  evidence and registry input. The ownership and no-go rules are documented in
-  `docs/delegation-qualification-oracles.md`; no v3 production schema or runner
-  is implemented.
+## Key Files & State
 
-### Synthetic probe-protocol kernel (test-only)
+- `src/weightclass/native_v2_schema.py`: native Protocol 2 policy validation.
+- `src/weightclass/native_v2_compile.py`: deterministic native route compiler.
+- `src/weightclass/native_v2_runtime.py`: reviewed single-child native runtime.
+- `src/weightclass/delegation_v2_schema.py`: delegation Protocol 2 schema.
+- `src/weightclass/delegation_v2_compile.py`: descriptor/fingerprint compiler.
+- `src/weightclass/delegation_v2_graph.py`: orchestration DAG validation.
+- `src/weightclass/delegation_v2_permissions.py`: capability/grant validation.
+- `src/weightclass/delegation_v2_runtime.py`: reviewed external-runtime boundary.
+- `tests/fixtures/orchestration_traceability.json`: adopted/non-goal research map.
+- `docs/protocol-v2-specification.md`: normative Protocol 2 contract.
+- `docs/protocol-v2-security.md`: security boundaries and residual risks.
+- `docs/protocol-v2-migration.md`: Protocol 1 to Protocol 2 migration guidance.
+- `docs/completion-audit-v2.md`: requirement-to-test completion map.
+- `.github/workflows/release.yml`: immutable candidate validation and PyPI
+  Trusted Publishing flow.
 
-- `tests/synthetic_probe_protocol.py`, `synthetic_probe_runner.py`, and their
-  fixtures define a bounded non-public self-test kernel. Its
-  `wcp-selftest/v1/*` identifiers are separate from all 67 qualification claim
-  identifiers, its canonical manifests hardcode qualification and delegation
-  false, and its output is not qualification-candidate or registry compatible.
-- Decisive observations are limited to runner-selected argv, runner-observed
-  direct-child PID/start, exit status, timeout, and runner-owned framed file
-  descriptor traffic. Child payload assertions, stdout markers, telemetry, and
-  self-attestation are explicitly untrusted and non-decisive. Malformed,
-  truncated, duplicate, reordered, oversized, retained-writer, and hostile
-  substitution cases fail closed with bounded value-free diagnostics.
-- Containment assessment accepts direct provenance only from the runner-owned
-  immutable result type; a plain child- or caller-supplied mapping cannot gain
-  `runner-direct` provenance by copying field values. This is a test-process
-  type boundary, not cryptographic attestation or protection from malicious
-  code already executing inside that Python process.
-- Path-based execution remains `TOCTOU-UNRESOLVED`: the probe does not establish
-  that reviewed bytes were the bytes executed. It invokes only bounded local
-  synthetic fixtures and is not a production driver or qualification runner.
-- `tests/synthetic_descendant_containment.py` records tested Linux and Darwin
-  `NO-GO` decisions. Process groups/sessions and observation of known processes
-  do not establish an authoritative descendant boundary; Linux cgroup v2 was
-  not verified as runner-owned and Darwin has no verified equivalent here.
-  Platform labels, child cooperation, and child self-report never imply
-  containment. No unsafe or runaway descendant was launched.
-- Distribution gates require the source, wheel, and sdist production registries
-  to have the exact canonical empty shape and canonical archive identity. Wheel
-  and sdist component tries retain exact spelling alongside Unicode NFC plus
-  case-folded identity, reject implicit file-parent and file/directory
-  collisions in either order, and cap raw name bytes before normalization plus
-  total path depth. The production registry itself must use its exact path. The
-  sdist must have one root;
-  backslash/NUL and other unsafe member names, links, devices, FIFOs, or other
-  special members are rejected before extraction; synthetic assets must occupy
-  their exact `tests/...` paths. Synthetic and candidate-like content are
-  excluded from the wheel.
-  CI/release action pins were not changed.
+## Important Context / Decisions
 
-## Delivered hardening
+- Facts:
+  - Review/run bind one immutable descriptor, fingerprint, and argv truth.
+  - Unknown, ambiguous, unsupported, or unsafe inputs fail closed with
+    value-free diagnostics.
+  - Native schema-2 `run` and delegation protocol-1 `run` check the process
+    context before task access and again next to spawn. Delegation protocol-2
+    `run` checks it only at the spawn seam; that is what
+    `docs/protocol-v2-specification.md` requires, which scopes the pre-task
+    check to native run. Do not restate this as a uniform guarantee. Exclusive
+    direct-child wait-status ownership is a documented prerequisite; hostile
+    concurrent native mutation remains a residual race.
+  - External runtimes own provider authentication, network, quota, billing,
+    descendants, and output behavior.
+  - Task content must never be logged, persisted, hashed, or included in review
+    artifacts or diagnostics.
+- Assumptions:
+  - Future work starts from `origin/main`, not by extending the merged feature
+    branch.
+  - No new routing behavior is required until real-user feedback or a new
+    explicitly scoped version request arrives.
 
-### P0 — optional vendor triage boundary
+## Verification
 
-- `src/weightclass/triage.py` enables only the Claude adapter. Its reviewed argv
-  requests safe mode, no built-in tools, no MCP, no user/project/local setting
-  sources, no session persistence, plan permission mode, and low effort.
-- The child starts in an empty private working directory and a new POSIX session.
-  Nonblocking stdin/stdout exchange is bounded; timeout, oversized output, and
-  successful-leader cleanup terminate the captured process group before one
-  final reap. Linux/current macOS use `waitid`; macOS Python 3.10 uses a
-  non-reaping kqueue process-exit observer. Parent pipes, selectors, and kqueues
-  are closed deterministically.
-- The parser accepts only the complete decoded lowercase value `low`,
-  `standard`, or `high`; prose, multiple tokens, uppercase, invalid UTF-8, and
-  embedded NUL fail closed.
-- Codex optional triage is unavailable with reason `no_no_tools_boundary`.
-  Official Codex CLI documentation exposes read-only filesystem sandboxing but
-  no contract that disables every built-in tool. Native Codex route/run support
-  is unchanged.
-- Claude managed policy remains a documented vendor-owned residual capability.
-  `--ask-vendor` is a distinct opt-in disclosure and quota/billing event.
+On `fix/review-followups`, macOS/arm64, CPython 3.10:
 
-### P1 — deterministic input and classification contracts
+- `python -m unittest discover -s tests -t .`: 627/627 passed (616 before, plus
+  11 new regression tests).
+- `ruff check` and `ruff format --check`: clean.
+- `mypy --strict src/weightclass tests`: no issues in 90 source files.
+- Not re-run on this branch: Python 3.14, the sdist/wheel distribution gates,
+  and CI. Run them before any release.
 
-- New `src/weightclass/json_input.py` is shared by native policy, workflow
-  descriptor, and V2 policy loading. It opens once with nonblocking/close-on-exec
-  intent, validates that opened descriptor as a regular file, caps raw input at
-  262,144 bytes, requires strict UTF-8 and a top-level object, and rejects
-  duplicate keys at every nesting depth with value-free errors.
-- Native and V2 route/run validate static policy before reading task stdin.
-  FIFOs and other special files fail promptly. Symlinks are accepted only when
-  the opened object is regular; this does not eliminate review/run path TOCTOU.
-- Classification policy version is 2. Narrow exploit/failure phrases retain
-  `high.risk_floor`; broad domain vocabulary uses
-  `high.complexity_signal`. Harmful-outcome patterns retain bounded distances
-  across newlines. Duplicate-work qualifiers are order-independent, and the
-  `multiple` token inside `multiple times` cannot qualify itself.
+For 0.5.0, as released:
 
-### P2 — invariants and release gates
-
-- Main CLI dispatch has an explicit V2 route/run branch and otherwise returns
-  redacted `invalid_input`; it no longer has an implicit V2 run fallthrough.
-- Tests bind source-vendor/provider map coverage and confirm that explanation
-  reason-only changes do not alter a reviewed native route fingerprint.
-- CI and release workflows add blocking macOS Python 3.10/3.14 triage-process
-  and JSON-input boundary jobs. Release verification compares source version,
-  installed metadata, and `wclass --version`.
-- Distribution verification accepts exactly one regular wheel and one regular
-  sdist, binds their inventory and hashes across extracted tests, and applies
-  bounded physical-tar checks before `tarfile` parsing or extraction. The
-  source registry uses bounded same-FD double reads, and both artifacts use
-  bounded no-follow snapshots; wheel and sdist parsers consume only
-  fingerprint-bound private bytes. A bounded
-  classic-ZIP preflight runs before `ZipFile`, rejects unsupported or ambiguous
-  layouts, and verifies every stored/deflated payload's exact byte consumption,
-  output size, and CRC. Core metadata uses one bounded strict header grammar;
-  exact project/version values must agree across the wheel filename, sole
-  `.dist-info` namespace, wheel METADATA, sdist filename/root/PKG-INFO, and the
-  release tag. Bare-CR, folded, duplicate, alternate metadata namespaces, and
-  noncanonical identities fail closed with value-free diagnostics. Release
-  validation uses a fresh stdlib-only job, and publication consumes the same
-  immutable artifact that job approved rather than re-uploading mutable paths.
-- `README.md`, `RELEASING.md`, `tests/eval/README.md`, and
-  `docs/routing-roadmap.md` describe the new boundaries and 0.4.0 delivery.
-
-## Verification evidence
-
-- On 2026-08-09, the shared native `SIGCHLD` gate, delegation runtime, and
-  Darwin kqueue/Linux native-inspection conformance hardening passed all 106
-  focused runtime and conformance tests under Python 3.14.6 and Python 3.10.20
-  with `ResourceWarning` promoted to an error. Both versions exercised actual
-  Darwin pre-task and spawn-adjacent `SA_NOCLDWAIT` rejection, exact nonzero
-  runtime status, fast-exit waitability, and exact-owned externally reaped
-  children. Injected native-call argument failures also released every signal
-  target without probing, signaling, or final waiting; every spawned fixture
-  was reaped and retained no descendant. Ruff
-  check/format, strict mypy over all 40 source files, both-version `compileall`
-  over `src` and `tests`, and `git diff --check` passed.
-- The final current-tree source suite passed all 616 tests under Python 3.14.6
-  in 79.610s and Python 3.10.20 in 72.988s with `ResourceWarning` promoted to
-  an error. A fresh offline exact wheel/sdist build then passed the
-  release-candidate, distribution-isolation, extracted-sdist, installed-wheel,
-  and normalized cross-version gates for the same tree under both interpreters.
-  The extracted sdist passed all 611 collected tests in 82.730s on Python 3.14.6
-  and 71.693s on Python 3.10.20, with eleven intentional platform/source-boundary
-  skips on each.
-  The gate proves exact empty source/wheel/sdist registries;
-  rejects duplicate, Unicode-normalized, case-folding, file/implicit-directory,
-  and alternate `.dist-info` identities; binds the exact canonical
-  project/version across filenames, archive roots, core metadata, and the
-  expected release tag; bounds physical tar and classic-ZIP headers and
-  payloads before parsing; rejects unconsumed deflate bytes, checksum/size
-  mismatches, ZIP64, data descriptors, encryption, overlaps, and excessive
-  physical member counts; binds preflight, parsing, and extraction to one
-  fingerprinted snapshot; excludes test-only and qualification-like wheel
-  content; and confines required synthetic assets to their exact sdist
-  `tests/` paths.
-- Verification did not access a credential or secret-like file, invoke a
-  weightclass-selected product/vendor runtime, persist runtime task content,
-  publish a release, or deploy. External review tools received only bounded,
-  redacted code targets; their provider authentication and network egress remain
-  owned by those tools and are not a weightclass guarantee. No runtime task
-  content was supplied to review. The synthetic kernel does not qualify a
-  runtime or advertise delegation support; the packaged production registry
-  remains empty.
-- The P1 qualification, conformance-runner, and blocked claim-map foundation
-  passed all 227 tests
-  under Python 3.10.20 and Python
-  3.14.6 with `ResourceWarning` promoted to an error. Both interpreters passed
-  `compileall`; Ruff check/format, strict mypy, and `git diff --check` passed.
-  An offline sdist/wheel build included the qualification module, empty package
-  registry, and typing marker. Test fixtures and evaluation assets remained
-  outside the wheel but were included through extension-bounded sdist rules;
-  the extracted sdist passed all 227 tests without caches or bytecode. A clean
-  no-index wheel install loaded the empty registry and exposed the candidate
-  CLI. Build artifacts remained under a temporary directory.
-- The unreleased delegation P0/P0.5 passed all 200 tests under Python 3.10.20
-  and Python 3.14.6 with `ResourceWarning` promoted to an error. Both
-  interpreters passed `compileall`; Ruff check/format, strict mypy, and
-  `git diff --check` passed. Ruff and mypy were downloaded from PyPI only for
-  local verification after user approval; no repository or task data was sent
-  to a provider runtime.
-- Python 3.10.20 and the current local Python each passed all 177 tests with
-  `ResourceWarning` promoted to an error.
-- `compileall`, Ruff check/format, native and Linux-targeted mypy, workflow YAML,
-  and `git diff --check` passed locally.
-- Local release artifacts passed `twine check --strict`, clean no-index wheel
-  installation, source/metadata/CLI version equality, and byte-exact default
+- Full source suite after final fixes:
+  - Python 3.14: 616/616 passed with `ResourceWarning` as error.
+  - Python 3.10: 616/616 passed with `ResourceWarning` as error.
+- Fresh extracted sdist:
+  - Python 3.14: 611/611 passed; 11 intentional skips.
+  - Python 3.10: 611/611 passed; 11 intentional skips.
+- Passed: Ruff check/format, strict mypy, Python 3.10/3.14 `compileall`, YAML
+  parsing, `git diff --check`, offline wheel installation, CLI version and
   classification smoke tests.
-- PR #19 and PR #20 each passed 14 CI checks. Merge commit `786824c` passed main
-  CI run `31076433696`, including Python 3.10–3.13 and macOS 3.10/3.13 jobs.
-- Release run `31076506680` passed tag/version, tests, lint, formatting, types,
-  build, strict Twine metadata, macOS boundaries, and PyPI Trusted Publishing.
-- A clean public-index environment installed `weightclass==0.4.0` and passed
-  CLI/metadata/default-output checks. The public sdist SHA-256 is
-  `46f2d6b76385fc9585542310497227b0eb329d2fed309382b9d15caaac6389c0`.
-- `brew style ictechgy/tap/weightclass`, strict tap audit, source upgrade from
-  0.3.0 to 0.4.0, `brew test`, and installed CLI smoke checks passed before tap
-  PR #10 merged.
+- GitHub CI and all release jobs passed on exact reviewed head `8121f52` and
+  merge/tag target `3f0167a`.
+- PyPI 0.5.0 files verified:
+  - `weightclass-0.5.0-py3-none-any.whl`
+    SHA-256 `3c8730bb20f0a5ae4170879f7c8e08e6bdf115892f30abdc7133b384c51ad86d`
+  - `weightclass-0.5.0.tar.gz`
+    SHA-256 `5eba2c77ab5b96247ab027c6acb948e16e3481ce413fb8941e8052719b4ef0ca`
 
-Reproduction commands:
+## Ultra Review Loop
 
-```sh
-PYTHONPATH=src python3.14 -W error::ResourceWarning -m unittest discover -s tests
-PYTHONPATH=src python3.10 -W error::ResourceWarning -m unittest discover -s tests
-python3.14 -m compileall -q src tests
-python3.10 -m compileall -q src tests
-uvx --offline ruff check src tests
-uvx --offline ruff format --check src tests
-uvx --offline mypy --strict src tests
-git diff --check
-```
+- Five rounds were run over PR #23.
+- Final reviewed head: `8121f5295766053a172a4171b19254ed176d5d8f`.
+- Final target hash:
+  `3abd9d35a359eca7b41b0c36550a27e3979bd09ba77dd03c476b10a7218a457c`.
+- Final convergence used full native Codex coverage and valid Forge partial
+  coverage; accepted CRITICAL/HIGH blockers: zero.
+- Claude/Grok/Antigravity outputs that timed out or violated schema/citation
+  contracts were discarded, never normalized into approvals.
+- Review ledger/report are outside the repository at
+  `~/.codex/artifacts/ultra-review-loop/pr23-1786315205/`.
 
-The final offline distribution verification additionally used a fresh output
-directory:
+## Blockers & Open Questions
 
-```sh
-wclass_artifact_root=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-pr22-final.XXXXXX")
-mkdir "$wclass_artifact_root/source" "$wclass_artifact_root/dist"
-git archive HEAD | tar -x -C "$wclass_artifact_root/source"
-(
-  cd "$wclass_artifact_root/source"
-  uv --quiet build --offline --no-python-downloads --no-create-gitignore \
-    --out-dir "$wclass_artifact_root/dist"
-)
-python3.14 tests/verify_distribution_isolation.py \
-  --source "$wclass_artifact_root/source" \
-  --dist-dir "$wclass_artifact_root/dist" \
-  --run-sdist-tests
-python3.10 tests/verify_distribution_isolation.py \
-  --source "$wclass_artifact_root/source" \
-  --dist-dir "$wclass_artifact_root/dist" \
-  --run-sdist-tests
-```
+- No blocker or required follow-up remains for 0.5.0.
+- `fix/review-followups` has had no human review. Every local and CI-equivalent
+  gate passes, but nobody other than its author has read it.
+- The permission gate remains a compatibility break, now a narrow one: a
+  world-writable policy, or one owned by another user, worked before and now
+  fails closed with `invalid_input` (exit 2). `chmod o-w` is the fix. This is
+  why the version is a minor bump under the `0.x` policy in `RELEASING.md`.
+- Considered and not done: adding the pre-task process-context check to the
+  delegation protocol-2 run path so all three run paths match. The current code
+  matches `docs/protocol-v2-specification.md`, so aligning them would be a
+  normative change and needs its own scoped request.
+- Optional future work only:
+  - collect real-user routing feedback and add predeclared regressions;
+  - independently qualify a concrete runtime only after external-oracle,
+    hostile-negative-control, identity, and containment gates are satisfied;
+  - update pinned GitHub actions when a reviewed upstream Node-runtime migration
+    is needed.
 
-Build artifacts were created under a system temporary directory; they are
-outside the repository and are not release artifacts.
+## What Worked
 
-## Safety and compatibility decisions
+- Tests-first fixes for every accepted review finding.
+- Exact descriptor/fingerprint and immutable release-candidate boundaries.
+- Requiring contract-valid reviewer output and independently reproducing claims
+  before accepting them.
+- Fresh Python 3.10/3.14 source, sdist, installed-wheel, macOS-boundary, and
+  release validation before publishing.
 
-- Never persist, log, echo, hash, or include runtime task content in diagnostics.
-- Never access `.env`, authentication, keychain, credential, cookie, or shell
-  profile files without explicit approval. None were accessed in this change.
-- The router itself does no provider HTTP and owns no provider credentials.
-  External CLIs own their authentication, network, billing, and output.
-- Default `wclass classify` output remains byte-compatible; richer local reason
-  metadata remains opt-in through `--explain` or posture-bearing route output.
-- Route fingerprints bind the reviewed selection/policy inputs, not task text or
-  reason metadata. Task hashes remain forbidden by the no-retention contract.
-- Qualification hashes only the external runtime artifact and task-free
-  conformance evidence. It never hashes or receives runtime task content.
-- Public evaluation data is regression-only and must not be used to approve a
-  semantic candidate. Keep the Phase 4 decision no-go without independent
-  predeclared evidence.
+## What Did Not Work / Avoid
 
-## Next safe action
+- Do not treat provider prose, malformed JSON, invalid citations, or timeouts as
+  review approval.
+- One Forge review attempt could traverse from its session directory to the raw
+  target; that entire track was discarded. Later Forge runs used an isolated
+  prompt-only root. Preserve that isolation if external review is repeated.
+- Do not rerun the full review/release workflow merely to reconfirm unchanged
+  code. Re-run it only after a new code or policy delta.
+- Do not populate the qualification registry or claim real provider delegation
+  from synthetic/self-attested evidence.
 
-1. Do not advertise real Claude/Codex delegation from P0.5. It proves only the
-   weightclass-to-runtime boundary; a user-supplied runtime can lie with exit
-   zero, leave descendants, or ignore the descriptor.
-2. Keep the completed synthetic probe kernel test-only. Its runner-direct facts
-   do not close runtime identity or descendant containment and cannot support a
-   qualification record. The next honest boundary is an independently reviewed
-   design for one exact claim with an external oracle, hostile negative control,
-   identity closure, and an authoritative per-platform containment gate. Do not
-   implement a Claude/Codex driver, add a package record, or advertise
-   delegation support before those prerequisites exist.
-3. Keep Phase 4 at no-go unless independent predeclared evidence satisfies every
-   quality, resource, privacy, and supply-chain gate.
-4. Before the next release, address the upstream `actions/setup-python` Node 20
-   deprecation warning by updating only to a reviewed pinned action commit.
-5. Re-run the full local and macOS boundary gates for every routing behavior
-   change; do not weaken the Codex-triage fail-closed contract without a newly
-   documented all-tools-disabled vendor boundary.
+## Next Steps
 
-## Resume prompt
+1. Review `fix/review-followups`, then decide whether the permission gate ships
+   as-is. Nothing on that branch is committed yet.
+2. Before merging it, run Python 3.14 and the sdist/wheel distribution gates;
+   only the Python 3.10 source suite, ruff, and strict mypy were run.
+3. For other new work, fetch `origin/main`, create a new branch from
+   `3f0167abab2a4d79d2252aef0b75fa067d3c7337`, and re-read `AGENTS.md` plus the
+   relevant Protocol 2 docs.
+4. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, transient
+   task handling, and the single-reviewed-child execution boundary.
 
-Read `HANDOFF.md` and `AGENTS.md`. The 0.5.0 release candidate adds opt-in
-Protocol 2 model/effort and source-profile routing while preserving every
-Protocol 1 lifecycle. Same-vendor routing is the default; profile changes and
-directional cross-vendor routing require exact explicit grants. Model labels,
-effort labels, account/profile identifiers, and subscription availability stay
-opaque user configuration and are not entitlement or billing claims.
+## Resume Prompt
 
-Protocol 2 adopts bounded orchestration structure (task/dispatch provenance,
-ownership, DAG readiness, typed gates, completion versus settlement) without
-adding retries, fallback, background work, provider HTTP, credential access, or
-task persistence. Each run still starts at most one reviewed foreground child.
-The qualification registry remains empty, so do not advertise a qualified real
-Claude/Codex delegation adapter or treat synthetic evidence as independent
-attestation. Preserve the Codex-triage fail-closed decision, transient-task
-boundary, and Phase 4 no-go. Re-run final verification after any change; tag,
-release, and external publishing remain explicit actions until their workflow
-has completed successfully.
+Open this repository at
+`/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
+`AGENTS.md`, then continue from: `weightclass 0.5.0 is merged and deployed.
+Branch fix/review-followups holds four uncommitted, unreviewed review
+follow-ups; review them and decide on the policy-file permission gate before
+anything else. For unrelated work, branch from origin/main at
+3f0167abab2a4d79d2252aef0b75fa067d3c7337 and preserve the documented Protocol
+1/privacy/process boundaries.`

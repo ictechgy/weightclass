@@ -428,7 +428,11 @@ def build_qualification_candidate(evidence: object, runtime_path: Path) -> dict[
 def load_conformance_evidence(path: Path) -> dict[str, Any]:
     """Load one bounded task-free evidence document for candidate construction."""
     try:
-        return load_json_object(path, max_bytes=MAX_EVIDENCE_BYTES)
+        return load_json_object(
+            path,
+            max_bytes=MAX_EVIDENCE_BYTES,
+            require_exclusive_write_owner=True,
+        )
     except (JsonInputError, RecursionError):
         raise QualificationInvalidInputError() from None
 

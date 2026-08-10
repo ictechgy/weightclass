@@ -374,7 +374,11 @@ def _parse_workflow(value: object) -> DelegationWorkflow:
 def load_delegation_policy(path: Path) -> DelegationPolicy:
     """Load a bounded policy without retaining any task data."""
     try:
-        policy = load_json_object(path, max_bytes=MAX_POLICY_BYTES)
+        policy = load_json_object(
+            path,
+            max_bytes=MAX_POLICY_BYTES,
+            require_exclusive_write_owner=True,
+        )
     except (JsonInputError, RecursionError):
         raise DelegationInvalidInputError() from None
     _require_object(policy, {"schema_version", "profiles", "workflows"})
@@ -487,7 +491,11 @@ def _parse_adapter(value: object) -> DelegationAdapter:
 def load_delegation_manifest(path: Path) -> DelegationRuntimeManifest:
     """Load an offline capability declaration; do not inspect a runtime path."""
     try:
-        manifest = load_json_object(path, max_bytes=MAX_MANIFEST_BYTES)
+        manifest = load_json_object(
+            path,
+            max_bytes=MAX_MANIFEST_BYTES,
+            require_exclusive_write_owner=True,
+        )
     except (JsonInputError, RecursionError):
         raise DelegationInvalidInputError() from None
     _require_object(

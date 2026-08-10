@@ -4,6 +4,7 @@
 """
 
 import contextlib
+import errno
 import gc
 import io
 import json
@@ -20,7 +21,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests.runtime_guard import guarded_launch
-from weightclass import cli
+from weightclass import cli, delegation_conformance, process_context, triage
 from weightclass.router import SUPPORTED_VENDORS
 from weightclass.triage import (
     TRIAGE_COMMANDS,
@@ -572,6 +573,108 @@ class ExplicitTierTests(unittest.TestCase):
         # 로컬 판정이었다면 low 라 이 라우트는 선택되지 않는다.
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "ran\n")
+
+
+class LeaderObserverSharingTests(unittest.TestCase):
+    """자식 수명주기 관찰은 한 곳에만 있어야 한다.
+
+    conformance 러너는 Darwin 이 이미 종료한 자식의 EVFILT_PROC 등록을 ESRCH 로
+    거부한다는 사실을 처리하고 있었지만, 같은 로직의 사본을 들고 있던 triage 는
+    그 처리를 받지 못해 빠르게 죽는 벤더의 정상 답변까지 버렸다. 사본이 다시
+    생기면 같은 일이 반복된다.
+    """
+
+    def test_triage_uses_the_shared_observer_rather_than_a_private_copy(self) -> None:
+        """Breaks if a fixed child-process race is re-forked into a module-local copy."""
+        shared = (
+            ("open_leader_exit_queue", process_context.open_leader_exit_queue),
+            ("observe_leader_exit", process_context.observe_leader_exit),
+            ("has_leader_exit_observer", process_context.has_leader_exit_observer),
+            ("signal_process_group", process_context.signal_process_group),
+            ("close_leader_exit_queue", process_context.close_leader_exit_queue),
+        )
+        for name, implementation in shared:
+            with self.subTest(helper=name):
+                self.assertIs(getattr(triage, name), implementation)
+
+        conformance_aliases = (
+            ("_observe_leader_exit", process_context.observe_leader_exit),
+            ("_has_leader_exit_observer", process_context.has_leader_exit_observer),
+            ("_signal_process_group", process_context.signal_process_group),
+        )
+        for name, implementation in conformance_aliases:
+            with self.subTest(helper=f"conformance.{name}"):
+                self.assertIs(getattr(delegation_conformance, name), implementation)
+
+    def test_an_already_exited_leader_is_observed_rather_than_treated_as_a_failure(
+        self,
+    ) -> None:
+        """Breaks if the exited-leader sentinel is mistaken for an unusable observer."""
+        self.assertTrue(
+            process_context.observe_leader_exit(-1, process_context.LEADER_ALREADY_EXITED)
+        )
+        # 센티널은 닫을 핸들이 아니다. 닫기가 여기서 터지면 정리 경로가 무너진다.
+        process_context.close_leader_exit_queue(process_context.LEADER_ALREADY_EXITED)
+        process_context.close_leader_exit_queue(None)
+
+    def test_registration_refused_only_because_the_leader_exited_is_not_a_failure(self) -> None:
+        """Breaks if Darwin's ESRCH-on-an-exited-child becomes 'observer unusable' again.
+
+        실제 경합 창은 마이크로초라 자식을 실제로 그 타이밍에 죽일 수 없다. 대신
+        Darwin 이 그때 내는 ESRCH 를 등록 지점에 직접 넣고, 상태 소유권이 남아
+        있는 경우와 아닌 경우가 서로 다른 결과로 갈리는지 확인한다.
+        """
+        with (
+            mock.patch.object(os, "waitid", None, create=True),
+            mock.patch.multiple(
+                "weightclass.process_context.select",
+                KQ_FILTER_PROC=0,
+                KQ_EV_ADD=0,
+                KQ_EV_ONESHOT=0,
+                KQ_NOTE_EXIT=0,
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.process_context.select.kevent",
+                side_effect=ProcessLookupError(errno.ESRCH, "no such process"),
+                create=True,
+            ),
+        ):
+            with mock.patch.object(
+                process_context, "darwin_child_status_waitable", return_value=True
+            ):
+                self.assertIs(
+                    process_context.open_leader_exit_queue(1234),
+                    process_context.LEADER_ALREADY_EXITED,
+                )
+
+            # 상태 소유권이 증명되지 않으면 같은 ESRCH 라도 닫는 방향으로 간다.
+            with mock.patch.object(
+                process_context, "darwin_child_status_waitable", return_value=False
+            ):
+                with self.assertRaises(ChildProcessError):
+                    process_context.open_leader_exit_queue(1234)
+
+    def test_an_unrelated_registration_failure_still_fails_closed(self) -> None:
+        """Breaks if the exited-leader allowance widens into a general error swallow."""
+        with (
+            mock.patch.object(os, "waitid", None, create=True),
+            mock.patch.multiple(
+                "weightclass.process_context.select",
+                KQ_FILTER_PROC=0,
+                KQ_EV_ADD=0,
+                KQ_EV_ONESHOT=0,
+                KQ_NOTE_EXIT=0,
+                create=True,
+            ),
+            mock.patch(
+                "weightclass.process_context.select.kevent",
+                side_effect=OSError(errno.EMFILE, "too many open files"),
+                create=True,
+            ),
+        ):
+            with self.assertRaises(process_context.LeaderObserverError):
+                process_context.open_leader_exit_queue(1234)
 
 
 if __name__ == "__main__":

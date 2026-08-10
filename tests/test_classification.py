@@ -1,5 +1,7 @@
+import time
 import unittest
 from dataclasses import asdict
+from unittest import mock
 
 import weightclass.classification as classification
 from weightclass.classification import (
@@ -357,6 +359,49 @@ class ClassificationRegressionTests(unittest.TestCase):
         for task, expected_tier in cases.items():
             with self.subTest(task=task):
                 self.assertEqual(classify_task(task), expected_tier)
+
+
+# 상위 티어 패턴들은 `[\s\S]{0,80}` 같은 경계 있는 와일드카드를 여러 겹 중첩한다.
+# 매칭 실패 시 되추적 비용이 입력 길이에 대해 준-2차로 늘어나므로, 정규식이 보는
+# 최대 길이를 무엇이 닫고 있는지가 성능 계약이다. 지금은 길이 바닥이 닫는다.
+_BACKTRACKING_BAIT: tuple[str, ...] = (
+    "the same task runs again and ",
+    "user is charged and ",
+    "job runs same task ",
+    "balance is turned and ",
+)
+
+
+class BacktrackingBoundTests(unittest.TestCase):
+    def test_length_floor_runs_before_any_pattern_sees_a_full_length_task(self) -> None:
+        """Breaks if reordering exposes the nested bounded wildcards to 20,000 characters."""
+
+        def explode(*arguments: object, **keywords: object) -> bool:
+            raise AssertionError("a risk pattern ran on input above the length floor")
+
+        with (
+            mock.patch.object(classification, "_has_signal", side_effect=explode),
+            mock.patch.object(classification, "_has_high_risk_outcome", side_effect=explode),
+        ):
+            decision = classification.classify_task_with_reason("x" * MAX_TASK_CHARACTERS)
+
+        self.assertEqual(decision.tier, "high")
+        self.assertEqual(decision.reason_code, "high.length_floor")
+
+    def test_patterns_stay_cheap_at_the_longest_input_they_can_reach(self) -> None:
+        """Breaks if backtracking becomes superlinear just below the length floor."""
+        longest_reachable = HIGH_TASK_CHARACTERS - 1
+
+        for bait in _BACKTRACKING_BAIT:
+            with self.subTest(bait=bait):
+                hostile = (bait * (longest_reachable // len(bait) + 1))[:longest_reachable]
+                started = time.perf_counter()
+                classify_task(hostile)
+                elapsed = time.perf_counter() - started
+
+                # 실측 최악값은 밀리초 단위다. 이 상한은 느린 러너를 위한 여유이며,
+                # 진짜 되추적 폭발(초 단위)만 잡도록 넉넉하게 잡았다.
+                self.assertLess(elapsed, 1.0)
 
 
 if __name__ == "__main__":
