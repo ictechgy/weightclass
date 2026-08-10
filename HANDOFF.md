@@ -11,12 +11,20 @@ _Last updated: 2026-08-10 by Claude Code_
 - Version 0.6.0 added no routing behavior. It fixed a Darwin child-observation
   race, removed the forked process helpers that caused it, and gated
   caller-supplied JSON on file write ownership.
+- Version 0.7.0 added no routing behavior either. It made review binding and the
+  pre-task process-context check uniform across every run path, so no policy can
+  reach execution without the exact fingerprint its review produced.
 - Preserve the local privacy boundary: task content is transient stdin only;
   weightclass does not retain it or own provider credentials, HTTP, billing, or
   subscription entitlement discovery.
 
 ## Current Status
 
+- 0.7.0 makes the three execution boundaries uniform across every run path. It
+  is unreleased; see Completed for what it changes and Blockers for what it
+  breaks.
+- 0.7.0 resolves all three judgement calls that 0.6.0 shipped unconfirmed. Two
+  were changed, one was kept and is now argued rather than assumed.
 - 0.6.0 is complete, merged, and deployed. It carries the review follow-ups
   listed under Completed.
 - PR [#24](https://github.com/ictechgy/weightclass/pull/24) is merged.
@@ -46,6 +54,30 @@ _Last updated: 2026-08-10 by Claude Code_
 - `8121f52` — `fix: validate native v2 child status context`
 - Goal g12 is leader-verified. It adds full Linux/macOS CI and release-DAG gates
   plus the requirement map in `docs/completion-audit-v2.md`.
+
+In 0.7.0:
+
+- `run --policy` now requires `--ack-route-fingerprint`. A missing
+  acknowledgement exits 6 before the task is read. This is what actually closes
+  the review-to-run gap: the fingerprint covers the selected command, so a
+  swapped policy cannot execute. File permissions never could close it — whoever
+  can write the containing directory can replace the file regardless of its mode,
+  and the second read is a different `open()` from the first. Built-in routes are
+  exempt because they live in code and cannot be swapped.
+- Delegation protocol-2 `run` now checks the process context before task access,
+  matching native schema-2 `run` and delegation protocol-1 `run`. The spec and
+  the security doc are updated: this is now a uniform requirement, not a
+  native-only one. Previously the check happened only at the spawn seam.
+- `_DeferredSigint` is renamed in both modules:
+  `delegation_runtime._SigintDeferredUntilChildOwned` defers SIGINT until the
+  direct-child handle is owned; `delegation_conformance._SigintForwardedToGroup`
+  forwards it to the already-owned process group. They were never the same
+  thing; the shared name was the whole hazard. Each docstring now argues against
+  merging them.
+- The group-writable decision from 0.6.0 stands, and it now stands on a reason
+  rather than on a test failure: with the acknowledgement mandatory, file mode is
+  defense in depth, not the boundary. Tightening it would fail correct `umask 002`
+  setups to defend something the fingerprint already covers.
 
 Released in 0.6.0:
 
@@ -209,21 +241,23 @@ For 0.5.0, as released:
 ## Blockers & Open Questions
 
 - No blocker or required follow-up remains for 0.5.0 or 0.6.0.
-- `packaging/homebrew/weightclass.rb` still pins the 0.4.0 sdist URL and hash,
-  so the tap is two releases behind. It was already stale before 0.6.0.
-  Updating it is a change to `ictechgy/homebrew-tap`, per `RELEASING.md`.
-- 0.6.0 shipped without human review. Its judgement calls are the ones to
-  revisit first if something turns out wrong: allowing group-writable policy
-  files, leaving `_DeferredSigint` unmerged, and correcting the documentation
-  rather than the code for the delegation protocol-2 process-context check.
-- The permission gate is a narrow compatibility break: a world-writable policy,
-  or one owned by another user, worked before and now fails closed with
-  `invalid_input` (exit 2). `chmod o-w` is the fix. This is why 0.6.0 is a minor
-  bump under the `0.x` policy in `RELEASING.md`.
-- Considered and not done: adding the pre-task process-context check to the
-  delegation protocol-2 run path so all three run paths match. The current code
-  matches `docs/protocol-v2-specification.md`, so aligning them would be a
-  normative change and needs its own scoped request.
+- 0.7.0 breaks the command line. `wclass run --policy` without
+  `--ack-route-fingerprint` used to run; it now exits 6 with
+  `route_fingerprint_mismatch`. Any script that ran a policy in one step must
+  become two steps: `route` to get the fingerprint, then `run` with it. This is
+  the reason for the minor bump under the `0.x` policy in `RELEASING.md`, and it
+  must be first in the release notes.
+- 0.7.0 also changes normative behavior: delegation protocol-2 `run` now fails
+  `executor_unavailable`/exit 4 before task access when the process context is
+  unreviewed, where it previously read the task first. `docs/protocol-v2-
+  specification.md` and `docs/protocol-v2-security.md` are updated to match.
+- The permission gate from 0.6.0 remains a narrow compatibility break: a
+  world-writable policy, or one owned by another user, fails closed with
+  `invalid_input` (exit 2). `chmod o-w` is the fix.
+- 0.6.0 and 0.7.0 both shipped without human review. If something turns out
+  wrong, the place to look is whether requiring the acknowledgement was worth
+  the command-line break, and whether group-writable policy files should have
+  been rejected after all.
 - Optional future work only:
   - collect real-user routing feedback and add predeclared regressions;
   - independently qualify a concrete runtime only after external-oracle,
@@ -254,11 +288,12 @@ For 0.5.0, as released:
 
 ## Next Steps
 
-1. If no new feature is requested, stop; 0.6.0 is complete and deployed.
-2. Optionally read 0.6.0 after the fact and record whether its three judgement
-   calls stand. It was published without that pass.
-3. For new work, fetch `origin/main`, create a new branch from `a11d2d6`, and
-   re-read `AGENTS.md` plus the relevant Protocol 2 docs.
+1. If no new feature is requested, stop; 0.7.0 is complete and deployed.
+2. Any documentation, script, or downstream integration that ran
+   `wclass run --policy` in one step is now broken. Check for those before
+   assuming the release is quiet.
+3. For new work, fetch `origin/main`, branch from its head, and re-read
+   `AGENTS.md` plus the relevant Protocol 2 docs.
 4. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, transient
    task handling, and the single-reviewed-child execution boundary.
 
@@ -266,8 +301,8 @@ For 0.5.0, as released:
 
 Open this repository at
 `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
-`AGENTS.md`, then continue from: `weightclass 0.6.0 is merged, tagged, and
-published to PyPI; no mandatory work remains. It shipped without human review,
-so its three judgement calls are unconfirmed. If a new request exists, branch
-from origin/main at a11d2d6 and preserve the documented Protocol
-1/privacy/process boundaries.`
+`AGENTS.md`, then continue from: `weightclass 0.7.0 is merged, tagged, and
+published to PyPI; no mandatory work remains. It breaks the command line —
+wclass run --policy now requires --ack-route-fingerprint — and it shipped
+without human review. If a new request exists, branch from origin/main and
+preserve the documented Protocol 1/privacy/process boundaries.`
