@@ -1780,7 +1780,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             mock.patch("weightclass.delegation_conformance.sys.platform", "darwin"),
             mock.patch.object(os, "waitid", None, create=True),
             mock.patch.multiple(
-                "weightclass.delegation_conformance.select",
+                "weightclass.process_context.select",
                 KQ_FILTER_PROC=0,
                 KQ_EV_ADD=0,
                 KQ_EV_ONESHOT=0,
@@ -1788,12 +1788,12 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 create=True,
             ),
             mock.patch(
-                "weightclass.delegation_conformance.select.kevent",
+                "weightclass.process_context.select.kevent",
                 return_value=object(),
                 create=True,
             ),
             mock.patch(
-                "weightclass.delegation_conformance.select.kqueue",
+                "weightclass.process_context.select.kqueue",
                 return_value=exit_queue,
                 create=True,
             ),
@@ -1802,7 +1802,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 return_value=True,
             ),
             mock.patch(
-                "weightclass.delegation_conformance.ctypes.CDLL",
+                "weightclass.process_context.ctypes.CDLL",
                 return_value=libc,
             ),
             mock.patch(
@@ -1893,7 +1893,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             mock.patch("weightclass.delegation_conformance.sys.platform", "darwin"),
             mock.patch.object(os, "waitid", None, create=True),
             mock.patch.multiple(
-                "weightclass.delegation_conformance.select",
+                "weightclass.process_context.select",
                 KQ_FILTER_PROC=0,
                 KQ_EV_ADD=0,
                 KQ_EV_ONESHOT=0,
@@ -1901,12 +1901,12 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 create=True,
             ),
             mock.patch(
-                "weightclass.delegation_conformance.select.kevent",
+                "weightclass.process_context.select.kevent",
                 return_value=object(),
                 create=True,
             ),
             mock.patch(
-                "weightclass.delegation_conformance.select.kqueue",
+                "weightclass.process_context.select.kqueue",
                 return_value=exit_queue,
                 create=True,
             ),
@@ -1915,7 +1915,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 return_value=True,
             ),
             mock.patch(
-                "weightclass.delegation_conformance.ctypes.CDLL",
+                "weightclass.process_context.ctypes.CDLL",
                 return_value=libc,
             ),
             mock.patch(
@@ -2004,7 +2004,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             mock.patch("weightclass.delegation_conformance.sys.platform", "darwin"),
             mock.patch.object(os, "waitid", None, create=True),
             mock.patch.multiple(
-                "weightclass.delegation_conformance.select",
+                "weightclass.process_context.select",
                 KQ_FILTER_PROC=0,
                 KQ_EV_ADD=0,
                 KQ_EV_ONESHOT=0,
@@ -2012,12 +2012,12 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 create=True,
             ),
             mock.patch(
-                "weightclass.delegation_conformance.select.kevent",
+                "weightclass.process_context.select.kevent",
                 return_value=object(),
                 create=True,
             ),
             mock.patch(
-                "weightclass.delegation_conformance.select.kqueue",
+                "weightclass.process_context.select.kqueue",
                 return_value=exit_queue,
                 create=True,
             ),
@@ -2026,7 +2026,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 return_value=True,
             ),
             mock.patch(
-                "weightclass.delegation_conformance.ctypes.CDLL",
+                "weightclass.process_context.ctypes.CDLL",
                 return_value=libc,
             ),
             mock.patch(
@@ -2096,7 +2096,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
             mock.patch("weightclass.delegation_conformance.sys.platform", "darwin"),
             mock.patch.object(os, "waitid", None, create=True),
             mock.patch.multiple(
-                "weightclass.delegation_conformance.select",
+                "weightclass.process_context.select",
                 KQ_FILTER_PROC=0,
                 KQ_EV_ADD=0,
                 KQ_EV_ONESHOT=0,
@@ -2104,7 +2104,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 create=True,
             ),
             mock.patch(
-                "weightclass.delegation_conformance.select.kevent",
+                "weightclass.process_context.select.kevent",
                 side_effect=ProcessLookupError(errno.ESRCH, "gone"),
                 create=True,
             ),
@@ -2113,7 +2113,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
                 return_value=True,
             ) as sigchld_checks,
             mock.patch(
-                "weightclass.delegation_conformance.ctypes.CDLL",
+                "weightclass.process_context.ctypes.CDLL",
                 return_value=object(),
             ),
             mock.patch(

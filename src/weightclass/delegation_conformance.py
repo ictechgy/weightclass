@@ -8,12 +8,10 @@ reviewed.
 """
 
 import argparse
-import ctypes
 import errno
 import json
 import os
 import re
-import select
 import signal
 import subprocess
 import sys
@@ -26,6 +24,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, BinaryIO, Final, Literal, NoReturn, cast
 
+from . import process_context
 from .delegation_compile import canonical_json_bytes
 from .delegation_qualification import (
     QualificationInvalidInputError,
@@ -38,7 +37,19 @@ from .delegation_schema import (
     validate_runtime_path_lexically,
 )
 from .delegation_types import VendorFamily
-from .process_context import has_safe_sigchld_disposition as _has_safe_sigchld_disposition
+from .json_input import DuplicateJsonKeyError, json_object_pairs_without_duplicates
+from .process_context import LeaderObserverError
+
+# 자식 수명주기 관찰(비수확 종료 관찰, 프로세스그룹 시그널, SIGCHLD 처분 확인)은
+# process_context 가 단일 구현을 소유한다. 예전에는 이 러너와 triage 가 각자
+# 사본을 들고 있었고, 그 사이에서 Darwin 의 "이미 종료한 자식 등록 거부" 처리가
+# 한쪽에만 반영된 채 갈라졌다. 아래는 이 모듈의 기존 호출부와 테스트 패치 지점을
+# 유지하기 위한 별칭일 뿐, 두 번째 구현이 아니다.
+_close_leader_exit_queue = process_context.close_leader_exit_queue
+_has_leader_exit_observer = process_context.has_leader_exit_observer
+_has_safe_sigchld_disposition = process_context.has_safe_sigchld_disposition
+_observe_leader_exit = process_context.observe_leader_exit
+_signal_process_group = process_context.signal_process_group
 
 DRIVER_PROTOCOL_VERSION: Final = 1
 EVIDENCE_SCHEMA_VERSION: Final = 2
@@ -51,11 +62,6 @@ MAX_REQUEST_BYTES: Final = 32_768
 GROUP_CLEANUP_TIMEOUT_SECONDS: Final = 1.0
 DRIVER_ARGUMENTS: Final = ("--weightclass-conformance-driver", "1")
 _CHILD_STATUS_LOST: Final = -sys.maxsize
-_DARWIN_P_PID: Final = 1
-_DARWIN_WNOHANG: Final = 0x01
-_DARWIN_WEXITED: Final = 0x04
-_DARWIN_WNOWAIT: Final = 0x20
-_LEADER_ALREADY_EXITED: Final = object()
 
 Role = Literal["orchestrator", "worker", "reviewer"]
 Category = Literal["implementation", "tests", "documentation"]
@@ -94,17 +100,6 @@ _IDENTIFIER_PATTERN: Final = re.compile(r"[a-z][a-z0-9._-]{0,63}\Z")
 
 class ConformanceInvalidInputError(ValueError):
     """Raised without source values for unsafe harness input."""
-
-
-class _DuplicateKeyError(ValueError):
-    pass
-
-
-class _DarwinSiginfoBuffer(ctypes.Structure):
-    # Darwin's reviewed 64-bit siginfo_t is smaller than this aligned buffer.
-    # The runner never interprets it; waitid's return/errno is the ownership
-    # oracle, so no field offsets are duplicated here.
-    _fields_ = [("storage", ctypes.c_uint64 * 16)]
 
 
 class _SafeArgumentParser(argparse.ArgumentParser):
@@ -262,11 +257,7 @@ class _DriverCaseOwnership:
                     break
                 time.sleep(0.005)
 
-        if self.exit_queue is not None and self.exit_queue is not _LEADER_ALREADY_EXITED:
-            try:
-                self.exit_queue.close()
-            except OSError:
-                pass
+        _close_leader_exit_queue(self.exit_queue)
 
         for thread in (self.writer, self.reader):
             if self._thread_is_alive(thread):
@@ -342,20 +333,11 @@ def _scenario_cases() -> tuple[ConformanceCase, ...]:
 CONFORMANCE_CASES: Final = _permission_cases() + _scenario_cases()
 
 
-def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise _DuplicateKeyError()
-        value[key] = item
-    return value
-
-
 def _parse_driver_response(contents: bytes, expected_case_id: str) -> bool:
     try:
         decoded = contents.decode("utf-8")
-        value = json.loads(decoded, object_pairs_hook=_object_without_duplicate_keys)
-    except (RecursionError, UnicodeDecodeError, json.JSONDecodeError, _DuplicateKeyError):
+        value = json.loads(decoded, object_pairs_hook=json_object_pairs_without_duplicates)
+    except (RecursionError, UnicodeDecodeError, json.JSONDecodeError, DuplicateJsonKeyError):
         return False
     return (
         isinstance(value, dict)
@@ -364,13 +346,6 @@ def _parse_driver_response(contents: bytes, expected_case_id: str) -> bool:
         and isinstance(value["passed"], bool)
         and value["passed"]
     )
-
-
-def _signal_process_group(process_group_id: int, signal_number: int) -> None:
-    try:
-        os.killpg(process_group_id, signal_number)
-    except (PermissionError, ProcessLookupError):
-        pass
 
 
 def _linux_proc_stat_live_group_member(
@@ -431,110 +406,17 @@ def _process_group_exists(process_group_id: int) -> bool:
     return True
 
 
-def _has_leader_exit_observer() -> bool:
-    if callable(getattr(os, "waitid", None)):
-        return all(hasattr(os, name) for name in ("P_PID", "WEXITED", "WNOHANG", "WNOWAIT"))
-    return all(
-        hasattr(select, name)
-        for name in (
-            "kqueue",
-            "kevent",
-            "KQ_FILTER_PROC",
-            "KQ_EV_ADD",
-            "KQ_EV_ONESHOT",
-            "KQ_NOTE_EXIT",
-        )
-    )
-
-
-def _darwin_child_status_waitable(pid: int) -> bool:
-    """Check Darwin child-status ownership once without consuming the status."""
-    if (
-        sys.platform != "darwin"
-        or ctypes.sizeof(ctypes.c_void_p) != 8
-        or pid <= 0
-        or pid > 0xFFFFFFFF
-    ):
-        return False
-    try:
-        libc = ctypes.CDLL(None, use_errno=True)
-        waitid = libc.waitid
-        waitid.argtypes = [ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
-        waitid.restype = ctypes.c_int
-        status = _DarwinSiginfoBuffer()
-        ctypes.set_errno(0)
-        result = waitid(
-            _DARWIN_P_PID,
-            pid,
-            ctypes.byref(status),
-            _DARWIN_WEXITED | _DARWIN_WNOHANG | _DARWIN_WNOWAIT,
-        )
-    except (
-        AttributeError,
-        ctypes.ArgumentError,
-        OSError,
-        OverflowError,
-        TypeError,
-        ValueError,
-    ):
-        return False
-    # WNOHANG makes this a single bounded native call. ECHILD and every other
-    # failure leave ownership unproved and therefore release all signal targets.
-    return bool(result == 0)
-
-
 def _open_leader_exit_queue(pid: int) -> Any | None:
-    """Register a non-reaping kqueue observer when waitid is unavailable."""
-    if callable(getattr(os, "waitid", None)):
-        return None
-    exit_queue: Any | None = None
+    """Register the shared observer, mapping its failure to this runner's class.
+
+    The registration logic itself lives in ``process_context`` so the runner and
+    the triage boundary cannot drift apart again; only the error vocabulary is
+    local. ``ChildProcessError`` still means provable child-status loss.
+    """
     try:
-        select_features = vars(select)
-        event = select_features["kevent"](
-            pid,
-            filter=select_features["KQ_FILTER_PROC"],
-            flags=select_features["KQ_EV_ADD"] | select_features["KQ_EV_ONESHOT"],
-            fflags=select_features["KQ_NOTE_EXIT"],
-        )
-        exit_queue = select_features["kqueue"]()
-        exit_queue.control([event], 0, 0)
-    except OSError as error:
-        if exit_queue is not None:
-            exit_queue.close()
-        if isinstance(error, ChildProcessError) or error.errno == errno.ECHILD:
-            raise ChildProcessError() from None
-        if isinstance(error, ProcessLookupError) or error.errno == errno.ESRCH:
-            if not _darwin_child_status_waitable(pid):
-                raise ChildProcessError() from None
-            # Darwin rejects EVFILT_PROC registration for a child that already
-            # exited even while its wait status and PGID anchor remain owned.
-            return _LEADER_ALREADY_EXITED
+        return process_context.open_leader_exit_queue(pid)
+    except LeaderObserverError:
         raise ConformanceInvalidInputError() from None
-    except ValueError:
-        if exit_queue is not None:
-            exit_queue.close()
-        raise ConformanceInvalidInputError() from None
-    return exit_queue
-
-
-def _observe_leader_exit(pid: int, exit_queue: Any | None) -> bool:
-    """Observe leader exit without releasing its process-group identity."""
-    if exit_queue is _LEADER_ALREADY_EXITED:
-        return True
-    waitid = getattr(os, "waitid", None)
-    if not callable(waitid):
-        assert exit_queue is not None
-        while True:
-            try:
-                return bool(exit_queue.control(None, 1, 0))
-            except InterruptedError:
-                continue
-    while True:
-        try:
-            result = waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-        except InterruptedError:
-            continue
-        return result is not None
 
 
 def _wait_for_leader_exit(pid: int, exit_queue: Any | None, timeout_seconds: float) -> bool:
