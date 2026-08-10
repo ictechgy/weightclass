@@ -7,8 +7,8 @@ class Weightclass < Formula
 
   desc "Local, policy-driven routing for Codex and Claude workflows"
   homepage "https://github.com/ictechgy/weightclass"
-  url "https://files.pythonhosted.org/packages/fd/96/45e59e204c5f8075af5be23c68116068f08b025201b6eae5c2554d5bb1d2/weightclass-0.4.0.tar.gz"
-  sha256 "46f2d6b76385fc9585542310497227b0eb329d2fed309382b9d15caaac6389c0"
+  url "https://files.pythonhosted.org/packages/a5/ec/ded9ba7e7444f39224616b77f813940fd6c4c8c46c57bfd3c8f8dd0fb950/weightclass-0.6.0.tar.gz"
+  sha256 "1fe1448ae1a3ab529aeade320fad3e6db8f33fe3aa2227f1adf862d2dbb3b308"
   license "MIT"
 
   depends_on "python@3.13"
