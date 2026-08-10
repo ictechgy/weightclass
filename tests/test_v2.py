@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from weightclass.router import SUPPORTED_VENDORS, RouteSelectionError
-from weightclass.v2 import SOURCE_PROVIDER, ApiRoute, ApiRoutingPolicy, select_api_route
+from weightclass.v2 import (
+    API_SOURCE_VENDORS,
+    SOURCE_PROVIDER,
+    ApiRoute,
+    ApiRoutingPolicy,
+    select_api_route,
+)
 
 
 def _api_policy(**overrides: object) -> dict[str, object]:
@@ -723,11 +729,27 @@ class V2CommandLineTests(unittest.TestCase):
 
 
 class ApiVendorScopeTests(unittest.TestCase):
+    def test_api_vendor_set_derives_from_provider_map(self) -> None:
+        """Breaks if the gate drifts from the provider map.
+
+        API_SOURCE_VENDORS = frozenset(SOURCE_PROVIDER) ensures this equality by
+        construction. This is what makes SOURCE_PROVIDER[source_vendor] unreachable
+        from select_api_route: the gate always rejects any vendor not in the map
+        before indexing it. A hand-written gate that drifts from the provider map
+        (e.g., someone adding "agy" to the set without updating SOURCE_PROVIDER)
+        brings back a KeyError traceback instead of a RouteSelectionError diagnostic.
+        """
+        self.assertEqual(API_SOURCE_VENDORS, frozenset(SOURCE_PROVIDER))
+
     def test_a_vendor_without_a_known_provider_is_an_unsupported_route(self) -> None:
-        """Breaks if the API path admits a vendor it cannot place on a billing boundary.
+        """Breaks if the API path rejects unmapped vendors with a traceback.
 
         교차-provider 차단은 벤더에서 provider 를 유도해 성립한다. provider 를
         모르는 벤더는 그 차단을 통과시킬 근거가 없으므로 닫는다.
+
+        This test holds before and after the refactor: the user-visible contract
+        is RouteSelectionError, not KeyError. The regression guard for divergence
+        is test_api_vendor_set_derives_from_provider_map, above.
         """
         policy = ApiRoutingPolicy(
             routes=(
