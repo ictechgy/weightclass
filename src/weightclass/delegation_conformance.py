@@ -127,8 +127,14 @@ class _ExchangeState:
 
 
 @dataclass
-class _DeferredSigint:
-    """Defer SIGINT without leaving the exec'd driver with a blocked mask."""
+class _SigintForwardedToGroup:
+    """Forward SIGINT to the owned group without leaving the driver blocked.
+
+    delegation_runtime._SigintDeferredUntilChildOwned 와 합치면 안 된다. 한때 둘 다
+    _DeferredSigint 였고 그래서 사본처럼 보였으나, 여기는 이미 소유한 프로세스그룹에
+    시그널을 **즉시 전달**하고 저기는 자식 핸들을 소유할 때까지 **연기**한다.
+    자세한 대비는 그쪽 독스트링에 있다.
+    """
 
     previous_handler: Any = None
     received_frame: FrameType | None = None
@@ -517,7 +523,7 @@ def _run_driver_case(
     if len(request) > MAX_REQUEST_BYTES:
         return False
     ownership = _DriverCaseOwnership()
-    deferred_sigint = _DeferredSigint()
+    deferred_sigint = _SigintForwardedToGroup()
     ownership.before_final_reap = deferred_sigint.clear_process_group
     state = _ExchangeState(bytearray())
     timed_out = False

@@ -29,13 +29,26 @@ class DelegationRuntimeFailedError(OSError):
     """Raised after a post-spawn framing failure and direct-child cleanup."""
 
 
-class _DeferredSigintInterrupt(BaseException):
+class _ChildOwnedSigintInterrupt(BaseException):
     """Stop runtime exchange only after its direct-child handle is owned."""
 
 
 @dataclass
-class _DeferredSigint:
-    """Record SIGINT until a spawned direct child can be cleaned safely."""
+class _SigintDeferredUntilChildOwned:
+    """Record SIGINT until a spawned direct child can be cleaned safely.
+
+    이 클래스와 delegation_conformance._SigintForwardedToGroup 은 합치면 안 된다.
+    한때 둘 다 _DeferredSigint 라는 같은 이름이었고, 그래서 합칠 수 있는 사본처럼
+    보였다. 하는 일이 서로 다르다.
+
+    - 여기: SIGINT 를 **연기**한다. 자식 핸들을 소유하기 전에 빠져나가면 정리할
+      대상을 잃으므로, 소유가 확인될 때까지 붙들었다가 그때 인터럽트를 올린다.
+    - 저기: 잡아둔 프로세스그룹에 **즉시 전달**한다. 이미 그룹을 소유하고 있고,
+      exec 된 드라이버가 블록된 마스크를 물려받지 않게 하는 것이 목적이다.
+
+    저장·복원·재전달 로직이 닮은 것은 사실이나, 그 30 줄을 공유하려고 상태
+    기계까지 합치면 둘 중 하나의 수명주기가 깨진다.
+    """
 
     previous_handler: Any = None
     received_frame: FrameType | None = None
@@ -70,7 +83,7 @@ class _DeferredSigint:
 
     def check(self) -> None:
         if self.active and self.process_owned and self.received and not self.cleaning:
-            raise _DeferredSigintInterrupt()
+            raise _ChildOwnedSigintInterrupt()
 
     def begin_cleanup(self) -> None:
         self.cleaning = True
@@ -268,7 +281,7 @@ def run_delegation_runtime(
 ) -> subprocess.CompletedProcess[bytes]:
     """Spawn once, deliver one frame within the reviewed grace, and wait."""
     arguments = (runtime_path, *RUNTIME_ARGUMENTS)
-    deferred_sigint = _DeferredSigint()
+    deferred_sigint = _SigintDeferredUntilChildOwned()
     process: subprocess.Popen[bytes] | None = None
     cleanup_failed = False
     completed = False
@@ -301,7 +314,7 @@ def run_delegation_runtime(
         return_code = _wait_interruptibly(process, deferred_sigint.check)
         deferred_sigint.check()
         completed = True
-    except _DeferredSigintInterrupt:
+    except _ChildOwnedSigintInterrupt:
         interrupted = True
     finally:
         if process is not None and (not completed or deferred_sigint.received):

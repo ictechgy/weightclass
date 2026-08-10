@@ -37,11 +37,13 @@ Schema-2 `run` requires exact acknowledgement. Missing acknowledgement exits 6 b
 
 `ExecutableObservation` is frozen and records lexical path, `st_dev`, `st_ino`, file type/mode, size, `mtime_ns`, `ctime_ns`, and the POSIX `mode & 0o111 != 0` executable result. Final-component `lstat` rejects symlinks and nonregular/nonexecutable files; zero-sized regular executable files are allowed. Observe once and again immediately before spawn, require exact equality, and recheck executable equals `argv[0]` at the seam. Intermediate-component symlinks and replacement after the second check remain residuals; this is not inode-bound execution.
 
-Native run also requires the main thread and a reviewed native `SIGCHLD`
-disposition before task access and again at the spawn seam. Unsafe or
-unreviewed process context fails as `executor_unavailable`/exit `4`. This is a
-bounded observation rather than a lock, so the caller must retain exclusive
-direct-child status ownership throughout the invocation.
+Every schema-2 and protocol-2 run requires the main thread and a reviewed native
+`SIGCHLD` disposition before task access and again at the spawn seam. This holds
+uniformly for native schema-2 `run` and delegation protocol-2 `run`; neither may
+read a task before proving it can observe its own direct child's exit status.
+Unsafe or unreviewed process context fails as `executor_unavailable`/exit `4`.
+This is a bounded observation rather than a lock, so the caller must retain
+exclusive direct-child status ownership throughout the invocation.
 
 ## Delegation policy, manifest, and protocol 2
 

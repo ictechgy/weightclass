@@ -20,11 +20,11 @@ from tests.runtime_guard import guarded_launch
 from weightclass.delegation_conformance import (
     CONFORMANCE_CASES,
     ConformanceCase,
-    _DeferredSigint,
     _linux_proc_stat_live_group_member,
     _observe_leader_exit,
     _open_leader_exit_queue,
     _run_driver_case,
+    _SigintForwardedToGroup,
     _wait_after_kill,
     run_conformance,
 )
@@ -1341,9 +1341,9 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
     def test_spawn_adjacent_sigchld_check_follows_sigint_arming(self) -> None:
         """Breaks if SIGINT setup can invalidate child ownership before spawn."""
-        original_arm = _DeferredSigint.arm
+        original_arm = _SigintForwardedToGroup.arm
 
-        def arm_then_enable_auto_reap(deferred_sigint: _DeferredSigint) -> None:
+        def arm_then_enable_auto_reap(deferred_sigint: _SigintForwardedToGroup) -> None:
             original_arm(deferred_sigint)
             signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
@@ -1352,7 +1352,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
         try:
             with (
                 mock.patch.object(
-                    _DeferredSigint,
+                    _SigintForwardedToGroup,
                     "arm",
                     arm_then_enable_auto_reap,
                 ),
@@ -2366,7 +2366,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
 
         real_signal = signal.signal
         original_handler = real_signal(signal.SIGINT, previous_handler)
-        deferred_sigint = _DeferredSigint()
+        deferred_sigint = _SigintForwardedToGroup()
         deferred_sigint.arm()
         deferred_sigint.record_process_group(12345)
         deferred_sigint.clear_process_group()

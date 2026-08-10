@@ -127,7 +127,11 @@ def register_claimed_launches(guard: RuntimeGuard, category: str) -> None:
     python = Path(sys.executable).resolve(strict=True)
     fixtures = Path(__file__).parent / "fixtures"
     prefixes: dict[str, tuple[tuple[Path, tuple[str, ...]], ...]] = {
-        "native_v1": ((python, ("-m", "weightclass", "run")),),
+        # run --policy 는 검토한 지문을 요구하므로 native v1 도 route 를 먼저 띄운다.
+        "native_v1": (
+            (python, ("-m", "weightclass", "route")),
+            (python, ("-m", "weightclass", "run")),
+        ),
         "native_v2": (
             (python, ("-m", "weightclass", "route")),
             (python, ("-m", "weightclass", "run")),

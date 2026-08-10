@@ -11,11 +11,13 @@ Native schema 2 and delegation protocol 2 use the same binding pattern:
 3. `run` requires the exact reviewed fingerprint. A missing acknowledgement stops before task access. A supplied mismatch stops before executable inspection or spawn.
 4. Execution consumes the same immutable compiled descriptor, fingerprint, executable, and argv used for review. It starts exactly one foreground direct child with `shell=False`; there is no retry, fallback, or command rebuilding.
 
-Native execution requires the main thread and a reviewed native `SIGCHLD`
-disposition before task input, then rechecks that process context immediately
-before executable observation and spawn. The caller must exclusively own the
-direct child's wait status for the invocation; the check cannot lock out a
-hostile concurrent native disposition change or foreign reaper.
+Native and delegation execution both require the main thread and a reviewed
+native `SIGCHLD` disposition before task input, then recheck that process
+context immediately before executable observation and spawn. The environment is
+proved before the payload is touched, on every run path. The caller must
+exclusively own the direct child's wait status for the invocation; the check
+cannot lock out a hostile concurrent native disposition change or foreign
+reaper.
 
 Cross-profile changes require a directional profile grant. Cross-vendor changes additionally require a directional vendor grant. Delegation compares and authorizes provider, intended recipient, billing boundary, transport, and opaque account-profile label independently. Reverse, unused, redundant, ambiguous, and missing grants fail closed.
 
