@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from weightclass.router import SUPPORTED_VENDORS
-from weightclass.v2 import SOURCE_PROVIDER
+from weightclass.router import SUPPORTED_VENDORS, RouteSelectionError
+from weightclass.v2 import SOURCE_PROVIDER, ApiRoute, ApiRoutingPolicy, select_api_route
 
 
 def _api_policy(**overrides: object) -> dict[str, object]:
@@ -720,6 +720,35 @@ class V2CommandLineTests(unittest.TestCase):
         self.assertEqual(review.returncode, 0, review.stderr)
         self.assertEqual(result.returncode, 6)
         self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+
+
+class ApiVendorScopeTests(unittest.TestCase):
+    def test_a_vendor_without_a_known_provider_is_an_unsupported_route(self) -> None:
+        """Breaks if the API path admits a vendor it cannot place on a billing boundary.
+
+        교차-provider 차단은 벤더에서 provider 를 유도해 성립한다. provider 를
+        모르는 벤더는 그 차단을 통과시킬 근거가 없으므로 닫는다.
+        """
+        policy = ApiRoutingPolicy(
+            routes=(
+                ApiRoute(
+                    route_id="r",
+                    tier="low",
+                    eligible_source_vendors=("codex", "agy"),
+                    provider="openai",
+                    transport="api",
+                    model="m",
+                    effort="low",
+                    intended_recipient="OpenAI API",
+                    intended_billing_boundary="user OpenAI API account",
+                ),
+            ),
+            allow_cross_provider=False,
+            allow_api=True,
+        )
+
+        with self.assertRaises(RouteSelectionError):
+            select_api_route("Fix a typo.", policy, "agy")
 
 
 if __name__ == "__main__":

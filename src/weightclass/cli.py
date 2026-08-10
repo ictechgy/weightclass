@@ -88,6 +88,7 @@ from .router import (
 from .task_v2 import ValidatedTaskV2, read_validated_task_v2
 from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
 from .v2 import (
+    API_SOURCE_VENDORS,
     V2InvalidInputError,
     load_api_policy,
     render_api_route,
@@ -297,7 +298,7 @@ def load_request(descriptor_path: Path) -> RouteRequest:
 def _add_api_route_arguments(parser: argparse.ArgumentParser) -> None:
     """Declare the arguments shared by both V2 API subcommands."""
     parser.add_argument("--policy", required=True, type=Path)
-    parser.add_argument("--source-vendor", required=True, choices=sorted(SUPPORTED_VENDORS))
+    parser.add_argument("--source-vendor", required=True, choices=sorted(API_SOURCE_VENDORS))
     parser.add_argument("--api-runtime", required=True, type=Path)
 
 
