@@ -20,9 +20,23 @@ _Last updated: 2026-08-10 by Claude Code_
 
 ## Current Status
 
-- 0.7.0 makes the three execution boundaries uniform across every run path. It
-  is unreleased; see Completed for what it changes and Blockers for what it
-  breaks.
+- 0.7.0 is complete, merged, and deployed. It makes the three execution
+  boundaries uniform across every run path. See Completed for what it changes
+  and Blockers for what it breaks.
+- PR [#27](https://github.com/ictechgy/weightclass/pull/27) is merged.
+- Merge commit: `bb311a5`.
+- Annotated tag `v0.7.0` points to that merge commit and is on `origin`.
+- GitHub Release workflow run
+  [31355064061](https://github.com/ictechgy/weightclass/actions/runs/31355064061)
+  completed successfully.
+- PyPI publishes
+  [`weightclass 0.7.0`](https://pypi.org/project/weightclass/0.7.0/)
+  as exactly one wheel and one sdist; neither is yanked.
+- [GitHub Release v0.7.0](https://github.com/ictechgy/weightclass/releases/tag/v0.7.0)
+  carries the migration example. It is the first release on this repository to
+  have notes at all; `release.yml` publishes to PyPI and does not create them.
+- The Homebrew formula and `ictechgy/homebrew-tap` are on 0.7.0. PyPI, the tap,
+  `main`, and the tag all agree.
 - 0.7.0 resolves all three judgement calls that 0.6.0 shipped unconfirmed. Two
   were changed, one was kept and is now argued rather than assumed.
 - 0.6.0 is complete, merged, and deployed. It carries the review follow-ups
@@ -160,13 +174,21 @@ Released in 0.6.0:
   - Review/run bind one immutable descriptor, fingerprint, and argv truth.
   - Unknown, ambiguous, unsupported, or unsafe inputs fail closed with
     value-free diagnostics.
-  - Native schema-2 `run` and delegation protocol-1 `run` check the process
-    context before task access and again next to spawn. Delegation protocol-2
-    `run` checks it only at the spawn seam; that is what
-    `docs/protocol-v2-specification.md` requires, which scopes the pre-task
-    check to native run. Do not restate this as a uniform guarantee. Exclusive
-    direct-child wait-status ownership is a documented prerequisite; hostile
-    concurrent native mutation remains a residual race.
+  - Every run path checks the process context before task access and again next
+    to spawn: native schema-2 `run`, delegation protocol-1 `run`, and — since
+    0.7.0 — delegation protocol-2 `run`. `docs/protocol-v2-specification.md` and
+    `docs/protocol-v2-security.md` state this as a uniform requirement. Before
+    0.7.0 the protocol-2 path checked only at the spawn seam and the spec scoped
+    the pre-task check to native run; both the code and the spec were changed
+    together. Do not restore the old ordering on the strength of an older note.
+    Exclusive direct-child wait-status ownership remains a documented
+    prerequisite; hostile concurrent native mutation remains a residual race.
+  - Running a policy is two steps. `run --policy` requires the exact fingerprint
+    that `route` printed, and refuses before task access without it. Built-in
+    routes are exempt because they live in code and cannot be swapped. File
+    permissions are defense in depth here, not the boundary: whoever can write
+    the containing directory can replace the file whatever its mode, and `run`
+    opens the path independently of `route`.
   - External runtimes own provider authentication, network, quota, billing,
     descendants, and output behavior.
   - Task content must never be logged, persisted, hashed, or included in review
@@ -178,6 +200,33 @@ Released in 0.6.0:
     explicitly scoped version request arrives.
 
 ## Verification
+
+For 0.7.0, as released:
+
+- Full source suite with `ResourceWarning` as error, on the merge commit:
+  633/633 passed on Python 3.10, 3.13, and 3.14 (628 before, plus 5 new
+  regression tests).
+- The suite passes identically under `umask 022` and `umask 002`.
+- Ruff check/format and strict mypy (90 source files): clean.
+- `python -m build`, `twine check --strict`, and
+  `verify_distribution_isolation.py --run-sdist-tests` (628 passed, 11 skips).
+- GitHub CI on `bb311a5` and every release job on tag `v0.7.0`: success.
+- PyPI 0.7.0 files verified:
+  - `weightclass-0.7.0-py3-none-any.whl`
+    SHA-256 `46c0e4fb001fb0ee60487a21927c0d2b0e2e27696eaa27ed03d4e745fe250e36`
+  - `weightclass-0.7.0.tar.gz`
+    SHA-256 `f5a8d0fab172bb4369427564b415de3b17017e1895bb5c862ca6725e9ca0d3fb`
+- Clean-environment install reports `weightclass 0.7.0`, and the published build
+  refuses `run --policy` without an acknowledgement (exit 6), runs it with one,
+  and still runs a built-in route without one.
+- `brew style`, `brew audit --strict`, `brew install --build-from-source`, and
+  `brew test` pass against the merged tap.
+
+Verifying a release means verifying the version you actually installed.
+`uv tool install --force --reinstall` served a cached 0.6.0 during this release
+and produced a result that looked like the new behavior was missing. Use
+`--refresh` and pin the exact version, then confirm `--version` before reading
+anything into the output.
 
 For 0.6.0, as released:
 
@@ -199,12 +248,6 @@ For 0.6.0, as released:
   `weightclass 0.6.0`; classification smoke tests and the empty-task exit-2 path
   behave as documented; a `0o666` policy is refused while `0o644` and `0o664`
   are accepted.
-
-Known flake, pre-existing and unrelated to 0.6.0: running two full suites
-concurrently makes the SIGINT and process-group tests in
-`DelegationConformanceRunnerTests` fail unpredictably. The same experiment on
-`3f0167a` fails on the same test names, so do not attribute it to this release.
-Sequential runs pass.
 
 For 0.5.0, as released:
 
@@ -246,7 +289,12 @@ For 0.5.0, as released:
   `route_fingerprint_mismatch`. Any script that ran a policy in one step must
   become two steps: `route` to get the fingerprint, then `run` with it. This is
   the reason for the minor bump under the `0.x` policy in `RELEASING.md`, and it
-  must be first in the release notes.
+  leads the [v0.7.0 release notes](https://github.com/ictechgy/weightclass/releases/tag/v0.7.0)
+  with a migration example.
+- The blast radius of that break was checked after publishing, not before: 0
+  stars, 0 forks, 0 issues, and a download count consistent with mirrors on a
+  package eight days old. There are no known users to migrate. Check this kind
+  of signal *before* deciding a breaking change, not after.
 - 0.7.0 also changes normative behavior: delegation protocol-2 `run` now fails
   `executor_unavailable`/exit 4 before task access when the process context is
   unreviewed, where it previously read the task first. `docs/protocol-v2-
@@ -263,7 +311,14 @@ For 0.5.0, as released:
   - independently qualify a concrete runtime only after external-oracle,
     hostile-negative-control, identity, and containment gates are satisfied;
   - update pinned GitHub actions when a reviewed upstream Node-runtime migration
-    is needed.
+    is needed;
+  - v0.1.0 through v0.6.0 have no GitHub Release notes. `release.yml` publishes
+    to PyPI and never creates a release; v0.7.0's notes were written by hand.
+    Either backfill the older tags or add the step to the workflow;
+  - running two full suites concurrently makes the SIGINT and process-group
+    tests in `DelegationConformanceRunnerTests` fail unpredictably. The same
+    experiment on `3f0167a` fails on the same test names, so this predates
+    0.6.0. CI runs sequentially and is unaffected.
 
 ## What Worked
 
