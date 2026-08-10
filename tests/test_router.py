@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from tests.runtime_guard import guarded_launch
-from weightclass import cli
+from weightclass import cli, router
 from weightclass.router import (
     DEFAULT_ROUTES,
     Route,
@@ -268,6 +268,62 @@ class PolicyRunBindingTests(unittest.TestCase):
         self.assertEqual(result.returncode, 6)
         self.assertEqual(result.stdout, "")
         self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+
+
+class TaskPlaceholderTests(unittest.TestCase):
+    """{{task}} 는 명령 안에서 태스크가 들어갈 자리를 표시한다.
+
+    stdin 을 읽지 않고 프롬프트를 인자로만 받는 CLI 가 있기 때문이다. 자리를
+    잘못 쓴 정책은 파싱 단계에서 닫는다. 실행 직전에 발견하면 이미 늦다.
+    """
+
+    def _policy(self, directory: Path, command: list[str]) -> Path:
+        policy_path = directory / "policy.json"
+        policy_path.write_text(
+            json.dumps(
+                {"routes": [{"id": "r", "vendor": "codex", "tier": "low", "command": command}]}
+            ),
+            encoding="utf-8",
+        )
+        return policy_path
+
+    def test_one_whole_token_is_accepted(self) -> None:
+        """Breaks if the reserved slot cannot be declared at all."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
+            routes = cli.load_routes(path)
+
+        self.assertEqual(routes[0].command, ("/bin/echo", "{{task}}"))
+        self.assertTrue(router.uses_argv_task_delivery(routes[0].command))
+
+    def test_no_token_means_stdin_delivery(self) -> None:
+        """Breaks if existing policies silently change delivery mode."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(Path(directory), ["/bin/echo", "ok"])
+            routes = cli.load_routes(path)
+
+        self.assertFalse(router.uses_argv_task_delivery(routes[0].command))
+
+    def test_two_tokens_are_rejected(self) -> None:
+        """Breaks if a task could be delivered twice with no defined meaning."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(Path(directory), ["/bin/echo", "{{task}}", "{{task}}"])
+            with self.assertRaises(cli.InvalidInputError):
+                cli.load_routes(path)
+
+    def test_the_token_inside_a_larger_argument_is_rejected(self) -> None:
+        """Breaks if how the task and a flag were joined becomes ambiguous."""
+        for argument in ("--prompt={{task}}", "prefix{{task}}", "{{task}}suffix"):
+            with self.subTest(argument=argument), tempfile.TemporaryDirectory() as directory:
+                path = self._policy(Path(directory), ["/bin/echo", argument])
+                with self.assertRaises(cli.InvalidInputError):
+                    cli.load_routes(path)
+
+    def test_substitution_fills_exactly_the_reserved_slot(self) -> None:
+        """Breaks if substitution touches an argument it was not given."""
+        filled = router.substitute_task(("agy", "--print", "{{task}}", "--effort"), "긴 태스크")
+
+        self.assertEqual(filled, ("agy", "--print", "긴 태스크", "--effort"))
 
 
 class CommandSurfaceTests(unittest.TestCase):

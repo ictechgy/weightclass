@@ -53,6 +53,26 @@ def codex_command(reasoning_effort: str) -> tuple[str, ...]:
     return CODEX_COMMAND_PREFIX + (f"model_reasoning_effort={reasoning_effort}", "-")
 
 
+# 프롬프트를 stdin 이 아니라 인자로만 받는 CLI 가 있다. 그런 명령에서 태스크가
+# 들어갈 자리를 이 토큰으로 표시한다. 이 토큰이 없으면 지금까지처럼 stdin 으로
+# 전달한다.
+TASK_PLACEHOLDER: Final = "{{task}}"
+
+
+def uses_argv_task_delivery(command: tuple[str, ...]) -> bool:
+    """Report whether this command carries the task in argv rather than on stdin."""
+    return TASK_PLACEHOLDER in command
+
+
+def substitute_task(command: tuple[str, ...], task: str) -> tuple[str, ...]:
+    """Fill the single reserved slot. Call this only immediately before spawn.
+
+    치환된 argv 는 실행에만 쓴다. 검토 출력과 지문은 치환 전 명령으로 계산해야
+    태스크가 그 둘에 새어 들어가지 않는다.
+    """
+    return tuple(task if token == TASK_PLACEHOLDER else token for token in command)
+
+
 @dataclass(frozen=True)
 class Route:
     """A reviewable vendor command. `command` is the only thing ever executed.

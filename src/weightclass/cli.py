@@ -73,6 +73,7 @@ from .native_v2_types import CompiledExecutionV2
 from .router import (
     DEFAULT_ROUTES,
     SUPPORTED_VENDORS,
+    TASK_PLACEHOLDER,
     Posture,
     Route,
     RouteRequest,
@@ -193,6 +194,19 @@ def _require_command_argument(value: object) -> str:
     return value
 
 
+def _require_at_most_one_task_slot(command: tuple[str, ...]) -> tuple[str, ...]:
+    """Require the reserved task token to appear at most once, as a whole argument.
+
+    부분 문자열로 쓰면 태스크와 플래그가 어떻게 이어붙었는지가 모호해지고, 두 번
+    쓰면 태스크를 두 번 전달한다는 뜻이 되는데 그런 의미는 정의된 적이 없다.
+    """
+    if sum(token == TASK_PLACEHOLDER for token in command) > 1:
+        raise InvalidInputError()
+    if any(TASK_PLACEHOLDER in token and token != TASK_PLACEHOLDER for token in command):
+        raise InvalidInputError()
+    return command
+
+
 def _parse_route(value: object) -> Route:
     if not isinstance(value, dict):
         raise InvalidInputError()
@@ -216,11 +230,14 @@ def _parse_route(value: object) -> Route:
         if parsed_tier not in {"low", "standard", "high"}:
             raise InvalidInputError()
         tier = cast(Tier, parsed_tier)
+    parsed_command = _require_at_most_one_task_slot(
+        tuple(_require_command_argument(argument) for argument in command)
+    )
     return Route(
         route_id=route_id,
         vendor=vendor,
         workflow=workflow,
-        command=tuple(_require_command_argument(argument) for argument in command),
+        command=parsed_command,
         tier=tier,
     )
 
