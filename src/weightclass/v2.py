@@ -10,7 +10,7 @@ from typing import Any, Final, cast
 
 from .classification import Tier, classify_task
 from .json_input import JsonInputError, load_json_object
-from .router import SUPPORTED_VENDORS, RouteSelectionError
+from .router import RouteSelectionError
 
 POLICY_SCHEMA_VERSION: Final = 2
 MAX_POLICY_BYTES: Final = 262_144
@@ -20,7 +20,7 @@ SOURCE_PROVIDER: Final = {"codex": "openai", "claude": "anthropic"}
 
 # API 경로는 벤더에서 provider 를 유도해 교차-provider 를 차단한다. 그 매핑이 없는
 # 벤더는 어디로 과금되는지 판단할 근거가 없으므로 이 경로에서 제외한다. 네이티브
-# 경로의 SUPPORTED_VENDORS 와 일부러 분리한다.
+# 경로의 BUILT_IN_VENDORS 와 일부러 분리한다.
 API_SOURCE_VENDORS: Final = frozenset(SOURCE_PROVIDER)
 
 
@@ -102,7 +102,7 @@ def _parse_route(value: object) -> ApiRoute:
     if not isinstance(eligible_sources, list) or not eligible_sources:
         raise V2InvalidInputError()
     parsed_sources = tuple(_require_label(source) for source in eligible_sources)
-    if any(source not in SUPPORTED_VENDORS for source in parsed_sources) or len(
+    if any(source not in API_SOURCE_VENDORS for source in parsed_sources) or len(
         set(parsed_sources)
     ) != len(parsed_sources):
         raise V2InvalidInputError()

@@ -11,7 +11,35 @@ NATIVE_FINGERPRINT_VERSION: Final = 1
 Posture = Literal["balanced", "cautious"]
 
 
-SUPPORTED_VENDORS: Final = frozenset({"claude", "codex"})
+# 이 패키지가 명령까지 함께 배포하는 벤더. 라벨을 제한하는 목록이 아니라,
+# 내장 라우트와 판정 어댑터가 존재하는 벤더를 적어둔 것이다.
+BUILT_IN_VENDORS: Final = frozenset({"claude", "codex"})
+
+MAX_VENDOR_LABEL_BYTES: Final = 64
+
+
+class InvalidVendorLabelError(ValueError):
+    """Raised without the offending value when a vendor label is unusable."""
+
+
+def validate_vendor_label(value: object) -> str:
+    """Require a reviewable containment identifier, not a known tool name.
+
+    벤더 라벨이 하는 일은 격리다. select_tier_route 는 이 문자열을 비교하고
+    native_route_fingerprint 는 해싱할 뿐이며, 어느 쪽도 벤더별 지식을 갖지
+    않는다. 그래서 목록을 닫아둘 이유가 없다. 다만 검토 출력과 지문에 들어가는
+    값이므로 눈으로 확인 가능한 형태여야 한다.
+    """
+    if not isinstance(value, str):
+        raise InvalidVendorLabelError()
+    encoded = value.encode("utf-8", errors="replace")
+    if not 1 <= len(encoded) <= MAX_VENDOR_LABEL_BYTES:
+        raise InvalidVendorLabelError()
+    if any(character.isspace() or not character.isprintable() for character in value):
+        raise InvalidVendorLabelError()
+    return value
+
+
 # manual 은 사람에게 승인을 묻는 모드다. --print 는 비대화형이라 물어볼 상대가
 # 없어 모든 편집이 거부되고, 그런데도 claude 는 0으로 종료한다. 즉 라우터가
 # 성공을 보고하면서 아무 일도 일어나지 않는다. acceptEdits 는 파일 편집만

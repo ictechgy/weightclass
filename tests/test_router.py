@@ -8,16 +8,20 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest import mock
 
 from tests.runtime_guard import guarded_launch
 from weightclass import cli, router
 from weightclass.router import (
+    BUILT_IN_VENDORS,
     DEFAULT_ROUTES,
     Route,
     RouteRequest,
+    RouteSelectionError,
     native_route_fingerprint,
     select_route,
+    select_tier_route,
 )
 
 
@@ -457,6 +461,79 @@ class TaskPlaceholderTests(unittest.TestCase):
             json.loads(first.stdout)["route_fingerprint"],
             json.loads(second.stdout)["route_fingerprint"],
         )
+
+
+class OpenVendorLabelTests(unittest.TestCase):
+    """벤더 라벨은 격리 식별자이지 이 패키지가 아는 도구 목록이 아니다.
+
+    select_tier_route 는 문자열을 비교하고 native_route_fingerprint 는 문자열을
+    해싱할 뿐이다. 둘 다 벤더별 지식을 갖고 있지 않으므로, 목록을 닫아둘 근거는
+    "명령을 함께 배포한다"뿐인데 그건 라벨과 별개다.
+    """
+
+    def _policy(self, directory: Path, routes: list[dict[str, object]]) -> Path:
+        policy_path = directory / "policy.json"
+        policy_path.write_text(json.dumps({"routes": routes}), encoding="utf-8")
+        return policy_path
+
+    def test_an_unknown_vendor_label_is_accepted(self) -> None:
+        """Breaks if a user cannot bring an agent this package never heard of."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(
+                Path(directory),
+                [
+                    {
+                        "id": "r",
+                        "vendor": "qwen",
+                        "tier": "low",
+                        "command": ["/bin/echo", "{{task}}"],
+                    }
+                ],
+            )
+            routes = cli.load_routes(path)
+
+        self.assertEqual(routes[0].vendor, "qwen")
+
+    def test_a_malformed_vendor_label_is_rejected(self) -> None:
+        """Breaks if the label stops being a reviewable identifier."""
+        for label in ("", "two words", "a" * 65, "tab\there", "  padded  "):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                path = self._policy(
+                    Path(directory),
+                    [{"id": "r", "vendor": label, "tier": "low", "command": ["/bin/echo"]}],
+                )
+                with self.assertRaises(cli.InvalidInputError):
+                    cli.load_routes(path)
+
+    def test_containment_still_holds_for_unknown_labels(self) -> None:
+        """Breaks if opening the label also opened the boundary it exists to enforce."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(
+                Path(directory),
+                [
+                    {"id": "a", "vendor": "qwen", "tier": "low", "command": ["/bin/echo"]},
+                    {"id": "b", "vendor": "kimi", "tier": "high", "command": ["/bin/echo"]},
+                ],
+            )
+            routes = cli.load_routes(path)
+
+            with self.assertRaises(RouteSelectionError):
+                select_tier_route(routes, "high", "qwen")
+
+    def test_the_fingerprint_still_separates_two_unknown_vendors(self) -> None:
+        """Breaks if the vendor stops being bound, letting a review cover another vendor."""
+        # mypy --strict: 값 타입이 섞인 딕셔너리를 **로 풀면 각 필드의 정확한
+        # 타입이 사라져 Route 생성자와 맞지 않는다고 판정한다. 동작은 그대로
+        # 두고 주석 타입만 명시한다.
+        shared: dict[str, Any] = {"tier": "low", "command": ("/bin/echo", "ok"), "workflow": ""}
+        first = native_route_fingerprint(Route(route_id="r", vendor="qwen", **shared), False)
+        second = native_route_fingerprint(Route(route_id="r", vendor="kimi", **shared), False)
+
+        self.assertNotEqual(first, second)
+
+    def test_the_built_in_vendors_are_still_named(self) -> None:
+        """Breaks if the shipped commands lose the set that documents them."""
+        self.assertLessEqual(frozenset({"claude", "codex"}), BUILT_IN_VENDORS)
 
 
 class CommandSurfaceTests(unittest.TestCase):

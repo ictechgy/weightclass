@@ -22,7 +22,7 @@ from unittest import mock
 
 from tests.runtime_guard import guarded_launch
 from weightclass import cli, delegation_conformance, process_context, triage
-from weightclass.router import SUPPORTED_VENDORS
+from weightclass.router import BUILT_IN_VENDORS
 from weightclass.triage import (
     TRIAGE_COMMANDS,
     TRIAGE_PROMPT,
@@ -100,13 +100,18 @@ class TriageCommandTests(unittest.TestCase):
         self.assertEqual(descriptor["unavailable_reason"], "no_no_tools_boundary")
         self.assertNotIn("command", descriptor)
 
-    def test_every_supported_vendor_has_a_reviewable_triage_descriptor(self) -> None:
-        """Breaks if a new source vendor has an implicit triage policy."""
-        for vendor in SUPPORTED_VENDORS:
+    def test_every_built_in_vendor_has_a_reviewable_triage_descriptor(self) -> None:
+        """Breaks if a shipped vendor has an implicit triage policy."""
+        for vendor in BUILT_IN_VENDORS:
             with self.subTest(vendor=vendor):
                 descriptor = triage_descriptor(vendor)
                 self.assertEqual(descriptor["source_vendor"], vendor)
                 self.assertIn("available", descriptor)
+
+    def test_a_vendor_this_package_ships_no_command_for_has_no_triage(self) -> None:
+        """Breaks if an unreviewed adapter is invented for an unknown vendor."""
+        with self.assertRaises(TriageUnavailableError):
+            triage_descriptor("qwen")
 
     def test_enabled_triage_commands_keep_their_read_only_pin(self) -> None:
         """Breaks if an enabled adapter loses its filesystem restriction."""
@@ -469,6 +474,35 @@ class ClassifyWithVendorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 8)
         self.assertEqual(result.stdout, "")
         self.assertEqual(json.loads(result.stderr), {"error": "triage_unavailable"})
+
+    def test_show_triage_command_fails_closed_for_a_vendor_with_no_adapter(self) -> None:
+        """Breaks if opening the vendor label lets --show-triage-command crash instead of closing.
+
+        벤더 라벨이 열려 있으므로 판정 어댑터가 없는 벤더도 여기까지 내려온다.
+        --ask-vendor 경로는 이미 TriageUnavailableError 를 잡지만, 이 분기는
+        태스크를 읽기도 전에 별도로 triage_descriptor 를 부르므로 같은 예외를
+        따로 잡아야 한다. 잡지 않으면 트레이스백이 새어 나간다.
+        """
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "classify",
+                "--source-vendor",
+                "qwen",
+                "--show-triage-command",
+            ],
+            capture_output=True,
+            check=False,
+            input="",
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 8)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(json.loads(result.stderr), {"error": "triage_unavailable"})
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_does_not_echo_the_task(self) -> None:
         """Breaks if the triage path starts placing task content in output."""

@@ -72,8 +72,8 @@ from .native_v2_schema import (
 from .native_v2_types import CompiledExecutionV2
 from .router import (
     DEFAULT_ROUTES,
-    SUPPORTED_VENDORS,
     TASK_PLACEHOLDER,
+    InvalidVendorLabelError,
     Posture,
     Route,
     RouteRequest,
@@ -84,6 +84,7 @@ from .router import (
     select_tier_route,
     substitute_task,
     uses_argv_task_delivery,
+    validate_vendor_label,
 )
 from .task_v2 import ValidatedTaskV2, read_validated_task_v2
 from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
@@ -221,9 +222,12 @@ def _parse_route(value: object) -> Route:
         raise InvalidInputError()
 
     route_id = _require_nonempty_string(value["id"])
-    vendor = _require_nonempty_string(value["vendor"])
+    try:
+        vendor = validate_vendor_label(value["vendor"])
+    except InvalidVendorLabelError:
+        raise InvalidInputError() from None
     command = value["command"]
-    if vendor not in SUPPORTED_VENDORS or not isinstance(command, list) or not command:
+    if not isinstance(command, list) or not command:
         raise InvalidInputError()
 
     workflow = _require_nonempty_string(value["workflow"]) if has_workflow else ""
@@ -289,9 +293,10 @@ def load_request(descriptor_path: Path) -> RouteRequest:
     """Load a redacted descriptor without task content or credentials."""
     descriptor = _read_json_object(descriptor_path, max_bytes=MAX_NATIVE_DESCRIPTOR_BYTES)
     _require_exact_keys(descriptor, {"vendor", "workflow"})
-    vendor = _require_nonempty_string(descriptor["vendor"])
-    if vendor not in SUPPORTED_VENDORS:
-        raise InvalidInputError()
+    try:
+        vendor = validate_vendor_label(descriptor["vendor"])
+    except InvalidVendorLabelError:
+        raise InvalidInputError() from None
     return RouteRequest(vendor=vendor, workflow=_require_nonempty_string(descriptor["workflow"]))
 
 
@@ -338,7 +343,7 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
         description="Print the tier of a task read from standard input.",
     )
-    classify.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
+    classify.add_argument("--source-vendor")
     # 로컬 판정이 기본이다. 이 플래그를 줄 때만 벤더 CLI 를 한 번 실행한다.
     classify.add_argument("--ask-vendor", action="store_true")
     # 판정 명령도 내장 벤더 명령이므로 실행 전에 볼 수 있어야 한다.
@@ -354,7 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         native = subcommands.add_parser(name, allow_abbrev=False, description=description)
         native.add_argument("--policy", type=Path)
-        native.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
+        native.add_argument("--source-vendor")
         native.add_argument("--source-profile")
         # wclass classify 가 낸 티어를 그대로 받는다. route 와 run 은 이 경로에서도
         # 네트워크를 쓰지 않는다. 판정은 별도 명령에서 이미 끝났다.
@@ -814,7 +819,17 @@ def classify_from_standard_input(
     if show_triage_command:
         assert source_vendor is not None
         # 태스크를 읽지 않고 벤더도 부르지 않는다. 명령만 보여준다.
-        print(json.dumps(triage_descriptor(source_vendor)))
+        #
+        # 벤더 라벨이 열려 있으므로 이 패키지가 판정 명령을 갖지 않는 벤더도
+        # 여기까지 내려온다. triage_descriptor 는 그런 벤더에 대해 이미
+        # TriageUnavailableError 로 닫히지만(내부에서 실패), 여기서 잡지
+        # 않으면 트레이스백으로 새어 나간다. --ask-vendor 경로와 같은 진단으로
+        # 닫는다.
+        try:
+            print(json.dumps(triage_descriptor(source_vendor)))
+        except TriageUnavailableError:
+            print(json.dumps({"error": "triage_unavailable"}), file=sys.stderr)
+            return 8
         return 0
     try:
         task = read_task_from_standard_input()
@@ -1164,6 +1179,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command is None:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
+
+    # 라벨이 열려 있으므로 argparse 가 오타를 잡아주지 못한다. 형식만이라도
+    # 여기서 닫아, 잘못된 라벨이 라우트 선택까지 내려가지 않게 한다.
+    source_vendor = getattr(arguments, "source_vendor", None)
+    if source_vendor is not None:
+        try:
+            validate_vendor_label(source_vendor)
+        except InvalidVendorLabelError:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
 
     if arguments.command == "classify":
         return classify_from_standard_input(
