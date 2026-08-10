@@ -240,6 +240,11 @@ def _parse_route(value: object) -> Route:
     parsed_command = _require_at_most_one_task_slot(
         tuple(_require_command_argument(argument) for argument in command)
     )
+    # workflow 라우트는 select_tier_route 의 후보가 아니라 render 만 다루므로
+    # 아무도 이 자리를 채우지 않는다. 여기서 닫지 않으면 render 가 미치환
+    # 리터럴 "{{task}}" 를 그대로 내보내 검토 산출물이 실제 실행과 어긋난다.
+    if has_workflow and TASK_PLACEHOLDER in parsed_command:
+        raise InvalidInputError()
     return Route(
         route_id=route_id,
         vendor=vendor,

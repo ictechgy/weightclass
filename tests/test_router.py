@@ -324,6 +324,33 @@ class TaskPlaceholderTests(unittest.TestCase):
                 with self.assertRaises(cli.InvalidInputError):
                     cli.load_routes(path)
 
+    def test_the_token_is_rejected_in_a_workflow_route(self) -> None:
+        """Breaks if a workflow route can declare a slot nothing ever fills.
+
+        select_tier_route 만 티어 라우트를 대상으로 치환을 준비하므로, workflow
+        라우트에 이 토큰을 허용하면 render 가 미치환 리터럴 "{{task}}" 를 그대로
+        보여준다. 파싱 단계에서 닫아야 검토 산출물이 항상 실제 실행을 반영한다.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "r",
+                                "vendor": "codex",
+                                "workflow": "review",
+                                "command": ["/bin/echo", "{{task}}"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(cli.InvalidInputError):
+                cli.load_routes(policy_path)
+
     def test_substitution_fills_exactly_the_reserved_slot(self) -> None:
         """Breaks if substitution touches an argument it was not given."""
         filled = router.substitute_task(("agy", "--print", "{{task}}", "--effort"), "긴 태스크")
@@ -557,6 +584,24 @@ class OpenVendorLabelTests(unittest.TestCase):
                 with self.assertRaises(cli.InvalidInputError):
                     cli.load_routes(path)
 
+    def test_a_malformed_source_vendor_is_rejected_before_any_subcommand_runs(self) -> None:
+        """Breaks if main()'s only guard against a garbled --source-vendor stops firing.
+
+        라벨이 열려 있어 argparse choices 가 오타를 잡아주지 못하는 서브커맨드에서,
+        main() 의 형식 검사가 라우트 선택까지 내려가기 전에 거부해야 한다.
+        """
+        result = _weightclass("classify", "--source-vendor", "bad vendor", task="Fix a typo.")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+
+    def test_a_well_formed_but_unrouted_source_vendor_fails_closed_at_selection(self) -> None:
+        """Breaks if a syntactically valid label that matches no route is silently accepted."""
+        result = _weightclass("route", "--source-vendor", "qwen", task="Fix a typo.")
+
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(json.loads(result.stderr), {"error": "unsupported_route"})
+
     def test_containment_still_holds_for_unknown_labels(self) -> None:
         """Breaks if opening the label also opened the boundary it exists to enforce."""
         with tempfile.TemporaryDirectory() as directory:
@@ -571,6 +616,8 @@ class OpenVendorLabelTests(unittest.TestCase):
 
             with self.assertRaises(RouteSelectionError):
                 select_tier_route(routes, "high", "qwen")
+
+            self.assertEqual(select_tier_route(routes, "low", "qwen").route_id, "a")
 
     def test_the_fingerprint_still_separates_two_unknown_vendors(self) -> None:
         """Breaks if the vendor stops being bound, letting a review cover another vendor."""

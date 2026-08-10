@@ -766,6 +766,47 @@ class ApiVendorScopeTests(unittest.TestCase):
         with self.assertRaises(RouteSelectionError):
             select_api_route("Fix a typo.", policy, "agy")
 
+    def test_cli_rejects_a_native_only_vendor_before_route_selection(self) -> None:
+        """Breaks if the CLI's own gate on --source-vendor stops matching the vendor set.
+
+        위 test_a_vendor_without_a_known_provider_is_an_unsupported_route 는
+        select_api_route 내부 게이트를 직접 부른다(그 결과는 unsupported_route,
+        exit 3). 이 테스트는 그보다 앞선 층을 고정한다: `v2 route`/`v2 run` 의
+        --source-vendor 는 argparse choices 로 API_SOURCE_VENDORS 에 닫혀 있어,
+        native 경로에는 있지만 API 경로에는 없는 `agy` 는 파싱 단계에서 막혀
+        select_api_route 까지 내려가지 않는다(invalid_input, exit 2). 정책을 실존
+        하고 유효하게, 그리고 그 안의 eligible_source_vendors 에 "agy"를 넣지
+        않은 채로 줘야 한다. 그렇지 않으면 이 gate 가 아니라 다른 이유로 같은
+        exit 2가 나와, choices gate 가 사라져도 테스트가 계속 통과하는 거짓
+        안전감을 준다.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "api-policy.json"
+            policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "v2",
+                    "route",
+                    "--policy",
+                    str(policy_path),
+                    "--source-vendor",
+                    "agy",
+                    "--api-runtime",
+                    sys.executable,
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+
 
 if __name__ == "__main__":
     unittest.main()
