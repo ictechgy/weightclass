@@ -8,30 +8,36 @@ _Last updated: 2026-08-10 by Claude Code_
   a reviewed native Codex or Claude workflow from explicit user policy.
 - Version 0.5.0 added explicit model and effort routing, same-vendor profile
   routing, and directional opt-in cross-vendor/profile routing.
+- Version 0.6.0 added no routing behavior. It fixed a Darwin child-observation
+  race, removed the forked process helpers that caused it, and gated
+  caller-supplied JSON on file write ownership.
 - Preserve the local privacy boundary: task content is transient stdin only;
   weightclass does not retain it or own provider credentials, HTTP, billing, or
   subscription entitlement discovery.
 
 ## Current Status
 
-- The requested 0.5.0 scope is complete, reviewed, merged, and deployed.
-- PR [#23](https://github.com/ictechgy/weightclass/pull/23) is merged.
-- Merge commit: `3f0167abab2a4d79d2252aef0b75fa067d3c7337`.
-- Annotated tag `v0.5.0` points to that merge commit and is on `origin`.
+- 0.6.0 is complete, merged, and deployed. It carries the review follow-ups
+  listed under Completed.
+- PR [#24](https://github.com/ictechgy/weightclass/pull/24) is merged.
+- Merge commit: `a11d2d6`.
+- Annotated tag `v0.6.0` points to that merge commit and is on `origin`.
 - GitHub Release workflow run
-  [31344056294](https://github.com/ictechgy/weightclass/actions/runs/31344056294)
+  [31350378332](https://github.com/ictechgy/weightclass/actions/runs/31350378332)
   completed successfully.
 - PyPI publishes
-  [`weightclass 0.5.0`](https://pypi.org/project/weightclass/0.5.0/)
+  [`weightclass 0.6.0`](https://pypi.org/project/weightclass/0.6.0/)
   as exactly one wheel and one sdist; neither is yanked.
-- No mandatory 0.5.0 implementation, merge, or deployment work remains.
-- Branch `fix/review-followups` is open from `origin/main`
-  (`3f0167abab2a4d79d2252aef0b75fa067d3c7337`). It carries four unreleased
-  review follow-ups, listed under Completed. Nothing on this branch has been
-  committed, pushed, tagged, or published.
-- This branch changes no routing decision, descriptor, fingerprint, frame, or
-  protocol stage. It is a correctness, deduplication, and documentation change
-  plus one new fail-closed gate on caller-supplied file permissions.
+- 0.6.0 changes no routing decision, descriptor, fingerprint, frame, or protocol
+  stage. It is a correctness, deduplication, and documentation change plus one
+  fail-closed gate on caller-supplied file permissions.
+- 0.6.0 was never read by anyone other than its author before publication. The
+  gates were exhaustive; the human review step in `AGENTS.md` was not performed.
+  Treat its judgement calls as unconfirmed, not as settled precedent.
+- The requested 0.5.0 scope was complete, reviewed, merged, and deployed. PR
+  [#23](https://github.com/ictechgy/weightclass/pull/23), merge commit
+  `3f0167abab2a4d79d2252aef0b75fa067d3c7337`, tag `v0.5.0`.
+- No mandatory implementation, merge, or deployment work remains.
 
 ## Completed
 
@@ -41,7 +47,7 @@ _Last updated: 2026-08-10 by Claude Code_
 - Goal g12 is leader-verified. It adds full Linux/macOS CI and release-DAG gates
   plus the requirement map in `docs/completion-audit-v2.md`.
 
-Unreleased, on `fix/review-followups`:
+Released in 0.6.0:
 
 - Restored the `Goal g12 is leader-verified` statement this file must contain.
   A previous refresh dropped it and left
@@ -141,14 +147,32 @@ Unreleased, on `fix/review-followups`:
 
 ## Verification
 
-On `fix/review-followups`, macOS/arm64, CPython 3.10:
+For 0.6.0, as released:
 
-- `python -m unittest discover -s tests -t .`: 627/627 passed (616 before, plus
-  11 new regression tests).
-- `ruff check` and `ruff format --check`: clean.
-- `mypy --strict src/weightclass tests`: no issues in 90 source files.
-- Not re-run on this branch: Python 3.14, the sdist/wheel distribution gates,
-  and CI. Run them before any release.
+- Full source suite with `ResourceWarning` as error, on the merge commit:
+  628/628 passed on Python 3.10, 3.13, and 3.14 (616 before, plus 12 new
+  regression tests).
+- The suite passes identically under `umask 022` and `umask 002`. Keep both
+  covered; the permission gate is the reason.
+- Ruff check/format and strict mypy (90 source files): clean.
+- `python -m build`, `twine check --strict`, and
+  `verify_distribution_isolation.py --run-sdist-tests` (623 passed, 11 skips).
+- GitHub CI on `a11d2d6` and every release job on tag `v0.6.0`: success.
+- PyPI 0.6.0 files verified:
+  - `weightclass-0.6.0-py3-none-any.whl`
+    SHA-256 `f83697649dbf316e03bea439f3d7be7bb6fab5cb99dd188dd25eba0c7d0ed972`
+  - `weightclass-0.6.0.tar.gz`
+    SHA-256 `1fe1448ae1a3ab529aeade320fad3e6db8f33fe3aa2227f1adf862d2dbb3b308`
+- Clean-environment `uv tool install weightclass`: `wclass --version` reports
+  `weightclass 0.6.0`; classification smoke tests and the empty-task exit-2 path
+  behave as documented; a `0o666` policy is refused while `0o644` and `0o664`
+  are accepted.
+
+Known flake, pre-existing and unrelated to 0.6.0: running two full suites
+concurrently makes the SIGINT and process-group tests in
+`DelegationConformanceRunnerTests` fail unpredictably. The same experiment on
+`3f0167a` fails on the same test names, so do not attribute it to this release.
+Sequential runs pass.
 
 For 0.5.0, as released:
 
@@ -184,13 +208,18 @@ For 0.5.0, as released:
 
 ## Blockers & Open Questions
 
-- No blocker or required follow-up remains for 0.5.0.
-- `fix/review-followups` has had no human review. Every local and CI-equivalent
-  gate passes, but nobody other than its author has read it.
-- The permission gate remains a compatibility break, now a narrow one: a
-  world-writable policy, or one owned by another user, worked before and now
-  fails closed with `invalid_input` (exit 2). `chmod o-w` is the fix. This is
-  why the version is a minor bump under the `0.x` policy in `RELEASING.md`.
+- No blocker or required follow-up remains for 0.5.0 or 0.6.0.
+- `packaging/homebrew/weightclass.rb` still pins the 0.4.0 sdist URL and hash,
+  so the tap is two releases behind. It was already stale before 0.6.0.
+  Updating it is a change to `ictechgy/homebrew-tap`, per `RELEASING.md`.
+- 0.6.0 shipped without human review. Its judgement calls are the ones to
+  revisit first if something turns out wrong: allowing group-writable policy
+  files, leaving `_DeferredSigint` unmerged, and correcting the documentation
+  rather than the code for the delegation protocol-2 process-context check.
+- The permission gate is a narrow compatibility break: a world-writable policy,
+  or one owned by another user, worked before and now fails closed with
+  `invalid_input` (exit 2). `chmod o-w` is the fix. This is why 0.6.0 is a minor
+  bump under the `0.x` policy in `RELEASING.md`.
 - Considered and not done: adding the pre-task process-context check to the
   delegation protocol-2 run path so all three run paths match. The current code
   matches `docs/protocol-v2-specification.md`, so aligning them would be a
@@ -225,13 +254,11 @@ For 0.5.0, as released:
 
 ## Next Steps
 
-1. Review `fix/review-followups`, then decide whether the permission gate ships
-   as-is. Nothing on that branch is committed yet.
-2. Before merging it, run Python 3.14 and the sdist/wheel distribution gates;
-   only the Python 3.10 source suite, ruff, and strict mypy were run.
-3. For other new work, fetch `origin/main`, create a new branch from
-   `3f0167abab2a4d79d2252aef0b75fa067d3c7337`, and re-read `AGENTS.md` plus the
-   relevant Protocol 2 docs.
+1. If no new feature is requested, stop; 0.6.0 is complete and deployed.
+2. Optionally read 0.6.0 after the fact and record whether its three judgement
+   calls stand. It was published without that pass.
+3. For new work, fetch `origin/main`, create a new branch from `a11d2d6`, and
+   re-read `AGENTS.md` plus the relevant Protocol 2 docs.
 4. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, transient
    task handling, and the single-reviewed-child execution boundary.
 
@@ -239,9 +266,8 @@ For 0.5.0, as released:
 
 Open this repository at
 `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
-`AGENTS.md`, then continue from: `weightclass 0.5.0 is merged and deployed.
-Branch fix/review-followups holds four uncommitted, unreviewed review
-follow-ups; review them and decide on the policy-file permission gate before
-anything else. For unrelated work, branch from origin/main at
-3f0167abab2a4d79d2252aef0b75fa067d3c7337 and preserve the documented Protocol
+`AGENTS.md`, then continue from: `weightclass 0.6.0 is merged, tagged, and
+published to PyPI; no mandatory work remains. It shipped without human review,
+so its three judgement calls are unconfirmed. If a new request exists, branch
+from origin/main at a11d2d6 and preserve the documented Protocol
 1/privacy/process boundaries.`
