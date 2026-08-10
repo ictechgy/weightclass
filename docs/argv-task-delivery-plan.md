@@ -1096,8 +1096,57 @@ high/medium/low 를, --permission-mode 는 acceptEdits 를 받는다.
 - Modify: `HANDOFF.md` (Goal, Current Status, Completed)
 
 **Interfaces:**
-- Consumes: everything from Tasks 1-6.
+- Consumes: everything from Tasks 1-7.
 - Produces: no code.
+
+- [ ] **Step 0: Document the opened vendor label in README**
+
+This step was added after Task 5 joined the plan. It is the headline user-facing
+change of the whole branch and the original reason for the work: bringing an
+agent this package ships no command for, without installing that CLI on a
+maintainer's machine to measure its flags.
+
+In `README.md`, in the `## Override the routes` section, before the `{{task}}`
+paragraph from Step 1, add:
+
+```markdown
+A route's `vendor` is a containment label you choose, not a list of tools
+weightclass knows. Any printable identifier without whitespace, up to 64 bytes,
+is valid. Routing compares it as a string and the fingerprint hashes it as a
+string; nothing in weightclass holds vendor-specific knowledge about it.
+
+That means an agent weightclass ships no built-in command for is still usable
+by whoever has it installed:
+
+```json
+{
+  "routes": [
+    { "id": "qwen-low", "vendor": "qwen", "tier": "low",
+      "command": ["qwen", "-p", "{{task}}"] }
+  ]
+}
+```
+
+The label still does its job. Routes of different vendors do not mix without
+`"allow_mixed_vendors": true`, and a fingerprint reviewed for one vendor never
+matches another.
+
+Because the label is open, `--source-vendor` can no longer reject a typo.
+`--source-vendor codx` is well-formed, so it is not an argument error; it simply
+matches no route and exits `3` with `{"error": "unsupported_route"}`. A
+malformed label — empty, containing whitespace, over 64 bytes, or carrying
+non-printable characters — still exits `2` with `{"error": "invalid_input"}`.
+```
+
+In the boundary list near the end of `README.md`, add:
+
+```markdown
+- weightclass ships built-in commands only for vendors whose CLI invocation was
+  measured: `claude`, `codex`, `agy`, and `grok`. It will not guess another
+  program's flags. Any other agent is reachable by writing its exact argv in a
+  policy, which is also why no CLI has to be installed here for weightclass to
+  support it.
+```
 
 - [ ] **Step 1: Document the placeholder and the exposure in README**
 
