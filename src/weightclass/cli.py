@@ -939,6 +939,10 @@ def route_from_standard_input(
     if policy.posture is not None:
         response["posture"] = policy.posture
         response["reason_code"] = reason_code
+    # argv 전달은 태스크를 명령줄에 싣는다. 같은 머신의 다른 사용자가 ps 로 볼 수
+    # 있으므로, 검토하는 사람이 이 사실을 모르고 지나치지 않게 명시한다.
+    if uses_argv_task_delivery(route.command):
+        response["task_delivery"] = "argv"
     print(json.dumps(response))
     return 0
 

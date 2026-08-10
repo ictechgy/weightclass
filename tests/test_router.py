@@ -392,6 +392,72 @@ class TaskPlaceholderTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(recorded["stdin"], "Fix a typo.\x00second part")
 
+    def test_review_names_argv_delivery_and_never_shows_the_task(
+        self,
+    ) -> None:
+        """Breaks if a reviewer cannot see that this route puts the task on the command line."""
+        with tempfile.TemporaryDirectory() as directory:
+            directory_path = Path(directory)
+            policy_path = directory_path / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "r-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": ["/bin/echo", "low"],
+                            },
+                            {
+                                "id": "r",
+                                "vendor": "codex",
+                                "tier": "standard",
+                                "command": ["/bin/echo", "{{task}}"],
+                            },
+                            {
+                                "id": "r-high",
+                                "vendor": "codex",
+                                "tier": "high",
+                                "command": ["/bin/echo", "high"],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            review = _weightclass("route", "--policy", str(policy_path), task="비밀 태스크")
+
+        rendered = json.loads(review.stdout)
+        self.assertEqual(review.returncode, 0, review.stderr)
+        self.assertEqual(rendered["task_delivery"], "argv")
+        self.assertEqual(rendered["command"], ["/bin/echo", "{{task}}"])
+        self.assertNotIn("비밀 태스크", review.stdout)
+
+    def test_review_omits_the_key_for_stdin_delivery(self) -> None:
+        """Breaks if every existing review output grows a field it never had."""
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = self._policy(Path(directory), ["/bin/echo", "ok"])
+            review = _weightclass("route", "--policy", str(policy_path), task="Fix a typo.")
+
+        self.assertNotIn("task_delivery", json.loads(review.stdout))
+
+    def test_two_tasks_at_one_tier_share_one_fingerprint(self) -> None:
+        """Breaks if the fingerprint starts covering substituted task text.
+
+        지문이 태스크마다 달라지면 한 번의 검토가 한 번의 실행만 묶게 되고,
+        태스크의 해시를 남기지 않는다는 규칙도 사실상 깨진다.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
+            first = _weightclass("route", "--policy", str(policy_path), task="Fix a typo.")
+            second = _weightclass("route", "--policy", str(policy_path), task="Rename a var.")
+
+        self.assertEqual(
+            json.loads(first.stdout)["route_fingerprint"],
+            json.loads(second.stdout)["route_fingerprint"],
+        )
+
 
 class CommandSurfaceTests(unittest.TestCase):
     def test_help_lists_every_reachable_subcommand(self) -> None:
