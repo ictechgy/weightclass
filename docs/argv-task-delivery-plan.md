@@ -154,7 +154,7 @@ def _require_at_most_one_task_slot(command: tuple[str, ...]) -> tuple[str, ...]:
 
 Replace the `Route(...)` construction at the end of `_parse_route` so the command is validated before the route is built:
 
-```python
+```text
     parsed_command = _require_at_most_one_task_slot(
         tuple(_require_command_argument(argument) for argument in command)
     )
@@ -209,62 +209,59 @@ git commit -m "feat: 명령 안에 태스크 자리를 표시하는 {{task}} 토
 
 Add to `tests/test_router.py`, inside `TaskPlaceholderTests`:
 
-```python
-def _recorder(self, directory: Path) -> Path:
-    """자식이 받은 argv 와 stdin 을 그대로 파일에 적는 가짜 실행 파일."""
-    recorder = directory / "recorder.py"
-    recorder.write_text(
-        "import json, sys\n"
-        "record = {'argv': sys.argv[1:], 'stdin': sys.stdin.read()}\n"
-        "open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps(record))\n",
-        encoding="utf-8",
-    )
-    return recorder
-
-
-def test_argv_delivery_puts_the_task_in_argv_and_leaves_stdin_empty(self) -> None:
-    """Breaks if the task is delivered twice or in the wrong channel."""
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        recorder = self._recorder(root)
-        record_path = root / "record.json"
-        policy_path = self._policy(
-            root,
-            [sys.executable, str(recorder), str(record_path), "{{task}}"],
+```text
+    def _recorder(self, directory: Path) -> Path:
+        """자식이 받은 argv 와 stdin 을 그대로 파일에 적는 가짜 실행 파일."""
+        recorder = directory / "recorder.py"
+        recorder.write_text(
+            "import json, sys\n"
+            "record = {'argv': sys.argv[1:], 'stdin': sys.stdin.read()}\n"
+            "open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps(record))\n",
+            encoding="utf-8",
         )
+        return recorder
 
-        result = reviewed_run(policy_path, "Fix a typo.")
-        recorded = json.loads(record_path.read_text(encoding="utf-8"))
+    def test_argv_delivery_puts_the_task_in_argv_and_leaves_stdin_empty(self) -> None:
+        """Breaks if the task is delivered twice or in the wrong channel."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = self._recorder(root)
+            record_path = root / "record.json"
+            policy_path = self._policy(
+                root,
+                [sys.executable, str(recorder), str(record_path), "{{task}}"],
+            )
 
-    self.assertEqual(result.returncode, 0, result.stderr)
-    self.assertEqual(recorded["argv"][-1], "Fix a typo.")
-    self.assertEqual(recorded["stdin"], "")
+            result = reviewed_run(policy_path, "Fix a typo.")
+            recorded = json.loads(record_path.read_text(encoding="utf-8"))
 
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(recorded["argv"][-1], "Fix a typo.")
+        self.assertEqual(recorded["stdin"], "")
 
-def test_stdin_delivery_is_unchanged(self) -> None:
-    """Breaks if adding argv delivery altered the path every existing policy uses."""
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        recorder = self._recorder(root)
-        record_path = root / "record.json"
-        policy_path = self._policy(root, [sys.executable, str(recorder), str(record_path)])
+    def test_stdin_delivery_is_unchanged(self) -> None:
+        """Breaks if adding argv delivery altered the path every existing policy uses."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = self._recorder(root)
+            record_path = root / "record.json"
+            policy_path = self._policy(root, [sys.executable, str(recorder), str(record_path)])
 
-        result = reviewed_run(policy_path, "Fix a typo.")
-        recorded = json.loads(record_path.read_text(encoding="utf-8"))
+            result = reviewed_run(policy_path, "Fix a typo.")
+            recorded = json.loads(record_path.read_text(encoding="utf-8"))
 
-    self.assertEqual(result.returncode, 0, result.stderr)
-    self.assertEqual(recorded["stdin"], "Fix a typo.")
-    self.assertNotIn("Fix a typo.", recorded["argv"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(recorded["stdin"], "Fix a typo.")
+        self.assertNotIn("Fix a typo.", recorded["argv"])
 
+    def test_a_task_carrying_nul_is_refused_before_spawn(self) -> None:
+        """Breaks if an argv-delivery run reaches execve with a byte it cannot carry."""
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
+            result = reviewed_run(policy_path, "before\x00after")
 
-def test_a_task_carrying_nul_is_refused_before_spawn(self) -> None:
-    """Breaks if an argv-delivery run reaches execve with a byte it cannot carry."""
-    with tempfile.TemporaryDirectory() as directory:
-        policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
-        result = reviewed_run(policy_path, "before\x00after")
-
-    self.assertEqual(result.returncode, 2)
-    self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -276,7 +273,7 @@ Expected: FAIL. `test_argv_delivery_...` fails because the recorder receives `{{
 
 In `src/weightclass/cli.py`, replace the `subprocess.run` call inside `run_from_standard_input` (currently at lines 980-986) with:
 
-```python
+```text
         # 치환은 spawn 직전에 한 번만 한다. 검토 출력과 지문은 이미 치환 전
         # 명령으로 계산되었으므로 태스크가 그 둘에 들어가지 않는다.
         argv = route.command
@@ -339,44 +336,44 @@ argv 전달에서만 거부한다. stdin 전달은 실을 수 있으므로 그�
 
 Add to `tests/test_router.py`, inside `TaskPlaceholderTests`:
 
-```python
-def test_review_names_argv_delivery_and_never_shows_the_task(self) -> None:
-    """Breaks if a reviewer cannot see that this route puts the task on the command line."""
-    with tempfile.TemporaryDirectory() as directory:
-        policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
-        review = _weightclass("route", "--policy", str(policy_path), task="비밀 태스크")
+```text
+    def test_review_names_argv_delivery_and_never_shows_the_task(self) -> None:
+        """Breaks if a reviewer cannot see that this route puts the task on the command line."""
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
+            review = _weightclass(
+                "route", "--policy", str(policy_path), task="비밀 태스크"
+            )
 
-    rendered = json.loads(review.stdout)
-    self.assertEqual(review.returncode, 0, review.stderr)
-    self.assertEqual(rendered["task_delivery"], "argv")
-    self.assertEqual(rendered["command"], ["/bin/echo", "{{task}}"])
-    self.assertNotIn("비밀 태스크", review.stdout)
+        rendered = json.loads(review.stdout)
+        self.assertEqual(review.returncode, 0, review.stderr)
+        self.assertEqual(rendered["task_delivery"], "argv")
+        self.assertEqual(rendered["command"], ["/bin/echo", "{{task}}"])
+        self.assertNotIn("비밀 태스크", review.stdout)
 
+    def test_review_omits_the_key_for_stdin_delivery(self) -> None:
+        """Breaks if every existing review output grows a field it never had."""
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = self._policy(Path(directory), ["/bin/echo", "ok"])
+            review = _weightclass("route", "--policy", str(policy_path), task="Fix a typo.")
 
-def test_review_omits_the_key_for_stdin_delivery(self) -> None:
-    """Breaks if every existing review output grows a field it never had."""
-    with tempfile.TemporaryDirectory() as directory:
-        policy_path = self._policy(Path(directory), ["/bin/echo", "ok"])
-        review = _weightclass("route", "--policy", str(policy_path), task="Fix a typo.")
+        self.assertNotIn("task_delivery", json.loads(review.stdout))
 
-    self.assertNotIn("task_delivery", json.loads(review.stdout))
+    def test_two_tasks_at_one_tier_share_one_fingerprint(self) -> None:
+        """Breaks if the fingerprint starts covering substituted task text.
 
+        지문이 태스크마다 달라지면 한 번의 검토가 한 번의 실행만 묶게 되고,
+        태스크의 해시를 남기지 않는다는 규칙도 사실상 깨진다.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
+            first = _weightclass("route", "--policy", str(policy_path), task="Fix a typo.")
+            second = _weightclass("route", "--policy", str(policy_path), task="Rename a var.")
 
-def test_two_tasks_at_one_tier_share_one_fingerprint(self) -> None:
-    """Breaks if the fingerprint starts covering substituted task text.
-
-    지문이 태스크마다 달라지면 한 번의 검토가 한 번의 실행만 묶게 되고,
-    태스크의 해시를 남기지 않는다는 규칙도 사실상 깨진다.
-    """
-    with tempfile.TemporaryDirectory() as directory:
-        policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
-        first = _weightclass("route", "--policy", str(policy_path), task="Fix a typo.")
-        second = _weightclass("route", "--policy", str(policy_path), task="Rename a var.")
-
-    self.assertEqual(
-        json.loads(first.stdout)["route_fingerprint"],
-        json.loads(second.stdout)["route_fingerprint"],
-    )
+        self.assertEqual(
+            json.loads(first.stdout)["route_fingerprint"],
+            json.loads(second.stdout)["route_fingerprint"],
+        )
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -388,7 +385,7 @@ Expected: FAIL with `KeyError: 'task_delivery'`.
 
 In `src/weightclass/cli.py`, inside `route_from_standard_input`, after the block that adds `posture` and `reason_code`:
 
-```python
+```text
     # argv 전달은 태스크를 명령줄에 싣는다. 같은 머신의 다른 사용자가 ps 로 볼 수
     # 있으므로, 검토하는 사람이 이 사실을 모르고 지나치지 않게 명시한다.
     if uses_argv_task_delivery(route.command):
@@ -492,7 +489,7 @@ API_SOURCE_VENDORS: Final = frozenset(SOURCE_PROVIDER)
 
 In `select_api_route`, replace the guard:
 
-```python
+```text
     if source_vendor not in API_SOURCE_VENDORS or not policy.allow_api:
         raise RouteSelectionError()
 ```
@@ -501,7 +498,7 @@ Remove the now-unused `SUPPORTED_VENDORS` import from `v2.py` only if nothing el
 
 Gate the V2 subcommand's argument too. In `src/weightclass/cli.py`, `_add_api_route_arguments` currently offers `choices=sorted(SUPPORTED_VENDORS)`; change it to the API set so an unknown vendor is refused at parse time:
 
-```python
+```text
     parser.add_argument("--source-vendor", required=True, choices=sorted(API_SOURCE_VENDORS))
 ```
 
@@ -634,20 +631,19 @@ Extend the `weightclass.router` import in `tests/test_router.py` to include `BUI
 
 Replace the triage contract test in `tests/test_triage.py`. It currently iterates `SUPPORTED_VENDORS`, which no longer exists:
 
-```python
-def test_every_built_in_vendor_has_a_reviewable_triage_descriptor(self) -> None:
-    """Breaks if a shipped vendor has an implicit triage policy."""
-    for vendor in BUILT_IN_VENDORS:
-        with self.subTest(vendor=vendor):
-            descriptor = triage_descriptor(vendor)
-            self.assertEqual(descriptor["source_vendor"], vendor)
-            self.assertIn("available", descriptor)
+```text
+    def test_every_built_in_vendor_has_a_reviewable_triage_descriptor(self) -> None:
+        """Breaks if a shipped vendor has an implicit triage policy."""
+        for vendor in BUILT_IN_VENDORS:
+            with self.subTest(vendor=vendor):
+                descriptor = triage_descriptor(vendor)
+                self.assertEqual(descriptor["source_vendor"], vendor)
+                self.assertIn("available", descriptor)
 
-
-def test_a_vendor_this_package_ships_no_command_for_has_no_triage(self) -> None:
-    """Breaks if an unreviewed adapter is invented for an unknown vendor."""
-    with self.assertRaises(TriageUnavailableError):
-        triage_descriptor("qwen")
+    def test_a_vendor_this_package_ships_no_command_for_has_no_triage(self) -> None:
+        """Breaks if an unreviewed adapter is invented for an unknown vendor."""
+        with self.assertRaises(TriageUnavailableError):
+            triage_descriptor("qwen")
 ```
 
 Update the `weightclass.router` import in `tests/test_triage.py` from `SUPPORTED_VENDORS` to `BUILT_IN_VENDORS`.
@@ -695,7 +691,7 @@ def validate_vendor_label(value: object) -> str:
 
 In `src/weightclass/cli.py`, `_parse_route`, replace the vendor check:
 
-```python
+```text
     route_id = _require_nonempty_string(value["id"])
     try:
         vendor = validate_vendor_label(value["vendor"])
@@ -710,13 +706,13 @@ In `load_request`, the same replacement for the descriptor's `vendor`.
 
 For the `classify`, `route`, and `run` subcommands, drop `choices=` and validate after parsing. Replace each `add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))` with:
 
-```python
+```text
         native.add_argument("--source-vendor")
 ```
 
 and add this guard at the top of `main`, immediately after `arguments.command` is known to be one of `classify`, `route`, `run`:
 
-```python
+```text
     # 라벨이 열려 있으므로 argparse 가 오타를 잡아주지 못한다. 형식만이라도
     # 여기서 닫아, 잘못된 라벨이 라우트 선택까지 내려가지 않게 한다.
     source_vendor = getattr(arguments, "source_vendor", None)
@@ -815,7 +811,7 @@ Extend the `weightclass.router` import in `tests/test_router.py` to include `BUI
 
 Add to `tests/test_triage.py`, inside `TriageCommandTests`:
 
-```python
+```text
     def test_agy_has_no_reviewed_triage_adapter(self) -> None:
         """Breaks if an unreviewed adapter starts sending task text to a new vendor."""
         with self.assertRaises(TriageUnavailableError):
@@ -863,8 +859,7 @@ def agy_command(reasoning_effort: str) -> tuple[str, ...]:
 
 Append to `DEFAULT_ROUTES`, after the existing claude entries:
 
-```python
-(
+```text
     Route(
         route_id="agy-low",
         vendor="agy",
@@ -872,8 +867,6 @@ Append to `DEFAULT_ROUTES`, after the existing claude entries:
         tier="low",
         command=agy_command("low"),
     ),
-)
-(
     Route(
         route_id="agy-standard",
         vendor="agy",
@@ -881,8 +874,6 @@ Append to `DEFAULT_ROUTES`, after the existing claude entries:
         tier="standard",
         command=agy_command("medium"),
     ),
-)
-(
     Route(
         route_id="agy-high",
         vendor="agy",
@@ -890,7 +881,6 @@ Append to `DEFAULT_ROUTES`, after the existing claude entries:
         tier="high",
         command=agy_command("high"),
     ),
-)
 ```
 
 In `src/weightclass/triage.py`, extend the reasons table:
@@ -977,7 +967,7 @@ class GrokBuiltInRouteTests(unittest.TestCase):
 
 Add to `tests/test_triage.py`, inside `TriageCommandTests`:
 
-```python
+```text
     def test_grok_has_no_reviewed_triage_adapter(self) -> None:
         """Breaks if an unreviewed adapter starts sending task text to a new vendor."""
         with self.assertRaises(TriageUnavailableError):
@@ -1026,8 +1016,7 @@ def grok_command(reasoning_effort: str) -> tuple[str, ...]:
 
 Append to `DEFAULT_ROUTES`, after the agy entries:
 
-```python
-(
+```text
     Route(
         route_id="grok-low",
         vendor="grok",
@@ -1035,8 +1024,6 @@ Append to `DEFAULT_ROUTES`, after the agy entries:
         tier="low",
         command=grok_command("low"),
     ),
-)
-(
     Route(
         route_id="grok-standard",
         vendor="grok",
@@ -1044,8 +1031,6 @@ Append to `DEFAULT_ROUTES`, after the agy entries:
         tier="standard",
         command=grok_command("medium"),
     ),
-)
-(
     Route(
         route_id="grok-high",
         vendor="grok",
@@ -1053,7 +1038,6 @@ Append to `DEFAULT_ROUTES`, after the agy entries:
         tier="high",
         command=grok_command("high"),
     ),
-)
 ```
 
 In `src/weightclass/triage.py`:
