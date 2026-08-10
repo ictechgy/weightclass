@@ -278,7 +278,19 @@ def classify_task(task: str) -> Tier:
 
 
 def classify_task_with_reason(task: str) -> ClassificationDecision:
-    """Return a versioned decision containing no task-derived content."""
+    """Return a versioned decision containing no task-derived content.
+
+    검사 순서는 취향이 아니라 계약이다. 길이 바닥이 반드시 첫 번째여야 한다.
+
+    아래 시그널/결과 패턴들은 `[\\s\\S]{0,80}` 처럼 경계 있는 와일드카드를 여러 겹
+    중첩한다. 매칭 실패 시 되추적 비용이 입력 길이에 대해 준-2차로 늘어나므로,
+    상한(20,000자)까지 통과시키면 적대적 입력 하나로 수 밀리초를 태울 수 있다.
+    길이 바닥이 먼저 걸리면 정규식이 보는 최대 길이는 HIGH_TASK_CHARACTERS - 1 로
+    닫힌다. 즉 이 반환문은 분류 규칙이면서 동시에 되추적 상한이다.
+
+    이 순서를 바꾸거나 HIGH_TASK_CHARACTERS 를 올리려면 먼저 그 비용을 측정할 것.
+    tests/test_classification.py 의 되추적 상한 회귀 테스트가 이 계약을 고정한다.
+    """
     normalized_task = validate_task(task)
     if len(normalized_task) >= HIGH_TASK_CHARACTERS:
         return ClassificationDecision("high", "high.length_floor")
