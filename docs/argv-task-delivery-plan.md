@@ -512,7 +512,7 @@ Expected: OK.
 - [ ] **Step 5: Run the full suite and the gates**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests -t . -q`
-Expected: OK, 645 tests.
+Expected: OK, 646 tests.
 
 Run: `ruff check . && ruff format --check . && mypy --strict src/weightclass tests`
 Expected: all clean.
@@ -736,7 +736,7 @@ Expected: OK.
 - [ ] **Step 6: Run the full suite and the gates**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests -t . -q`
-Expected: OK, 650 tests.
+Expected: OK, 651 tests.
 
 Some existing tests assert that a bad `--source-vendor` is an argparse rejection. Those now exit `unsupported_route` instead of `invalid_input` when the label is well-formed but unknown. Update each to the behavior the new gate defines: malformed label stays exit 2, well-formed-but-unrouted becomes exit 3. Do not weaken an assertion to make it pass; change it to the value the design specifies and leave a comment saying why.
 
@@ -900,7 +900,7 @@ Expected: OK.
 - [ ] **Step 5: Run the full suite and the gates**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests -t . -q`
-Expected: OK, 654 tests.
+Expected: OK, 655 tests.
 
 Run: `ruff check . && ruff format --check . && mypy --strict src/weightclass tests`
 Expected: all clean.
@@ -1058,7 +1058,7 @@ Expected: OK.
 - [ ] **Step 5: Run the full suite and the gates**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests -t . -q`
-Expected: OK, 658 tests.
+Expected: OK, 659 tests.
 
 Run: `ruff check . && ruff format --check . && mypy --strict src/weightclass tests`
 Expected: all clean.
@@ -1181,7 +1181,7 @@ Expected: no output.
 - [ ] **Step 5: Run the full suite and the gates**
 
 Run: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m unittest discover -s tests -t . -q`
-Expected: OK, 658 tests.
+Expected: OK, 659 tests.
 
 Run: `ruff check . && ruff format --check . && mypy --strict src/weightclass tests`
 Expected: all clean.
