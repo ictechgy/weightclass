@@ -154,7 +154,16 @@ EXPECTED_BUILTINS = (
     b'"sha256:5de03b92f50a013e8e318e1e2bb1791d07d52210dc3a6594e3a981ec2d39a41b"],'
     b'["agy-high","agy","high",["agy","--print","{{task}}","--mode","accept-edits",'
     b'"--effort","high"],'
-    b'"sha256:6294541a7054de64e5bf89da85c3cbd85941c562c0c831af43eeaed38f058b64"]]'
+    b'"sha256:6294541a7054de64e5bf89da85c3cbd85941c562c0c831af43eeaed38f058b64"],'
+    b'["grok-low","grok","low",["grok","-p","{{task}}","--permission-mode",'
+    b'"acceptEdits","--reasoning-effort","low"],'
+    b'"sha256:21fa8116c73daec8e477647952c77e6fa4494d053b3179ea8ee601d81a44bc1a"],'
+    b'["grok-standard","grok","standard",["grok","-p","{{task}}","--permission-mode",'
+    b'"acceptEdits","--reasoning-effort","medium"],'
+    b'"sha256:d99ec8ab2d3b8339a575c092325b0f22d56a933ba7138bbdca788103d226894e"],'
+    b'["grok-high","grok","high",["grok","-p","{{task}}","--permission-mode",'
+    b'"acceptEdits","--reasoning-effort","high"],'
+    b'"sha256:75f5893a91505f4ba5f3a65cb21cca6f618cfe80531183bd3e6bdc9716cac916"]]'
 )
 
 

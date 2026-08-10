@@ -13,7 +13,7 @@ Posture = Literal["balanced", "cautious"]
 
 # 이 패키지가 명령까지 함께 배포하는 벤더. 라벨을 제한하는 목록이 아니라,
 # 내장 라우트와 판정 어댑터가 존재하는 벤더를 적어둔 것이다.
-BUILT_IN_VENDORS: Final = frozenset({"claude", "codex", "agy"})
+BUILT_IN_VENDORS: Final = frozenset({"claude", "codex", "agy", "grok"})
 
 MAX_VENDOR_LABEL_BYTES: Final = 64
 
@@ -102,6 +102,25 @@ AGY_COMMAND_PREFIX: Final = (
 def agy_command(reasoning_effort: str) -> tuple[str, ...]:
     """Build the built-in Antigravity command for one reasoning effort label."""
     return AGY_COMMAND_PREFIX + (reasoning_effort,)
+
+
+# grok 도 프롬프트를 stdin 에서 읽지 않는다. -p 가 단일 턴 프롬프트를 인자로 받고,
+# 빈 문자열은 prompt is empty 로 닫힌다. --sandbox 는 프로필 어휘가 --help 에
+# 열거되지 않아 측정하지 못했으므로 지정하지 않고 grok 자신의 기본값에 맡긴다.
+# 검증하지 않은 값을 배포되는 명령에 박아 넣지 않는다.
+GROK_COMMAND_PREFIX: Final = (
+    "grok",
+    "-p",
+    TASK_PLACEHOLDER,
+    "--permission-mode",
+    "acceptEdits",
+    "--reasoning-effort",
+)
+
+
+def grok_command(reasoning_effort: str) -> tuple[str, ...]:
+    """Build the built-in Grok command for one reasoning effort label."""
+    return GROK_COMMAND_PREFIX + (reasoning_effort,)
 
 
 def uses_argv_task_delivery(command: tuple[str, ...]) -> bool:
@@ -210,6 +229,27 @@ DEFAULT_ROUTES: Final = (
         workflow="",
         tier="high",
         command=agy_command("high"),
+    ),
+    Route(
+        route_id="grok-low",
+        vendor="grok",
+        workflow="",
+        tier="low",
+        command=grok_command("low"),
+    ),
+    Route(
+        route_id="grok-standard",
+        vendor="grok",
+        workflow="",
+        tier="standard",
+        command=grok_command("medium"),
+    ),
+    Route(
+        route_id="grok-high",
+        vendor="grok",
+        workflow="",
+        tier="high",
+        command=grok_command("high"),
     ),
 )
 

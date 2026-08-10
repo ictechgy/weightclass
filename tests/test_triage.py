@@ -153,6 +153,16 @@ class TriageCommandTests(unittest.TestCase):
         self.assertEqual(descriptor["unavailable_reason"], "no_reviewed_triage_adapter")
         self.assertNotIn("command", descriptor)
 
+    def test_grok_has_no_reviewed_triage_adapter(self) -> None:
+        """Breaks if an unreviewed adapter starts sending task text to a new vendor."""
+        with self.assertRaises(TriageUnavailableError):
+            triage_command("grok")
+
+        descriptor = triage_descriptor("grok")
+        self.assertFalse(descriptor["available"])
+        self.assertEqual(descriptor["unavailable_reason"], "no_reviewed_triage_adapter")
+        self.assertNotIn("command", descriptor)
+
 
 class AskVendorTests(unittest.TestCase):
     """실제 claude/codex 는 부르지 않는다. PATH 앞에 가짜를 놓아 가로챈다.

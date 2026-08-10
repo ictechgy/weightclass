@@ -489,6 +489,32 @@ class AgyBuiltInRouteTests(unittest.TestCase):
         self.assertEqual(route.vendor, "codex")
 
 
+class GrokBuiltInRouteTests(unittest.TestCase):
+    def test_every_tier_has_a_grok_route_that_carries_the_task_in_argv(self) -> None:
+        """Breaks if a tier is missing or the built-in stops declaring its task slot."""
+        for tier, effort in (("low", "low"), ("standard", "medium"), ("high", "high")):
+            with self.subTest(tier=tier):
+                route = select_tier_route(DEFAULT_ROUTES, cast(Tier, tier), "grok")
+
+                self.assertEqual(route.vendor, "grok")
+                self.assertEqual(route.command[0], "grok")
+                self.assertIn(router.TASK_PLACEHOLDER, route.command)
+                index = route.command.index("--reasoning-effort")
+                self.assertEqual(route.command[index + 1], effort)
+                mode = route.command.index("--permission-mode")
+                self.assertEqual(route.command[mode + 1], "acceptEdits")
+
+    def test_grok_is_a_supported_source_vendor(self) -> None:
+        """Breaks if the vendor label is rejected by the surfaces that gate routing."""
+        self.assertIn("grok", BUILT_IN_VENDORS)
+
+    def test_the_built_in_does_not_assert_an_unverified_sandbox_profile(self) -> None:
+        """Breaks if a profile value nobody measured is baked into a shipped command."""
+        route = select_tier_route(DEFAULT_ROUTES, "high", "grok")
+
+        self.assertNotIn("--sandbox", route.command)
+
+
 class OpenVendorLabelTests(unittest.TestCase):
     """벤더 라벨은 격리 식별자이지 이 패키지가 아는 도구 목록이 아니다.
 

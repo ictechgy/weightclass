@@ -90,6 +90,7 @@ TRIAGE_COMMANDS: Final = {
 TRIAGE_UNAVAILABLE_REASONS: Final = {
     "codex": "no_no_tools_boundary",
     "agy": "no_reviewed_triage_adapter",
+    "grok": "no_reviewed_triage_adapter",
 }
 TRIAGE_ADAPTER_VERSION: Final = 1
 
