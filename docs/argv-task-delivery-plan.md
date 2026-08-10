@@ -537,7 +537,16 @@ SUPPORTED_VENDORS 를 통과시킨 뒤 SOURCE_PROVIDER 를 인덱싱하므로, p
 - Modify: `src/weightclass/router.py` (`SUPPORTED_VENDORS` becomes `BUILT_IN_VENDORS`; add `validate_vendor_label`)
 - Modify: `src/weightclass/cli.py` (`_parse_route`, `load_request`, `--source-vendor` arguments on `classify`/`route`/`run`)
 - Modify: `src/weightclass/triage.py` (nothing structural; confirm unknown vendors still fail closed)
-- Test: `tests/test_router.py`, `tests/test_triage.py`
+- Modify: `src/weightclass/v2.py` (`_parse_route` validates `eligible_source_vendors` against `API_SOURCE_VENDORS`; drop the `SUPPORTED_VENDORS` import)
+- Test: `tests/test_router.py`, `tests/test_triage.py`, `tests/test_v2.py`
+
+**Two dependencies this plan originally missed**, found by the Task 5 implementer before writing code and confirmed by reproducing the `ImportError` on a scratch copy:
+
+1. `v2.py:105` still validates an API policy's `eligible_source_vendors` against `SUPPORTED_VENDORS`. Renaming the symbol without touching that line breaks `import weightclass.v2` — and therefore `cli.py` — collapsing the whole suite at collection. Point it at `API_SOURCE_VENDORS` instead. These are vendors eligible to *use* an API route, and `select_api_route` already gates them on `API_SOURCE_VENDORS`; validating against the same set makes the policy fail earlier and consistently. Today the two sets are equal, so this is a no-op for `claude` and `codex`.
+
+2. `tests/test_v2.py:47`, `ProviderMappingInvariantTests.test_every_source_vendor_has_one_explicit_provider_family`, asserts `set(SOURCE_PROVIDER) == set(SUPPORTED_VENDORS)` — "every native vendor has an API provider." That is exactly the coupling Task 4 severed on purpose, and Tasks 6 and 7 will break it by design when they add `agy` and `grok`. Task 4 already added its correct successor: `test_api_vendor_set_derives_from_provider_map`, pinning `API_SOURCE_VENDORS == frozenset(SOURCE_PROVIDER)`. Delete the superseded test and its now-unused import. This is the one deletion this plan authorises; nothing else may be deleted to make a suite pass.
+
+Net suite count for this task is therefore 647 + 5 new − 1 deleted = 651.
 
 **Interfaces:**
 - Consumes: `v2.API_SOURCE_VENDORS` from Task 4 — the V2 path must already have its own gate before arbitrary labels exist.
