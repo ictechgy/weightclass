@@ -5,7 +5,9 @@ _Last updated: 2026-08-10 by Claude Code_
 ## Goal
 
 - Maintain `weightclass` as a public, local router that deterministically selects
-  a reviewed native Codex or Claude workflow from explicit user policy.
+  a reviewed workflow from explicit user policy.
+- Native routing supports `claude`, `codex`, `agy`, and `grok`. The last two
+  accept a prompt only in argv, so they use the reserved `{{task}}` slot.
 - Version 0.5.0 added explicit model and effort routing, same-vendor profile
   routing, and directional opt-in cross-vendor/profile routing.
 - Version 0.6.0 added no routing behavior. It fixed a Darwin child-observation
@@ -68,6 +70,15 @@ _Last updated: 2026-08-10 by Claude Code_
 - `8121f52` — `fix: validate native v2 child status context`
 - Goal g12 is leader-verified. It adds full Linux/macOS CI and release-DAG gates
   plus the requirement map in `docs/completion-audit-v2.md`.
+- Native routing gained `agy` and `grok`. Both accept a prompt only in argv:
+  `agy --print ""` returns `empty prompt` and `grok -p ""` returns
+  `prompt is empty`, and neither reads the pipe. Their routes therefore declare
+  the reserved `{{task}}` slot, which is filled immediately before spawn while
+  review output and fingerprints keep using the unsubstituted command.
+- Neither vendor has a triage adapter. `--ask-vendor` reports
+  `no_reviewed_triage_adapter` for both, for the reason the qualification
+  registry stays empty: an unreviewed adapter that hands untrusted task text to
+  a tool under unknown permissions is worse than no adapter.
 
 In 0.7.0:
 
@@ -306,6 +317,13 @@ For 0.5.0, as released:
   wrong, the place to look is whether requiring the acknowledgement was worth
   the command-line break, and whether group-writable policy files should have
   been rejected after all.
+- `kimi`, `qwen`, and `deepseek` are not installed on the development machine.
+  Their invocation was never measured, so no built-in command exists for them.
+  Add one only after measuring it the way `agy` and `grok` were measured; a
+  guessed command fails at the user's run rather than in this repository's tests.
+- Built-in `agy` and `grok` routes put the task on the command line, where any
+  local user can read it with `ps`. This follows from how those CLIs accept a
+  prompt and cannot be removed while supporting them.
 - Optional future work only:
   - collect real-user routing feedback and add predeclared regressions;
   - independently qualify a concrete runtime only after external-oracle,

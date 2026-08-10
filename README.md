@@ -334,6 +334,50 @@ but does not assert vendor CLI semantics or subscription access. Always run
 `wclass route` with a representative non-sensitive task to inspect a policy
 before using `wclass run`.
 
+A route's `vendor` is a containment label you choose, not a list of tools
+weightclass knows. Any printable identifier without whitespace, up to 64 bytes,
+is valid. Routing compares it as a string and the fingerprint hashes it as a
+string; nothing in weightclass holds vendor-specific knowledge about it.
+
+That means an agent weightclass ships no built-in command for is still usable
+by whoever has it installed:
+
+```json
+{
+  "routes": [
+    { "id": "qwen-low", "vendor": "qwen", "tier": "low",
+      "command": ["qwen", "-p", "{{task}}"] }
+  ]
+}
+```
+
+The label still does its job. Routes of different vendors do not mix without
+`"allow_mixed_vendors": true`, and a fingerprint reviewed for one vendor never
+matches another.
+
+Because the label is open, `--source-vendor` can no longer reject a typo.
+`--source-vendor codx` is well-formed, so it is not an argument error; it simply
+matches no route and exits `3` with `{"error": "unsupported_route"}`. A
+malformed label — empty, containing whitespace, over 64 bytes, or carrying
+non-printable characters — still exits `2` with `{"error": "invalid_input"}`.
+
+A command may contain the reserved token `{{task}}` once, as a whole argument.
+That route receives the task at that argv position and receives empty standard
+input, instead of the default of the task on standard input. This exists for
+agents that read a prompt only from their command line: `agy --print ""` and
+`grok -p ""` both refuse an empty prompt and never read the pipe.
+
+`wclass route` prints the command with `{{task}}` still in it and adds
+`"task_delivery": "argv"`, so a review never contains task text and the
+fingerprint does not change from one task to the next.
+
+**Command lines are readable by every user on the machine.** A route that uses
+`{{task}}` exposes the task to anyone who can run `ps` for as long as the child
+runs. On a single-user machine this is inconsequential; on a shared host it is
+not. Nothing weightclass can do removes this — it follows from how these agents
+accept a prompt — so it is your decision each time you write `{{task}}` or
+select an `agy` or `grok` built-in route.
+
 A token is passed to the selected program as one `argv` entry, without a shell,
 so a token may contain spaces — an install path such as
 `/Users/me/My Tools/claude`, or a multi-word flag value.
@@ -655,9 +699,19 @@ credential management, background execution, or a bundled provider runtime.
 - The built-in routes need no acknowledgement. They live in code, cannot be
   swapped, and there is nothing to bind them to. Treat a policy file the way you
   treat a shell script.
-- A selected command receives the task on standard input and inherits standard
-  output and error. Whatever it does with the task — including writing it
-  somewhere — is outside weightclass's control, and its exit status is its own.
+- weightclass ships built-in commands only for vendors whose CLI invocation was
+  measured: `claude`, `codex`, `agy`, and `grok`. It will not guess another
+  program's flags. Any other agent is reachable by writing its exact argv in a
+  policy, which is also why no CLI has to be installed here for weightclass to
+  support it.
+- The built-in `agy` and `grok` routes deliver the task on the command line, so
+  the `ps` exposure above applies to them. `claude` and `codex` routes deliver
+  it on standard input and do not.
+- A selected command receives the task on standard input — or, for a route that
+  declares `{{task}}`, at that argv position with empty standard input instead
+  — and inherits standard output and error. Whatever it does with the task —
+  including writing it somewhere — is outside weightclass's control, and its
+  exit status is its own.
 
 ## Development verification
 

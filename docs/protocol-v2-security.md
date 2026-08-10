@@ -35,6 +35,8 @@ weightclass observes only its direct child's exit status. Exit zero is not proof
 
 The named guarded runtime suites provide only current test process evidence: direct calls in that process reject INET sockets and nonallowlisted executable prefixes. The guard does not instrument child processes; behavior below an allowed CLI or harness is covered by separate test-owned fixture and lifecycle assertions. Build and extracted-sdist subprocesses are outside the guard claim.
 
+A route that declares the reserved `{{task}}` argv slot binds the shape of its command, not the exact string reaching `execve`; one element is filled at run time. Review and fingerprinting deliberately operate on the unsubstituted command so neither carries task content, and so one review continues to bind many runs. The task is visible in that child's command line to any local user for the lifetime of the process. Standard-input delivery, which every `claude` and `codex` route uses, has neither property.
+
 ## Planning and rollback truth
 
 The five-round RALPLAN history ended `max_rounds/ITERATE`. Its Critic findings were mandatory implementation input; it was never consensus approval.
