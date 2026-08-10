@@ -35,7 +35,7 @@ weightclass observes only its direct child's exit status. Exit zero is not proof
 
 The named guarded runtime suites provide only current test process evidence: direct calls in that process reject INET sockets and nonallowlisted executable prefixes. The guard does not instrument child processes; behavior below an allowed CLI or harness is covered by separate test-owned fixture and lifecycle assertions. Build and extracted-sdist subprocesses are outside the guard claim.
 
-A route that declares the reserved `{{task}}` argv slot binds the shape of its command, not the exact string reaching `execve`; one element is filled at run time. Review and fingerprinting deliberately operate on the unsubstituted command so neither carries task content, and so one review continues to bind many runs. The task is visible in that child's command line to any local user for the lifetime of the process. Standard-input delivery, which every `claude` and `codex` route uses, has neither property.
+Native schema 2 and delegation protocol 2 have no argv task-delivery surface at all: `Vendor` is the closed `codex`/`claude` vocabulary, argv is compiled from executable, model, and effort with no caller-supplied `command` field for a `{{task}}` token to occupy, and task delivery is always standard input for native schema 2 or the exact WCD2 frame for delegation protocol 2 — never argv. A `{{task}}` route cannot be constructed here. The reserved-argv-slot residual — review binding the shape of a command rather than the exact string reaching `execve` — belongs to native schema-1 policies and the built-in routes, which `README.md` documents.
 
 ## Planning and rollback truth
 

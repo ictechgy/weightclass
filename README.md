@@ -1,9 +1,11 @@
 # weightclass
 
-**weightclass** is a local, policy-driven router for Codex and Claude Code
-workflows. It classifies a task in memory as `low`, `standard`, or `high`,
-chooses a deterministic model-and-effort route, and can start one selected
-vendor process in the foreground.
+**weightclass** is a local, policy-driven router for agent CLI workflows.
+Built-in support covers Codex, Claude Code, Antigravity (`agy`), and Grok; any
+other vendor is reachable by writing its exact command in a policy. It
+classifies a task in memory as `low`, `standard`, or `high`, chooses a
+deterministic model-and-effort route, and can start one selected vendor
+process in the foreground.
 
 By default, a request stays with its explicit source vendor. Cross-vendor
 routing is available only through a reviewed policy opt-in. An optional V2
@@ -126,16 +128,27 @@ The built-in routes are intentionally conservative:
   Codex route already could. It does not make the two identical: Codex's
   `workspace-write` also runs commands, while under `acceptEdits` a non-edit
   tool still goes to a prompt that print mode cannot answer.
+- `agy`: `low`, `standard`, and `high` use `--print` with efforts `low`,
+  `medium`, and `high`, and `--mode accept-edits` for the same non-interactive
+  reason as Claude's `acceptEdits`. `agy` takes its prompt only in argv, so
+  these routes declare `{{task}}` and receive empty stdin instead.
+- `grok`: `low`, `standard`, and `high` use `-p` with `--reasoning-effort`
+  `low`, `medium`, and `high`, and `--permission-mode acceptEdits`. `--sandbox`
+  is left at `grok`'s own default because its profile vocabulary was never
+  enumerated in `--help`, and an unmeasured value is not shipped. `grok` also
+  takes its prompt only in argv, so these routes declare `{{task}}` and receive
+  empty stdin instead.
 
 Neither default route pins a model. Model selection stays your reviewed
 policy's decision, expressed inside that policy's `command`; see
 [Override the routes](#override-the-routes).
 
-`--source-vendor` is required when weightclass is called from a Codex or Claude
+`--source-vendor` is required when weightclass is called from an agent
 integration. With the default policy, `--source-vendor codex` selects only
-Codex routes and `--source-vendor claude` selects only Claude routes.
-weightclass is a standalone process, so it does not try to infer its parent
-application.
+Codex routes, `--source-vendor claude` selects only Claude routes,
+`--source-vendor agy` selects only Antigravity routes, and `--source-vendor
+grok` selects only Grok routes. weightclass is a standalone process, so it
+does not try to infer its parent application.
 
 When `--source-vendor` is omitted, weightclass still pins every tier to a
 single vendor: the vendor of the first route declared in the policy (`codex`
