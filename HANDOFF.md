@@ -324,7 +324,20 @@ For 0.5.0, as released:
 - Built-in `agy` and `grok` routes put the task on the command line, where any
   local user can read it with `ps`. This follows from how those CLIs accept a
   prompt and cannot be removed while supporting them.
+- The built-in `grok` route cannot carry a task that begins with `-`. Measured:
+  `grok -p "-text"` is refused by grok's own argument parser, and `--` does not
+  help. `agy` is unaffected and in fact breaks if `--` is added. `grok
+  --single=<TASK>` works, but adopting it means concatenating the task into the
+  flag token, which the whole-token placeholder rule deliberately forbids. That
+  is a design change and needs its own scoped request; the limitation is
+  documented in `README.md` next to the `ps` exposure until then.
 - Optional future work only:
+  - three review findings were triaged as safe to defer and are still open:
+    `validate_vendor_label`'s `isprintable` branch has no covering test case
+    (every malformed case in the tuple trips `isspace()` first); one
+    construction in `tests/test_router.py` uses `dict[str, Any]`, which
+    disables strict typing there; and the `grok --sandbox` absence test covers
+    only the `high` tier though all three share one prefix;
   - collect real-user routing feedback and add predeclared regressions;
   - independently qualify a concrete runtime only after external-oracle,
     hostile-negative-control, identity, and containment gates are satisfied;
