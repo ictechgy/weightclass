@@ -7,8 +7,8 @@ class Weightclass < Formula
 
   desc "Local, policy-driven routing for agent CLI workflows"
   homepage "https://github.com/ictechgy/weightclass"
-  url "https://files.pythonhosted.org/packages/51/bd/8ce24b289bc7997fee8d8c298f1dce9272ce4e2d31ec5c52dba678370d27/weightclass-0.7.0.tar.gz"
-  sha256 "f5a8d0fab172bb4369427564b415de3b17017e1895bb5c862ca6725e9ca0d3fb"
+  url "https://files.pythonhosted.org/packages/47/07/7ceebb0a0ec343590832bdac4e80a76459d976e0c724c0e5600dc04c1cde/weightclass-0.8.0.tar.gz"
+  sha256 "9959e66113e445bdf88915ead89a71476b5d8b0d14656163fd4e16a4b5896e5f"
   license "MIT"
 
   depends_on "python@3.13"
