@@ -16,6 +16,11 @@ _Last updated: 2026-08-11 by Claude Code_
 - Version 0.7.0 added no routing behavior either. It made review binding and the
   pre-task process-context check uniform across every run path, so no policy can
   reach execution without the exact fingerprint its review produced.
+- Version 0.8.0 added the reserved `{{task}}` argv slot for agents that accept a
+  prompt only on the command line, opened the vendor label so any agent is
+  routable by policy without its CLI being installed here, and shipped `agy` and
+  `grok` as built-ins. It changed one exit code: an unknown `--source-vendor`
+  now exits 3, not 2.
 - Preserve the local privacy boundary: task content is transient and never
   retained — not logged, not persisted, not hashed, and never in review output
   or diagnostics. Since 0.8.0 it is not *stdin only*: a route declaring the
@@ -199,6 +204,15 @@ Released in 0.6.0:
 - `docs/protocol-v2-security.md`: security boundaries and residual risks.
 - `docs/protocol-v2-migration.md`: Protocol 1 to Protocol 2 migration guidance.
 - `docs/completion-audit-v2.md`: requirement-to-test completion map.
+- `docs/argv-task-delivery-design.md`: why `{{task}}` exists, why the vendor
+  label opened, and which residuals were accepted rather than hidden. The
+  durable record for 0.8.0's reasoning.
+- `docs/argv-task-delivery-plan.md`: the 0.8.0 implementation plan. A working
+  artifact, kept because two of its own gaps and their corrections are part of
+  the record. Its fragment code blocks are fenced as `text` on purpose —
+  `ruff format` rewrites `python` fences inside markdown and mangles them.
+- `src/weightclass/router.py`: `TASK_PLACEHOLDER`, `BUILT_IN_VENDORS`,
+  `validate_vendor_label`, and the four built-in command builders.
 - `.github/workflows/release.yml`: immutable candidate validation and PyPI
   Trusted Publishing flow.
 
@@ -420,6 +434,22 @@ For 0.5.0, as released:
   before accepting them.
 - Fresh Python 3.10/3.14 source, sdist, installed-wheel, macOS-boundary, and
   release validation before publishing.
+- Measuring another program's invocation before shipping a command for it. Every
+  `agy` and `grok` flag in 0.8.0 came from running the installed binary, and
+  `grok --sandbox` was left out precisely because its profile vocabulary is not
+  enumerated by `--help` and was never measured. A test pins that absence.
+- Reviewers reproducing a claim instead of reading around it. Three findings in
+  0.8.0 were only visible that way: extracting the pre-fix code to prove a new
+  test passed identically before and after its own fix; running a golden-master
+  test in isolation to prove new fingerprints were real output and not
+  hand-typed; and checking a documentation claim against `native_v2_schema.py`
+  rather than against the design doc that asserted it.
+- Telling an implementer that stopping is allowed. The largest 0.8.0 task
+  returned NEEDS_CONTEXT before writing any code, having reproduced a plan
+  defect on a scratch copy without touching the repo.
+- Confirming the installed version before reading any post-release verification.
+  `uv tool install --force --reinstall` served a cached older build during 0.7.0
+  and produced a result that looked like the release had not taken effect.
 
 ## What Did Not Work / Avoid
 
@@ -432,6 +462,24 @@ For 0.5.0, as released:
   code. Re-run it only after a new code or policy delta.
 - Do not populate the qualification registry or claim real provider delegation
   from synthetic/self-attested evidence.
+- **Do not insert a task into a finished plan without re-deriving its blast
+  radius.** This single omission produced most of 0.8.0's review findings. When
+  a plan gains a task, recompute every later task's file list by grepping for
+  what the new task actually touches — not by reasoning about what ought to be
+  affected. The `v2.py` import that broke the suite, and a documentation task
+  that never documented the branch's headline feature, both came from here.
+- Do not build a documentation task's file list from "what changed." Build it
+  from "where the old story is told." The two-vendor description survived in
+  `README.md`, `docs/integrations.md`, `AGENTS.md`, `pyproject.toml`, the
+  Homebrew formula, and this file's own Goal section; it took four passes and a
+  post-release catch to clear, because each pass looked at changed files instead
+  of grepping for the claim.
+- Do not put a new check in a shared validation function because it is
+  convenient. Scoping the 0.8.0 NUL rejection into `classification.validate_task`
+  changed behavior for five unrelated call sites and silently regressed the stdin
+  path; it had to be reverted entirely.
+- Do not let a report claim evidence its own commands could not produce. Two
+  fix rounds in 0.8.0 existed only to make a report say what actually happened.
 
 ## Next Steps
 
