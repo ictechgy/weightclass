@@ -1,5 +1,4 @@
 import contextlib
-from dataclasses import replace
 import io
 import json
 import signal
@@ -8,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest import mock
