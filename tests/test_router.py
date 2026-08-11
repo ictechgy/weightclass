@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -178,6 +179,56 @@ class ExecutorSpawnFailureTests(unittest.TestCase):
     def test_maps_a_missing_executable_to_a_redacted_diagnostic(self) -> None:
         """Breaks if the pre-existing OSError path stops being handled."""
         self._assert_maps_to_executor_unavailable(FileNotFoundError("no such file"))
+
+
+class LegacyProcessContextTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
+    def test_auto_reaping_context_stops_legacy_run_before_task_input(self) -> None:
+        """Breaks if auto-reaping folds a failed legacy child into exit zero."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            command = (sys.executable, "-c", "raise SystemExit(17)")
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "codex-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": list(command),
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fingerprint = native_route_fingerprint(
+                Route(
+                    route_id="codex-low",
+                    vendor="codex",
+                    workflow="",
+                    command=command,
+                    tier="low",
+                ),
+                False,
+            )
+            errors = io.StringIO()
+            previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+            try:
+                with (
+                    mock.patch(
+                        "weightclass.cli.read_task_from_standard_input", return_value="Fix a typo."
+                    ) as reader,
+                    contextlib.redirect_stderr(errors),
+                ):
+                    exit_code = cli.run_from_standard_input(policy_path, None, fingerprint)
+            finally:
+                signal.signal(signal.SIGCHLD, previous_sigchld)
+
+        self.assertEqual(exit_code, 4)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_unavailable"})
+        reader.assert_not_called()
 
 
 class PolicyRunBindingTests(unittest.TestCase):

@@ -2,15 +2,16 @@
 
 import hashlib
 import json
-import os
 import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final, cast
 
 from .classification import Tier, classify_task
+from .executable_observation import ExecutableObservation, observe_executable
 from .json_input import JsonInputError, load_json_object
 from .router import RouteSelectionError
+from .v2_validation import V2ValidationError
 
 POLICY_SCHEMA_VERSION: Final = 2
 MAX_POLICY_BYTES: Final = 262_144
@@ -151,10 +152,25 @@ def load_api_policy(path: Path) -> ApiRoutingPolicy:
 
 
 def validate_api_runtime(path: Path) -> Path:
-    """Require a user-supplied absolute executable runtime path."""
-    if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+    """Return the resolved executable path used for API review and execution."""
+    return Path(observe_api_runtime(path).lexical_path)
+
+
+def observe_api_runtime(path: Path) -> ExecutableObservation:
+    """Observe a resolved API runtime without allowing a final symlink at spawn.
+
+    The CLI executes the returned resolved path, rather than the caller's
+    symlink spelling. The observation becomes part of the review fingerprint so
+    an ordinary replacement between ``route`` and ``run`` invalidates the
+    acknowledgement before the task reaches the runtime.
+    """
+    if not path.is_absolute():
         raise V2InvalidInputError()
-    return path
+    try:
+        resolved_path = path.resolve(strict=True)
+        return observe_executable(str(resolved_path))
+    except (OSError, RuntimeError, V2ValidationError, ValueError):
+        raise V2InvalidInputError() from None
 
 
 def select_api_route(
@@ -181,6 +197,7 @@ def route_fingerprint(
     tier: Tier,
     source_vendor: str,
     runtime_path: Path,
+    runtime_observation: ExecutableObservation,
 ) -> str:
     """Bind review acknowledgement to all non-secret route semantics."""
     semantic_route = {
@@ -188,6 +205,7 @@ def route_fingerprint(
         "tier": tier,
         "source_vendor": source_vendor,
         "runtime_path": str(runtime_path),
+        "runtime_identity": asdict(runtime_observation),
         "policy": {
             "allow_api": policy.allow_api,
             "allow_cross_provider": policy.allow_cross_provider,
@@ -209,6 +227,7 @@ def render_api_route(
     tier: Tier,
     source_vendor: str,
     runtime_path: Path,
+    runtime_observation: ExecutableObservation,
 ) -> dict[str, object]:
     """Render the review descriptor, deliberately excluding task text and credentials."""
     return {
@@ -224,11 +243,13 @@ def render_api_route(
             "intended_billing_boundary": route.intended_billing_boundary,
         },
         "runtime_path": str(runtime_path),
+        "runtime_identity": asdict(runtime_observation),
         "route_fingerprint": route_fingerprint(
             route,
             policy,
             tier,
             source_vendor,
             runtime_path,
+            runtime_observation,
         ),
     }

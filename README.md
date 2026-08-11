@@ -644,8 +644,9 @@ printf '%s' 'Review this authorization change.' | \
 Starting an API route requires both an explicit egress confirmation and the
 exact fingerprint from that review. weightclass recomputes the route before
 spawning the runtime, so a change to the selected model, effort, source,
-destination, runtime path, or API/cross-provider permission invalidates the
-acknowledgement.
+destination, resolved runtime path, runtime identity, or API/cross-provider
+permission invalidates the acknowledgement. API `run` rejects a missing egress
+confirmation before consuming task standard input.
 
 ```sh
 printf '%s' 'Review this authorization change.' | \
@@ -678,6 +679,16 @@ credential management, background execution, or a bundled provider runtime.
   or vendor configuration. It does not capture or process vendor output. V2
   does not issue provider HTTP requests; a separately installed runtime may do
   so only after the explicit acknowledgement described above.
+- Every execution path requires the main thread and a native `SIGCHLD`
+  disposition that preserves its direct child's exit status before consuming
+  task input. An unsafe context fails closed as `executor_unavailable`; a
+  concurrent native change after the check remains a documented residual.
+- For V2 API routes, weightclass resolves the supplied runtime path before
+  review and executes that resolved regular executable path. Its device, inode,
+  mode, size, and timestamps are bound into the review fingerprint and checked
+  again immediately before spawn. This detects ordinary replacement between
+  review and run, but cannot eliminate a replacement after the final check;
+  execution remains path-based rather than inode-bound.
 - Route selection is deterministic. Unsupported, malformed, or unsafe input
   fails closed with a redacted JSON diagnostic.
 - weightclass does not infer source vendor, model availability, subscription

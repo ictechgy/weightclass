@@ -92,10 +92,10 @@ from .v2 import (
     API_SOURCE_VENDORS,
     V2InvalidInputError,
     load_api_policy,
+    observe_api_runtime,
     render_api_route,
     route_fingerprint,
     select_api_route,
-    validate_api_runtime,
 )
 from .v2_validation import V2ValidationError
 
@@ -726,7 +726,8 @@ def v2_route_from_standard_input(
 ) -> int:
     """Render an API review descriptor without sending data to a provider."""
     try:
-        runtime_path = validate_api_runtime(runtime_path)
+        runtime_observation = observe_api_runtime(runtime_path)
+        runtime_path = Path(runtime_observation.lexical_path)
         policy = load_api_policy(policy_path)
         task = read_task_from_standard_input()
         tier, route = select_api_route(task, policy, source_vendor)
@@ -739,7 +740,18 @@ def v2_route_from_standard_input(
     except RouteSelectionError:
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
-    print(json.dumps(render_api_route(route, policy, tier, source_vendor, runtime_path)))
+    print(
+        json.dumps(
+            render_api_route(
+                route,
+                policy,
+                tier,
+                source_vendor,
+                runtime_path,
+                runtime_observation,
+            )
+        )
+    )
     return 0
 
 
@@ -752,30 +764,50 @@ def v2_run_from_standard_input(
 ) -> int:
     """Start one acknowledged external API runtime without handling credentials."""
     try:
-        runtime_path = validate_api_runtime(runtime_path)
         policy = load_api_policy(policy_path)
+    except (V2InvalidInputError, InvalidInputError):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+
+    if not confirm_api_egress:
+        print(json.dumps({"error": "api_confirmation_required"}), file=sys.stderr)
+        return 5
+    try:
+        validate_runtime_process_context()
+    except DelegationRuntimeUnavailableError:
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    try:
+        runtime_observation = observe_api_runtime(runtime_path)
+        runtime_path = Path(runtime_observation.lexical_path)
+    except V2InvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    try:
         task = read_task_from_standard_input()
         tier, route = select_api_route(task, policy, source_vendor)
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
-    except (V2InvalidInputError, InvalidInputError):
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
     except RouteSelectionError:
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
-
-    if not confirm_api_egress:
-        print(json.dumps({"error": "api_confirmation_required"}), file=sys.stderr)
-        return 5
     if acknowledged_fingerprint != route_fingerprint(
         route,
         policy,
         tier,
         source_vendor,
         runtime_path,
+        runtime_observation,
     ):
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
+    try:
+        final_observation = observe_api_runtime(runtime_path)
+    except V2InvalidInputError:
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    if final_observation != runtime_observation:
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
     try:
@@ -1008,6 +1040,11 @@ def run_from_standard_input(
     if policy_path is not None and acknowledged_fingerprint is None:
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
+    try:
+        validate_runtime_process_context()
+    except DelegationRuntimeUnavailableError:
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
     try:
         policy = (
             _parse_routing_policy(cast(dict[str, Any], dispatched))

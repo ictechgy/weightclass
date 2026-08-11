@@ -1,4 +1,8 @@
+import contextlib
+from dataclasses import replace
+import io
 import json
+import signal
 import stat
 import subprocess
 import sys
@@ -6,13 +10,16 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
+from weightclass import cli
 from weightclass.router import RouteSelectionError
 from weightclass.v2 import (
     API_SOURCE_VENDORS,
     SOURCE_PROVIDER,
     ApiRoute,
     ApiRoutingPolicy,
+    observe_api_runtime,
     select_api_route,
 )
 
@@ -119,6 +126,22 @@ class V2EgressGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
 
+    def test_rejects_a_cyclic_api_runtime_without_leaking_its_path(self) -> None:
+        """Breaks if a supported Python runtime prints a symlink-loop traceback."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            first_link = directory / "runtime-loop-a"
+            second_link = directory / "runtime-loop-b"
+            first_link.symlink_to(second_link.name)
+            second_link.symlink_to(first_link.name)
+
+            result = self._review(_api_policy(), str(first_link))
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+        self.assertNotIn(str(first_link), result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
     def test_hides_runtime_startup_details_when_the_runtime_cannot_execute(self) -> None:
         """Breaks if a failed runtime launch leaks its path or a traceback."""
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -166,6 +189,229 @@ class V2EgressGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 4)
         self.assertEqual(json.loads(result.stderr), {"error": "executor_unavailable"})
         self.assertNotIn("unlaunchable-runtime", result.stderr)
+
+    def test_missing_egress_confirmation_does_not_consume_the_task(self) -> None:
+        """Breaks if an unconfirmed API run drains stdin before it fails closed."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
+            errors = io.StringIO()
+            with (
+                mock.patch(
+                    "weightclass.cli.read_task_from_standard_input", return_value="Fix a typo."
+                ) as reader,
+                contextlib.redirect_stderr(errors),
+            ):
+                exit_code = cli.v2_run_from_standard_input(
+                    policy_path,
+                    "codex",
+                    Path(sys.executable),
+                    False,
+                    None,
+                )
+
+        self.assertEqual(exit_code, 5)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "api_confirmation_required"})
+        reader.assert_not_called()
+
+    def test_missing_egress_confirmation_precedes_runtime_validation(self) -> None:
+        """Breaks if an unconfirmed run observes a user-supplied runtime first."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                exit_code = cli.v2_run_from_standard_input(
+                    policy_path,
+                    "codex",
+                    directory / "missing-runtime",
+                    False,
+                    None,
+                )
+
+        self.assertEqual(exit_code, 5)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "api_confirmation_required"})
+
+    @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
+    def test_auto_reaping_context_stops_api_run_before_task_input(self) -> None:
+        """Breaks if a failed API runtime can be reported as a successful run."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
+            runtime_path = directory / "failing-runtime"
+            runtime_path.write_text(f"#!{sys.executable}\nraise SystemExit(17)\n", encoding="utf-8")
+            runtime_path.chmod(runtime_path.stat().st_mode | stat.S_IXUSR)
+            review = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "v2",
+                    "route",
+                    "--policy",
+                    str(policy_path),
+                    "--source-vendor",
+                    "codex",
+                    "--api-runtime",
+                    str(runtime_path),
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+            errors = io.StringIO()
+            previous_sigchld = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+            try:
+                with (
+                    mock.patch(
+                        "weightclass.cli.read_task_from_standard_input", return_value="Fix a typo."
+                    ) as reader,
+                    contextlib.redirect_stderr(errors),
+                ):
+                    exit_code = cli.v2_run_from_standard_input(
+                        policy_path,
+                        "codex",
+                        runtime_path,
+                        True,
+                        json.loads(review.stdout)["route_fingerprint"],
+                    )
+            finally:
+                signal.signal(signal.SIGCHLD, previous_sigchld)
+
+        self.assertEqual(exit_code, 4)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_unavailable"})
+        reader.assert_not_called()
+
+    def test_refuses_a_runtime_replaced_after_review(self) -> None:
+        """Breaks if an acknowledged API route can start replacement runtime bytes."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
+            runtime_path = directory / "runtime"
+            runtime_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            runtime_path.chmod(runtime_path.stat().st_mode | stat.S_IXUSR)
+            review_arguments = [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "v2",
+                "route",
+                "--policy",
+                str(policy_path),
+                "--source-vendor",
+                "codex",
+                "--api-runtime",
+                str(runtime_path),
+            ]
+            review = subprocess.run(
+                review_arguments,
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+            replacement_marker = directory / "replacement-ran"
+            runtime_path.write_text(
+                f"#!{sys.executable}\n"
+                "from pathlib import Path\n"
+                f"Path({str(replacement_marker)!r}).write_text('ran', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                review_arguments[:4]
+                + ["run"]
+                + review_arguments[5:]
+                + [
+                    "--confirm-api-egress",
+                    "--ack-route-fingerprint",
+                    json.loads(review.stdout)["route_fingerprint"],
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+            replacement_started = replacement_marker.exists()
+
+        self.assertEqual(result.returncode, 6)
+        self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+        self.assertFalse(replacement_started)
+
+    def test_refuses_a_runtime_changed_after_fingerprint_comparison(self) -> None:
+        """Breaks if the final identity check can launch bytes changed mid-run."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
+            policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
+            runtime_path = directory / "runtime"
+            replacement_marker = directory / "replacement-ran"
+            runtime_path.write_text(
+                f"#!{sys.executable}\n"
+                "from pathlib import Path\n"
+                f"Path({str(replacement_marker)!r}).write_text('ran', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            runtime_path.chmod(runtime_path.stat().st_mode | stat.S_IXUSR)
+            review_arguments = [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "v2",
+                "route",
+                "--policy",
+                str(policy_path),
+                "--source-vendor",
+                "codex",
+                "--api-runtime",
+                str(runtime_path),
+            ]
+            review = subprocess.run(
+                review_arguments,
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+            self.assertEqual(review.returncode, 0, review.stderr)
+            original_observation = observe_api_runtime(runtime_path)
+            changed_observation = replace(
+                original_observation,
+                size=original_observation.size + 1,
+            )
+            errors = io.StringIO()
+            with (
+                mock.patch(
+                    "weightclass.cli.observe_api_runtime",
+                    side_effect=(original_observation, changed_observation),
+                ),
+                mock.patch(
+                    "weightclass.cli.read_task_from_standard_input",
+                    return_value="Fix a typo.",
+                ) as reader,
+                contextlib.redirect_stderr(errors),
+            ):
+                exit_code = cli.v2_run_from_standard_input(
+                    policy_path,
+                    "codex",
+                    runtime_path,
+                    True,
+                    json.loads(review.stdout)["route_fingerprint"],
+                )
+
+            replacement_started = replacement_marker.exists()
+
+        self.assertEqual(exit_code, 6)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "route_fingerprint_mismatch"})
+        reader.assert_called_once_with()
+        self.assertFalse(replacement_started)
 
 
 class V2ExecutorResultTests(unittest.TestCase):
