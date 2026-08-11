@@ -16,15 +16,38 @@ _Last updated: 2026-08-11 by Claude Code_
 - Version 0.7.0 added no routing behavior either. It made review binding and the
   pre-task process-context check uniform across every run path, so no policy can
   reach execution without the exact fingerprint its review produced.
-- Preserve the local privacy boundary: task content is transient stdin only;
-  weightclass does not retain it or own provider credentials, HTTP, billing, or
-  subscription entitlement discovery.
+- Preserve the local privacy boundary: task content is transient and never
+  retained — not logged, not persisted, not hashed, and never in review output
+  or diagnostics. Since 0.8.0 it is not *stdin only*: a route declaring the
+  reserved `{{task}}` slot carries it in argv, where any local user can read it
+  with `ps` for the child's lifetime. That is a documented residual the user
+  accepts per route, not a weakening of the no-retention rule.
+- weightclass does not own provider credentials, HTTP, billing, or subscription
+  entitlement discovery.
 
 ## Current Status
 
+- 0.8.0 is complete, merged, and deployed. It adds the reserved `{{task}}` argv
+  slot, opens the vendor label, and ships `agy` and `grok` as built-ins. See
+  Completed for what it changes and Blockers for what it breaks.
+- PR [#30](https://github.com/ictechgy/weightclass/pull/30) is merged.
+- Merge commit: `21f73f7`. Annotated tag `v0.8.0` points to it and is on
+  `origin`.
+- GitHub Release workflow run
+  [31448453086](https://github.com/ictechgy/weightclass/actions/runs/31448453086)
+  completed successfully.
+- PyPI publishes
+  [`weightclass 0.8.0`](https://pypi.org/project/weightclass/0.8.0/)
+  as exactly one wheel and one sdist; neither is yanked.
+- [GitHub Release v0.8.0](https://github.com/ictechgy/weightclass/releases/tag/v0.8.0)
+  leads with the exit-code change and a before/after example.
+- 0.8.0 was built with eight independently reviewed tasks. Reviews caught, among
+  others, a NUL regression on the stdin path, a test with zero regression
+  coverage that passed identically before and after its own fix, and
+  `wclass render` printing a literal `{{task}}` — the one place where reviewed
+  output did not describe what would happen.
 - 0.7.0 is complete, merged, and deployed. It makes the three execution
-  boundaries uniform across every run path. See Completed for what it changes
-  and Blockers for what it breaks.
+  boundaries uniform across every run path.
 - PR [#27](https://github.com/ictechgy/weightclass/pull/27) is merged.
 - Merge commit: `bb311a5`.
 - Annotated tag `v0.7.0` points to that merge commit and is on `origin`.
@@ -212,6 +235,32 @@ Released in 0.6.0:
 
 ## Verification
 
+For 0.8.0, as released:
+
+- Full source suite with `ResourceWarning` as error, on the merge commit:
+  665/665 passed on Python 3.10, 3.13, and 3.14 (633 before this branch).
+- The suite passes identically under `umask 022` and `umask 002`.
+- Ruff check/format and strict mypy (90 source files): clean. `git diff --check`
+  clean.
+- `python -m build`, `twine check --strict`, and
+  `verify_distribution_isolation.py --run-sdist-tests` (660 passed, 11 skips).
+- GitHub CI on `21f73f7` and every release job on tag `v0.8.0`: success.
+- PyPI 0.8.0 files verified:
+  - `weightclass-0.8.0-py3-none-any.whl`
+    SHA-256 `591fcacd7490a9d1b7cf79f7f9ebba25cc5210c763a4b3df4a8e80c42a89425d`
+  - `weightclass-0.8.0.tar.gz`
+    SHA-256 `9959e66113e445bdf88915ead89a71476b5d8b0d14656163fd4e16a4b5896e5f`
+- Clean-environment install pinned to `weightclass==0.8.0` with `--refresh`,
+  version confirmed **before** reading any result. Against the published build:
+  a policy naming the unknown vendor `qwen` routes and runs; `wclass route`
+  prints `{{task}}` unsubstituted with `"task_delivery": "argv"` and no task
+  text; two different tasks at one tier produce one fingerprint;
+  `--source-vendor codx` exits 3 and `--source-vendor 'bad vendor'` exits 2; the
+  `agy` and `grok` built-ins render their measured argv; a `codex` route still
+  omits `task_delivery`; and `--ask-vendor --source-vendor agy` exits 8.
+- `brew audit --strict`, `brew reinstall --build-from-source`, and `brew test`
+  pass against the 0.8.0 formula.
+
 For 0.7.0, as released:
 
 - Full source suite with `ResourceWarning` as error, on the merge commit:
@@ -294,7 +343,19 @@ For 0.5.0, as released:
 
 ## Blockers & Open Questions
 
-- No blocker or required follow-up remains for 0.5.0 or 0.6.0.
+- No blocker or required follow-up remains for 0.5.0, 0.6.0, or 0.8.0.
+- 0.8.0 changes one exit code. Opening the vendor label means `--source-vendor`
+  can no longer reject a typo: `codx` is well-formed, so it is not an argument
+  error and instead matches no route, exiting 3 `unsupported_route` where it
+  used to exit 2 `invalid_input`. A malformed label — empty, whitespace-bearing,
+  over 64 bytes, or non-printable — still exits 2. Only scripts branching on the
+  exit code are affected. This is the reason for the minor bump under the `0.x`
+  policy in `RELEASING.md`, and it leads the
+  [v0.8.0 release notes](https://github.com/ictechgy/weightclass/releases/tag/v0.8.0).
+- 0.8.0 also accepts a residual it cannot remove: a route declaring `{{task}}`
+  puts the task on the child's command line, readable by any local user via
+  `ps`. It follows from how `agy` and `grok` accept a prompt and is stated in
+  `README.md`, `docs/integrations.md`, and `docs/protocol-v2-security.md`.
 - 0.7.0 breaks the command line. `wclass run --policy` without
   `--ack-route-fingerprint` used to run; it now exits 6 with
   `route_fingerprint_mismatch`. Any script that ran a policy in one step must
@@ -374,21 +435,26 @@ For 0.5.0, as released:
 
 ## Next Steps
 
-1. If no new feature is requested, stop; 0.7.0 is complete and deployed.
-2. Any documentation, script, or downstream integration that ran
-   `wclass run --policy` in one step is now broken. Check for those before
-   assuming the release is quiet.
+1. If no new feature is requested, stop; 0.8.0 is complete and deployed.
+2. Two releases now change behavior scripts may depend on: 0.7.0 made
+   `--ack-route-fingerprint` mandatory for `run --policy`, and 0.8.0 moved an
+   unknown `--source-vendor` from exit 2 to exit 3. Check downstream callers
+   before assuming either release was quiet.
 3. For new work, fetch `origin/main`, branch from its head, and re-read
    `AGENTS.md` plus the relevant Protocol 2 docs.
-4. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, transient
-   task handling, and the single-reviewed-child execution boundary.
+4. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, the
+   no-retention rule for task content, and the single-reviewed-child execution
+   boundary. Note that "transient stdin only" is no longer the right phrasing
+   for the first of those — see Goal.
 
 ## Resume Prompt
 
 Open this repository at
 `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
-`AGENTS.md`, then continue from: `weightclass 0.7.0 is merged, tagged, and
-published to PyPI; no mandatory work remains. It breaks the command line —
-wclass run --policy now requires --ack-route-fingerprint — and it shipped
-without human review. If a new request exists, branch from origin/main and
-preserve the documented Protocol 1/privacy/process boundaries.`
+`AGENTS.md`, then continue from: `weightclass 0.8.0 is merged, tagged, and
+published to PyPI; no mandatory work remains. It adds the reserved {{task}} argv
+slot, opens the vendor label so any agent can be routed by policy, and ships agy
+and grok as built-ins. It changes one exit code — an unknown --source-vendor now
+exits 3, not 2 — and, like 0.6.0 and 0.7.0, shipped without human review. If a
+new request exists, branch from origin/main and preserve the documented Protocol
+1/privacy/process boundaries.`
