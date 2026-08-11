@@ -72,7 +72,8 @@ from .native_v2_schema import (
 from .native_v2_types import CompiledExecutionV2
 from .router import (
     DEFAULT_ROUTES,
-    SUPPORTED_VENDORS,
+    TASK_PLACEHOLDER,
+    InvalidVendorLabelError,
     Posture,
     Route,
     RouteRequest,
@@ -81,10 +82,14 @@ from .router import (
     native_route_fingerprint,
     select_route,
     select_tier_route,
+    substitute_task,
+    uses_argv_task_delivery,
+    validate_vendor_label,
 )
 from .task_v2 import ValidatedTaskV2, read_validated_task_v2
 from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
 from .v2 import (
+    API_SOURCE_VENDORS,
     V2InvalidInputError,
     load_api_policy,
     render_api_route,
@@ -193,6 +198,19 @@ def _require_command_argument(value: object) -> str:
     return value
 
 
+def _require_at_most_one_task_slot(command: tuple[str, ...]) -> tuple[str, ...]:
+    """Require the reserved task token to appear at most once, as a whole argument.
+
+    부분 문자열로 쓰면 태스크와 플래그가 어떻게 이어붙었는지가 모호해지고, 두 번
+    쓰면 태스크를 두 번 전달한다는 뜻이 되는데 그런 의미는 정의된 적이 없다.
+    """
+    if sum(token == TASK_PLACEHOLDER for token in command) > 1:
+        raise InvalidInputError()
+    if any(TASK_PLACEHOLDER in token and token != TASK_PLACEHOLDER for token in command):
+        raise InvalidInputError()
+    return command
+
+
 def _parse_route(value: object) -> Route:
     if not isinstance(value, dict):
         raise InvalidInputError()
@@ -204,9 +222,12 @@ def _parse_route(value: object) -> Route:
         raise InvalidInputError()
 
     route_id = _require_nonempty_string(value["id"])
-    vendor = _require_nonempty_string(value["vendor"])
+    try:
+        vendor = validate_vendor_label(value["vendor"])
+    except InvalidVendorLabelError:
+        raise InvalidInputError() from None
     command = value["command"]
-    if vendor not in SUPPORTED_VENDORS or not isinstance(command, list) or not command:
+    if not isinstance(command, list) or not command:
         raise InvalidInputError()
 
     workflow = _require_nonempty_string(value["workflow"]) if has_workflow else ""
@@ -216,11 +237,19 @@ def _parse_route(value: object) -> Route:
         if parsed_tier not in {"low", "standard", "high"}:
             raise InvalidInputError()
         tier = cast(Tier, parsed_tier)
+    parsed_command = _require_at_most_one_task_slot(
+        tuple(_require_command_argument(argument) for argument in command)
+    )
+    # workflow 라우트는 select_tier_route 의 후보가 아니라 render 만 다루므로
+    # 아무도 이 자리를 채우지 않는다. 여기서 닫지 않으면 render 가 미치환
+    # 리터럴 "{{task}}" 를 그대로 내보내 검토 산출물이 실제 실행과 어긋난다.
+    if has_workflow and TASK_PLACEHOLDER in parsed_command:
+        raise InvalidInputError()
     return Route(
         route_id=route_id,
         vendor=vendor,
         workflow=workflow,
-        command=tuple(_require_command_argument(argument) for argument in command),
+        command=parsed_command,
         tier=tier,
     )
 
@@ -269,16 +298,17 @@ def load_request(descriptor_path: Path) -> RouteRequest:
     """Load a redacted descriptor without task content or credentials."""
     descriptor = _read_json_object(descriptor_path, max_bytes=MAX_NATIVE_DESCRIPTOR_BYTES)
     _require_exact_keys(descriptor, {"vendor", "workflow"})
-    vendor = _require_nonempty_string(descriptor["vendor"])
-    if vendor not in SUPPORTED_VENDORS:
-        raise InvalidInputError()
+    try:
+        vendor = validate_vendor_label(descriptor["vendor"])
+    except InvalidVendorLabelError:
+        raise InvalidInputError() from None
     return RouteRequest(vendor=vendor, workflow=_require_nonempty_string(descriptor["workflow"]))
 
 
 def _add_api_route_arguments(parser: argparse.ArgumentParser) -> None:
     """Declare the arguments shared by both V2 API subcommands."""
     parser.add_argument("--policy", required=True, type=Path)
-    parser.add_argument("--source-vendor", required=True, choices=sorted(SUPPORTED_VENDORS))
+    parser.add_argument("--source-vendor", required=True, choices=sorted(API_SOURCE_VENDORS))
     parser.add_argument("--api-runtime", required=True, type=Path)
 
 
@@ -318,7 +348,7 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
         description="Print the tier of a task read from standard input.",
     )
-    classify.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
+    classify.add_argument("--source-vendor")
     # 로컬 판정이 기본이다. 이 플래그를 줄 때만 벤더 CLI 를 한 번 실행한다.
     classify.add_argument("--ask-vendor", action="store_true")
     # 판정 명령도 내장 벤더 명령이므로 실행 전에 볼 수 있어야 한다.
@@ -334,7 +364,7 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         native = subcommands.add_parser(name, allow_abbrev=False, description=description)
         native.add_argument("--policy", type=Path)
-        native.add_argument("--source-vendor", choices=sorted(SUPPORTED_VENDORS))
+        native.add_argument("--source-vendor")
         native.add_argument("--source-profile")
         # wclass classify 가 낸 티어를 그대로 받는다. route 와 run 은 이 경로에서도
         # 네트워크를 쓰지 않는다. 판정은 별도 명령에서 이미 끝났다.
@@ -794,7 +824,17 @@ def classify_from_standard_input(
     if show_triage_command:
         assert source_vendor is not None
         # 태스크를 읽지 않고 벤더도 부르지 않는다. 명령만 보여준다.
-        print(json.dumps(triage_descriptor(source_vendor)))
+        #
+        # 벤더 라벨이 열려 있으므로 이 패키지가 판정 명령을 갖지 않는 벤더도
+        # 여기까지 내려온다. triage_descriptor 는 그런 벤더에 대해 이미
+        # TriageUnavailableError 로 닫히지만(내부에서 실패), 여기서 잡지
+        # 않으면 트레이스백으로 새어 나간다. --ask-vendor 경로와 같은 진단으로
+        # 닫는다.
+        try:
+            print(json.dumps(triage_descriptor(source_vendor)))
+        except TriageUnavailableError:
+            print(json.dumps({"error": "triage_unavailable"}), file=sys.stderr)
+            return 8
         return 0
     try:
         task = read_task_from_standard_input()
@@ -920,6 +960,10 @@ def route_from_standard_input(
     if policy.posture is not None:
         response["posture"] = policy.posture
         response["reason_code"] = reason_code
+    # argv 전달은 태스크를 명령줄에 싣는다. 같은 머신의 다른 사용자가 ps 로 볼 수
+    # 있으므로, 검토하는 사람이 이 사실을 모르고 지나치지 않게 명시한다.
+    if uses_argv_task_delivery(route.command):
+        response["task_delivery"] = "argv"
     print(json.dumps(response))
     return 0
 
@@ -977,12 +1021,23 @@ def run_from_standard_input(
         ):
             print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
             return 6
+        # 치환은 spawn 직전에 한 번만 한다. 검토 출력과 지문은 이미 치환 전
+        # 명령으로 계산되었으므로 태스크가 그 둘에 들어가지 않는다.
+        argv = route.command
+        child_input = task.encode("utf-8")
+        if uses_argv_task_delivery(route.command):
+            # execve 는 NUL 을 실을 수 없다. stdin 전달은 실을 수 있으므로 이
+            # 거부는 argv 전달에만 적용한다.
+            if "\x00" in task:
+                raise InvalidTaskError()
+            argv = substitute_task(route.command, task)
+            child_input = b""
         # text 모드는 로케일 인코딩을 사용하므로 LC_ALL=C 환경에서 비ASCII 태스크가
         # UnicodeEncodeError로 새어 나간다. 자식 출력을 읽지 않으므로 바이트로 전달한다.
         completed_process = subprocess.run(
-            route.command,
+            argv,
             check=False,
-            input=task.encode("utf-8"),
+            input=child_input,
         )
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
@@ -1129,6 +1184,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command is None:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
+
+    # 라벨이 열려 있으므로 argparse 가 오타를 잡아주지 못한다. 형식만이라도
+    # 여기서 닫아, 잘못된 라벨이 라우트 선택까지 내려가지 않게 한다.
+    source_vendor = getattr(arguments, "source_vendor", None)
+    if source_vendor is not None:
+        try:
+            validate_vendor_label(source_vendor)
+        except InvalidVendorLabelError:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
 
     if arguments.command == "classify":
         return classify_from_standard_input(

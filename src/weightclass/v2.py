@@ -10,13 +10,18 @@ from typing import Any, Final, cast
 
 from .classification import Tier, classify_task
 from .json_input import JsonInputError, load_json_object
-from .router import SUPPORTED_VENDORS, RouteSelectionError
+from .router import RouteSelectionError
 
 POLICY_SCHEMA_VERSION: Final = 2
 MAX_POLICY_BYTES: Final = 262_144
 MAX_LABEL_LENGTH: Final = 240
 SUPPORTED_PROVIDERS: Final = frozenset({"openai", "anthropic"})
 SOURCE_PROVIDER: Final = {"codex": "openai", "claude": "anthropic"}
+
+# API 경로는 벤더에서 provider 를 유도해 교차-provider 를 차단한다. 그 매핑이 없는
+# 벤더는 어디로 과금되는지 판단할 근거가 없으므로 이 경로에서 제외한다. 네이티브
+# 경로의 BUILT_IN_VENDORS 와 일부러 분리한다.
+API_SOURCE_VENDORS: Final = frozenset(SOURCE_PROVIDER)
 
 
 class V2InvalidInputError(ValueError):
@@ -97,7 +102,7 @@ def _parse_route(value: object) -> ApiRoute:
     if not isinstance(eligible_sources, list) or not eligible_sources:
         raise V2InvalidInputError()
     parsed_sources = tuple(_require_label(source) for source in eligible_sources)
-    if any(source not in SUPPORTED_VENDORS for source in parsed_sources) or len(
+    if any(source not in API_SOURCE_VENDORS for source in parsed_sources) or len(
         set(parsed_sources)
     ) != len(parsed_sources):
         raise V2InvalidInputError()
@@ -159,7 +164,7 @@ def select_api_route(
 ) -> tuple[Tier, ApiRoute]:
     """Select the first route compatible with tier, source, and provider policy."""
     tier = classify_task(task)
-    if source_vendor not in SUPPORTED_VENDORS or not policy.allow_api:
+    if source_vendor not in API_SOURCE_VENDORS or not policy.allow_api:
         raise RouteSelectionError()
     for route in policy.routes:
         if route.tier != tier or source_vendor not in route.eligible_source_vendors:

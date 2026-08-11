@@ -7,8 +7,14 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from weightclass.router import SUPPORTED_VENDORS
-from weightclass.v2 import SOURCE_PROVIDER
+from weightclass.router import RouteSelectionError
+from weightclass.v2 import (
+    API_SOURCE_VENDORS,
+    SOURCE_PROVIDER,
+    ApiRoute,
+    ApiRoutingPolicy,
+    select_api_route,
+)
 
 
 def _api_policy(**overrides: object) -> dict[str, object]:
@@ -33,12 +39,6 @@ def _api_policy(**overrides: object) -> dict[str, object]:
     }
     policy.update(overrides)
     return policy
-
-
-class ProviderMappingInvariantTests(unittest.TestCase):
-    def test_every_source_vendor_has_one_explicit_provider_family(self) -> None:
-        """Breaks if a new vendor bypasses the default cross-provider guard."""
-        self.assertEqual(set(SOURCE_PROVIDER), set(SUPPORTED_VENDORS))
 
 
 class V2EgressGateTests(unittest.TestCase):
@@ -720,6 +720,92 @@ class V2CommandLineTests(unittest.TestCase):
         self.assertEqual(review.returncode, 0, review.stderr)
         self.assertEqual(result.returncode, 6)
         self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+
+
+class ApiVendorScopeTests(unittest.TestCase):
+    def test_api_vendor_set_derives_from_provider_map(self) -> None:
+        """Breaks if the gate drifts from the provider map.
+
+        API_SOURCE_VENDORS = frozenset(SOURCE_PROVIDER) ensures this equality by
+        construction. This is what makes SOURCE_PROVIDER[source_vendor] unreachable
+        from select_api_route: the gate always rejects any vendor not in the map
+        before indexing it. A hand-written gate that drifts from the provider map
+        (e.g., someone adding "agy" to the set without updating SOURCE_PROVIDER)
+        brings back a KeyError traceback instead of a RouteSelectionError diagnostic.
+        """
+        self.assertEqual(API_SOURCE_VENDORS, frozenset(SOURCE_PROVIDER))
+
+    def test_a_vendor_without_a_known_provider_is_an_unsupported_route(self) -> None:
+        """Breaks if the API path rejects unmapped vendors with a traceback.
+
+        교차-provider 차단은 벤더에서 provider 를 유도해 성립한다. provider 를
+        모르는 벤더는 그 차단을 통과시킬 근거가 없으므로 닫는다.
+
+        This test holds before and after the refactor: the user-visible contract
+        is RouteSelectionError, not KeyError. The regression guard for divergence
+        is test_api_vendor_set_derives_from_provider_map, above.
+        """
+        policy = ApiRoutingPolicy(
+            routes=(
+                ApiRoute(
+                    route_id="r",
+                    tier="low",
+                    eligible_source_vendors=("codex", "agy"),
+                    provider="openai",
+                    transport="api",
+                    model="m",
+                    effort="low",
+                    intended_recipient="OpenAI API",
+                    intended_billing_boundary="user OpenAI API account",
+                ),
+            ),
+            allow_cross_provider=False,
+            allow_api=True,
+        )
+
+        with self.assertRaises(RouteSelectionError):
+            select_api_route("Fix a typo.", policy, "agy")
+
+    def test_cli_rejects_a_native_only_vendor_before_route_selection(self) -> None:
+        """Breaks if the CLI's own gate on --source-vendor stops matching the vendor set.
+
+        위 test_a_vendor_without_a_known_provider_is_an_unsupported_route 는
+        select_api_route 내부 게이트를 직접 부른다(그 결과는 unsupported_route,
+        exit 3). 이 테스트는 그보다 앞선 층을 고정한다: `v2 route`/`v2 run` 의
+        --source-vendor 는 argparse choices 로 API_SOURCE_VENDORS 에 닫혀 있어,
+        native 경로에는 있지만 API 경로에는 없는 `agy` 는 파싱 단계에서 막혀
+        select_api_route 까지 내려가지 않는다(invalid_input, exit 2). 정책을 실존
+        하고 유효하게, 그리고 그 안의 eligible_source_vendors 에 "agy"를 넣지
+        않은 채로 줘야 한다. 그렇지 않으면 이 gate 가 아니라 다른 이유로 같은
+        exit 2가 나와, choices gate 가 사라져도 테스트가 계속 통과하는 거짓
+        안전감을 준다.
+        """
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "api-policy.json"
+            policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "v2",
+                    "route",
+                    "--policy",
+                    str(policy_path),
+                    "--source-vendor",
+                    "agy",
+                    "--api-runtime",
+                    sys.executable,
+                ],
+                capture_output=True,
+                check=False,
+                input="Fix a typo.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@
 
 ## Product direction
 
-weightclass is intended to be a public, local tool that classifies a task and selects or starts a supported native Codex or Claude Code workflow. By default, a route stays with its explicit source vendor; cross-vendor routing requires an explicit policy opt-in. Treat model labels and subscription availability as user-provided opaque configuration; do not infer entitlements, pricing, or remaining subscription usage.
+weightclass is intended to be a public, local tool that classifies a task and selects or starts a supported native agent CLI workflow. Built-in support covers Codex, Claude Code, Antigravity (`agy`), and Grok; any other vendor is reachable through a reviewed policy naming its exact command. By default, a route stays with its explicit source vendor; cross-vendor routing requires an explicit policy opt-in. Treat model labels and subscription availability as user-provided opaque configuration; do not infer entitlements, pricing, or remaining subscription usage.
 
 V1 may run exactly one selected vendor process in the foreground; it does not retry, recover, background, or supervise that process. V2 API routing is intentionally narrower than an API proxy: weightclass selects a declarative policy and starts at most one reviewed, user-supplied external runtime. weightclass never reads credentials, resolves authentication, makes HTTP requests, verifies the intended recipient or billing account, or persists task content. The external runtime owns all provider authentication, network, billing, and output behavior.
 

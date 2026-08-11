@@ -1,9 +1,11 @@
 # weightclass
 
-**weightclass** is a local, policy-driven router for Codex and Claude Code
-workflows. It classifies a task in memory as `low`, `standard`, or `high`,
-chooses a deterministic model-and-effort route, and can start one selected
-vendor process in the foreground.
+**weightclass** is a local, policy-driven router for agent CLI workflows.
+Built-in support covers Codex, Claude Code, Antigravity (`agy`), and Grok; any
+other vendor is reachable by writing its exact command in a policy. It
+classifies a task in memory as `low`, `standard`, or `high`, chooses a
+deterministic model-and-effort route, and can start one selected vendor
+process in the foreground.
 
 By default, a request stays with its explicit source vendor. Cross-vendor
 routing is available only through a reviewed policy opt-in. An optional V2
@@ -33,9 +35,11 @@ cd weightclass
 python3 -m pip install .
 ```
 
-All three install the `wclass` command. The native Codex and Claude CLIs must
-already be installed and authenticated; weightclass never reads or changes
-their authentication or subscription state.
+All three install the `wclass` command. weightclass bundles no vendor CLI
+itself: whichever built-in route you use — `codex`, `claude`, `agy`, or
+`grok` — that vendor's own CLI must already be installed and authenticated on
+the machine that runs it. weightclass never reads or changes their
+authentication or subscription state.
 
 Releases are cut by pushing a tag; see [RELEASING.md](RELEASING.md).
 
@@ -126,16 +130,27 @@ The built-in routes are intentionally conservative:
   Codex route already could. It does not make the two identical: Codex's
   `workspace-write` also runs commands, while under `acceptEdits` a non-edit
   tool still goes to a prompt that print mode cannot answer.
+- `agy`: `low`, `standard`, and `high` use `--print` with efforts `low`,
+  `medium`, and `high`, and `--mode accept-edits` for the same non-interactive
+  reason as Claude's `acceptEdits`. `agy` takes its prompt only in argv, so
+  these routes declare `{{task}}` and receive empty stdin instead.
+- `grok`: `low`, `standard`, and `high` use `-p` with `--reasoning-effort`
+  `low`, `medium`, and `high`, and `--permission-mode acceptEdits`. `--sandbox`
+  is left at `grok`'s own default because its profile vocabulary was never
+  enumerated in `--help`, and an unmeasured value is not shipped. `grok` also
+  takes its prompt only in argv, so these routes declare `{{task}}` and receive
+  empty stdin instead.
 
 Neither default route pins a model. Model selection stays your reviewed
 policy's decision, expressed inside that policy's `command`; see
 [Override the routes](#override-the-routes).
 
-`--source-vendor` is required when weightclass is called from a Codex or Claude
+`--source-vendor` is required when weightclass is called from an agent
 integration. With the default policy, `--source-vendor codex` selects only
-Codex routes and `--source-vendor claude` selects only Claude routes.
-weightclass is a standalone process, so it does not try to infer its parent
-application.
+Codex routes, `--source-vendor claude` selects only Claude routes,
+`--source-vendor agy` selects only Antigravity routes, and `--source-vendor
+grok` selects only Grok routes. weightclass is a standalone process, so it
+does not try to infer its parent application.
 
 When `--source-vendor` is omitted, weightclass still pins every tier to a
 single vendor: the vendor of the first route declared in the policy (`codex`
@@ -286,10 +301,12 @@ Use `wclass route --policy policy.json` to review a local policy, then
 `wclass run --policy policy.json --ack-route-fingerprint <fingerprint>` to run
 what that review selected. `run` refuses a policy without the acknowledgement;
 see [Bind a run to the selection you reviewed](#bind-a-run-to-the-selection-you-reviewed).
-Routes are considered in listed order, so the first matching `tier` is selected. Add `--source-vendor codex` or
-`--source-vendor claude` when invoking it from that vendor. Configure model
-labels and vendor-specific effort arguments only with labels you know are
-available to you.
+Routes are considered in listed order, so the first matching `tier` is selected. Add
+`--source-vendor <vendor>` matching the route's vendor label when invoking it
+from that vendor — `codex` or `claude` for the example policy below, but any
+label a route declares works the same way. Configure model labels and
+vendor-specific effort arguments only with labels you know are available to
+you.
 
 ```json
 {
@@ -333,6 +350,50 @@ The `command` tokens are opaque policy values. weightclass validates their shape
 but does not assert vendor CLI semantics or subscription access. Always run
 `wclass route` with a representative non-sensitive task to inspect a policy
 before using `wclass run`.
+
+A route's `vendor` is a containment label you choose, not a list of tools
+weightclass knows. Any printable identifier without whitespace, up to 64 bytes,
+is valid. Routing compares it as a string and the fingerprint hashes it as a
+string; nothing in weightclass holds vendor-specific knowledge about it.
+
+That means an agent weightclass ships no built-in command for is still usable
+by whoever has it installed:
+
+```json
+{
+  "routes": [
+    { "id": "qwen-low", "vendor": "qwen", "tier": "low",
+      "command": ["qwen", "-p", "{{task}}"] }
+  ]
+}
+```
+
+The label still does its job. Routes of different vendors do not mix without
+`"allow_mixed_vendors": true`, and a fingerprint reviewed for one vendor never
+matches another.
+
+Because the label is open, `--source-vendor` can no longer reject a typo.
+`--source-vendor codx` is well-formed, so it is not an argument error; it simply
+matches no route and exits `3` with `{"error": "unsupported_route"}`. A
+malformed label — empty, containing whitespace, over 64 bytes, or carrying
+non-printable characters — still exits `2` with `{"error": "invalid_input"}`.
+
+A command may contain the reserved token `{{task}}` once, as a whole argument.
+That route receives the task at that argv position and receives empty standard
+input, instead of the default of the task on standard input. This exists for
+agents that read a prompt only from their command line: `agy --print ""` and
+`grok -p ""` both refuse an empty prompt and never read the pipe.
+
+`wclass route` prints the command with `{{task}}` still in it and adds
+`"task_delivery": "argv"`, so a review never contains task text and the
+fingerprint does not change from one task to the next.
+
+**Command lines are readable by every user on the machine.** A route that uses
+`{{task}}` exposes the task to anyone who can run `ps` for as long as the child
+runs. On a single-user machine this is inconsequential; on a shared host it is
+not. Nothing weightclass can do removes this — it follows from how these agents
+accept a prompt — so it is your decision each time you write `{{task}}` or
+select an `agy` or `grok` built-in route.
 
 A token is passed to the selected program as one `argv` entry, without a shell,
 so a token may contain spaces — an install path such as
@@ -655,9 +716,30 @@ credential management, background execution, or a bundled provider runtime.
 - The built-in routes need no acknowledgement. They live in code, cannot be
   swapped, and there is nothing to bind them to. Treat a policy file the way you
   treat a shell script.
-- A selected command receives the task on standard input and inherits standard
-  output and error. Whatever it does with the task — including writing it
-  somewhere — is outside weightclass's control, and its exit status is its own.
+- weightclass ships built-in commands only for vendors whose CLI invocation was
+  measured: `claude`, `codex`, `agy`, and `grok`. It will not guess another
+  program's flags. Any other agent is reachable by writing its exact argv in a
+  policy, which is also why no CLI has to be installed here for weightclass to
+  support it.
+- The built-in `agy` and `grok` routes deliver the task on the command line, so
+  the `ps` exposure above applies to them. `claude` and `codex` routes deliver
+  it on standard input and do not.
+- Argv delivery puts the task in a value position among flags, so a task
+  beginning with `-` reaches the child's own argument parser. This is not an
+  adversarial case — an ordinary task written as a markdown bullet list starts
+  with `-` routinely. Measured directly: the built-in `grok` route fails
+  closed on such a task with an argument-parser error from `grok` itself
+  (`error: a value is required for '--single <PROMPT>' but none was
+  supplied`); the built-in `agy` route is unaffected and accepts it. Neither
+  `--` nor any other change to the command helps — for `grok` it produces the
+  same error, and `agy` does not need it. weightclass does not validate,
+  escape, or reject a task for this; it delivers exactly the bytes you gave
+  it.
+- A selected command receives the task on standard input — or, for a route that
+  declares `{{task}}`, at that argv position with empty standard input instead
+  — and inherits standard output and error. Whatever it does with the task —
+  including writing it somewhere — is outside weightclass's control, and its
+  exit status is its own.
 
 ## Development verification
 

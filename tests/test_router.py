@@ -8,16 +8,21 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest import mock
 
 from tests.runtime_guard import guarded_launch
-from weightclass import cli
+from weightclass import cli, router
+from weightclass.classification import Tier
 from weightclass.router import (
+    BUILT_IN_VENDORS,
     DEFAULT_ROUTES,
     Route,
     RouteRequest,
+    RouteSelectionError,
     native_route_fingerprint,
     select_route,
+    select_tier_route,
 )
 
 
@@ -268,6 +273,366 @@ class PolicyRunBindingTests(unittest.TestCase):
         self.assertEqual(result.returncode, 6)
         self.assertEqual(result.stdout, "")
         self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+
+
+class TaskPlaceholderTests(unittest.TestCase):
+    """{{task}} 는 명령 안에서 태스크가 들어갈 자리를 표시한다.
+
+    stdin 을 읽지 않고 프롬프트를 인자로만 받는 CLI 가 있기 때문이다. 자리를
+    잘못 쓴 정책은 파싱 단계에서 닫는다. 실행 직전에 발견하면 이미 늦다.
+    """
+
+    def _policy(self, directory: Path, command: list[str]) -> Path:
+        policy_path = directory / "policy.json"
+        policy_path.write_text(
+            json.dumps(
+                {"routes": [{"id": "r", "vendor": "codex", "tier": "low", "command": command}]}
+            ),
+            encoding="utf-8",
+        )
+        return policy_path
+
+    def test_one_whole_token_is_accepted(self) -> None:
+        """Breaks if the reserved slot cannot be declared at all."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
+            routes = cli.load_routes(path)
+
+        self.assertEqual(routes[0].command, ("/bin/echo", "{{task}}"))
+        self.assertTrue(router.uses_argv_task_delivery(routes[0].command))
+
+    def test_no_token_means_stdin_delivery(self) -> None:
+        """Breaks if existing policies silently change delivery mode."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(Path(directory), ["/bin/echo", "ok"])
+            routes = cli.load_routes(path)
+
+        self.assertFalse(router.uses_argv_task_delivery(routes[0].command))
+
+    def test_two_tokens_are_rejected(self) -> None:
+        """Breaks if a task could be delivered twice with no defined meaning."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(Path(directory), ["/bin/echo", "{{task}}", "{{task}}"])
+            with self.assertRaises(cli.InvalidInputError):
+                cli.load_routes(path)
+
+    def test_the_token_inside_a_larger_argument_is_rejected(self) -> None:
+        """Breaks if how the task and a flag were joined becomes ambiguous."""
+        for argument in ("--prompt={{task}}", "prefix{{task}}", "{{task}}suffix"):
+            with self.subTest(argument=argument), tempfile.TemporaryDirectory() as directory:
+                path = self._policy(Path(directory), ["/bin/echo", argument])
+                with self.assertRaises(cli.InvalidInputError):
+                    cli.load_routes(path)
+
+    def test_the_token_is_rejected_in_a_workflow_route(self) -> None:
+        """Breaks if a workflow route can declare a slot nothing ever fills.
+
+        select_tier_route 만 티어 라우트를 대상으로 치환을 준비하므로, workflow
+        라우트에 이 토큰을 허용하면 render 가 미치환 리터럴 "{{task}}" 를 그대로
+        보여준다. 파싱 단계에서 닫아야 검토 산출물이 항상 실제 실행을 반영한다.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "r",
+                                "vendor": "codex",
+                                "workflow": "review",
+                                "command": ["/bin/echo", "{{task}}"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(cli.InvalidInputError):
+                cli.load_routes(policy_path)
+
+    def test_substitution_fills_exactly_the_reserved_slot(self) -> None:
+        """Breaks if substitution touches an argument it was not given."""
+        filled = router.substitute_task(("agy", "--print", "{{task}}", "--effort"), "긴 태스크")
+
+        self.assertEqual(filled, ("agy", "--print", "긴 태스크", "--effort"))
+
+    def _recorder(self, directory: Path) -> Path:
+        """자식이 받은 argv 와 stdin 을 그대로 파일에 적는 가짜 실행 파일."""
+        recorder = directory / "recorder.py"
+        recorder.write_text(
+            "import json, sys\n"
+            "record = {'argv': sys.argv[1:], 'stdin': sys.stdin.read()}\n"
+            "open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps(record))\n",
+            encoding="utf-8",
+        )
+        return recorder
+
+    def test_argv_delivery_puts_the_task_in_argv_and_leaves_stdin_empty(self) -> None:
+        """Breaks if the task is delivered twice or in the wrong channel."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = self._recorder(root)
+            record_path = root / "record.json"
+            policy_path = self._policy(
+                root,
+                [sys.executable, str(recorder), str(record_path), "{{task}}"],
+            )
+
+            result = reviewed_run(policy_path, "Fix a typo.")
+            recorded = json.loads(record_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(recorded["argv"][-1], "Fix a typo.")
+        self.assertEqual(recorded["stdin"], "")
+
+    def test_stdin_delivery_is_unchanged(self) -> None:
+        """Breaks if adding argv delivery altered the path every existing policy uses."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = self._recorder(root)
+            record_path = root / "record.json"
+            policy_path = self._policy(root, [sys.executable, str(recorder), str(record_path)])
+
+            result = reviewed_run(policy_path, "Fix a typo.")
+            recorded = json.loads(record_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(recorded["stdin"], "Fix a typo.")
+        self.assertNotIn("Fix a typo.", recorded["argv"])
+
+    def test_a_task_carrying_nul_is_refused_before_spawn(self) -> None:
+        """Breaks if an argv-delivery run reaches execve with a byte it cannot carry."""
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
+            result = reviewed_run(policy_path, "Fix a typo.\x00second part")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
+
+    def test_stdin_delivery_accepts_nul_bytes(self) -> None:
+        """Breaks if stdin-delivery path rejects valid input that execve never sees."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = self._recorder(root)
+            record_path = root / "record.json"
+            policy_path = self._policy(root, [sys.executable, str(recorder), str(record_path)])
+
+            result = reviewed_run(policy_path, "Fix a typo.\x00second part")
+            recorded = json.loads(record_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(recorded["stdin"], "Fix a typo.\x00second part")
+
+    def test_review_names_argv_delivery_and_never_shows_the_task(
+        self,
+    ) -> None:
+        """Breaks if a reviewer cannot see that this route puts the task on the command line."""
+        with tempfile.TemporaryDirectory() as directory:
+            directory_path = Path(directory)
+            policy_path = directory_path / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "r-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": ["/bin/echo", "low"],
+                            },
+                            {
+                                "id": "r",
+                                "vendor": "codex",
+                                "tier": "standard",
+                                "command": ["/bin/echo", "{{task}}"],
+                            },
+                            {
+                                "id": "r-high",
+                                "vendor": "codex",
+                                "tier": "high",
+                                "command": ["/bin/echo", "high"],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            review = _weightclass("route", "--policy", str(policy_path), task="비밀 태스크")
+
+        rendered = json.loads(review.stdout)
+        self.assertEqual(review.returncode, 0, review.stderr)
+        self.assertEqual(rendered["task_delivery"], "argv")
+        self.assertEqual(rendered["command"], ["/bin/echo", "{{task}}"])
+        self.assertNotIn("비밀 태스크", review.stdout)
+
+    def test_review_omits_the_key_for_stdin_delivery(self) -> None:
+        """Breaks if every existing review output grows a field it never had."""
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = self._policy(Path(directory), ["/bin/echo", "ok"])
+            review = _weightclass("route", "--policy", str(policy_path), task="Fix a typo.")
+
+        self.assertNotIn("task_delivery", json.loads(review.stdout))
+
+    def test_two_tasks_at_one_tier_share_one_fingerprint(self) -> None:
+        """Breaks if the fingerprint starts covering substituted task text.
+
+        지문이 태스크마다 달라지면 한 번의 검토가 한 번의 실행만 묶게 되고,
+        태스크의 해시를 남기지 않는다는 규칙도 사실상 깨진다.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
+            first = _weightclass("route", "--policy", str(policy_path), task="Fix a typo.")
+            second = _weightclass("route", "--policy", str(policy_path), task="Rename a var.")
+
+        self.assertEqual(
+            json.loads(first.stdout)["route_fingerprint"],
+            json.loads(second.stdout)["route_fingerprint"],
+        )
+
+
+class AgyBuiltInRouteTests(unittest.TestCase):
+    def test_every_tier_has_an_agy_route_that_carries_the_task_in_argv(self) -> None:
+        """Breaks if a tier is missing or the built-in stops declaring its task slot."""
+        for tier, effort in (("low", "low"), ("standard", "medium"), ("high", "high")):
+            with self.subTest(tier=tier):
+                route = select_tier_route(DEFAULT_ROUTES, cast(Tier, tier), "agy")
+
+                self.assertEqual(route.vendor, "agy")
+                self.assertEqual(route.command[0], "agy")
+                self.assertIn(router.TASK_PLACEHOLDER, route.command)
+                self.assertEqual(route.command[route.command.index("--effort") + 1], effort)
+                self.assertIn("--mode", route.command)
+                self.assertEqual(route.command[route.command.index("--mode") + 1], "accept-edits")
+
+    def test_agy_is_a_supported_source_vendor(self) -> None:
+        """Breaks if the vendor label is rejected by the surfaces that gate routing."""
+        self.assertIn("agy", BUILT_IN_VENDORS)
+
+    def test_the_default_vendor_is_still_codex(self) -> None:
+        """Breaks if adding a vendor changed which route an unqualified call selects."""
+        route = select_tier_route(DEFAULT_ROUTES, "low")
+
+        self.assertEqual(route.vendor, "codex")
+
+
+class GrokBuiltInRouteTests(unittest.TestCase):
+    def test_every_tier_has_a_grok_route_that_carries_the_task_in_argv(self) -> None:
+        """Breaks if a tier is missing or the built-in stops declaring its task slot."""
+        for tier, effort in (("low", "low"), ("standard", "medium"), ("high", "high")):
+            with self.subTest(tier=tier):
+                route = select_tier_route(DEFAULT_ROUTES, cast(Tier, tier), "grok")
+
+                self.assertEqual(route.vendor, "grok")
+                self.assertEqual(route.command[0], "grok")
+                self.assertIn(router.TASK_PLACEHOLDER, route.command)
+                index = route.command.index("--reasoning-effort")
+                self.assertEqual(route.command[index + 1], effort)
+                mode = route.command.index("--permission-mode")
+                self.assertEqual(route.command[mode + 1], "acceptEdits")
+
+    def test_grok_is_a_supported_source_vendor(self) -> None:
+        """Breaks if the vendor label is rejected by the surfaces that gate routing."""
+        self.assertIn("grok", BUILT_IN_VENDORS)
+
+    def test_the_built_in_does_not_assert_an_unverified_sandbox_profile(self) -> None:
+        """Breaks if a profile value nobody measured is baked into a shipped command."""
+        route = select_tier_route(DEFAULT_ROUTES, "high", "grok")
+
+        self.assertNotIn("--sandbox", route.command)
+
+
+class OpenVendorLabelTests(unittest.TestCase):
+    """벤더 라벨은 격리 식별자이지 이 패키지가 아는 도구 목록이 아니다.
+
+    select_tier_route 는 문자열을 비교하고 native_route_fingerprint 는 문자열을
+    해싱할 뿐이다. 둘 다 벤더별 지식을 갖고 있지 않으므로, 목록을 닫아둘 근거는
+    "명령을 함께 배포한다"뿐인데 그건 라벨과 별개다.
+    """
+
+    def _policy(self, directory: Path, routes: list[dict[str, object]]) -> Path:
+        policy_path = directory / "policy.json"
+        policy_path.write_text(json.dumps({"routes": routes}), encoding="utf-8")
+        return policy_path
+
+    def test_an_unknown_vendor_label_is_accepted(self) -> None:
+        """Breaks if a user cannot bring an agent this package never heard of."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(
+                Path(directory),
+                [
+                    {
+                        "id": "r",
+                        "vendor": "qwen",
+                        "tier": "low",
+                        "command": ["/bin/echo", "{{task}}"],
+                    }
+                ],
+            )
+            routes = cli.load_routes(path)
+
+        self.assertEqual(routes[0].vendor, "qwen")
+
+    def test_a_malformed_vendor_label_is_rejected(self) -> None:
+        """Breaks if the label stops being a reviewable identifier."""
+        for label in ("", "two words", "a" * 65, "tab\there", "  padded  "):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                path = self._policy(
+                    Path(directory),
+                    [{"id": "r", "vendor": label, "tier": "low", "command": ["/bin/echo"]}],
+                )
+                with self.assertRaises(cli.InvalidInputError):
+                    cli.load_routes(path)
+
+    def test_a_malformed_source_vendor_is_rejected_before_any_subcommand_runs(self) -> None:
+        """Breaks if main()'s only guard against a garbled --source-vendor stops firing.
+
+        라벨이 열려 있어 argparse choices 가 오타를 잡아주지 못하는 서브커맨드에서,
+        main() 의 형식 검사가 라우트 선택까지 내려가기 전에 거부해야 한다.
+        """
+        result = _weightclass("classify", "--source-vendor", "bad vendor", task="Fix a typo.")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+
+    def test_a_well_formed_but_unrouted_source_vendor_fails_closed_at_selection(self) -> None:
+        """Breaks if a syntactically valid label that matches no route is silently accepted."""
+        result = _weightclass("route", "--source-vendor", "qwen", task="Fix a typo.")
+
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(json.loads(result.stderr), {"error": "unsupported_route"})
+
+    def test_containment_still_holds_for_unknown_labels(self) -> None:
+        """Breaks if opening the label also opened the boundary it exists to enforce."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._policy(
+                Path(directory),
+                [
+                    {"id": "a", "vendor": "qwen", "tier": "low", "command": ["/bin/echo"]},
+                    {"id": "b", "vendor": "kimi", "tier": "high", "command": ["/bin/echo"]},
+                ],
+            )
+            routes = cli.load_routes(path)
+
+            with self.assertRaises(RouteSelectionError):
+                select_tier_route(routes, "high", "qwen")
+
+            self.assertEqual(select_tier_route(routes, "low", "qwen").route_id, "a")
+
+    def test_the_fingerprint_still_separates_two_unknown_vendors(self) -> None:
+        """Breaks if the vendor stops being bound, letting a review cover another vendor."""
+        # mypy --strict: 값 타입이 섞인 딕셔너리를 **로 풀면 각 필드의 정확한
+        # 타입이 사라져 Route 생성자와 맞지 않는다고 판정한다. 동작은 그대로
+        # 두고 주석 타입만 명시한다.
+        shared: dict[str, Any] = {"tier": "low", "command": ("/bin/echo", "ok"), "workflow": ""}
+        first = native_route_fingerprint(Route(route_id="r", vendor="qwen", **shared), False)
+        second = native_route_fingerprint(Route(route_id="r", vendor="kimi", **shared), False)
+
+        self.assertNotEqual(first, second)
+
+    def test_the_built_in_vendors_are_still_named(self) -> None:
+        """Breaks if the shipped commands lose the set that documents them."""
+        self.assertLessEqual(frozenset({"claude", "codex"}), BUILT_IN_VENDORS)
 
 
 class CommandSurfaceTests(unittest.TestCase):

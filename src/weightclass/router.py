@@ -11,7 +11,40 @@ NATIVE_FINGERPRINT_VERSION: Final = 1
 Posture = Literal["balanced", "cautious"]
 
 
-SUPPORTED_VENDORS: Final = frozenset({"claude", "codex"})
+# 이 패키지가 명령까지 함께 배포하는 벤더. 라벨을 제한하는 목록이 아니라,
+# 내장 라우트와 판정 어댑터가 존재하는 벤더를 적어둔 것이다.
+BUILT_IN_VENDORS: Final = frozenset({"claude", "codex", "agy", "grok"})
+
+MAX_VENDOR_LABEL_BYTES: Final = 64
+
+
+class InvalidVendorLabelError(ValueError):
+    """Raised without the offending value when a vendor label is unusable."""
+
+
+def validate_vendor_label(value: object) -> str:
+    """Require a reviewable containment identifier, not a known tool name.
+
+    벤더 라벨이 하는 일은 격리다. select_tier_route 는 이 문자열을 비교하고
+    native_route_fingerprint 는 해싱할 뿐이며, 어느 쪽도 벤더별 지식을 갖지
+    않는다. 그래서 목록을 닫아둘 이유가 없다. 다만 검토 출력과 지문에 들어가는
+    값이므로 눈으로 확인 가능한 형태여야 한다.
+    """
+    if not isinstance(value, str):
+        raise InvalidVendorLabelError()
+    encoded = value.encode("utf-8", errors="replace")
+    if not 1 <= len(encoded) <= MAX_VENDOR_LABEL_BYTES:
+        raise InvalidVendorLabelError()
+    if any(character.isspace() or not character.isprintable() for character in value):
+        raise InvalidVendorLabelError()
+    return value
+
+
+# 프롬프트를 stdin 이 아니라 인자로만 받는 CLI 가 있다. 그런 명령에서 태스크가
+# 들어갈 자리를 이 토큰으로 표시한다. 이 토큰이 없으면 지금까지처럼 stdin 으로
+# 전달한다.
+TASK_PLACEHOLDER: Final = "{{task}}"
+
 # manual 은 사람에게 승인을 묻는 모드다. --print 는 비대화형이라 물어볼 상대가
 # 없어 모든 편집이 거부되고, 그런데도 claude 는 0으로 종료한다. 즉 라우터가
 # 성공을 보고하면서 아무 일도 일어나지 않는다. acceptEdits 는 파일 편집만
@@ -51,6 +84,57 @@ def codex_command(reasoning_effort: str) -> tuple[str, ...]:
     표준 입력에서 읽으라는 뜻이다.
     """
     return CODEX_COMMAND_PREFIX + (f"model_reasoning_effort={reasoning_effort}", "-")
+
+
+# agy 는 프롬프트를 stdin 에서 읽지 않는다. --print 가 프롬프트를 인자로 요구하고,
+# 빈 문자열을 주면 empty prompt 오류로 닫힌다. 그래서 태스크 자리를 argv 에 둔다.
+# --effort 어휘가 이 저장소의 티어 어휘와 같아 그대로 대응된다.
+AGY_COMMAND_PREFIX: Final = (
+    "agy",
+    "--print",
+    TASK_PLACEHOLDER,
+    "--mode",
+    "accept-edits",
+    "--effort",
+)
+
+
+def agy_command(reasoning_effort: str) -> tuple[str, ...]:
+    """Build the built-in Antigravity command for one reasoning effort label."""
+    return AGY_COMMAND_PREFIX + (reasoning_effort,)
+
+
+# grok 도 프롬프트를 stdin 에서 읽지 않는다. -p 가 단일 턴 프롬프트를 인자로 받고,
+# 빈 문자열은 prompt is empty 로 닫힌다. --sandbox 는 프로필 어휘가 --help 에
+# 열거되지 않아 측정하지 못했으므로 지정하지 않고 grok 자신의 기본값에 맡긴다.
+# 검증하지 않은 값을 배포되는 명령에 박아 넣지 않는다.
+GROK_COMMAND_PREFIX: Final = (
+    "grok",
+    "-p",
+    TASK_PLACEHOLDER,
+    "--permission-mode",
+    "acceptEdits",
+    "--reasoning-effort",
+)
+
+
+def grok_command(reasoning_effort: str) -> tuple[str, ...]:
+    """Build the built-in Grok command for one reasoning effort label."""
+    return GROK_COMMAND_PREFIX + (reasoning_effort,)
+
+
+def uses_argv_task_delivery(command: tuple[str, ...]) -> bool:
+    """Report whether this command carries the task in argv rather than on stdin."""
+    return TASK_PLACEHOLDER in command
+
+
+def substitute_task(command: tuple[str, ...], task: str) -> tuple[str, ...]:
+    """Fill the single reserved slot. Call this only immediately before spawn.
+
+    치환된 argv 는 실행에만 쓴다. 검토 출력과 지문은 치환 전 명령으로 계산해야
+    태스크가 그 둘에 새어 들어가지 않는다.
+    """
+    return tuple(task if token == TASK_PLACEHOLDER else token for token in command)
 
 
 @dataclass(frozen=True)
@@ -124,6 +208,48 @@ DEFAULT_ROUTES: Final = (
         workflow="",
         tier="high",
         command=CLAUDE_COMMAND_PREFIX + ("high",),
+    ),
+    Route(
+        route_id="agy-low",
+        vendor="agy",
+        workflow="",
+        tier="low",
+        command=agy_command("low"),
+    ),
+    Route(
+        route_id="agy-standard",
+        vendor="agy",
+        workflow="",
+        tier="standard",
+        command=agy_command("medium"),
+    ),
+    Route(
+        route_id="agy-high",
+        vendor="agy",
+        workflow="",
+        tier="high",
+        command=agy_command("high"),
+    ),
+    Route(
+        route_id="grok-low",
+        vendor="grok",
+        workflow="",
+        tier="low",
+        command=grok_command("low"),
+    ),
+    Route(
+        route_id="grok-standard",
+        vendor="grok",
+        workflow="",
+        tier="standard",
+        command=grok_command("medium"),
+    ),
+    Route(
+        route_id="grok-high",
+        vendor="grok",
+        workflow="",
+        tier="high",
+        command=grok_command("high"),
     ),
 )
 
