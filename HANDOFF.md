@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-12 14:05 KST by Codex_
+_Last updated: 2026-08-12 14:31 KST by Codex_
 
 ## Goal
 
@@ -13,23 +13,24 @@ _Last updated: 2026-08-12 14:05 KST by Codex_
 
 ## Current Status
 
-- `weightclass 0.8.2` is merged, tagged, published, and installable.
-  - Release commit: `63258166471b393ca31ae0fc89c2ba18683528b6`.
-  - Annotated tag: `v0.8.2`.
-  - GitHub Release: <https://github.com/ictechgy/weightclass/releases/tag/v0.8.2>.
-  - Release workflow: [31457913800](https://github.com/ictechgy/weightclass/actions/runs/31457913800), completed successfully.
-  - PyPI: <https://pypi.org/project/weightclass/0.8.2/>.
+- `weightclass 0.9.0` is merged, tagged, published, and installable.
+  - Release commit and annotated `v0.9.0` tag target:
+    `a61f973d9d32974b7db34a591d08f4cc20921f42`.
+  - GitHub Release: <https://github.com/ictechgy/weightclass/releases/tag/v0.9.0>.
+  - Final release-gating CI:
+    [31566006243](https://github.com/ictechgy/weightclass/actions/runs/31566006243), completed successfully.
+  - Immutable Release workflow:
+    [31566160612](https://github.com/ictechgy/weightclass/actions/runs/31566160612), completed successfully.
+  - PyPI: <https://pypi.org/project/weightclass/0.9.0/>.
 - The source-of-truth Homebrew formula was updated on `main` by
-  `7c82fde424c1e5807c5ca8a9fa1e9f76b4d5f004`. The matching tap commit is
-  [`eaaf259`](https://github.com/ictechgy/homebrew-tap/commit/eaaf25947ea10560df050bceccd7f127f3af6fec).
+  `d5d5b75a81de17c226a385b986302f440bb58ac1`. The matching tap commit is
+  [`a462ec4`](https://github.com/ictechgy/homebrew-tap/commit/a462ec47de49cdca8abe1549c4d075dd3e3d391c).
 - `v0.8.1` was never published to PyPI: its Release workflow failed only on
   Ruff import ordering. It had no GitHub Release and was deliberately deleted
   from both the local and `origin` tag namespaces. Do not recreate it.
-- A `0.9.0` release candidate is prepared on `main` from
-  `6eebf9c6e90ff55958d2172fbd8131f240ddafe8`; the version source is already
-  `0.9.0`. The candidate is not yet committed, tagged, published, or deployed.
-  The minor bump is intentional because Linux Claude semantic triage now fails
-  closed before task egress; ordinary native Claude routing remains unchanged.
+- `0.8.2` is the previous published release. The `0.9.0` minor bump is
+  intentional because Linux Claude semantic triage now fails closed before
+  task egress; ordinary native Claude routing remains unchanged.
 
 ## Completed in 0.8.2
 
@@ -48,7 +49,7 @@ _Last updated: 2026-08-12 14:05 KST by Codex_
   - sdist SHA-256:
     `c566a8f2835ba29e8fae6a30651fe0e40671a376ccca4db51459cc26770ca096`.
 
-## 0.9.0 Release Candidate
+## Completed in 0.9.0
 
 - All ordinary foreground execution paths now own direct-child status through
   `waitpid`; `ECHILD` is a redacted `executor_failed`, never synthesized exit
@@ -116,7 +117,7 @@ _Last updated: 2026-08-12 14:05 KST by Codex_
 
 ## Verification
 
-- Fresh verification of the `0.9.0` release candidate on 2026-08-12:
+- Fresh pre-release verification of `0.9.0` on 2026-08-12:
   - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
     `ResourceWarning` as an error: 738 tests passed on each interpreter.
   - Full pytest: 738 tests and 806 subtests passed; two existing Python 3.14 tar
@@ -129,22 +130,22 @@ _Last updated: 2026-08-12 14:05 KST by Codex_
   - Release-tool installation and build isolation used the public Python
     package index within the approved release scope. No secret-bearing file was
     accessed.
-
-- Local release verification before publishing:
-  - Full source suite with `ResourceWarning` as an error on Python 3.14 and
-    Python 3.10: 672 tests passed.
-  - Ruff `0.16.2` check and format checks: clean.
-  - Mypy, package build, strict Twine metadata check, distribution-isolation
-    verification, installed-wheel version check, and `git diff --check`: clean.
-- GitHub Release workflow `31457913800` succeeded:
-  immutable Python 3.13 candidate; macOS routing boundaries on Python 3.10 and
-  3.14; immutable candidate validation on Python 3.10 and 3.14; exact PyPI
-  publish.
-- A fresh virtual environment installed `weightclass==0.8.2` from the explicit
-  PyPI simple index; `wclass --version` reported `weightclass 0.8.2` and the
+- Final CI run `31566006243` passed on the tagged commit: Python 3.10 through
+  3.14, macOS routing boundaries on Python 3.10 and 3.14, lint, strict typing,
+  build, strict Twine metadata, and distribution-isolation checks.
+- Release workflow `31566160612` built one immutable Python 3.13 candidate,
+  revalidated it on Python 3.10 and 3.14 plus the macOS boundaries, and
+  published those exact artifacts through PyPI Trusted Publishing.
+- PyPI reports the canonical `0.9.0` sdist SHA-256 as
+  `9f0c70cc4150a793ea99cfa51c878663a5575dde33fe8140ed6569d93b7b7d21`;
+  an independent download matched it.
+- A fresh virtual environment installed `weightclass==0.9.0` from the explicit
+  PyPI simple index; `wclass --version` reported `weightclass 0.9.0` and the
   classification smoke test returned `{"tier": "low"}`.
 - Homebrew verification passed for the `weightclass` formula: formula-scoped
-  style and strict audit, `brew reinstall --build-from-source`, and `brew test`.
+  style and strict audit, `brew reinstall --build-from-source`, `brew test`, and
+  direct low/high classification smokes. `/opt/homebrew/bin/wclass --version`
+  reports `weightclass 0.9.0`.
   The full tap style check has an unrelated existing `relay.rb` ordering
   violation; do not change it as part of weightclass maintenance.
 
@@ -152,9 +153,7 @@ _Last updated: 2026-08-12 14:05 KST by Codex_
 
 - No known code blocker remains; independent final diff review reported no
   actionable findings.
-- Commit and push the reviewed candidate, create annotated tag `v0.9.0`, and
-  watch the immutable Release workflow through PyPI publication. No release,
-  push, or deployment has yet been performed for these changes.
+- No mandatory release or deployment step remains for `0.9.0`.
 - Real installed-Claude compatibility under the Darwin sandbox was not tested
   because that would invoke an external runtime/network boundary.
 - Optional future work: collect real-user routing feedback; qualify a concrete
@@ -163,18 +162,16 @@ _Last updated: 2026-08-12 14:05 KST by Codex_
 
 ## Next Steps
 
-1. Commit and push the verified `0.9.0` candidate, then push annotated tag
-   `v0.9.0` and monitor the Release workflow through PyPI publication.
-2. Update `packaging/homebrew/weightclass.rb` from the published canonical sdist,
-   verify the tap formula, push it, and refresh this handoff with exact commits,
-   workflow run, release URL, and checksum.
+1. No mandatory work remains for the `0.9.0` release. Monitor installation and
+   routing feedback without inferring provider entitlement or quota.
+2. Re-enable Linux Claude semantic triage only after reviewing a concrete
+   filesystem-containment command and its process-tree boundary.
 3. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
    no-retention, and the single-reviewed-child boundary.
 
 ## Resume Prompt
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`
-and `AGENTS.md`, then continue from: `publish the verified weightclass 0.9.0
-candidate using the immutable v0.9.0 release workflow, then update and verify
-the Homebrew formula; no candidate commit, tag, publish, or deployment has yet
-completed.`
+and `AGENTS.md`, then continue from: `weightclass 0.9.0 is published to PyPI,
+has a GitHub Release, and is deployed through the verified Homebrew tap; no
+mandatory release work remains.`
