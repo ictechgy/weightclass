@@ -921,12 +921,11 @@ class AskVendorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "root"
             root.mkdir()
-            for index in range(20_000):
-                (root / f"entry-{index}").touch()
+            (root / "artifact").touch()
             root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
             parent_fd = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY)
             root_identity = os.fstat(root_fd)
-            deadline = time.monotonic() + triage.TRIAGE_DIRECTORY_CLEANUP_BUDGET_SECONDS
+            deadline = time.monotonic() - 1
             try:
                 removed_within_deadline = triage._remove_private_directory(
                     root_fd,
