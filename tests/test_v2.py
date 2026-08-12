@@ -13,13 +13,16 @@ from typing import Any
 from unittest import mock
 
 from weightclass import cli
+from weightclass.process_context import ChildStatusLostError
 from weightclass.router import RouteSelectionError
 from weightclass.v2 import (
     API_SOURCE_VENDORS,
     SOURCE_PROVIDER,
     ApiRoute,
     ApiRoutingPolicy,
+    load_api_policy,
     observe_api_runtime,
+    route_fingerprint,
     select_api_route,
 )
 
@@ -233,6 +236,35 @@ class V2EgressGateTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 5)
         self.assertEqual(json.loads(errors.getvalue()), {"error": "api_confirmation_required"})
+
+    def test_missing_fingerprint_precedes_process_context_runtime_and_task_access(self) -> None:
+        """Breaks if a run that cannot be bound touches runtime state or task input."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
+            observed = observe_api_runtime(Path(sys.executable))
+            errors = io.StringIO()
+            with (
+                mock.patch("weightclass.cli.validate_runtime_process_context") as context_check,
+                mock.patch("weightclass.cli.observe_api_runtime", return_value=observed) as inspect,
+                mock.patch(
+                    "weightclass.cli.read_task_from_standard_input", return_value="Fix a typo."
+                ) as reader,
+                contextlib.redirect_stderr(errors),
+            ):
+                exit_code = cli.v2_run_from_standard_input(
+                    policy_path,
+                    "codex",
+                    Path(sys.executable),
+                    True,
+                    None,
+                )
+
+        self.assertEqual(exit_code, 6)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "route_fingerprint_mismatch"})
+        context_check.assert_not_called()
+        inspect.assert_not_called()
+        reader.assert_not_called()
 
     @unittest.skipUnless(hasattr(signal, "SIGCHLD"), "requires SIGCHLD")
     def test_auto_reaping_context_stops_api_run_before_task_input(self) -> None:
@@ -461,6 +493,44 @@ class V2ExecutorResultTests(unittest.TestCase):
                 input=task,
                 text=True,
             )
+
+    def test_lost_child_status_is_executor_failed_not_unavailable(self) -> None:
+        """Breaks if ECHILD after API spawn is mapped to launch failure or success."""
+        task = "Fix a typo."
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
+            runtime_path = Path(sys.executable)
+            observed = observe_api_runtime(runtime_path)
+            reviewed_runtime_path = Path(observed.lexical_path)
+            policy = load_api_policy(policy_path)
+            tier, route = select_api_route(task, policy, "codex")
+            fingerprint = route_fingerprint(
+                route,
+                policy,
+                tier,
+                "codex",
+                reviewed_runtime_path,
+                observed,
+            )
+            errors = io.StringIO()
+            raised = ChildStatusLostError()
+            with (
+                mock.patch("weightclass.cli.observe_api_runtime", return_value=observed),
+                mock.patch.object(cli, "run_owned_foreground", side_effect=raised),
+                mock.patch("weightclass.cli.read_task_from_standard_input", return_value=task),
+                contextlib.redirect_stderr(errors),
+            ):
+                exit_code = cli.v2_run_from_standard_input(
+                    policy_path,
+                    "codex",
+                    runtime_path,
+                    True,
+                    fingerprint,
+                )
+
+        self.assertEqual(exit_code, 7)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_failed"})
 
     def test_reports_a_failing_runtime_without_colliding_with_router_codes(self) -> None:
         """Breaks if a runtime's exit status can be mistaken for a router diagnostic."""

@@ -61,6 +61,7 @@ from .delegation_v2_schema import (
 )
 from .delegation_v2_versions import DelegationVersionError, dispatch_delegation_versions
 from .executable_observation import observe_executable
+from .foreground_process import run_owned_foreground
 from .json_input import JsonInputError, load_json_object
 from .native_v2_compile import compile_native_v2
 from .native_v2_runtime import run_native_v2
@@ -70,6 +71,7 @@ from .native_v2_schema import (
     validate_native_selector,
 )
 from .native_v2_types import CompiledExecutionV2
+from .process_context import ChildStatusLostError
 from .router import (
     DEFAULT_ROUTES,
     TASK_PLACEHOLDER,
@@ -700,6 +702,9 @@ def _delegation_v2_run(
         return 2
     try:
         completed = run_delegation_v2_runtime(compiled, frame, first_observation)
+    except ChildStatusLostError:
+        print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
+        return EXECUTOR_FAILED_EXIT_CODE
     except (V2ValidationError, OSError, ValueError):
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
@@ -772,6 +777,9 @@ def v2_run_from_standard_input(
     if not confirm_api_egress:
         print(json.dumps({"error": "api_confirmation_required"}), file=sys.stderr)
         return 5
+    if acknowledged_fingerprint is None:
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
     try:
         validate_runtime_process_context()
     except DelegationRuntimeUnavailableError:
@@ -813,7 +821,7 @@ def v2_run_from_standard_input(
     try:
         # 로케일 인코딩을 쓰는 text 모드는 비ASCII 태스크에서 UnicodeEncodeError를 내고,
         # 그 예외 메시지가 태스크 문자와 위치를 진단에 노출한다. 항상 UTF-8 바이트로 넘긴다.
-        completed_process = subprocess.run(
+        completed_process = run_owned_foreground(
             (
                 str(runtime_path),
                 "--provider",
@@ -823,9 +831,13 @@ def v2_run_from_standard_input(
                 "--effort",
                 route.effort,
             ),
-            check=False,
-            input=task.encode("utf-8"),
+            task.encode("utf-8"),
+            cleanup_grace_seconds=0,
+            terminate_grace_seconds=0,
         )
+    except ChildStatusLostError:
+        print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
+        return EXECUTOR_FAILED_EXIT_CODE
     except (OSError, ValueError):
         # ValueError 는 argv 를 실제로 인코딩하는 단계에서 나온다(NUL, 서로게이트).
         # 검증기가 이미 막고 있지만, 규칙에 빈틈이 생겨도 트레이스백 대신
@@ -1071,10 +1083,11 @@ def run_from_standard_input(
             child_input = b""
         # text 모드는 로케일 인코딩을 사용하므로 LC_ALL=C 환경에서 비ASCII 태스크가
         # UnicodeEncodeError로 새어 나간다. 자식 출력을 읽지 않으므로 바이트로 전달한다.
-        completed_process = subprocess.run(
+        completed_process = run_owned_foreground(
             argv,
-            check=False,
-            input=child_input,
+            child_input,
+            cleanup_grace_seconds=0,
+            terminate_grace_seconds=0,
         )
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
@@ -1085,6 +1098,9 @@ def run_from_standard_input(
     except RouteSelectionError:
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
+    except ChildStatusLostError:
+        print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
+        return EXECUTOR_FAILED_EXIT_CODE
     except (OSError, ValueError):
         # ValueError 는 argv 를 실제로 인코딩하는 단계에서 나온다(NUL, 서로게이트).
         # 검증기가 이미 막고 있지만, 규칙에 빈틈이 생겨도 트레이스백 대신
@@ -1182,6 +1198,9 @@ def _native_v2_run(
     try:
         first_observation = observe_executable(compiled.executable)
         completed = run_native_v2(compiled, task.delivery_bytes(), first_observation)
+    except ChildStatusLostError:
+        print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
+        return EXECUTOR_FAILED_EXIT_CODE
     except (V2ValidationError, OSError, ValueError):
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4

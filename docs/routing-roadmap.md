@@ -30,8 +30,13 @@ unchanged.
 
 ## Non-negotiable constraints
 
-- Runtime task text remains transient standard input only: never persist, log,
-  hash, echo, or include it in diagnostics.
+- Runtime task text remains transient: read it from standard input and deliver
+  it to children on standard input whenever they support that. The sole native
+  exception is an explicitly reviewed `{{task}}` argv slot for a CLI that only
+  accepts its prompt there, including the built-in `agy` and `grok` routes;
+  those routes must disclose `"task_delivery": "argv"` and the documented
+  local process-inspection exposure. Never persist, log, hash, echo, or include
+  task text in diagnostics or review output.
 - Default classification stays deterministic, offline, and reviewable.
 - Model labels, subscription availability, billing, and entitlement remain
   opaque user configuration; the router does not infer them.
@@ -214,12 +219,16 @@ the dependency, resource, maintenance, and supply-chain costs.
 The post-0.3 review priorities shipped in weightclass 0.4.0:
 
 - P0: Claude triage now requests safe mode, no tools/MCP, no local setting
-  sources, no persistence, and an empty private working directory. Its bounded
-  POSIX runner tears down the complete process group and accepts only one exact
-  lowercase tier. It observes exit without reaping through `waitid` or the
-  macOS Python 3.10 kqueue fallback. Codex triage fails closed because its
-  documented CLI contract does not currently provide an all-tools-disabled
-  mode; native Codex routing is unaffected.
+  sources, no persistence, and an empty private working directory. On macOS its
+  exact reviewed command additionally uses a fixed `sandbox-exec` metadata and
+  private-root-rename profile while the pinned private root is read/execute
+  only. Linux Claude triage fails closed until an equivalent filesystem
+  containment command is separately reviewed; native Claude routing is
+  unaffected. The bounded POSIX runner tears down the complete process group
+  and accepts only one exact lowercase tier. It observes exit without reaping
+  through `waitid` or the macOS Python 3.10 kqueue fallback. Codex triage fails
+  closed because its documented CLI contract does not currently provide an
+  all-tools-disabled mode; native Codex routing is unaffected.
 - P1: all installed-runtime policy and descriptor readers share a bounded,
   duplicate-key-safe, regular-file JSON loader. Static inputs are validated
   before transient task stdin is read. High-tier explanations distinguish

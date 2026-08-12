@@ -217,11 +217,11 @@ class DelegationProtocolUnitTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "weightclass.delegation_runtime.os.waitpid",
+                "weightclass.process_context.os.waitpid",
                 side_effect=[InterruptedError(), InterruptedError(), (123, 17 << 8)],
             ) as waitpid,
             mock.patch(
-                "weightclass.delegation_runtime.time.monotonic", side_effect=[10.0, 11.0, 12.0]
+                "weightclass.process_context.time.monotonic", side_effect=[10.0, 11.0, 12.0]
             ),
         ):
             return_code = _wait(process, 5.0)
@@ -240,7 +240,7 @@ class DelegationProtocolUnitTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "weightclass.delegation_runtime.os.waitpid",
+                "weightclass.process_context.os.waitpid",
                 side_effect=ChildProcessError(),
             ) as waitpid,
             self.assertRaises(DelegationRuntimeFailedError),
@@ -261,7 +261,7 @@ class DelegationProtocolUnitTests(unittest.TestCase):
         process.returncode = None
 
         with mock.patch(
-            "weightclass.delegation_runtime.os.waitpid",
+            "weightclass.process_context.os.waitpid",
             return_value=(123, signal.SIGTERM),
         ):
             return_code = _wait(process)
@@ -281,7 +281,7 @@ class DelegationProtocolUnitTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "weightclass.delegation_runtime.os.waitpid",
+                "weightclass.process_context.os.waitpid",
                 side_effect=ChildProcessError(),
             ),
             mock.patch("weightclass.delegation_runtime.os.kill") as kill,

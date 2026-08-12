@@ -16,6 +16,7 @@ from weightclass.delegation_v2_schema import (
     parse_delegation_policy_v2,
 )
 from weightclass.executable_observation import ExecutableObservation
+from weightclass.process_context import ChildStatusLostError
 from weightclass.task_v2 import read_validated_task_v2
 
 
@@ -138,6 +139,46 @@ class DelegationV2CliTests(unittest.TestCase):
         self.assertEqual(actual_compiled, expected)
         self.assertEqual(actual_frame, b"frame")
         self.assertIs(actual_observation, observed)
+
+    def test_lost_child_status_is_executor_failed_not_unavailable(self) -> None:
+        """Breaks if status loss after spawn is mislabeled as runtime availability."""
+        policy, manifest = compilable_inputs()
+        expected = compile_delegation_v2(
+            parse_delegation_policy_v2(policy),
+            parse_delegation_manifest_v2(manifest),
+            source_vendor_family="codex",
+            source_profile_id="source",
+            tier="low",
+            runtime_path="/owned/runtime",
+        )
+        observed = ExecutableObservation("/owned/runtime", 1, 1, 0o100000, 0o100700, 1, 1, 1, True)
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            manifest_path = Path(directory) / "manifest.json"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            errors = io.StringIO()
+            with (
+                patch.object(sys, "stdin", io.StringIO("task")),
+                patch.object(sys, "stderr", errors),
+                patch("weightclass.cli.observe_executable", return_value=observed),
+                patch("weightclass.cli.encode_delegation_frame_v2", return_value=b"frame"),
+                patch(
+                    "weightclass.cli.run_delegation_v2_runtime",
+                    side_effect=ChildStatusLostError(),
+                ),
+            ):
+                result = cli.main(
+                    [
+                        *self.arguments(policy_path, manifest_path, "run"),
+                        "--confirm-trusted-delegation-runtime",
+                        "--ack-route-fingerprint",
+                        expected.route_fingerprint,
+                    ]
+                )
+
+        self.assertEqual(result, 7)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_failed"})
 
     def test_frame_failure_is_invalid_input_and_stops_before_spawn(self) -> None:
         policy, manifest = compilable_inputs()

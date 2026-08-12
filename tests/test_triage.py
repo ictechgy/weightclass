@@ -9,15 +9,22 @@ import gc
 import io
 import json
 import os
+import resource
+import selectors
+import shutil
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 from unittest import mock
 
 from tests.runtime_guard import guarded_launch
@@ -72,11 +79,13 @@ def _fake_python_vendor_on_path(source: str) -> "Iterator[dict[str, str]]":
 
 
 class TriageCommandTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "macOS containment command")
     def test_claude_triage_disables_customizations_tools_mcp_and_persistence(self) -> None:
         """Breaks if untrusted task text can reach an ambient Claude capability."""
         command = triage_command("claude")
 
-        self.assertEqual(command[0], "claude")
+        self.assertEqual(command[:2], ("/usr/bin/sandbox-exec", "-p"))
+        self.assertEqual(command[3], "claude")
         self.assertIn("--safe-mode", command)
         self.assertIn("--no-session-persistence", command)
         self.assertIn("--strict-mcp-config", command)
@@ -88,6 +97,41 @@ class TriageCommandTests(unittest.TestCase):
         self.assertEqual(command[permission_mode_index + 1], "plan")
         effort_index = command.index("--effort")
         self.assertEqual(command[effort_index + 1], "low")
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox profile")
+    def test_claude_triage_descriptor_pins_metadata_mutation_denials(self) -> None:
+        """Breaks if production can create cleanup-defeating metadata again."""
+        descriptor = triage_descriptor("claude")
+        command = tuple(cast(list[str], descriptor["command"]))
+
+        self.assertEqual(command[:2], ("/usr/bin/sandbox-exec", "-p"))
+        profile = command[2]
+        self.assertIn("(allow default)", profile)
+        self.assertIn("(deny file-write-mode)", profile)
+        self.assertIn("(deny file-write-flags)", profile)
+        self.assertIn("(deny file-write-acl)", profile)
+        self.assertIn(
+            '(deny file-write-unlink (regex #"/weightclass-triage-[^/]+$"))',
+            profile,
+        )
+        self.assertEqual(command[3], "claude")
+        self.assertEqual(descriptor["adapter_version"], 2)
+
+    def test_claude_triage_is_unavailable_without_reviewed_containment(self) -> None:
+        """Breaks if non-Darwin task content can reach an uncontained child."""
+        with mock.patch("weightclass.triage.sys.platform", "linux"):
+            with self.assertRaises(TriageUnavailableError):
+                triage_command("claude")
+
+            descriptor = triage_descriptor("claude")
+
+        self.assertFalse(descriptor["available"])
+        self.assertEqual(descriptor["adapter_version"], 2)
+        self.assertEqual(
+            descriptor["unavailable_reason"],
+            "no_reviewed_filesystem_containment",
+        )
+        self.assertNotIn("command", descriptor)
 
     def test_codex_triage_fails_closed_without_a_no_tools_contract(self) -> None:
         """Breaks if read-only filesystem access is mistaken for no tool access."""
@@ -117,6 +161,8 @@ class TriageCommandTests(unittest.TestCase):
         """Breaks if an enabled adapter loses its filesystem restriction."""
         self.assertEqual(set(TRIAGE_COMMANDS), {"claude"})
         self.assertEqual(set(TRIAGE_READ_ONLY_MARKERS), {"claude"})
+        if sys.platform != "darwin":
+            return
         for vendor, marker in TRIAGE_READ_ONLY_MARKERS.items():
             with self.subTest(vendor=vendor):
                 self.assertIn(marker, triage_command(vendor))
@@ -171,12 +217,34 @@ class AskVendorTests(unittest.TestCase):
     실제 파이프에서만 검증되고, mock 은 그 둘을 통과시킨다.
     """
 
+    def _ask_test_command(self, task: str = "task") -> str:
+        """Exercise after-gate lifecycle and parsing with an explicit test command."""
+        with mock.patch(
+            "weightclass.triage.triage_command",
+            return_value=("claude",),
+        ):
+            return ask_vendor_for_tier(task, "claude")
+
     def _ask(self, body: str, task: str = "task") -> str | None:
         with _fake_vendor_on_path(body) as env, mock.patch.dict(os.environ, env):
             try:
-                return ask_vendor_for_tier(task, "claude")
+                return self._ask_test_command(task)
             except TriageUnavailableError:
                 return None
+
+    def test_non_darwin_refuses_before_starting_a_vendor(self) -> None:
+        """Breaks if platform rejection occurs only after task egress."""
+        with (
+            mock.patch("weightclass.triage.sys.platform", "linux"),
+            mock.patch("weightclass.triage.subprocess.Popen") as popen,
+            mock.patch("weightclass.triage._read_bounded_vendor_answer") as read_answer,
+        ):
+            with self.assertRaises(TriageUnavailableError) as captured:
+                ask_vendor_for_tier("private task", "claude")
+
+        popen.assert_not_called()
+        read_answer.assert_not_called()
+        self.assertEqual(captured.exception.args, ())
 
     def test_accepts_a_bare_tier_word(self) -> None:
         self.assertEqual(self._ask("printf high"), "high")
@@ -226,12 +294,53 @@ class AskVendorTests(unittest.TestCase):
     def test_refuses_when_the_vendor_is_not_installed(self) -> None:
         with mock.patch.dict(os.environ, {"PATH": "/nonexistent"}):
             with self.assertRaises(TriageUnavailableError):
-                ask_vendor_for_tier("task", "claude")
+                self._ask_test_command()
+
+    def test_rejects_an_unsafe_sigchld_context_before_starting_the_vendor(self) -> None:
+        """Breaks if discarded child status is noticed only after task egress."""
+        with (
+            mock.patch(
+                "weightclass.triage.has_safe_sigchld_disposition",
+                return_value=False,
+            ),
+            mock.patch(
+                "weightclass.triage.subprocess.Popen",
+                side_effect=AssertionError("vendor process was started"),
+            ) as popen,
+        ):
+            with self.assertRaises(TriageUnavailableError):
+                self._ask_test_command()
+
+        popen.assert_not_called()
+
+    def test_rejects_a_worker_thread_before_starting_the_vendor(self) -> None:
+        """Breaks if triage starts a child where SIGCHLD ownership is unsafe."""
+        errors: list[BaseException] = []
+
+        def ask_from_worker() -> None:
+            try:
+                self._ask_test_command()
+            except BaseException as error:
+                errors.append(error)
+
+        with mock.patch(
+            "weightclass.triage.subprocess.Popen",
+            side_effect=AssertionError("vendor process was started"),
+        ) as popen:
+            worker = threading.Thread(target=ask_from_worker)
+            worker.start()
+            worker.join(timeout=2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], TriageUnavailableError)
+        popen.assert_not_called()
 
     def test_refuses_output_past_the_size_cap(self) -> None:
         """Breaks if the cap moves back to after the whole stream is buffered."""
         self.assertIsNone(self._ask("printf low; head -c 10000 /dev/zero | tr '\\000' ' '"))
 
+    @unittest.skipUnless(sys.platform == "darwin", "public Claude triage containment")
     def test_discards_vendor_stderr(self) -> None:
         """Breaks if a vendor's own output can reach weightclass's streams.
 
@@ -275,7 +384,7 @@ class AskVendorTests(unittest.TestCase):
             mock.patch.dict(os.environ, env),
             self.assertRaises(TriageUnavailableError),
         ):
-            ask_vendor_for_tier("task", "claude")
+            self._ask_test_command()
 
         # 가짜 벤더는 60초를 잔다. 그보다 한참 전에 끊겼어야 한다.
         self.assertLess(time.monotonic() - started, 20)
@@ -287,6 +396,812 @@ class AskVendorTests(unittest.TestCase):
             import sys
 
             sys.stdout.write("high" if not os.listdir(".") else "not-a-tier")
+        """
+        with _fake_python_vendor_on_path(source) as env, mock.patch.dict(os.environ, env):
+            self.assertEqual(self._ask_test_command(), "high")
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox profile")
+    def test_vendor_cannot_make_the_private_tree_cleanup_hostile(self) -> None:
+        """Breaks if production can chmod its cwd/root or create an artifact."""
+        source = """
+            import os
+            import pathlib
+            import stat
+            import sys
+
+            cwd = pathlib.Path.cwd()
+            root = cwd.parent
+            blocked = stat.S_IMODE(cwd.stat().st_mode) == 0o500
+            blocked = blocked and stat.S_IMODE(root.stat().st_mode) == 0o500
+            for target in (cwd, root):
+                try:
+                    os.chmod(target, 0o700)
+                except PermissionError:
+                    pass
+                else:
+                    blocked = False
+            try:
+                (cwd / "artifact").write_text("ephemeral", encoding="utf-8")
+            except PermissionError:
+                pass
+            else:
+                blocked = False
+            sys.stdout.write("high" if blocked else "not-a-tier")
+        """
+        with _fake_python_vendor_on_path(source) as env, mock.patch.dict(os.environ, env):
+            self.assertEqual(ask_vendor_for_tier("task", "claude"), "high")
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox profile")
+    def test_vendor_cannot_rename_the_private_root(self) -> None:
+        """Breaks if the child can move the root beyond exact-name removal."""
+        source = """
+            import os
+            import pathlib
+            import sys
+
+            root = pathlib.Path.cwd().parent
+            moved = root.with_name(root.name + "-moved")
+            try:
+                os.rename(root, moved)
+            except PermissionError:
+                sys.stdout.write("high")
+            else:
+                sys.stdout.write("not-a-tier")
+        """
+        with _fake_python_vendor_on_path(source) as env, mock.patch.dict(os.environ, env):
+            self.assertEqual(ask_vendor_for_tier("task", "claude"), "high")
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox profile")
+    def test_vendor_can_unlink_an_unrelated_cache_file(self) -> None:
+        """Breaks if the root-rename denial blocks ordinary unrelated cleanup."""
+        source = """
+            import os
+            import pathlib
+            import tempfile
+            import sys
+
+            file_descriptor, path = tempfile.mkstemp(prefix="weightclass-cache-")
+            os.close(file_descriptor)
+            cache_file = pathlib.Path(path)
+            cache_file.unlink()
+            sys.stdout.write("high" if not cache_file.exists() else "not-a-tier")
+        """
+        with _fake_python_vendor_on_path(source) as env, mock.patch.dict(os.environ, env):
+            self.assertEqual(ask_vendor_for_tier("task", "claude"), "high")
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox wrapper")
+    def test_missing_sandbox_wrapper_fails_redacted_without_a_child(self) -> None:
+        """Breaks if a missing required containment wrapper falls back to Claude."""
+        command = triage_command("claude")
+
+        with mock.patch(
+            "weightclass.triage.subprocess.Popen",
+            side_effect=FileNotFoundError("raw"),
+        ) as popen:
+            with self.assertRaises(TriageUnavailableError) as captured:
+                ask_vendor_for_tier("task", "claude")
+
+        self.assertEqual(popen.call_args.args[0], command)
+        self.assertEqual(command[0], "/usr/bin/sandbox-exec")
+        self.assertEqual(captured.exception.args, ())
+
+    def test_root_open_failure_removes_the_unspawned_private_directory(self) -> None:
+        """Breaks if partial root acquisition forgets a new empty directory."""
+        allocated: list[Path] = []
+        real_mkdtemp = tempfile.mkdtemp
+        real_open = os.open
+
+        def record_allocation(*args: Any, **kwargs: Any) -> str:
+            path = cast(str, real_mkdtemp(*args, **kwargs))
+            allocated.append(Path(path))
+            return path
+
+        def fail_root_open(
+            path: str | os.PathLike[str],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            if Path(path).name.startswith("weightclass-triage-"):
+                raise OSError("raw")
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        try:
+            with (
+                mock.patch(
+                    "weightclass.triage.tempfile.mkdtemp",
+                    side_effect=record_allocation,
+                ),
+                mock.patch("weightclass.triage.os.open", side_effect=fail_root_open),
+                mock.patch("weightclass.triage.subprocess.Popen") as popen,
+            ):
+                with self.assertRaises(TriageUnavailableError) as captured:
+                    self._ask_test_command()
+
+            popen.assert_not_called()
+            self.assertEqual(captured.exception.args, ())
+            self.assertEqual(len(allocated), 1)
+            self.assertFalse(allocated[0].exists())
+        finally:
+            for path in allocated:
+                if path.exists():
+                    path.rmdir()
+
+    def test_parent_open_failure_removes_the_unspawned_private_directory(self) -> None:
+        """Breaks if parent descriptor acquisition leaks its pinned empty root."""
+        allocated: list[Path] = []
+        real_mkdtemp = tempfile.mkdtemp
+        real_open = os.open
+
+        def record_allocation(*args: Any, **kwargs: Any) -> str:
+            path = cast(str, real_mkdtemp(*args, **kwargs))
+            allocated.append(Path(path))
+            return path
+
+        def fail_parent_open(
+            path: str | os.PathLike[str],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            if path == ".." and dir_fd is not None:
+                raise OSError("raw")
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        try:
+            with (
+                mock.patch(
+                    "weightclass.triage.tempfile.mkdtemp",
+                    side_effect=record_allocation,
+                ),
+                mock.patch("weightclass.triage.os.open", side_effect=fail_parent_open),
+                mock.patch("weightclass.triage.subprocess.Popen") as popen,
+            ):
+                with self.assertRaises(TriageUnavailableError) as captured:
+                    self._ask_test_command()
+
+            popen.assert_not_called()
+            self.assertEqual(captured.exception.args, ())
+            self.assertEqual(len(allocated), 1)
+            self.assertFalse(allocated[0].exists())
+        finally:
+            for path in allocated:
+                if path.exists():
+                    path.rmdir()
+
+    def test_unproved_private_directory_removal_fails_redacted(self) -> None:
+        """Breaks if task-derived artifacts can be silently left on disk."""
+        real_remove = triage._remove_private_directory
+
+        def remove_without_proof(*args: Any, **kwargs: Any) -> bool:
+            self.assertTrue(real_remove(*args, **kwargs))
+            return False
+
+        with (
+            _fake_vendor_on_path("printf high") as env,
+            mock.patch.dict(os.environ, env),
+            mock.patch(
+                "weightclass.triage._remove_private_directory",
+                side_effect=remove_without_proof,
+            ),
+        ):
+            with self.assertRaises(TriageUnavailableError) as captured:
+                self._ask_test_command()
+
+        self.assertEqual(captured.exception.args, ())
+
+    def test_private_cleanup_handles_a_tree_deeper_than_python_recursion(self) -> None:
+        """Breaks if adversarial directory depth can escape as RecursionError."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "root"
+            root.mkdir()
+            child = root
+            for _ in range(120):
+                child /= "d"
+                child.mkdir()
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            previous_limit = sys.getrecursionlimit()
+            try:
+                sys.setrecursionlimit(80)
+                removed_contents = triage._erase_private_tree(root_fd, time.monotonic() + 10)
+            finally:
+                sys.setrecursionlimit(previous_limit)
+                os.close(root_fd)
+
+            self.assertTrue(removed_contents)
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_private_cleanup_normalizes_fanout_allocation_failure(self) -> None:
+        """Breaks if adversarial fanout can expose MemoryError and a path."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "artifact").touch()
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            real_scandir = os.scandir
+            calls = 0
+
+            def fail_once(file_descriptor: int) -> Any:
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise MemoryError
+                return real_scandir(file_descriptor)
+
+            try:
+                with mock.patch("weightclass.triage.os.scandir", side_effect=fail_once):
+                    self.assertFalse(triage._erase_private_tree(root_fd, time.monotonic() + 1))
+            finally:
+                os.close(root_fd)
+
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_private_cleanup_returns_on_a_permanent_scan_failure(self) -> None:
+        """Breaks if unbounded ownership escalation becomes a CPU spin."""
+        source = textwrap.dedent(
+            """
+            import os
+            import pathlib
+            import tempfile
+            import time
+            from unittest import mock
+
+            from weightclass import triage
+
+            with tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                (root / "artifact").touch()
+                root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    with mock.patch(
+                        "weightclass.triage.os.scandir", side_effect=MemoryError
+                    ):
+                        removed = triage._erase_private_tree(
+                            root_fd, time.monotonic() + 0.01
+                        )
+                finally:
+                    os.close(root_fd)
+                if removed:
+                    raise SystemExit(1)
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", source],
+            capture_output=True,
+            check=False,
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
+            },
+            text=True,
+            timeout=3,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_private_cleanup_returns_on_a_permanent_leaf_failure(self) -> None:
+        """Breaks if a failed leaf is requeued forever in the final pass."""
+        source = textwrap.dedent(
+            """
+            import os
+            import pathlib
+            import tempfile
+            import time
+            from unittest import mock
+
+            from weightclass import triage
+
+            with tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                (root / "artifact").touch()
+                root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    with mock.patch(
+                        "weightclass.triage.os.unlink", side_effect=PermissionError
+                    ):
+                        removed = triage._erase_private_tree(
+                            root_fd, time.monotonic() + 0.01
+                        )
+                finally:
+                    os.close(root_fd)
+                if removed:
+                    raise SystemExit(1)
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", source],
+            capture_output=True,
+            check=False,
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
+            },
+            text=True,
+            timeout=3,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_directory_swap_before_open_cannot_normalize_the_replacement(
+        self,
+    ) -> None:
+        """Breaks if identity validation happens after replacement normalization."""
+        with tempfile.TemporaryDirectory() as directory:
+            outer = Path(directory)
+            root = outer / "root"
+            root.mkdir()
+            child = root / "child"
+            child.mkdir()
+            (child / "artifact").touch()
+            moved_child = outer / "moved-child"
+            external = outer / "external"
+            external.mkdir()
+            sentinel = external / "sentinel"
+            sentinel.write_text("preserve", encoding="utf-8")
+            external.chmod(0o750)
+            external_identity = external.stat()
+            child_identity = child.stat()
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            real_open = os.open
+            swapped = False
+
+            def swap_before_open(
+                path: str | os.PathLike[str],
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                nonlocal swapped
+                if not swapped and path == "child" and dir_fd is not None:
+                    swapped = True
+                    os.rename(child, moved_child)
+                    os.rename(external, child)
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            try:
+                with (
+                    mock.patch(
+                        "weightclass.triage.os.open",
+                        side_effect=swap_before_open,
+                    ),
+                    mock.patch("weightclass.triage._normalize_open_fd") as normalize,
+                    self.assertRaises(OSError),
+                ):
+                    triage._open_child_directory(
+                        root_fd,
+                        "child",
+                        child_identity,
+                        time.monotonic() + 1,
+                    )
+
+                self.assertTrue(swapped)
+                normalize.assert_not_called()
+                self.assertTrue(triage._same_identity(external_identity, child.stat()))
+                self.assertEqual(
+                    stat.S_IMODE(child.stat().st_mode),
+                    0o750,
+                )
+                self.assertEqual(
+                    (child / "sentinel").read_text(encoding="utf-8"),
+                    "preserve",
+                )
+            finally:
+                os.close(root_fd)
+                for candidate in (child, moved_child, external):
+                    if candidate.is_dir():
+                        candidate.chmod(0o700)
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS descriptor semantics")
+    def test_directory_swap_after_metadata_pin_is_rejected_on_reopen(self) -> None:
+        """Breaks if Darwin fallback trusts a mutable name after fd normalization."""
+        with tempfile.TemporaryDirectory() as directory:
+            outer = Path(directory)
+            root = outer / "root"
+            root.mkdir()
+            child = root / "child"
+            child.mkdir()
+            moved_child = outer / "moved-child"
+            external = outer / "external"
+            external.mkdir()
+            sentinel = external / "sentinel"
+            sentinel.write_text("preserve", encoding="utf-8")
+            external.chmod(0o750)
+            external_identity = external.stat()
+            child_identity = child.stat()
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            real_open = os.open
+            real_normalize = triage._normalize_open_fd
+            child_open_calls = 0
+            swapped = False
+
+            def force_metadata_fallback(
+                path: str | os.PathLike[str],
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                nonlocal child_open_calls
+                if path == "child" and dir_fd == root_fd:
+                    child_open_calls += 1
+                    if child_open_calls == 1:
+                        raise PermissionError("forced")
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            def normalize_then_swap(
+                file_descriptor: int,
+                mode: int,
+                deadline: float | None,
+            ) -> bool:
+                nonlocal swapped
+                result = real_normalize(file_descriptor, mode, deadline)
+                if not swapped:
+                    swapped = True
+                    os.rename(child, moved_child)
+                    os.rename(external, child)
+                return result
+
+            try:
+                with (
+                    mock.patch(
+                        "weightclass.triage.os.open",
+                        side_effect=force_metadata_fallback,
+                    ),
+                    mock.patch(
+                        "weightclass.triage._normalize_open_fd",
+                        side_effect=normalize_then_swap,
+                    ),
+                    self.assertRaises(OSError),
+                ):
+                    triage._open_child_directory(
+                        root_fd,
+                        "child",
+                        child_identity,
+                        time.monotonic() + 1,
+                    )
+
+                self.assertTrue(swapped)
+                self.assertTrue(triage._same_identity(external_identity, child.stat()))
+                self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o750)
+                self.assertEqual(
+                    (child / "sentinel").read_text(encoding="utf-8"),
+                    "preserve",
+                )
+            finally:
+                os.close(root_fd)
+                for candidate in (child, moved_child, external):
+                    if candidate.is_dir():
+                        candidate.chmod(0o700)
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS descriptor semantics")
+    def test_private_cleanup_fails_closed_for_an_unpinnable_chmod_zero_directory(
+        self,
+    ) -> None:
+        """Document the state production sandboxing prevents on Darwin."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "root"
+            root.mkdir()
+            child = root / "child"
+            child.mkdir()
+            (child / "artifact").write_text("ephemeral", encoding="utf-8")
+            child.chmod(0)
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                removed = triage._erase_private_tree(
+                    root_fd,
+                    time.monotonic() + 2,
+                )
+            finally:
+                os.close(root_fd)
+
+            try:
+                self.assertFalse(removed)
+            finally:
+                child.chmod(0o700)
+            self.assertTrue((child / "artifact").is_file())
+
+    def test_private_cleanup_handles_wide_fanout_without_a_snapshot_list(self) -> None:
+        """Breaks if cleanup allocates the full child set before making progress."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(2_000):
+                (root / f"entry-{index}").touch()
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                self.assertTrue(triage._erase_private_tree(root_fd, time.monotonic() + 5))
+            finally:
+                os.close(root_fd)
+
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_private_cleanup_finishes_after_its_admission_deadline(self) -> None:
+        """Breaks if an elapsed budget permits transient artifacts to remain."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "root"
+            root.mkdir()
+            for index in range(20_000):
+                (root / f"entry-{index}").touch()
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            parent_fd = os.open(root.parent, os.O_RDONLY | os.O_DIRECTORY)
+            root_identity = os.fstat(root_fd)
+            deadline = time.monotonic() + triage.TRIAGE_DIRECTORY_CLEANUP_BUDGET_SECONDS
+            try:
+                removed_within_deadline = triage._remove_private_directory(
+                    root_fd,
+                    parent_fd,
+                    root.name,
+                    root_identity,
+                    deadline,
+                )
+            finally:
+                os.close(root_fd)
+                os.close(parent_fd)
+
+            self.assertFalse(removed_within_deadline)
+            self.assertFalse(root.exists())
+
+    @unittest.skipUnless(hasattr(resource, "RLIMIT_NOFILE"), "requires POSIX fd limits")
+    def test_private_cleanup_uses_bounded_fds_for_a_deep_tree(self) -> None:
+        """Breaks if descriptor use grows with adversarial directory depth."""
+        source = textwrap.dedent(
+            """
+            import os
+            import pathlib
+            import resource
+            import tempfile
+            import time
+
+            from weightclass import triage
+
+            with tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory) / "root"
+                root.mkdir()
+                child = root
+                for _ in range(100):
+                    child /= "d"
+                    child.mkdir()
+                root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+                soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+                resource.setrlimit(resource.RLIMIT_NOFILE, (64, hard))
+                try:
+                    removed = triage._erase_private_tree(root_fd, time.monotonic() + 10)
+                finally:
+                    os.close(root_fd)
+                if not removed or list(root.iterdir()):
+                    raise SystemExit(1)
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", source],
+            capture_output=True,
+            check=False,
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src"),
+            },
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_private_cleanup_does_not_reopen_each_deep_path_quadratically(self) -> None:
+        """Breaks if every ascent walks from the root through all ancestors."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "root"
+            root.mkdir()
+            child = root
+            for _ in range(100):
+                child /= "d"
+                child.mkdir()
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            real_open = os.open
+            open_calls = 0
+
+            def count_open(*args: Any, **kwargs: Any) -> int:
+                nonlocal open_calls
+                open_calls += 1
+                return real_open(*args, **kwargs)
+
+            try:
+                with mock.patch("weightclass.triage.os.open", side_effect=count_open):
+                    removed = triage._erase_private_tree(
+                        root_fd,
+                        time.monotonic() + 10,
+                    )
+            finally:
+                os.close(root_fd)
+
+            self.assertTrue(removed)
+            self.assertLess(open_calls, 500)
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_failed_leaf_unlink_cannot_chmod_a_swapped_external_hardlink(self) -> None:
+        """Breaks if normalization acts on a mutable name after unlink failure."""
+        with tempfile.TemporaryDirectory() as directory:
+            outer = Path(directory)
+            external = outer / "external"
+            external.write_text("preserve", encoding="utf-8")
+            external.chmod(0o640)
+            root = outer / "root"
+            root.mkdir()
+            leaf = root / "leaf"
+            leaf.write_text("ephemeral", encoding="utf-8")
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            real_unlink = os.unlink
+            swapped = False
+
+            def fail_after_swap(path: str, *, dir_fd: int | None = None) -> None:
+                nonlocal swapped
+                if not swapped and path == "leaf":
+                    swapped = True
+                    real_unlink(path, dir_fd=dir_fd)
+                    os.link(external, path, dst_dir_fd=dir_fd)
+                    raise PermissionError("forced")
+                real_unlink(path, dir_fd=dir_fd)
+
+            try:
+                with mock.patch("weightclass.triage.os.unlink", side_effect=fail_after_swap):
+                    removed = triage._erase_private_tree(root_fd, time.monotonic() + 1)
+            finally:
+                os.close(root_fd)
+
+            self.assertFalse(removed)
+            self.assertEqual(external.read_text(encoding="utf-8"), "preserve")
+            self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o640)
+
+    def test_private_cleanup_closes_a_child_fd_when_scandir_allocation_fails(self) -> None:
+        """Breaks if pre-stack child traversal failure leaks an owned descriptor."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = root / "child"
+            child.mkdir()
+            (child / "artifact").touch()
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            real_scandir = os.scandir
+            baseline_descriptors = set(os.listdir("/dev/fd"))
+            calls = 0
+
+            def fail_child_scandir(file_descriptor: int) -> Any:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise MemoryError
+                return real_scandir(file_descriptor)
+
+            try:
+                with mock.patch("weightclass.triage.os.scandir", side_effect=fail_child_scandir):
+                    self.assertFalse(triage._erase_private_tree(root_fd, time.monotonic() + 1))
+                self.assertEqual(set(os.listdir("/dev/fd")), baseline_descriptors)
+            finally:
+                os.close(root_fd)
+
+    def test_cleanup_empties_a_root_renamed_outside_production_containment(self) -> None:
+        """Defense in depth for a root moved by a directly invoked helper."""
+        moved_root: Path | None = None
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root_record = Path(directory) / "moved-root"
+                source = f"""
+                    import os
+                    import pathlib
+                    import sys
+
+                    original = pathlib.Path.cwd().parent
+                    moved = original.with_name(original.name + "-moved")
+                    os.rename(original, moved)
+                    pathlib.Path({str(root_record)!r}).write_text(
+                        str(moved), encoding="utf-8"
+                    )
+                    pathlib.Path("artifact").write_text("ephemeral", encoding="utf-8")
+                    sys.stdout.write("high")
+                """
+                with (
+                    _fake_python_vendor_on_path(source) as env,
+                    mock.patch.dict(os.environ, env),
+                    mock.patch(
+                        "weightclass.triage.TRIAGE_COMMANDS",
+                        {"claude": ("claude",)},
+                    ),
+                ):
+                    with self.assertRaises(TriageUnavailableError) as captured:
+                        self._ask_test_command()
+
+                moved_root = Path(root_record.read_text(encoding="utf-8"))
+                self.assertTrue(moved_root.is_dir())
+                self.assertEqual(list(moved_root.iterdir()), [])
+                self.assertEqual(captured.exception.args, ())
+        finally:
+            if moved_root is not None and moved_root.exists():
+                shutil.rmtree(moved_root)
+
+    def test_helper_root_replacement_is_never_followed_or_removed(self) -> None:
+        """Defense in depth for replacement outside production containment."""
+        moved_root: Path | None = None
+        replacement: Path | None = None
+        with tempfile.TemporaryDirectory() as directory:
+            external = Path(directory) / "external"
+            external.mkdir()
+            sentinel = external / "sentinel"
+            sentinel.write_text("preserve", encoding="utf-8")
+            root_record = Path(directory) / "moved-root"
+            replacement_record = Path(directory) / "replacement"
+            source = f"""
+                import os
+                import pathlib
+                import sys
+
+                original = pathlib.Path.cwd().parent
+                moved = original.with_name(original.name + "-moved")
+                os.rename(original, moved)
+                original.symlink_to(pathlib.Path({str(external)!r}), target_is_directory=True)
+                pathlib.Path({str(root_record)!r}).write_text(
+                    str(moved), encoding="utf-8"
+                )
+                pathlib.Path({str(replacement_record)!r}).write_text(
+                    str(original), encoding="utf-8"
+                )
+                pathlib.Path("artifact").write_text("ephemeral", encoding="utf-8")
+                sys.stdout.write("high")
+            """
+            try:
+                with (
+                    _fake_python_vendor_on_path(source) as env,
+                    mock.patch.dict(os.environ, env),
+                    mock.patch(
+                        "weightclass.triage.TRIAGE_COMMANDS",
+                        {"claude": ("claude",)},
+                    ),
+                ):
+                    with self.assertRaises(TriageUnavailableError):
+                        self._ask_test_command()
+
+                moved_root = Path(root_record.read_text(encoding="utf-8"))
+                replacement = Path(replacement_record.read_text(encoding="utf-8"))
+                self.assertTrue(replacement.is_symlink())
+                self.assertEqual(sentinel.read_text(encoding="utf-8"), "preserve")
+                self.assertEqual(list(moved_root.iterdir()), [])
+            finally:
+                if replacement is not None and replacement.is_symlink():
+                    replacement.unlink()
+                if moved_root is not None and moved_root.exists():
+                    shutil.rmtree(moved_root)
+
+    def test_private_cleanup_unlinks_a_hardlink_without_changing_external_metadata(self) -> None:
+        """Breaks if cleanup mutates a multiply-linked inode outside its root."""
+        with tempfile.TemporaryDirectory() as directory:
+            outer = Path(directory)
+            external = outer / "external"
+            external.write_text("preserve", encoding="utf-8")
+            external.chmod(0o640)
+            root = outer / "root"
+            root.mkdir()
+            os.link(external, root / "linked")
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                self.assertTrue(triage._erase_private_tree(root_fd, time.monotonic() + 1))
+            finally:
+                os.close(root_fd)
+
+            self.assertEqual(external.read_text(encoding="utf-8"), "preserve")
+            self.assertEqual(stat.S_IMODE(external.stat().st_mode), 0o640)
+            self.assertEqual(list(root.iterdir()), [])
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS ACL semantics")
+    def test_vendor_cannot_create_a_deny_delete_acl(self) -> None:
+        """Breaks if the production sandbox permits hostile ACL metadata."""
+        source = """
+            import subprocess
+            import sys
+
+            result = subprocess.run(
+                ["/bin/chmod", "+a", "everyone deny delete", "."],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            sys.stdout.write("high" if result.returncode != 0 else "not-a-tier")
         """
         with _fake_python_vendor_on_path(source) as env, mock.patch.dict(os.environ, env):
             self.assertEqual(ask_vendor_for_tier("task", "claude"), "high")
@@ -314,7 +1229,7 @@ class AskVendorTests(unittest.TestCase):
                 _fake_python_vendor_on_path(source) as env,
                 mock.patch.dict(os.environ, env),
             ):
-                tier = ask_vendor_for_tier("task", "claude")
+                tier = self._ask_test_command()
 
             self.assertEqual(tier, "high")
             time.sleep(0.6)
@@ -342,11 +1257,411 @@ class AskVendorTests(unittest.TestCase):
                 mock.patch.dict(os.environ, env),
             ):
                 with self.assertRaises(TriageUnavailableError):
-                    ask_vendor_for_tier("task", "claude")
+                    self._ask_test_command()
 
             self.assertLess(time.monotonic() - started, 1.0)
             time.sleep(0.8)
             self.assertFalse(sentinel.exists())
+
+    def test_sigterm_failure_does_not_skip_sigkill_or_direct_child_reap(self) -> None:
+        """Breaks if one cleanup error abandons later ownership duties."""
+        signals: list[int] = []
+        reaped: list[int] = []
+        real_wait = process_context.wait_owned_child
+
+        def fail_term(process_group_id: int, signal_number: int) -> None:
+            signals.append(signal_number)
+            if signal_number == signal.SIGTERM:
+                raise OSError("sensitive signal detail")
+            process_context.signal_process_group(process_group_id, signal_number)
+
+        def record_reap(process: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+            return_code = real_wait(process, timeout)
+            reaped.append(return_code)
+            return return_code
+
+        with (
+            _fake_vendor_on_path("printf high") as env,
+            mock.patch.dict(os.environ, env),
+            mock.patch("weightclass.triage.signal_process_group", side_effect=fail_term),
+            mock.patch(
+                "weightclass.triage.wait_owned_child",
+                side_effect=record_reap,
+            ),
+        ):
+            with self.assertRaises(TriageUnavailableError) as captured:
+                self._ask_test_command()
+
+        self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(len(reaped), 1)
+        self.assertEqual(captured.exception.args, ())
+
+    def test_selector_construction_failure_still_kills_and_reaps_the_child(self) -> None:
+        """Breaks if setup after Popen sits outside the ownership cleanup region."""
+        signals: list[int] = []
+        reaped: list[int] = []
+        real_signal = process_context.signal_process_group
+        real_wait = process_context.wait_owned_child
+
+        def record_signal(process_group_id: int, signal_number: int) -> None:
+            signals.append(signal_number)
+            real_signal(process_group_id, signal_number)
+
+        def record_reap(process: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+            return_code = real_wait(process, timeout)
+            reaped.append(return_code)
+            return return_code
+
+        with (
+            _fake_vendor_on_path("exec sleep 60") as env,
+            mock.patch.dict(os.environ, env),
+            mock.patch(
+                "weightclass.triage.selectors.DefaultSelector",
+                side_effect=OSError("raw"),
+            ),
+            mock.patch("weightclass.triage.signal_process_group", side_effect=record_signal),
+            mock.patch("weightclass.triage.wait_owned_child", side_effect=record_reap),
+        ):
+            with self.assertRaises(TriageUnavailableError) as captured:
+                self._ask_test_command()
+
+        self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(len(reaped), 1)
+        self.assertEqual(captured.exception.args, ())
+
+    def test_exchange_keyboard_interrupt_cleans_up_before_it_is_re_raised(self) -> None:
+        """Breaks if BaseException can abandon a spawned triage child."""
+        signals: list[int] = []
+        reaped: list[int] = []
+        real_signal = process_context.signal_process_group
+        real_wait = process_context.wait_owned_child
+
+        def record_signal(process_group_id: int, signal_number: int) -> None:
+            signals.append(signal_number)
+            real_signal(process_group_id, signal_number)
+
+        def record_reap(process: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+            return_code = real_wait(process, timeout)
+            reaped.append(return_code)
+            return return_code
+
+        with (
+            _fake_vendor_on_path("exec sleep 60") as env,
+            mock.patch.dict(os.environ, env),
+            mock.patch("weightclass.triage.observe_leader_exit", side_effect=KeyboardInterrupt),
+            mock.patch("weightclass.triage.signal_process_group", side_effect=record_signal),
+            mock.patch("weightclass.triage.wait_owned_child", side_effect=record_reap),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self._ask_test_command()
+
+        self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(len(reaped), 1)
+
+    def test_sigint_during_popen_is_deferred_until_the_child_is_reaped(self) -> None:
+        """Breaks if SIGINT can land after fork but before ownership is recorded."""
+        started: list[subprocess.Popen[bytes]] = []
+        reaped: list[int] = []
+        real_popen = subprocess.Popen
+        real_signal = process_context.signal_process_group
+        real_wait = process_context.wait_owned_child
+
+        def interrupt_before_return(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+            process = cast(subprocess.Popen[bytes], real_popen(*args, **kwargs))
+            started.append(process)
+            signal.raise_signal(signal.SIGINT)
+            return process
+
+        def record_reap(process: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+            return_code = real_wait(process, timeout)
+            reaped.append(return_code)
+            return return_code
+
+        try:
+            with (
+                _fake_vendor_on_path("exec sleep 60") as env,
+                mock.patch.dict(os.environ, env),
+                mock.patch(
+                    "weightclass.triage.subprocess.Popen",
+                    side_effect=interrupt_before_return,
+                ),
+                mock.patch("weightclass.triage.wait_owned_child", side_effect=record_reap),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    self._ask_test_command()
+        finally:
+            for process in started:
+                if process.returncode is None:
+                    real_signal(process.pid, signal.SIGKILL)
+                    real_wait(process)
+                if process.stdin is not None and not process.stdin.closed:
+                    process.stdin.close()
+                if process.stdout is not None and not process.stdout.closed:
+                    process.stdout.close()
+
+        self.assertEqual(len(reaped), 1)
+
+    def test_sigint_during_cleanup_is_dispatched_only_after_kill_and_reap(self) -> None:
+        """Breaks if a repeated SIGINT can interrupt the ownership finally."""
+        signals: list[int] = []
+        reaped: list[int] = []
+        real_signal = process_context.signal_process_group
+        real_wait = process_context.wait_owned_child
+
+        def interrupt_on_term(process_group_id: int, signal_number: int) -> None:
+            signals.append(signal_number)
+            if signal_number == signal.SIGTERM:
+                signal.raise_signal(signal.SIGINT)
+            real_signal(process_group_id, signal_number)
+
+        def record_reap(process: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+            return_code = real_wait(process, timeout)
+            reaped.append(return_code)
+            return return_code
+
+        with (
+            _fake_vendor_on_path("exec sleep 60") as env,
+            mock.patch.dict(os.environ, env),
+            mock.patch("weightclass.triage.TRIAGE_TIMEOUT_SECONDS", 0.05),
+            mock.patch("weightclass.triage.signal_process_group", side_effect=interrupt_on_term),
+            mock.patch("weightclass.triage.wait_owned_child", side_effect=record_reap),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self._ask_test_command()
+
+        self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(len(reaped), 1)
+
+    def test_sigint_after_private_allocation_prevents_spawn_and_removes_the_root(self) -> None:
+        """Breaks if the pre-spawn allocation window can leak a private root."""
+        allocated: list[Path] = []
+        real_mkdtemp = tempfile.mkdtemp
+
+        def allocate_then_interrupt(*args: Any, **kwargs: Any) -> str:
+            temporary_root = cast(str, real_mkdtemp(*args, **kwargs))
+            allocated.append(Path(temporary_root))
+            signal.raise_signal(signal.SIGINT)
+            return temporary_root
+
+        with (
+            mock.patch("weightclass.triage.tempfile.mkdtemp", side_effect=allocate_then_interrupt),
+            mock.patch(
+                "weightclass.triage.subprocess.Popen",
+                side_effect=AssertionError("vendor process was started"),
+            ) as popen,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self._ask_test_command()
+
+        popen.assert_not_called()
+        self.assertEqual(len(allocated), 1)
+        self.assertFalse(allocated[0].exists())
+
+    def test_output_drain_failure_does_not_skip_sigkill_or_direct_child_reap(self) -> None:
+        """Breaks if failed pipe cleanup strands the owned direct child."""
+        signals: list[int] = []
+        reaped: list[int] = []
+        real_signal = process_context.signal_process_group
+        real_wait = process_context.wait_owned_child
+
+        def record_signal(process_group_id: int, signal_number: int) -> None:
+            signals.append(signal_number)
+            real_signal(process_group_id, signal_number)
+
+        def record_reap(process: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+            return_code = real_wait(process, timeout)
+            reaped.append(return_code)
+            return return_code
+
+        with (
+            _fake_vendor_on_path("printf high") as env,
+            mock.patch.dict(os.environ, env),
+            mock.patch("weightclass.triage._read_available_output", side_effect=OSError("raw")),
+            mock.patch("weightclass.triage.signal_process_group", side_effect=record_signal),
+            mock.patch(
+                "weightclass.triage.wait_owned_child",
+                side_effect=record_reap,
+            ),
+        ):
+            with self.assertRaises(TriageUnavailableError) as captured:
+                self._ask_test_command()
+
+        self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(len(reaped), 1)
+        self.assertEqual(captured.exception.args, ())
+
+    def test_selector_unregister_failure_does_not_skip_sigkill_or_reap(self) -> None:
+        """Breaks if cleanup registration failure abandons the owned child."""
+        real_selector = selectors.DefaultSelector
+        signals: list[int] = []
+        reaped: list[int] = []
+        started_processes: list[subprocess.Popen[bytes]] = []
+        real_popen = subprocess.Popen
+        real_signal = process_context.signal_process_group
+        real_wait = process_context.wait_owned_child
+
+        class SelectorFailingCleanupUnregister:
+            def __init__(self) -> None:
+                self.wrapped = real_selector()
+                self.failed = False
+
+            def register(self, *args: Any) -> Any:
+                return self.wrapped.register(*args)
+
+            def unregister(self, file_object: Any) -> Any:
+                result = self.wrapped.unregister(file_object)
+                if not self.failed:
+                    self.failed = True
+                    raise OSError("raw")
+                return result
+
+            def select(self, timeout: float | None = None) -> list[object]:
+                if timeout is not None:
+                    time.sleep(timeout)
+                return []
+
+            def close(self) -> None:
+                self.wrapped.close()
+
+        def record_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[bytes]:
+            process = cast(subprocess.Popen[bytes], real_popen(*args, **kwargs))
+            started_processes.append(process)
+            return process
+
+        def record_signal(process_group_id: int, signal_number: int) -> None:
+            signals.append(signal_number)
+            real_signal(process_group_id, signal_number)
+
+        def record_reap(process: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+            return_code = real_wait(process, timeout)
+            reaped.append(return_code)
+            return return_code
+
+        try:
+            with (
+                mock.patch("weightclass.triage.TRIAGE_TIMEOUT_SECONDS", 0.05),
+                _fake_vendor_on_path("exec sleep 60") as env,
+                mock.patch.dict(os.environ, env),
+                mock.patch(
+                    "weightclass.triage.selectors.DefaultSelector",
+                    new=SelectorFailingCleanupUnregister,
+                ),
+                mock.patch("weightclass.triage.subprocess.Popen", side_effect=record_popen),
+                mock.patch("weightclass.triage.signal_process_group", side_effect=record_signal),
+                mock.patch("weightclass.triage.wait_owned_child", side_effect=record_reap),
+            ):
+                with self.assertRaises(TriageUnavailableError):
+                    self._ask_test_command()
+        finally:
+            for process in started_processes:
+                if process.returncode is None:
+                    real_signal(process.pid, signal.SIGKILL)
+                    real_wait(process)
+                if process.stdin is not None and not process.stdin.closed:
+                    process.stdin.close()
+                if process.stdout is not None and not process.stdout.closed:
+                    process.stdout.close()
+
+        self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(len(reaped), 1)
+
+    def test_handle_close_failure_does_not_skip_direct_child_reap(self) -> None:
+        """Breaks if releasing one cleanup handle prevents direct-child reap."""
+        reaped: list[int] = []
+        real_wait = process_context.wait_owned_child
+
+        def record_reap(process: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+            return_code = real_wait(process, timeout)
+            reaped.append(return_code)
+            return return_code
+
+        with (
+            _fake_vendor_on_path("printf high") as env,
+            mock.patch.dict(os.environ, env),
+            mock.patch(
+                "weightclass.triage.close_leader_exit_queue",
+                side_effect=OSError("raw"),
+            ),
+            mock.patch(
+                "weightclass.triage.wait_owned_child",
+                side_effect=record_reap,
+            ),
+        ):
+            with self.assertRaises(TriageUnavailableError) as captured:
+                self._ask_test_command()
+
+        self.assertEqual(len(reaped), 1)
+        self.assertEqual(captured.exception.args, ())
+
+    def test_stream_close_failure_does_not_skip_sigkill_or_direct_child_reap(self) -> None:
+        """Breaks if a pipe close failure short-circuits remaining cleanup."""
+        signals: list[int] = []
+        reaped: list[int] = []
+        close_failed = False
+        real_close = triage._close_process_stream
+        real_signal = process_context.signal_process_group
+        real_wait = process_context.wait_owned_child
+
+        def record_signal(process_group_id: int, signal_number: int) -> None:
+            signals.append(signal_number)
+            real_signal(process_group_id, signal_number)
+
+        def record_reap(process: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+            return_code = real_wait(process, timeout)
+            reaped.append(return_code)
+            return return_code
+
+        def close_then_fail_once(stream: object) -> None:
+            nonlocal close_failed
+            real_close(stream)
+            if not close_failed:
+                close_failed = True
+                raise OSError("raw")
+
+        with (
+            _fake_vendor_on_path("printf high") as env,
+            mock.patch.dict(os.environ, env),
+            mock.patch(
+                "weightclass.triage._close_process_stream",
+                side_effect=close_then_fail_once,
+            ),
+            mock.patch("weightclass.triage.signal_process_group", side_effect=record_signal),
+            mock.patch(
+                "weightclass.triage.wait_owned_child",
+                side_effect=record_reap,
+            ),
+        ):
+            with self.assertRaises(TriageUnavailableError) as captured:
+                self._ask_test_command()
+
+        self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(len(reaped), 1)
+        self.assertEqual(captured.exception.args, ())
+
+    def test_a_result_reaped_after_the_deadline_is_not_reported_as_success(self) -> None:
+        """Breaks if late cleanup is described as a bounded successful triage."""
+        real_wait = process_context.wait_owned_child
+        reaped: list[int] = []
+
+        def reap_late(process: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+            return_code = real_wait(process, timeout)
+            reaped.append(return_code)
+            time.sleep(0.08)
+            return return_code
+
+        with (
+            mock.patch("weightclass.triage.TRIAGE_TIMEOUT_SECONDS", 0.05),
+            _fake_vendor_on_path("printf high") as env,
+            mock.patch.dict(os.environ, env),
+            mock.patch(
+                "weightclass.triage.wait_owned_child",
+                side_effect=reap_late,
+            ),
+        ):
+            with self.assertRaises(TriageUnavailableError):
+                self._ask_test_command()
+
+        self.assertEqual(len(reaped), 1)
 
     def test_success_closes_all_parent_pipe_objects(self) -> None:
         """Breaks if completed triage leaves stdin or stdout for garbage collection."""

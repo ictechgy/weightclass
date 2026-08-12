@@ -234,8 +234,14 @@ one.
 
 The built-in Claude adapter uses Claude Code safe mode, disables built-in tools
 and MCP, ignores user/project/local setting sources, uses an empty private
-working directory, and disables session persistence. Enterprise managed policy
-remains a Claude-owned residual boundary. Codex currently has no documented
+working directory, and disables session persistence. On macOS the reviewed
+command also uses a fixed `sandbox-exec` profile that denies mode, file-flag,
+ACL, and private-root rename changes; the pinned private root and working
+directory are read/execute only while the vendor runs. A missing containment
+wrapper fails closed. Linux currently has no reviewed equivalent filesystem
+containment command, so its optional Claude semantic triage also fails closed;
+ordinary native Claude routing is unaffected. Enterprise managed policy remains
+a Claude-owned residual boundary. Codex currently has no documented
 all-tools-disabled CLI contract, so `--source-vendor codex --ask-vendor` fails
 closed before starting Codex. Native Codex routes remain supported; only the
 optional semantic triage adapter is unavailable.
@@ -646,7 +652,8 @@ exact fingerprint from that review. weightclass recomputes the route before
 spawning the runtime, so a change to the selected model, effort, source,
 destination, resolved runtime path, runtime identity, or API/cross-provider
 permission invalidates the acknowledgement. API `run` rejects a missing egress
-confirmation before consuming task standard input.
+confirmation or a missing route fingerprint before checking process context,
+inspecting the runtime, or consuming task standard input.
 
 ```sh
 printf '%s' 'Review this authorization change.' | \

@@ -53,7 +53,7 @@ publisher once, on PyPI:
      --source . --dist-dir "$release_dist_dir" --run-sdist-tests
    ```
 
-   The release is also blocked unless CI's macOS Python 3.10 and 3.13 triage
+   The release is also blocked unless CI's macOS Python 3.10 and 3.14 triage
    process-group/FIFO boundary jobs pass. After building, verify the wheel's
    metadata version and an installed `wclass --version` against
    `weightclass.__version__`.

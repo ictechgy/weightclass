@@ -13,6 +13,7 @@ from weightclass.delegation_runtime import DelegationRuntimeUnavailableError
 from weightclass.executable_observation import ExecutableObservation
 from weightclass.native_v2_compile import compile_native_v2
 from weightclass.native_v2_schema import parse_native_policy_v2
+from weightclass.process_context import ChildStatusLostError
 from weightclass.task_v2 import read_validated_task_v2
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_native_runtime.py"
@@ -269,6 +270,46 @@ class NativeV2CliTests(unittest.TestCase):
             self.assertEqual(actual_compiled, expected)
             self.assertEqual(delivered, b"task")
             self.assertIs(actual_observation, observed)
+
+    def test_lost_child_status_is_executor_failed_not_unavailable(self) -> None:
+        """Breaks if a post-spawn wait-status loss is reported as a spawn failure."""
+        expected = compile_native_v2(
+            parse_native_policy_v2(policy()),
+            source_vendor="codex",
+            source_profile_id="p",
+            tier="low",
+        )
+        observed = ExecutableObservation("/owned/fake", 1, 1, 0o100000, 0o100700, 0, 1, 1, True)
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_policy(directory)
+            errors = io.StringIO()
+            with (
+                patch.object(sys, "stdin", io.StringIO("task")),
+                patch.object(sys, "stderr", errors),
+                patch("weightclass.cli.observe_executable", return_value=observed),
+                patch(
+                    "weightclass.cli.run_native_v2",
+                    side_effect=ChildStatusLostError(),
+                ),
+            ):
+                exit_code = cli.main(
+                    [
+                        "run",
+                        "--policy",
+                        str(path),
+                        "--source-vendor",
+                        "codex",
+                        "--source-profile",
+                        "p",
+                        "--tier",
+                        "low",
+                        "--ack-route-fingerprint",
+                        expected.route_fingerprint,
+                    ]
+                )
+
+        self.assertEqual(exit_code, 7)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_failed"})
 
     def test_schema_one_and_builtins_reject_source_profile_semantically(self) -> None:
         for arguments in (["route", "--source-profile", "p"],):

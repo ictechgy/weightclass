@@ -15,6 +15,7 @@ from unittest import mock
 from tests.runtime_guard import guarded_launch
 from weightclass import cli, router
 from weightclass.classification import Tier
+from weightclass.process_context import ChildStatusLostError
 from weightclass.router import (
     BUILT_IN_VENDORS,
     DEFAULT_ROUTES,
@@ -161,7 +162,7 @@ class ExecutorSpawnFailureTests(unittest.TestCase):
             )
             errors = io.StringIO()
             with (
-                mock.patch("weightclass.cli.subprocess.run", side_effect=raised),
+                mock.patch.object(cli, "run_owned_foreground", side_effect=raised),
                 mock.patch(
                     "weightclass.cli.read_task_from_standard_input", return_value="Fix a typo."
                 ),
@@ -179,6 +180,47 @@ class ExecutorSpawnFailureTests(unittest.TestCase):
     def test_maps_a_missing_executable_to_a_redacted_diagnostic(self) -> None:
         """Breaks if the pre-existing OSError path stops being handled."""
         self._assert_maps_to_executor_unavailable(FileNotFoundError("no such file"))
+
+    def test_maps_lost_child_status_to_executor_failed(self) -> None:
+        """Breaks if ECHILD after spawn is mislabeled as a launch failure or success."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory) / "policy.json"
+            route = Route(
+                route_id="codex-low",
+                vendor="codex",
+                workflow="",
+                command=(sys.executable, "-c", "pass"),
+                tier="low",
+            )
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": route.route_id,
+                                "vendor": route.vendor,
+                                "tier": route.tier,
+                                "command": list(route.command),
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fingerprint = native_route_fingerprint(route, False)
+            errors = io.StringIO()
+            raised = ChildStatusLostError()
+            with (
+                mock.patch.object(cli, "run_owned_foreground", side_effect=raised),
+                mock.patch(
+                    "weightclass.cli.read_task_from_standard_input", return_value="Fix a typo."
+                ),
+                contextlib.redirect_stderr(errors),
+            ):
+                exit_code = cli.run_from_standard_input(policy_path, None, fingerprint)
+
+        self.assertEqual(exit_code, 7)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_failed"})
 
 
 class LegacyProcessContextTests(unittest.TestCase):
@@ -279,7 +321,7 @@ class PolicyRunBindingTests(unittest.TestCase):
             errors = io.StringIO()
             with (
                 mock.patch("weightclass.cli.read_task_from_standard_input") as reader,
-                mock.patch("weightclass.cli.subprocess.run") as spawn,
+                mock.patch.object(cli, "run_owned_foreground") as spawn,
                 contextlib.redirect_stderr(errors),
             ):
                 exit_code = cli.run_from_standard_input(policy_path, None)
@@ -298,8 +340,9 @@ class PolicyRunBindingTests(unittest.TestCase):
         errors = io.StringIO()
         with (
             mock.patch("weightclass.cli.read_task_from_standard_input", return_value="Fix a typo."),
-            mock.patch(
-                "weightclass.cli.subprocess.run",
+            mock.patch.object(
+                cli,
+                "run_owned_foreground",
                 return_value=subprocess.CompletedProcess((), 0),
             ) as spawn,
             contextlib.redirect_stderr(errors),

@@ -14,7 +14,11 @@ from types import FrameType
 from typing import Any, Final
 
 from .delegation_types import DirectChildCleanup
-from .process_context import has_safe_sigchld_disposition
+from .process_context import (
+    ChildStatusLostError,
+    has_safe_sigchld_disposition,
+    wait_owned_child,
+)
 
 RUNTIME_ARGUMENTS: Final = ("--weightclass-delegation-protocol", "1")
 _SIGINT_POLL_SECONDS: Final = 0.05
@@ -177,40 +181,10 @@ def _wait(
     process: subprocess.Popen[bytes],
     timeout: float | None = None,
 ) -> int:
-    if process.returncode == _CHILD_STATUS_LOST:
-        raise DelegationRuntimeFailedError()
-    if process.returncode is not None:
-        return process.returncode
-
-    deadline = None if timeout is None else time.monotonic() + timeout
-    wait_flags = 0 if deadline is None else os.WNOHANG
-    while True:
-        while True:
-            try:
-                waited_pid, wait_status = os.waitpid(process.pid, wait_flags)
-                break
-            except InterruptedError:
-                if deadline is not None and time.monotonic() >= deadline:
-                    assert timeout is not None
-                    raise subprocess.TimeoutExpired(process.args, timeout) from None
-            except ChildProcessError:
-                # Popen.wait() treats ECHILD as exit 0. That is unsafe when an
-                # inherited/raced SIGCHLD policy has discarded the real status.
-                process.returncode = _CHILD_STATUS_LOST
-                raise DelegationRuntimeFailedError() from None
-        if waited_pid == process.pid:
-            return_code = os.waitstatus_to_exitcode(wait_status)
-            process.returncode = return_code
-            return return_code
-        if waited_pid != 0:
-            process.returncode = _CHILD_STATUS_LOST
-            raise DelegationRuntimeFailedError()
-        assert deadline is not None
-        assert timeout is not None
-        remaining_seconds = deadline - time.monotonic()
-        if remaining_seconds <= 0:
-            raise subprocess.TimeoutExpired(process.args, timeout)
-        time.sleep(min(_SIGINT_POLL_SECONDS, remaining_seconds))
+    try:
+        return wait_owned_child(process, timeout)
+    except ChildStatusLostError:
+        raise DelegationRuntimeFailedError() from None
 
 
 def _close_stdin(process: subprocess.Popen[bytes]) -> None:

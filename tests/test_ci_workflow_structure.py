@@ -8,6 +8,8 @@ MACOS_BOUNDARY_MODULES = (
     "tests.test_router",
     "tests.test_native_v2_runtime",
     "tests.test_executable_observation",
+    "tests.test_foreground_process",
+    "tests.test_process_context",
     "tests.test_triage",
     "tests.test_json_input",
     "tests.test_delegation_runtime",

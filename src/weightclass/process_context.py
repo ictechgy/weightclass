@@ -5,7 +5,10 @@ import errno
 import os
 import select
 import signal
+import subprocess
 import sys
+import threading
+import time
 from typing import Any, Final
 
 _DARWIN_SA_NOCLDWAIT: Final = 0x20
@@ -14,6 +17,8 @@ _DARWIN_P_PID: Final = 1
 _DARWIN_WNOHANG: Final = 0x01
 _DARWIN_WEXITED: Final = 0x04
 _DARWIN_WNOWAIT: Final = 0x20
+_CHILD_STATUS_LOST: Final = -sys.maxsize
+_WAIT_POLL_SECONDS: Final = 0.05
 
 # `open_leader_exit_queue` 가 "관찰 대상이 이미 종료했다"를 돌려줄 때 쓰는 표식.
 # None(=waitid 를 쓰므로 큐가 필요 없음)과 반드시 구분되어야 하므로 별도 객체다.
@@ -22,6 +27,56 @@ LEADER_ALREADY_EXITED: Final = object()
 
 class LeaderObserverError(ValueError):
     """Raised without pid detail when a leader-exit observer cannot be registered."""
+
+
+class ChildStatusLostError(OSError):
+    """Raised when an owned direct child's real wait status is unavailable."""
+
+
+def has_safe_child_status_context() -> bool:
+    """Return whether this thread can own one child's preserved wait status."""
+    return threading.current_thread() is threading.main_thread() and has_safe_sigchld_disposition()
+
+
+def wait_owned_child(
+    process: subprocess.Popen[Any],
+    timeout: float | None = None,
+) -> int:
+    """Wait through ``waitpid`` without allowing ``Popen`` to invent success."""
+    if process.returncode == _CHILD_STATUS_LOST:
+        raise ChildStatusLostError()
+    if process.returncode is not None:
+        return process.returncode
+
+    deadline = None if timeout is None else time.monotonic() + timeout
+    wait_flags = 0 if deadline is None else os.WNOHANG
+    while True:
+        while True:
+            try:
+                waited_pid, wait_status = os.waitpid(process.pid, wait_flags)
+                break
+            except InterruptedError:
+                if deadline is not None and time.monotonic() >= deadline:
+                    assert timeout is not None
+                    raise subprocess.TimeoutExpired(process.args, timeout) from None
+            except OSError as error:
+                if isinstance(error, ChildProcessError) or error.errno == errno.ECHILD:
+                    process.returncode = _CHILD_STATUS_LOST
+                    raise ChildStatusLostError() from None
+                raise
+        if waited_pid == process.pid:
+            return_code = os.waitstatus_to_exitcode(wait_status)
+            process.returncode = return_code
+            return return_code
+        if waited_pid != 0:
+            process.returncode = _CHILD_STATUS_LOST
+            raise ChildStatusLostError()
+        assert deadline is not None
+        assert timeout is not None
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        time.sleep(min(_WAIT_POLL_SECONDS, remaining_seconds))
 
 
 class _DarwinSigaction(ctypes.Structure):
