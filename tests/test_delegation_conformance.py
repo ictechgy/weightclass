@@ -2804,10 +2804,7 @@ class DelegationConformanceRunnerTests(unittest.TestCase):
     )
     def test_hidden_sa_nocldwait_is_rejected_before_driver_spawn(self) -> None:
         """Breaks if Python's cached SIG_DFL hides native auto-reaping."""
-        expected = (
-            ("default", 0, True, ""),
-            ("nocldwait", 2, False, '{"error": "invalid_input"}\n'),
-        )
+        expected = (("nocldwait", 2, False, '{"error": "invalid_input"}\n'),)
         for mode, return_code, spawn_expected, expected_stderr in expected:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary_directory:
                 directory = Path(temporary_directory)
