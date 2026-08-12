@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-12 14:31 KST by Codex_
+_Last updated: 2026-08-13 KST by Codex_
 
 ## Goal
 
@@ -68,6 +68,134 @@ _Last updated: 2026-08-12 14:31 KST by Codex_
 - macOS CI and release boundary jobs explicitly include the new
   `tests.test_foreground_process` and `tests.test_process_context` suites.
 
+## Current unreleased worktree
+
+- Added an evaluation-only offline paired token scorer at
+  `tests/eval/token_benchmark.py`. It accepts bounded task-free evidence,
+  emits aggregate metrics bound to safe experiment/configuration identifiers,
+  and never invokes a vendor, reads credentials, or infers provider pricing.
+- Added a separate offline estimated-cost scorer at
+  `tests/eval/cost_benchmark.py`. It accepts externally normalized integer cost
+  units, reuses the token scorer's privacy/quality/statistical boundaries, and
+  explicitly does not infer prices or claim actual billing.
+- Promotion is deliberately strict: at least 30 paired tasks, both languages,
+  every fixed category and tier, a nondegenerate savings interval with at least
+  a 15% lower bound, quality non-inferiority within 5%, complete paired runs,
+  no new critical failure, and all provenance assertions.
+- README now describes weightclass as effort routing rather than a token-saving
+  mechanism, counts `--ask-vendor` plus later execution as two full-task vendor
+  invocations, and separates historical 15/40 + 33/40 figures from the current
+  local-only 17/40 public-regression result.
+- A schema-1 Claude effort-inheritance policy is documented only as a reviewed
+  experiment. Its standard route omits the effort override; built-ins,
+  `balanced`/`cautious`, schema 2, fingerprints, and runtime behavior are
+  unchanged.
+- An approved exploratory Claude 2.1.228 pilot used existing public fixture
+  tasks with safe mode, tools disabled, and session persistence disabled. The
+  two complete pairs used 15,866 raw tokens with the effort override omitted
+  versus 8,302 with explicit medium, so the experimental arm used 91.1% more
+  under the pilot normalization contract. A third explicit-medium invocation
+  failed before the harness captured usable usage. The fixture was not fresh or
+  blind, quality was not independently reviewed, and not every attempt could be
+  normalized, so the run is not promotion evidence and collection stopped
+  before the 30-pair gate. Task and response text were not recorded.
+- A second approved Claude 2.1.228 pilot compared explicit low with explicit
+  medium on two disposable low-risk editing fixtures, counterbalancing order.
+  All four calls exposed complete usage, both arms passed both automated file
+  checks, and no unexpected file was created. Low used 49,163 raw tokens versus
+  49,144 for medium: 19 more tokens, or about 0.04%, rather than the required
+  savings. Both arms took seven turns per fixture and cache input dominated the
+  totals. The pilot reused one already-public README task across two layouts
+  and had no independent blind review, so it is diagnostic rather than
+  promotion evidence. Collection again stopped before the 30-pair gate; task
+  and response text and disposable workspaces were not retained.
+- A third approved Claude 2.1.228 pilot compared the default model at medium
+  with explicit Haiku at low on the same two disposable fixtures, again with
+  counterbalanced order. All four calls exposed complete usage and all four
+  outputs passed the automated checks without unexpected files. The default
+  arm used 49,099 raw tokens and seven turns per fixture; Haiku used 58,811 and
+  eight turns per fixture, 9,712 tokens or 19.78% more. Explicitly selecting a
+  lighter model therefore did not reduce raw tokens in this pilot. It reused
+  the public task and automated rubric, so it is diagnostic only and stopped
+  before the 30-pair gate. No task, response, or workspace was retained.
+- A follow-up cost diagnostic reran and expanded that comparison to six
+  counterbalanced disposable fixtures with complete model-level usage and
+  CLI-reported estimated cost. Both arms passed 6/6 automated checks, protected
+  files were unchanged, and no unexpected files appeared. Default/medium used
+  147,771 raw tokens and reported $0.3951410; Haiku/low used 243,851 raw tokens
+  but reported $0.0960305, a 75.70% estimated-cost reduction despite 65.02%
+  more tokens. The same public English task, automated rubric, low-risk-only
+  slice, and JSON measurement output make this diagnostic rather than
+  promotion evidence.
+- Added exact schema-1 policies for that cost comparison. The baseline remains
+  at `tests/eval/claude_cost_baseline_policy.json`; after qualification, the
+  byte-identical candidate moved to
+  `examples/claude_cost_focused_policy.json`. Only the low route differs;
+  standard/high routes and fingerprints are identical, both low routes deliver
+  the task on stdin, and their reviewed low fingerprints differ. A real
+  `wclass route` acknowledgement followed by `wclass run` succeeded for both
+  policies on one disposable public-fixture task. Both edits passed; the
+  candidate used 27,867 tokens versus 23,133 (+20.46%) while reporting
+  $0.0106916 versus $0.049921 (-78.58%). This closes the router-compatibility
+  check only; one reused English low-risk task is not promotion evidence.
+- Ran a fresh 30-pair, 60-arm counterbalanced evaluation through those exact
+  `route`/`run` policies. The ephemeral synthetic corpus covered en/ko, all
+  nine fixed categories, and all three tiers. All arms returned complete usage;
+  both configurations passed 30/30 arm-blind Codex quality reviews and had no
+  critical failure. Baseline reported 643,578 tokens and $1.9441010; candidate
+  reported 688,268 tokens (+6.94%) and $1.5257985 (-21.52%). The cost-savings
+  95% interval was 8.08% to 34.95%, failing the 15% lower-bound and 20% width
+  gates. Tasks, responses, pair rows, and workspaces were not retained.
+- Replaced the paired-quality normal interval/degeneracy workaround with a
+  conservative Bonferroni-adjusted exact Clopper-Pearson interval over matched
+  improvements and regressions. Thirty perfect ties remain insufficient for a
+  5% non-inferiority claim, while 72 perfect ties can pass; perfect equality is
+  no longer rejected forever or made weaker than one incidental improvement.
+- Rejected a follow-up v2 cost candidate after a fresh nine-pair mixed-tier
+  canary. It kept Haiku/low, tried Sonnet/medium for standard, and retained the
+  existing high route. All 18 arms completed; aggregate estimated cost fell
+  27.29% while raw tokens rose 19.35%. Low quality tied 3/3, but standard
+  quality was 2/3 versus baseline 3/3 and its raw tokens rose 58.29%. The v2
+  policy was removed instead of being promoted or left as dead configuration.
+- Rejected an effort-only v3 canary as well. It retained Haiku/low, changed
+  standard from medium to low effort without changing the default model, and
+  kept high unchanged. Both arms passed 9/9 blind quality checks, but aggregate
+  cost savings were only 14.08%, below the 15% floor; raw tokens rose 6.49%.
+  Standard itself reported 11.08% higher cost for only 0.59% fewer tokens.
+  The temporary policy and all task artifacts were discarded.
+- A fresh 150-pair balanced promotion-scale run then exercised the retained
+  low-only candidate over 300 complete counterbalanced arms. The corpus covered
+  en/ko, all nine categories, and all tiers equally. Candidate quality was
+  143/150 versus baseline 142/150; the exact paired 95% interval was -2.41% to
+  +3.66%, and there was no new candidate critical failure. Candidate used
+  3,604,732 raw tokens versus 3,359,583 (+7.30%) and reported $8.353250 versus
+  $10.133820 (-17.57%). The cost 95% interval was 12.30% to 22.84% (10.54%
+  wide), so the sole failing gate was its lower bound remaining below 15%.
+  Decision: `no-go`. Tasks, results, pair rows, and workspaces were deleted.
+- The first low-target qualification attempt completed 45/90 pairs, then a
+  fourth-batch synthetic task failed the pre-arm `protected_files` validator.
+  The entire partial run was invalidated rather than selectively reusing its
+  favorable rows; its TemporaryDirectory removed all tasks, results,
+  workspaces, and pair evidence. The restart contract permits order-preserving
+  deduplication of repeated protected names but still rejects any name that is
+  not an initialized flat file. Completed task-free rows may be checkpointed
+  outside the repository until final scoring, then must be deleted.
+- The clean low-target restart completed all 90 pairs/180 arms: 72 low, nine
+  standard controls, and nine high controls, still covering en/ko and all nine
+  categories. Blind quality tied 88/90; both arms had the same two critical
+  failures, so the candidate introduced none. Baseline reported $4.8391435 and
+  1,803,839 tokens; candidate reported $2.1708828 (-55.14%) and 2,066,975
+  tokens (+14.59%). The cost 95% interval was 46.28% to 64.00%, quality was
+  -4.02% to +4.02%, and every machine gate passed. All task artifacts and the
+  task-free checkpoint were deleted.
+- Moved the byte-identical evaluated candidate to
+  `examples/claude_cost_focused_policy.json` as a public explicit opt-in. Its
+  route IDs remain unchanged to preserve the evaluated configuration binding.
+  This is a cost-focused low-route `go`, not token savings or permission to
+  change built-ins, standard/high, schema 2, or the posture vocabulary.
+- No independent promotion-grade provider token-savings evidence exists, so
+  token/default promotion remains `no-go`.
+
 ## Key Files & State
 
 - `src/weightclass/cli.py`: V2 route/run ordering and pre-spawn identity check.
@@ -81,6 +209,17 @@ _Last updated: 2026-08-12 14:31 KST by Codex_
   conversion.
 - `tests/test_process_context.py`, `tests/test_foreground_process.py`,
   `tests/test_triage.py`, and `tests/test_v2.py`: focused hardening regressions.
+- `tests/eval/token_benchmark.py` and `tests/test_eval_token_benchmark.py`:
+  bounded aggregate-only token evidence, decision gates, and privacy/input
+  regressions.
+- `tests/eval/cost_benchmark.py` and `tests/test_eval_cost_benchmark.py`:
+  externally normalized estimated-cost evidence without internal pricing or
+  billing claims.
+- `tests/eval/claude_cost_baseline_policy.json`,
+  `examples/claude_cost_focused_policy.json`, and
+  `tests/test_eval_cost_policy.py`: exact evaluated Claude commands, public
+  low-route cost opt-in, unchanged non-low routes, stdin delivery, and
+  fingerprint binding.
 - `README.md`: documents the task-in-argv residual for `agy` and `grok`.
 - `packaging/homebrew/weightclass.rb`: source of truth copied to
   `ictechgy/homebrew-tap` after a successful PyPI publish.
@@ -117,6 +256,32 @@ _Last updated: 2026-08-12 14:31 KST by Codex_
 
 ## Verification
 
+- Fresh unreleased-worktree verification on 2026-08-13:
+  - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
+    `ResourceWarning` as an error: 768 tests passed on each interpreter.
+  - Ruff 0.16.2 check/format over `src` and `tests`, strict mypy over 98 source
+    files, compileall, and `git diff --check`: clean.
+  - The README experimental policy parsed through the real schema-1 parser;
+    its standard command omitted `--effort` and produced a 71-character route
+    fingerprint. The documented two-pair token evidence parsed and correctly
+    produced a bound `no-go` result.
+  - The six-pair task-free cost diagnostic parsed through the new cost scorer:
+    its estimated-cost interval was 72.55% to 78.84%, but the scorer correctly
+    returned `no-go` for insufficient pairs/slices/interval/provenance.
+  - The subsequent 30-pair run completed 60/60 arms and blind quality was
+    30/30 for both configurations, but cost CI and exact quality bounds kept
+    the decision at `no-go`.
+  - The balanced 150-pair cost run failed only the 15% CI-lower-bound gate; the
+    predeclared 90-pair low-target qualification then passed every machine gate
+    with a 46.28% to 64.00% cost-savings interval and -4.02% to +4.02% quality
+    interval. Scope remains explicit low-route opt-in only.
+  - Offline sdist/wheel build succeeded; the source distribution includes
+    `examples/claude_cost_focused_policy.json`. The real schema-1 route command
+    selected its low Claude route, used stdin delivery, and emitted a
+    71-character review fingerprint.
+  - Approved Claude measurement used the vendor CLI/network. No credential or
+    secret-bearing file was read, and no task/response/workspace was retained.
+
 - Fresh pre-release verification of `0.9.0` on 2026-08-12:
   - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
     `ResourceWarning` as an error: 738 tests passed on each interpreter.
@@ -151,9 +316,12 @@ _Last updated: 2026-08-12 14:31 KST by Codex_
 
 ## Blockers & Open Questions
 
-- No known code blocker remains; independent final diff review reported no
-  actionable findings.
+- No known blocker remains from the published 0.9.0 release review.
 - No mandatory release or deployment step remains for `0.9.0`.
+- No promotion-grade paired provider token-savings evidence has been collected. Do not
+  add an `efficient` posture or change built-in/schema-2 effort behavior based
+  on the exploratory pilot. A fresh, blind, fingerprint-bound evidence set
+  must pass the offline token gate first.
 - Real installed-Claude compatibility under the Darwin sandbox was not tested
   because that would invoke an external runtime/network boundary.
 - Optional future work: collect real-user routing feedback; qualify a concrete
@@ -164,14 +332,23 @@ _Last updated: 2026-08-12 14:31 KST by Codex_
 
 1. No mandatory work remains for the `0.9.0` release. Monitor installation and
    routing feedback without inferring provider entitlement or quota.
-2. Re-enable Linux Claude semantic triage only after reviewing a concrete
+2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
+   compatibility feedback without task telemetry, provider-price inference, or
+   a claim about actual bills. Do not change built-ins, standard/high routes,
+   schema 2, or posture vocabulary from the low-target result.
+3. Any future token-efficiency candidate still needs fresh task-free paired
+   evidence and must pass the separate raw-token gate; the cost `go` does not
+   satisfy it.
+4. Re-enable Linux Claude semantic triage only after reviewing a concrete
    filesystem-containment command and its process-tree boundary.
-3. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
+5. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
    no-retention, and the single-reviewed-child boundary.
 
 ## Resume Prompt
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`
-and `AGENTS.md`, then continue from: `weightclass 0.9.0 is published to PyPI,
-has a GitHub Release, and is deployed through the verified Homebrew tap; no
-mandatory release work remains.`
+and `AGENTS.md`, then continue from: `weightclass 0.9.0 is published and
+deployed; the unreleased worktree adds an offline aggregate token-efficiency
+and estimated-cost gates plus an exact cost-focused Claude low-route opt-in.
+The low-target cost gate passed, while raw tokens increased; built-ins remain
+unchanged and token/default promotion is still no-go.`

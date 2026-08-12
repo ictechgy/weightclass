@@ -1,5 +1,6 @@
 recursive-include tests/fixtures *.json *.py
 recursive-include tests/eval *.json *.md *.py
+recursive-include examples *.json
 recursive-include docs *.md
 include tests/synthetic_*.py
 include tests/runtime_guard.py

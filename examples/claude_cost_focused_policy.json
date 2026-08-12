@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "allow_mixed_vendors": false,
+  "posture": "balanced",
+  "routes": [
+    {
+      "id": "claude-cost-experiment-low",
+      "vendor": "claude",
+      "tier": "low",
+      "command": [
+        "claude",
+        "--print",
+        "--no-session-persistence",
+        "--safe-mode",
+        "--permission-mode",
+        "acceptEdits",
+        "--tools",
+        "Read,Edit,Glob,Grep",
+        "--output-format",
+        "json",
+        "--model",
+        "haiku",
+        "--effort",
+        "low"
+      ]
+    },
+    {
+      "id": "claude-cost-experiment-standard",
+      "vendor": "claude",
+      "tier": "standard",
+      "command": [
+        "claude",
+        "--print",
+        "--no-session-persistence",
+        "--safe-mode",
+        "--permission-mode",
+        "acceptEdits",
+        "--tools",
+        "Read,Edit,Glob,Grep",
+        "--output-format",
+        "json",
+        "--effort",
+        "medium"
+      ]
+    },
+    {
+      "id": "claude-cost-experiment-high",
+      "vendor": "claude",
+      "tier": "high",
+      "command": [
+        "claude",
+        "--print",
+        "--no-session-persistence",
+        "--safe-mode",
+        "--permission-mode",
+        "acceptEdits",
+        "--tools",
+        "Read,Edit,Glob,Grep",
+        "--output-format",
+        "json",
+        "--effort",
+        "high"
+      ]
+    }
+  ]
+}

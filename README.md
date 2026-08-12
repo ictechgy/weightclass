@@ -7,6 +7,15 @@ classifies a task in memory as `low`, `standard`, or `high`, chooses a
 deterministic model-and-effort route, and can start one selected vendor
 process in the foreground.
 
+This is effort routing, not a token-saving claim. weightclass does not read
+provider usage data, infer pricing, or know whether an effort label reduces
+the total tokens needed to finish a task. Retries and rework happen outside the
+router and can outweigh a cheaper first attempt.
+
+Raw tokens and estimated provider cost must be evaluated separately. The
+offline evaluation tools can score externally normalized aggregate evidence,
+but they never fetch prices or claim to reproduce a subscription bill.
+
 By default, a request stays with its explicit source vendor. Cross-vendor
 routing is available only through a reviewed policy opt-in. An optional V2
 route can start a separately installed API runtime after explicit review and
@@ -200,26 +209,35 @@ claim.
 `--ask-vendor` puts the question to a CLI you already have installed:
 
 ```sh
-task='About once a week a customer gets charged twice with the same idempotency key.'
+task='Bump the copyright year in LICENSE and the footer component.'
 
 printf '%s' "$task" | wclass classify
-# {"tier": "high"}
+# {"tier": "standard"}
 
 printf '%s' "$task" | wclass classify --source-vendor claude --ask-vendor
-# {"tier": "high", "tier_source": "vendor"}
+# The provider-owned result may be low, standard, or high.
 ```
 
-On the same 40 tasks that scored 15/40 locally, this scored 33/40, and never
-over-rated. It still under-rates 7 of the 15 genuinely hard tasks, so it is
-better, not solved. The corpus and the scoring script are in `tests/eval/`, and
-`PYTHONPATH=src python3 tests/eval/score.py` re-derives both figures without
-touching the network.
+In the historical measurement made before the public fixture was refined, the
+local classifier scored 15/40 and the recorded vendor tiers scored 33/40,
+without over-rating. The vendor result still under-rated 7 of the 15 genuinely
+hard tasks, so it was better, not solved. Models change, and those recorded
+tiers are not a current provider claim. The current offline command
+`PYTHONPATH=src python3 tests/eval/score.py` re-derives only the local public
+regression result, now 17/40. A supported vendor comparison requires a fresh
+evaluator-supplied corpus and `--compare-triage`, as documented in
+[`tests/eval/README.md`](tests/eval/README.md).
 
 This does not make weightclass an API client. It runs one vendor CLI in the
 foreground; that CLI owns its credentials and network. The triage call is a
 separate opt-in disclosure and quota/billing event before any later `wclass
 run`. There is no new key stored by weightclass, but there can be an additional
 vendor invocation.
+
+It is not a token-saving path. If you classify with `--ask-vendor` and then
+run the task, the full task reaches the external vendor once for triage and
+again for execution. Count both invocations, plus any rework, when comparing
+net token use.
 
 Where the task goes is your choice, and weightclass does not tie the two steps
 together: nothing stops you from asking Claude for a tier and then running the
@@ -342,7 +360,8 @@ only an otherwise `standard` local decision to `high`; it does not change
 model labels, or infer subscription availability. When posture is explicit,
 `wclass route` renders both `posture` and a static `reason_code`. Any other
 posture value or shape fails closed with the redacted `invalid_input`
-diagnostic.
+diagnostic. Because `cautious` can select a higher effort route, it can increase
+token use; it is a safety preference, not an efficiency setting.
 
 Native policies, workflow descriptors, and V2 policies must each be a regular
 file no larger than 262,144 raw bytes. Parsing is strict UTF-8, duplicate object
@@ -356,6 +375,68 @@ The `command` tokens are opaque policy values. weightclass validates their shape
 but does not assert vendor CLI semantics or subscription access. Always run
 `wclass route` with a representative non-sensitive task to inspect a policy
 before using `wclass run`.
+
+### Experimental effort-inheritance policy
+
+An evaluator can test a narrower schema-1 policy without changing built-ins or
+adding an `efficient` posture. In this example, only the `standard` route omits
+Claude's effort override and therefore inherits whatever default the installed
+CLI and its configuration choose:
+
+```json
+{
+  "allow_mixed_vendors": false,
+  "posture": "balanced",
+  "routes": [
+    {
+      "id": "experimental-efficient-v1-claude-low",
+      "vendor": "claude",
+      "tier": "low",
+      "command": ["claude", "--print", "--no-session-persistence", "--permission-mode", "acceptEdits", "--effort", "low"]
+    },
+    {
+      "id": "experimental-efficient-v1-claude-standard",
+      "vendor": "claude",
+      "tier": "standard",
+      "command": ["claude", "--print", "--no-session-persistence", "--permission-mode", "acceptEdits"]
+    },
+    {
+      "id": "experimental-efficient-v1-claude-high",
+      "vendor": "claude",
+      "tier": "high",
+      "command": ["claude", "--print", "--no-session-persistence", "--permission-mode", "acceptEdits", "--effort", "high"]
+    }
+  ]
+}
+```
+
+This is an experiment, not a built-in recommendation. weightclass cannot prove
+what provider default is selected, whether that default remains stable, or
+whether omitting the flag saves tokens. Keep the source vendor fixed, review
+the exact route fingerprint, freeze the CLI/model/configuration outside the
+router, and compare total provider-reported usage—including every authorized
+invocation and rework attempt—with the offline paired gate in
+[`tests/eval/README.md`](tests/eval/README.md). Until independent evidence
+passes that gate, the built-in `standard=medium` commands and the accepted
+`balanced`/`cautious` posture vocabulary remain unchanged. Native schema 2 also
+continues to require an explicit reviewed model/effort pair.
+
+Exploratory measurements also found that explicit Haiku/low could use more raw
+tokens while reporting a much lower estimated provider cost. That is not a
+contradiction: model prices differ. The diagnostic covered only one public
+low-risk task across disposable layouts and used JSON output for usage
+collection. The exact evaluation baseline remains in
+[`tests/eval/claude_cost_baseline_policy.json`](tests/eval/claude_cost_baseline_policy.json)
+and the exactly evaluated candidate is available as the explicit opt-in
+[`examples/claude_cost_focused_policy.json`](examples/claude_cost_focused_policy.json).
+Only its low route changes model/effort; standard and high remain identical to
+the baseline. The candidate passed the predeclared low-target estimated-cost
+gate, but used more raw tokens. It deliberately exposes JSON as user output for
+measurement and is neither a built-in nor a general-use default. Review its
+exact `wclass route` command and fingerprint before `run`. See the separate
+token and estimated-cost gates in
+[`tests/eval/README.md`](tests/eval/README.md); the result authorizes only this
+cost-focused low-route opt-in and does not change any built-in.
 
 A route's `vendor` is a containment label you choose, not a list of tools
 weightclass knows. Any printable identifier without whitespace, up to 64 bytes,

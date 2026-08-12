@@ -94,6 +94,11 @@ The optional `posture` is `balanced` by default. A reviewed `cautious` posture
 raises ambiguous local `standard` decisions to `high` while retaining the same
 source-vendor filter and opaque policy commands. The route review displays the
 explicit posture and static reason code, and its fingerprint binds the posture.
+`cautious` may select a higher-effort command and increase token use; neither
+posture is a measured token-saving mode. Use the offline paired gate in
+`tests/eval/README.md` before making an efficiency claim about a custom policy.
+Use its separate estimated-cost gate for provider-reported cost evidence;
+lower estimated cost does not imply fewer raw tokens or an actual lower bill.
 For API routes, use `wclass v2 route` followed by the explicit egress
 acknowledgement described in the main README; native integration commands never
 read API credentials.

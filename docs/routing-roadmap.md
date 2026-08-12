@@ -214,6 +214,72 @@ blind-corpus candidate evidence has satisfied that gate. The deterministic
 policy engine remains the production path until measured improvement justifies
 the dependency, resource, maintenance, and supply-chain costs.
 
+### Token-efficiency evaluation gate
+
+An offline paired scorer now evaluates externally collected, task-free net-token
+evidence. It compares one frozen candidate with one frozen baseline on the same
+sealed tasks, counts every invocation and rework attempt, requires blind quality
+non-inferiority and no new critical failure, and emits aggregate-only evidence.
+Collection remains outside weightclass: the scorer never invokes a vendor,
+reads credentials, or infers token accounting or prices.
+
+A separate offline cost scorer accepts externally normalized integer cost
+units under an opaque reviewed contract. It reuses the privacy, quality,
+coverage, and confidence gates but never fetches pricing or calls the result an
+actual bill. A candidate may therefore reduce estimated cost while increasing
+raw tokens; both metrics remain visible and neither scorer changes routing.
+
+The safe experiment is a reviewed schema-1 policy whose standard command omits
+a vendor effort override. No such policy has supplied independent passing
+evidence, so `efficient` is not a posture, built-in standard routes remain
+explicitly medium effort, and schema 2 still requires an explicit model/effort
+pair. A passing scorer record would authorize review of the opt-in policy—not
+an automatic built-in or default change.
+
+A separate cost diagnostic now has exact evaluation-only schema-1 baseline and
+candidate policies for Claude low-tier routing. A real `route` fingerprint
+acknowledgement followed by `run` succeeded for both arms on one disposable
+public-fixture task; Haiku/low reported 78.58% lower estimated cost while using
+20.46% more raw tokens. This verifies the router path and the distinction
+between cost and token objectives, but it is still a one-task diagnostic and
+does not satisfy either promotion gate.
+
+The next full 30-pair cost run completed all 60 counterbalanced arms and both
+configurations passed 30/30 arm-blind quality reviews with no critical failure.
+Haiku/low still used 6.94% more raw tokens while the mixed-tier policy reported
+21.52% lower estimated cost. Its 95% cost-savings interval was only 8.08% to
+34.95%, so the lower-bound and width gates failed; exact paired quality bounds
+also require more than 30 perfect ties to establish the fixed 5%
+non-inferiority margin. Phase 4 therefore remains `no-go`.
+
+A nine-pair diagnostic then tested whether changing standard to Sonnet/medium
+would strengthen the cost signal. Although aggregate reported cost fell
+27.29%, standard quality regressed from 3/3 to 2/3 and standard raw tokens rose
+58.29%. That candidate was discarded before any promotion-scale run.
+
+Changing only standard effort from medium to low also failed its nine-pair
+canary: blind quality tied 9/9, but aggregate cost savings were 14.08%, below
+the fixed 15% floor, while raw tokens rose 6.49%. The standard slice itself was
+11.08% more expensive. The original low-only cost candidate remains the sole
+promotion-scale experiment.
+
+That retained candidate next completed a fresh balanced 150-pair run. Quality
+was non-inferior (143/150 versus 142/150, exact 95% difference interval -2.41%
+to +3.66%) with no new critical failure. Reported cost fell 17.57%, but its
+95% interval was 12.30% to 22.84%; the 15% lower-bound gate alone failed. Raw
+tokens rose 7.30%. The result remains `no-go`, and any subsequent target-tier
+oversampling can support only the changed low route rather than a whole-policy
+or built-in promotion.
+
+The separately predeclared 90-pair low-target qualification then oversampled
+the changed route (72 low) while retaining nine standard and nine high controls
+plus every language/category slice. A clean restart completed 180/180 arms;
+blind quality tied 88/90 with no new candidate critical failure. Reported cost
+fell 55.14% with a 95% interval of 46.28% to 64.00%, while raw tokens rose
+14.59%. Every machine gate passed. This authorizes only the exact checked-in
+cost-focused low-route opt-in example; Phase 4 built-in/token-efficiency
+promotion remains `no-go`.
+
 ### 0.4 hardening delivery
 
 The post-0.3 review priorities shipped in weightclass 0.4.0:
