@@ -1501,6 +1501,7 @@ class CommandSurfaceTests(unittest.TestCase):
         cases = (
             ("agy-cost-focused", "--low-model", "reviewed-model"),
             ("grok-cost-focused", "--standard-effort", "low"),
+            ("grok-cost-focused", "--standard-model", ""),
             ("claude-cost-focused", "--high-model", "contains whitespace"),
             ("codex-cost-focused", "--low-effort", "control\u001fvalue"),
         )

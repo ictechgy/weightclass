@@ -131,8 +131,9 @@ class PresetOverrides:
     high_effort: str | None = None
 
     def is_empty(self) -> bool:
-        return not any(
-            (
+        return all(
+            value is None
+            for value in (
                 self.low_model,
                 self.standard_model,
                 self.high_model,

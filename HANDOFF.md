@@ -26,10 +26,10 @@ _Last updated: 2026-08-13 KST by Codex_
   tier-specific opaque model/effort overrides for the packaged Claude and
   Codex policies. Custom selections remain explicitly unqualified; built-in
   routes and provider boundaries are unchanged.
-- An unreleased worktree increment adds tier-specific opaque Grok model
-  overrides to packaged `review-preset`, `route`, and `run`. It is implemented
-  and verified but not committed, tagged, published, or installed through
-  Homebrew; the installed `0.12.0` does not contain it.
+- An unreleased source increment adds tier-specific opaque Grok model overrides
+  to packaged `review-preset`, `route`, and `run`. It is implemented and
+  verified but not tagged, published, or installed through Homebrew; the
+  installed `0.12.0` does not contain it.
 - The source-of-truth Homebrew formula was updated on `main` by
   `8e90b4e7a8e791d4400d6132719fb6a15f7dc3c1`. The matching tap commit is
   [`8d2b702`](https://github.com/ictechgy/homebrew-tap/commit/8d2b702851a09a770530f45bad101137d3a5a778).
@@ -354,6 +354,10 @@ _Last updated: 2026-08-13 KST by Codex_
   - RED: the two focused review/run tests both returned `invalid_input` before
     implementation. GREEN: the same tests pass and bind exact tier commands,
     fingerprints, argv delivery, task substitution, and one-child execution.
+  - Commit review reproduced an empty explicit model label being mistaken for
+    an absent override. The focused regression failed with exit 0 before the
+    fix and now receives redacted `invalid_input`; the common correction also
+    protects Claude and Codex override fields.
   - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
     `ResourceWarning` as an error: 791 tests passed on each interpreter.
   - Ruff 0.16.2 check/format over 99 files, strict mypy over 98 source files,
@@ -530,9 +534,8 @@ _Last updated: 2026-08-13 KST by Codex_
 ## Blockers & Open Questions
 
 - No known blocker or mandatory release/deployment step remains for `0.12.0`.
-- The Grok model-routing increment is verified but remains uncommitted and
-  unpublished. A future release must use a new version; PyPI `0.12.0` is
-  immutable.
+- The Grok model-routing increment is verified but remains unpublished. A
+  future release must use a new version; PyPI `0.12.0` is immutable.
 - No promotion-grade paired provider token-savings evidence has been collected. Do not
   add an `efficient` posture or change built-in/schema-2 effort behavior based
   on the exploratory pilot. A fresh, blind, fingerprint-bound evidence set
@@ -548,8 +551,8 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Next Steps
 
-1. Review and commit the Grok model-routing increment when requested; bump to a
-   new version before any publication rather than reusing `0.12.0`.
+1. Before publishing the Grok model-routing increment, bump to a new version
+   rather than reusing immutable `0.12.0`.
 2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
    compatibility feedback without task telemetry, provider-price inference, or
    a claim about actual bills. Do not change built-ins, standard/high routes,
@@ -574,7 +577,7 @@ agy, and Grok cost-focused policies remain unqualified experiments; built-ins
 remain unchanged and each vendor still needs independent evaluation before
 promotion. Task-free review-preset, --preset routing, and custom Claude/Codex
 tier model/effort overrides are available in 0.12.0; custom configurations are
-explicitly unqualified. A verified but uncommitted worktree increment adds
-tier-specific Grok model overrides while retaining packaged Grok effort values
-and argv task delivery. Review and commit it before preparing a new version;
-do not attempt to republish immutable 0.12.0.`
+explicitly unqualified. The unreleased source adds tier-specific Grok model
+overrides while retaining packaged Grok effort values and argv task delivery.
+Bump to a new version before publication; do not attempt to republish immutable
+0.12.0.`
