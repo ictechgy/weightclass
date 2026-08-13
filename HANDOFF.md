@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-13 21:03 KST by Codex_
+_Last updated: 2026-08-13 21:24 KST by Codex_
 
 ## Goal
 
@@ -40,6 +40,24 @@ _Last updated: 2026-08-13 21:03 KST by Codex_
   cost metadata. This public, single-pair, non-blind probe has no independent
   quality result and is diagnostic only. Task/response text, per-call output,
   and disposable workspaces were not retained.
+- A follow-up Codex standard-tier canary produced the opposite token signal.
+  Two approved `agy` task-generation attempts returned no recoverable structured
+  result, so the remaining approved calls used nine different existing public
+  standard fixtures (five English and four Korean), not fresh tasks. All 18
+  exact Codex arms and nine independent arm-blind Claude reviews completed.
+  The built-in medium baseline used 101,602 raw tokens and passed 5/9 reviews;
+  the packaged low candidate used 111,567 raw tokens (+9.81%) and passed 8/9.
+  The reviewer preferred the candidate eight times and tied once, with no
+  critical failure in either arm. The token-savings estimate was -9.81% with a
+  95% interval from -31.06% to +11.44%. The aggregate scorer returned `no-go`
+  because the candidate did not save tokens, the run had only nine pairs and
+  one tier, the public fixtures lacked fixed category coverage, and freshness
+  provenance was false. Actual external calls were 29: two failed structured
+  generation attempts, 18 Codex arms, and nine Claude reviews. No cost field
+  was available, so this is not cost evidence. Task/response text, pair rows,
+  per-call output, and disposable workspaces were not retained. Together with
+  the earlier single-pair decrease, the conflicting diagnostic evidence is a
+  reason not to promote the Codex standard/low candidate.
 - The source-of-truth Homebrew formula was updated on `main` by
   `e18fd3988a6fa6ad642f44a084b436c6507a2f6b`. The matching tap commit is
   [`1244ed6`](https://github.com/ictechgy/homebrew-tap/commit/1244ed6f0baf6cf2c557bec356230e3ea199961d).
