@@ -274,6 +274,26 @@ experiments must change an explicit low-tier model/effort configuration and
 bind actual sanitized metered-cost or quota evidence; an identical command is
 ineligible even if its route ID differs.
 
+A separate user-approved Codex model experiment then tested a low-only
+`gpt-5.6-luna` candidate against `gpt-5.6-terra`. A nine-pair public-fixture
+canary was directionally favorable: Luna's externally normalized estimated API
+cost was 81.98% lower despite using 46.97% more tokens, and blind quality was
+8/9 versus 7/9 with no critical failure. A fresh balanced 30-pair run reduced
+estimated cost by 51.52% and passed 30/30 quality checks on both arms, but its
+cost and exact-quality intervals were too wide, so it remained `no-go`.
+
+The predeclared follow-up independently regenerated 90 tasks: 72 low, nine
+standard controls, and nine high controls, with 45 en/45 ko and exactly ten
+tasks in each fixed category. All 180 Codex arms and 90 blind reviews
+completed. Estimated API cost fell 69.02%, with a 95% savings interval of
+60.57% to 77.47%, and raw tokens fell 4.89%. Both configurations passed 85/90
+quality checks, but the candidate introduced two new critical failures and its
+exact quality-difference interval was -7.53% to +7.53%. The result is therefore
+`no-go`; no Codex route was qualified or promoted. The evaluator added
+isolation flags not present in the packaged command, so the run is a model
+configuration diagnostic rather than an exact route qualification. Its API
+rate normalization does not measure subscription billing or quota usage.
+
 That retained candidate next completed a fresh balanced 150-pair run. Quality
 was non-inferior (143/150 versus 142/150, exact 95% difference interval -2.41%
 to +3.66%) with no new critical failure. Reported cost fell 17.57%, but its

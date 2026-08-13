@@ -246,6 +246,25 @@ A nine-pair canary remains a valid aggregate diagnostic but necessarily scores
 Expand only a promising, quality-safe exact configuration. The aggregate-only
 output omits task text, pair rows, and pair identifiers.
 
+One Codex model diagnostic followed that process without qualifying a product
+route. It compared explicit `gpt-5.6-terra`/low with
+`gpt-5.6-luna`/low, using externally normalized OpenAI API prices observed on
+2026-08-14. The public-fixture nine-pair canary estimated 81.98% lower cost for
+Luna, with blind quality 8/9 versus 7/9 and no critical failure. A fresh
+balanced 30-pair run estimated 51.52% lower cost and passed 30/30 quality checks
+on both arms, but its savings and quality intervals were insufficient.
+
+The independent 90-pair low-target follow-up covered 72 low tasks, nine
+standard controls, nine high controls, en/ko equally, and every fixed category
+exactly ten times. All arms completed. Estimated API cost fell 69.02% with a
+95% interval of 60.57% to 77.47%, while raw tokens fell 4.89%. Both
+configurations passed 85/90 quality checks, but Luna had two new critical
+failures and the exact quality interval was -7.53% to +7.53%. The scorer
+returned `no-go`. The evaluator-only commands used isolation flags beyond the
+packaged route, so this result cannot qualify that route even apart from the
+failed safety and quality gates. It is not subscription-cost or quota evidence.
+No tasks, answers, per-pair rows, or workspaces were retained.
+
 An exploratory Claude 2.1.228 diagnostic compared default-model medium with
 explicit Haiku low on six low-risk disposable editing fixtures. Both arms
 passed 6/6 automated checks and did not change protected files. Haiku used
