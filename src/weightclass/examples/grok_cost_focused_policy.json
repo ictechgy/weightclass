@@ -28,7 +28,7 @@
         "--permission-mode",
         "acceptEdits",
         "--reasoning-effort",
-        "low"
+        "medium"
       ]
     },
     {

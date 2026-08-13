@@ -29,7 +29,7 @@
         "--sandbox",
         "workspace-write",
         "-c",
-        "model_reasoning_effort=low",
+        "model_reasoning_effort=medium",
         "-"
       ]
     },

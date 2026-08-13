@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-13 19:35 KST by Codex_
+_Last updated: 2026-08-14 01:35 KST by Codex_
 
 ## Goal
 
@@ -31,6 +31,77 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
   task-free `review-cost-profile` plus non-executing `recommend`. It is not
   tagged, published, or installed through Homebrew yet. Built-in routes and
   every execution path remain unchanged.
+- An approved exact-command measurement probe used one already-public standard
+  fixture and exactly six vendor calls: built-in standard/medium versus the
+  packaged standard/low candidate for Codex, `agy`, and Grok. All six commands
+  exited successfully. Codex exposed 49,596 raw tokens for the baseline and
+  24,921 for the candidate (49.75% fewer in this single pair); neither arm
+  exposed cost. The exact `agy` and Grok commands exposed neither usage nor
+  cost metadata. This public, single-pair, non-blind probe has no independent
+  quality result and is diagnostic only. Task/response text, per-call output,
+  and disposable workspaces were not retained.
+- A follow-up Codex standard-tier canary produced the opposite token signal.
+  Two approved `agy` task-generation attempts returned no recoverable structured
+  result, so the remaining approved calls used nine different existing public
+  standard fixtures (five English and four Korean), not fresh tasks. All 18
+  exact Codex arms and nine independent arm-blind Claude reviews completed.
+  The built-in medium baseline used 101,602 raw tokens and passed 5/9 reviews;
+  the packaged low candidate used 111,567 raw tokens (+9.81%) and passed 8/9.
+  The reviewer preferred the candidate eight times and tied once, with no
+  critical failure in either arm. The token-savings estimate was -9.81% with a
+  95% interval from -31.06% to +11.44%. The aggregate scorer returned `no-go`
+  because the candidate did not save tokens, the run had only nine pairs and
+  one tier, the public fixtures lacked fixed category coverage, and freshness
+  provenance was false. Actual external calls were 29: two failed structured
+  generation attempts, 18 Codex arms, and nine Claude reviews. No cost field
+  was available, so this is not cost evidence. Task/response text, pair rows,
+  per-call output, and disposable workspaces were not retained. Together with
+  the earlier single-pair decrease, the conflicting diagnostic evidence is a
+  reason not to promote the Codex standard/low candidate.
+- A later user-approved Codex model diagnostic compared explicit
+  `gpt-5.6-terra`/low with `gpt-5.6-luna`/low on nine existing public low-tier
+  fixtures. All 18 arms and nine arm-blind Claude reviews completed. Luna used
+  409,859 tokens versus Terra's 278,871 (+46.97%) but, under the externally
+  normalized OpenAI API rates observed on 2026-08-14, its estimated cost was
+  $0.041333 versus $0.229397 (-81.98%). Blind quality passed 8/9 Luna answers
+  and 7/9 Terra answers, with no critical failure. This public-fixture canary
+  was directionally favorable but was neither fresh nor promotion evidence.
+- A fresh balanced 30-pair follow-up covered en/ko, all nine categories, and
+  low/standard/high as 18/6/6. Both configurations passed 30/30 blind quality
+  checks with no critical failure. The low-only Luna candidate used 1,937,820
+  tokens versus 2,062,665 (-6.05%) and reduced externally normalized estimated
+  API cost by 51.52%, but the cost interval was 34.47% to 68.58% (34.11% wide)
+  and the exact quality interval was -11.57% to +11.57%. The scorer correctly
+  returned `no-go` for insufficient intervals.
+- The independently regenerated 90-pair low-target qualification then used 72
+  low tasks plus nine standard and nine high controls, with 45 en/45 ko and
+  exactly ten tasks in every fixed category. All 180 Codex arms and 90 blind
+  reviews completed. Estimated API cost fell from $3.4776328 to $1.0773500
+  (-69.02%; 95% interval 60.57% to 77.47%, 16.90% wide), and tokens fell from
+  6,029,809 to 5,734,772 (-4.89%). Both arms passed 85/90 quality checks, but
+  Luna introduced two new critical failures and the exact quality interval was
+  -7.53% to +7.53%. The machine decision is therefore `no-go`; do not qualify,
+  auto-apply, or publish this Codex route. The measurement commands added
+  evaluator-only isolation flags, so this is not an exact packaged-route
+  qualification. Task text, answers, pair rows, and workspaces were deleted;
+  only aggregate facts remain. These are API-price estimates, not subscription
+  charges or quota evidence.
+- The current follow-up branch converts that `no-go` into the safe packaged
+  state: Codex, `agy`, and Grok cost-focused scaffolds again keep standard at
+  medium, while low/high retain their built-in effort values. Their static
+  commands are therefore not economic candidates by themselves. A candidate
+  whose exact command matches the baseline now returns
+  `candidate_route_unchanged`/`abstain`, so a different route ID cannot make a
+  no-op look qualified. A future Codex experiment should use the existing
+  low-tier-only `--low-model` plus low effort and keep standard/high unchanged;
+  the opaque model label must be supplied and reviewed by the user.
+- Added an evaluation-only, offline provider-usage scorer that accepts only
+  evaluator-normalized integer evidence, never a raw provider export. It
+  separates `metered_cost` from `subscription_quota`, requires assertions that
+  task data and account identifiers were removed, and emits aggregate-only
+  output. A passing fixed-subscription quota result is `capacity_only`, never a
+  monthly-bill claim or cost-recommendation input. A nine-pair canary remains a
+  scored `no-go`; the fixed 30-pair and slice/quality gates are unchanged.
 - The source-of-truth Homebrew formula was updated on `main` by
   `e18fd3988a6fa6ad642f44a084b436c6507a2f6b`. The matching tap commit is
   [`1244ed6`](https://github.com/ictechgy/homebrew-tap/commit/1244ed6f0baf6cf2c557bec356230e3ea199961d).
@@ -356,14 +427,19 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
 - `tests/eval/cost_benchmark.py` and `tests/test_eval_cost_benchmark.py`:
   externally normalized estimated-cost evidence without internal pricing or
   billing claims.
+- `tests/eval/provider_usage_benchmark.py` and
+  `tests/test_eval_provider_usage_benchmark.py`: sanitized provider-export
+  metered-cost versus fixed-subscription quota evidence, with cost promotion
+  disabled for quota results.
 - `tests/eval/claude_cost_baseline_policy.json`,
   `src/weightclass/examples/claude_cost_focused_policy.json`, and
   `tests/test_eval_cost_policy.py`: exact evaluated Claude commands, public
   low-route cost opt-in, unchanged non-low routes, stdin delivery, and
   fingerprint binding.
 - `src/weightclass/examples/{codex,agy,grok}_cost_focused_policy.json`:
-  unevaluated vendor-specific lower-effort opt-in policies; do not describe
-  them as measured savings.
+  unevaluated vendor-specific experiment scaffolds. Their static tier efforts
+  now match the built-ins; only an explicit reviewed model/effort override can
+  make a distinct candidate, and no such candidate has measured savings.
 - `README.md`: documents the task-in-argv residual for `agy` and `grok`.
 - `packaging/homebrew/weightclass.rb`: source of truth copied to
   `ictechgy/homebrew-tap` after a successful PyPI publish.
@@ -671,9 +747,9 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
 ## Blockers & Open Questions
 
 - No known blocker or mandatory release/deployment step remains for `0.13.0`.
-- The cost-recommendation worktree is deliberately unreleased and uncommitted.
-  Review the diff before deciding its version, commit, or deployment. Do not
-  republish immutable `0.13.0`.
+- The cost-recommendation work is merged to `main` by PR #34 but deliberately
+  unreleased. Decide its next version and release notes before publishing. Do
+  not republish immutable `0.13.0`.
 - GitHub repository settings were updated and re-read through the API on
   2026-08-13. The active `Protect version tags` ruleset targets `refs/tags/v*`,
   has no bypass actor, and blocks updates and deletions. The `pypi` environment
@@ -685,6 +761,14 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
   add an `efficient` posture or change built-in/schema-2 effort behavior based
   on the exploratory pilot. A fresh, blind, fingerprint-bound evidence set
   must pass the offline token gate first.
+- The Codex standard-low effort canary and the Terra-to-Luna low-model
+  qualification are completed `no-go` results. Luna showed large estimated API
+  cost savings, but its fresh 90-pair run introduced two new critical failures
+  and did not prove the fixed quality margin. Do not spend another expansion on
+  either candidate or qualify them through the cost recommender. A different
+  candidate still requires a user-reviewed opaque model label and a reviewed
+  sanitized metered-cost or quota contract; the router must not infer price or
+  entitlement.
 - Codex, `agy`, and Grok cost-focused examples are unqualified experiments.
   Do not promote them, infer provider pricing, or claim savings until each
   vendor independently passes the applicable aggregate gates.
@@ -696,18 +780,23 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
 
 ## Next Steps
 
-1. Review and commit the unreleased cost-recommendation diff. If publishing,
-   choose a new version, update release notes/HANDOFF, and run the normal
-   immutable release process; never overwrite `0.13.0`.
+1. If publishing the merged cost-recommendation feature, choose a new version,
+   update release notes/HANDOFF, and run the normal immutable release process;
+   never overwrite `0.13.0`.
 2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
    compatibility feedback without task telemetry, provider-price inference, or
    a claim about actual bills. Do not change built-ins, standard/high routes,
    schema 2, or posture vocabulary from the low-target result.
-3. Any future token-efficiency candidate still needs fresh task-free paired
-   evidence and must pass the separate raw-token gate; the cost `go` does not
-   satisfy it.
-4. Evaluate the Codex, `agy`, and Grok cost-focused examples independently
-   before any promotion; do not combine vendor results or infer pricing.
+3. Keep the rejected Codex Terra-to-Luna low-model candidate out of automatic
+   routing and cost recommendations. If testing a materially different future
+   candidate, bind only `--low-model` plus reviewed low effort, keep standard
+   and high unchanged, and require a fresh canary plus an exact packaged-route
+   qualification. Stop on any new critical failure; do not reuse the Luna
+   aggregate as evidence for another model or for subscription quota savings.
+4. Treat a passing quota result as capacity evidence only. Only passing
+   metered-cost evidence may feed a cost profile/qualification card, and even
+   then keep the exact qualified tier explicit opt-in. Evaluate Codex, `agy`,
+   and Grok independently; do not combine results or infer pricing.
 5. Re-enable Linux Claude semantic triage only after reviewing a concrete
    filesystem-containment command and its process-tree boundary.
 6. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
@@ -717,12 +806,18 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`
 and `AGENTS.md`, then continue from: `weightclass 0.13.0 remains the immutable
-published release. The current main worktree has an uncommitted, unreleased
-same-vendor advisory cost router: review-cost-profile plus recommend, strict
-cost/qualification schemas, full evidence fingerprints, fixed conservative
-gates, explicit abstention, provider capability/task-delivery receipts, docs,
-and eight focused tests. Built-ins and execution paths are unchanged. Python
-3.10/3.14 each passed 808 tests; Ruff, strict mypy, compileall, build, strict
+published release. Main contains the merged, unreleased same-vendor advisory
+cost router: review-cost-profile plus recommend, strict cost/qualification
+schemas, full evidence fingerprints, fixed conservative gates, explicit
+abstention, provider capability/task-delivery receipts, docs, and ten focused
+tests. Built-ins and execution paths are unchanged. Python 3.10/3.14 each
+passed 810 tests; Ruff, strict mypy, compileall, build, strict
 Twine, extracted-sdist isolation, and a clean-wheel recommendation smoke are
-green. Review the diff before choosing a new version/commit/release. Do not
-republish 0.13.0.`
+green. Choose a new version and run the immutable release process before
+publishing; do not republish 0.13.0. The local
+`eval/provider-cost-evidence` follow-up keeps unqualified standard routes at
+medium, rejects no-op cost candidates, and adds sanitized provider-export
+metered-cost/quota scoring. Its local full suites currently pass 816 tests on
+Python 3.10 and 3.14. Do not start another provider run until the user supplies
+the exact low-tier model label and approves a bounded external measurement
+scope.`

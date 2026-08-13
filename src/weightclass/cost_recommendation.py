@@ -508,6 +508,8 @@ def build_recommendation_receipt(
         candidate_route_fingerprint=candidate_route_fingerprint,
         today=today or date.today(),
     )
+    if reason is None and candidate_route.command == baseline_route.command:
+        reason = "candidate_route_unchanged"
     profile_savings_basis_points: int | None = None
     if reason is None and (baseline_cost is None or candidate_cost is None):
         reason = "profile_route_cost_missing"

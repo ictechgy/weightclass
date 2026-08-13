@@ -208,6 +208,63 @@ Its exact provenance therefore requires `same_provider_runtime`,
 same. The two configuration fingerprints bind the predeclared difference; all
 other provenance fields retain their token-gate meaning.
 
+## Sanitized provider-export usage gate
+
+Provider billing and subscription exports can contain account identifiers or
+other sensitive metadata. Never pass a raw export to weightclass or place it in
+the repository. An evaluator may instead normalize only the task-free integer
+usage totals under a reviewed contract, retain the source export outside the
+repository, and score the sanitized paired evidence offline:
+
+```sh
+PYTHONPATH=src python3 tests/eval/provider_usage_benchmark.py \
+  --evidence /outside/the/repository/sanitized-provider-usage.json
+```
+
+This scorer accepts an exact `objective` of `metered_cost` or
+`subscription_quota`. Arm objects use `usage_units`; the gate uses
+`minimum_usage_savings`. The remaining pair, binding, coverage, completion,
+quality, critical-failure, confidence, and bounded-file rules are the same as
+the token gate. Provenance additionally asserts that the provider export and
+normalization contract were reviewed, only the reviewed configuration
+dimensions changed, and the submitted evidence contains neither task data nor
+account identifiers. These are evaluator assertions, not facts verified by the
+scorer.
+
+`metered_cost` requires `fixed_subscription_charge: false`. A passing result is
+labeled `cost_opt_in` and may be used to prepare the separate reviewed cost
+profile and qualification card; it does not create those documents or authorize
+execution. `subscription_quota` requires `fixed_subscription_charge: true`.
+Even when its statistical decision is `go`, its promotion scope is
+`capacity_only`, `eligible_for_cost_recommendation` is false, and
+`monthly_bill_reduction_claimed` is false. The scorer never fetches prices,
+reads credentials, parses provider-specific exports, or verifies provider
+billing assertions.
+
+A nine-pair canary remains a valid aggregate diagnostic but necessarily scores
+`no-go` against the fixed 30-pair promotion floor and full slice requirements.
+Expand only a promising, quality-safe exact configuration. The aggregate-only
+output omits task text, pair rows, and pair identifiers.
+
+One Codex model diagnostic followed that process without qualifying a product
+route. It compared explicit `gpt-5.6-terra`/low with
+`gpt-5.6-luna`/low, using externally normalized OpenAI API prices observed on
+2026-08-14. The public-fixture nine-pair canary estimated 81.98% lower cost for
+Luna, with blind quality 8/9 versus 7/9 and no critical failure. A fresh
+balanced 30-pair run estimated 51.52% lower cost and passed 30/30 quality checks
+on both arms, but its savings and quality intervals were insufficient.
+
+The independent 90-pair low-target follow-up covered 72 low tasks, nine
+standard controls, nine high controls, en/ko equally, and every fixed category
+exactly ten times. All arms completed. Estimated API cost fell 69.02% with a
+95% interval of 60.57% to 77.47%, while raw tokens fell 4.89%. Both
+configurations passed 85/90 quality checks, but Luna had two new critical
+failures and the exact quality interval was -7.53% to +7.53%. The scorer
+returned `no-go`. The evaluator-only commands used isolation flags beyond the
+packaged route, so this result cannot qualify that route even apart from the
+failed safety and quality gates. It is not subscription-cost or quota evidence.
+No tasks, answers, per-pair rows, or workspaces were retained.
+
 An exploratory Claude 2.1.228 diagnostic compared default-model medium with
 explicit Haiku low on six low-risk disposable editing fixtures. Both arms
 passed 6/6 automated checks and did not change protected files. Haiku used
