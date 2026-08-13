@@ -1059,7 +1059,8 @@ class AskVendorTests(unittest.TestCase):
             (child / "artifact").touch()
             root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
             real_scandir = os.scandir
-            baseline_descriptors = set(os.listdir("/dev/fd"))
+            real_open_child = triage._open_child_directory
+            opened_child_descriptors: list[int] = []
             calls = 0
 
             def fail_child_scandir(file_descriptor: int) -> Any:
@@ -1069,10 +1070,27 @@ class AskVendorTests(unittest.TestCase):
                     raise MemoryError
                 return real_scandir(file_descriptor)
 
+            def track_open_child(*args: Any, **kwargs: Any) -> int:
+                file_descriptor = real_open_child(*args, **kwargs)
+                opened_child_descriptors.append(file_descriptor)
+                return file_descriptor
+
             try:
-                with mock.patch("weightclass.triage.os.scandir", side_effect=fail_child_scandir):
+                with (
+                    mock.patch(
+                        "weightclass.triage._open_child_directory",
+                        side_effect=track_open_child,
+                    ),
+                    mock.patch(
+                        "weightclass.triage.os.scandir",
+                        side_effect=fail_child_scandir,
+                    ),
+                ):
                     self.assertFalse(triage._erase_private_tree(root_fd, time.monotonic() + 1))
-                self.assertEqual(set(os.listdir("/dev/fd")), baseline_descriptors)
+                self.assertTrue(opened_child_descriptors)
+                for file_descriptor in opened_child_descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(file_descriptor)
             finally:
                 os.close(root_fd)
 
