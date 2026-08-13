@@ -1323,8 +1323,11 @@ def recommend_from_standard_input(
             card,
             baseline_route=baseline_route,
             baseline_route_fingerprint=baseline_fingerprint,
+            baseline_allow_mixed_vendors=False,
             candidate_route=candidate_route,
             candidate_route_fingerprint=candidate_fingerprint,
+            candidate_allow_mixed_vendors=candidate_policy.allow_mixed_vendors,
+            candidate_posture=candidate_policy.posture,
             routing_reason_code=routing_reason_code,
             candidate_configuration_status=_packaged_configuration_status(preset, model, overrides),
         )

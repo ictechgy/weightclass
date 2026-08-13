@@ -12,6 +12,13 @@ from typing import Any, cast
 from unittest import mock
 
 from weightclass import cli
+from weightclass.cost_recommendation import (
+    CostRecommendationError,
+    build_recommendation_receipt,
+    parse_cost_profile,
+    parse_qualification_card,
+)
+from weightclass.router import Route
 
 
 def _weightclass(*arguments: str, task: str) -> subprocess.CompletedProcess[str]:
@@ -139,6 +146,64 @@ def _recommend(
 
 
 class CostRecommendationCliTests(unittest.TestCase):
+    def test_rejects_non_integer_schema_versions(self) -> None:
+        """Breaks if JSON booleans or floats can impersonate schema version 1."""
+        baseline = {"route_fingerprint": "sha256:" + "1" * 64}
+        candidate = {
+            "route_fingerprint": "sha256:" + "2" * 64,
+            "vendor": "claude",
+        }
+        profile = _cost_profile(baseline, candidate)
+        card = _qualification_card(profile, baseline, candidate)
+
+        for parser, document in (
+            (parse_cost_profile, profile),
+            (parse_qualification_card, card),
+        ):
+            for invalid_version in (True, 1.0):
+                with self.subTest(parser=parser.__name__, value=invalid_version):
+                    invalid_document = dict(document)
+                    invalid_document["schema_version"] = invalid_version
+
+                    with self.assertRaises(CostRecommendationError):
+                        parser(invalid_document)
+
+    def test_rejects_route_objects_that_do_not_match_their_fingerprints(self) -> None:
+        """Breaks if a recommendation can display a command not bound by its fingerprint."""
+        baseline = _route("--source-vendor", "claude")
+        candidate = _route("--preset", "claude-cost-focused")
+        profile_document = _cost_profile(baseline, candidate)
+        card_document = _qualification_card(profile_document, baseline, candidate)
+        forged_candidate = Route(
+            route_id="forged-candidate",
+            vendor="claude",
+            workflow="",
+            command=("claude", "--forged-candidate"),
+            tier="low",
+        )
+        baseline_route = Route(
+            route_id=baseline["route"],
+            vendor=baseline["vendor"],
+            workflow="",
+            command=tuple(baseline["command"]),
+            tier=baseline["tier"],
+        )
+
+        with self.assertRaises(CostRecommendationError):
+            build_recommendation_receipt(
+                parse_cost_profile(profile_document),
+                parse_qualification_card(card_document),
+                baseline_route=baseline_route,
+                baseline_route_fingerprint=baseline["route_fingerprint"],
+                baseline_allow_mixed_vendors=False,
+                candidate_route=forged_candidate,
+                candidate_route_fingerprint=candidate["route_fingerprint"],
+                candidate_allow_mixed_vendors=False,
+                candidate_posture="balanced",
+                routing_reason_code="explicit.requested_tier",
+                candidate_configuration_status="measured_low_route_only",
+            )
+
     def test_reviews_a_cost_profile_without_reading_a_task(self) -> None:
         """Breaks if evidence binding requires an undocumented external hash tool."""
         baseline = {"route_fingerprint": "sha256:" + "1" * 64}

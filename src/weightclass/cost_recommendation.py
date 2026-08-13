@@ -12,7 +12,7 @@ from typing import Any, Final, Literal, cast
 
 from .classification import Tier
 from .json_input import JsonInputError, load_json_object
-from .router import Route, uses_argv_task_delivery
+from .router import Posture, Route, native_route_fingerprint, uses_argv_task_delivery
 
 MAX_COST_INPUT_BYTES: Final = 262_144
 MAX_COST_ROUTES: Final = 128
@@ -201,8 +201,7 @@ def parse_cost_profile(value: object) -> CostProfile:
             }
         ),
     )
-    if profile["schema_version"] != 1:
-        raise CostRecommendationError()
+    _integer(profile["schema_version"], minimum=1, maximum=1)
     if not _boolean(profile["identifiers_not_task_derived"]):
         raise CostRecommendationError()
     if _boolean(profile["pricing_inferred"]) or _boolean(profile["actual_billing_claimed"]):
@@ -266,8 +265,7 @@ def parse_qualification_card(value: object) -> QualificationCard:
             }
         ),
     )
-    if card["schema_version"] != 1:
-        raise CostRecommendationError()
+    _integer(card["schema_version"], minimum=1, maximum=1)
     if not _boolean(card["identifiers_not_task_derived"]):
         raise CostRecommendationError()
     tier = _reviewable_label(card["tier"])
@@ -475,8 +473,11 @@ def build_recommendation_receipt(
     *,
     baseline_route: Route,
     baseline_route_fingerprint: str,
+    baseline_allow_mixed_vendors: bool,
     candidate_route: Route,
     candidate_route_fingerprint: str,
+    candidate_allow_mixed_vendors: bool,
+    candidate_posture: Posture | None,
     routing_reason_code: str,
     candidate_configuration_status: str,
     today: date | None = None,
@@ -485,6 +486,14 @@ def build_recommendation_receipt(
     if baseline_route.tier is None or candidate_route.tier is None:
         raise CostRecommendationError()
     if baseline_route.tier != candidate_route.tier:
+        raise CostRecommendationError()
+    if baseline_route_fingerprint != native_route_fingerprint(
+        baseline_route, baseline_allow_mixed_vendors
+    ) or candidate_route_fingerprint != native_route_fingerprint(
+        candidate_route,
+        candidate_allow_mixed_vendors,
+        candidate_posture,
+    ):
         raise CostRecommendationError()
     tier = baseline_route.tier
     vendor = candidate_route.vendor

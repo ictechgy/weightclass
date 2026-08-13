@@ -27,10 +27,10 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
   security/performance and release hardening described below. Custom selections
   remain explicitly unqualified; built-in routes and provider boundaries are
   unchanged.
-- The current `main` worktree has an unreleased cost-recommendation feature:
+- The current unreleased code adds the cost-recommendation feature:
   task-free `review-cost-profile` plus non-executing `recommend`. It is not
-  committed, tagged, published, or installed through Homebrew yet. Built-in
-  routes and every execution path remain unchanged.
+  tagged, published, or installed through Homebrew yet. Built-in routes and
+  every execution path remain unchanged.
 - The source-of-truth Homebrew formula was updated on `main` by
   `e18fd3988a6fa6ad642f44a084b436c6507a2f6b`. The matching tap commit is
   [`1244ed6`](https://github.com/ictechgy/homebrew-tap/commit/1244ed6f0baf6cf2c557bec356230e3ea199961d).
@@ -415,8 +415,11 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
     abstention, configuration-before-task ordering, full qualification-card
     fingerprint binding, stale route binding, every fixed gate, all four
     provider capability/task-delivery receipts, and task-free profile review.
+    Review follow-up additionally rejects non-integer schema versions and a
+    route object whose displayed command is not bound by its supplied route
+    fingerprint.
   - Python 3.10.20 and Python 3.14.6 full `unittest` suites with
-    `ResourceWarning` as an error: 808 tests passed on each interpreter.
+    `ResourceWarning` as an error: 810 tests passed on each interpreter.
   - Ruff 0.16.2 check/format over 125 files, strict mypy over 105 source files,
     compileall, and `git diff --check` passed.
   - Offline wheel/sdist build and strict Twine checks passed. The artifacts
