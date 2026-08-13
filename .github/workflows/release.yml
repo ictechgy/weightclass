@@ -96,7 +96,9 @@ jobs:
           "$installed_venv/bin/wclass" example-policy claude-cost-focused >/dev/null
           "$installed_venv/bin/wclass" example-policy codex-cost-focused --model release-smoke-model >/dev/null
           "$installed_venv/bin/wclass" example-policy grok-cost-focused >/dev/null
+          "$installed_venv/bin/wclass" review-preset claude-cost-focused --low-model release-smoke-claude-model --low-effort low >/dev/null
           printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" route --cost-focused --source-vendor codex --model release-smoke-model --tier standard >/dev/null
+          printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" route --preset codex-cost-focused --standard-model release-smoke-codex-model --standard-effort medium --tier standard >/dev/null
           PYTHONPATH="$installed_wheel" python -m compileall -q "$installed_wheel/weightclass"
           test "$(PYTHONPATH="$installed_wheel" python -c 'import importlib.metadata; print(importlib.metadata.version("weightclass"))')" = "${GITHUB_REF_NAME#v}"
           test "$(PYTHONPATH="$installed_wheel" python -m weightclass --version)" = "weightclass ${GITHUB_REF_NAME#v}"
@@ -142,7 +144,9 @@ jobs:
           "$installed_venv/bin/wclass" example-policy claude-cost-focused >/dev/null
           "$installed_venv/bin/wclass" example-policy codex-cost-focused --model release-smoke-model >/dev/null
           "$installed_venv/bin/wclass" example-policy grok-cost-focused >/dev/null
+          "$installed_venv/bin/wclass" review-preset claude-cost-focused --low-model release-smoke-claude-model --low-effort low >/dev/null
           printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" route --cost-focused --source-vendor codex --model release-smoke-model --tier standard >/dev/null
+          printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" route --preset codex-cost-focused --standard-model release-smoke-codex-model --standard-effort medium --tier standard >/dev/null
           PYTHONPATH="$installed_wheel" python -m compileall -q "$installed_wheel/weightclass"
           test "$(PYTHONPATH="$installed_wheel" python -c 'import importlib.metadata; print(importlib.metadata.version("weightclass"))')" = "${GITHUB_REF_NAME#v}"
           test "$(PYTHONPATH="$installed_wheel" python -m weightclass --version)" = "weightclass ${GITHUB_REF_NAME#v}"

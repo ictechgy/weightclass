@@ -49,6 +49,18 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
                     "--source-vendor codex --model release-smoke-model --tier standard",
                     block,
                 )
+                self.assertIn(
+                    '"$installed_venv/bin/wclass" review-preset '
+                    "claude-cost-focused --low-model release-smoke-claude-model "
+                    "--low-effort low",
+                    block,
+                )
+                self.assertIn(
+                    '"$installed_venv/bin/wclass" route --preset codex-cost-focused '
+                    "--standard-model release-smoke-codex-model "
+                    "--standard-effort medium --tier standard",
+                    block,
+                )
                 installed_wheel_checks = block.split('installed_wheel="$RUNNER_TEMP', 1)[1]
                 self.assertNotIn("PYTHONPATH=src python", installed_wheel_checks)
 

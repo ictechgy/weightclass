@@ -6,6 +6,7 @@ import subprocess
 import sys
 import unicodedata
 from collections.abc import Sequence
+from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Final, NoReturn, cast
@@ -105,7 +106,7 @@ from .v2_validation import V2ValidationError
 EXECUTOR_FAILED_EXIT_CODE: Final = 7
 MAX_NATIVE_POLICY_BYTES: Final = 262_144
 MAX_NATIVE_DESCRIPTOR_BYTES: Final = 262_144
-MAX_EXAMPLE_MODEL_LABEL_BYTES: Final = 240
+MAX_PRESET_OVERRIDE_LABEL_BYTES: Final = 240
 EXAMPLE_POLICY_RESOURCES: Final = {
     "agy-cost-focused": "agy_cost_focused_policy.json",
     "claude-cost-focused": "claude_cost_focused_policy.json",
@@ -118,8 +119,38 @@ class InvalidInputError(ValueError):
     """Raised for invalid policy or descriptor data without exposing it."""
 
 
-def _validate_example_model_label(value: object) -> str:
-    """Accept one opaque, reviewable argv token without interpreting the model."""
+@dataclass(frozen=True)
+class PresetOverrides:
+    """Opaque, tier-specific arguments for the two reviewed native CLI shapes."""
+
+    low_model: str | None = None
+    standard_model: str | None = None
+    high_model: str | None = None
+    low_effort: str | None = None
+    standard_effort: str | None = None
+    high_effort: str | None = None
+
+    def is_empty(self) -> bool:
+        return not any(
+            (
+                self.low_model,
+                self.standard_model,
+                self.high_model,
+                self.low_effort,
+                self.standard_effort,
+                self.high_effort,
+            )
+        )
+
+    def model_for(self, tier: str) -> str | None:
+        return cast(str | None, getattr(self, f"{tier}_model"))
+
+    def effort_for(self, tier: str) -> str | None:
+        return cast(str | None, getattr(self, f"{tier}_effort"))
+
+
+def _validate_preset_override_label(value: object) -> str:
+    """Accept one opaque, reviewable argv token without interpreting its semantics."""
     if not isinstance(value, str):
         raise InvalidInputError()
     try:
@@ -127,7 +158,7 @@ def _validate_example_model_label(value: object) -> str:
     except UnicodeEncodeError as error:
         raise InvalidInputError() from error
     if (
-        not 1 <= len(encoded) <= MAX_EXAMPLE_MODEL_LABEL_BYTES
+        not 1 <= len(encoded) <= MAX_PRESET_OVERRIDE_LABEL_BYTES
         or value.startswith("-")
         or any(character.isspace() or not character.isprintable() for character in value)
     ):
@@ -135,7 +166,81 @@ def _validate_example_model_label(value: object) -> str:
     return value
 
 
-def _render_example_policy(name: str, model: str | None) -> str:
+def _replace_or_insert_option(
+    command: list[object],
+    option: str,
+    value: str,
+    *,
+    insert_before: str,
+) -> None:
+    indices = [index for index, token in enumerate(command) if token == option]
+    if len(indices) > 1 or (indices and indices[0] + 1 >= len(command)):
+        raise InvalidInputError()
+    if indices:
+        command[indices[0] + 1] = value
+        return
+    insertion_points = [index for index, token in enumerate(command) if token == insert_before]
+    if len(insertion_points) != 1:
+        raise InvalidInputError()
+    command[insertion_points[0] : insertion_points[0]] = [option, value]
+
+
+def _apply_preset_overrides(policy: dict[str, Any], name: str, overrides: PresetOverrides) -> None:
+    if overrides.is_empty():
+        return
+    vendor = name.removesuffix("-cost-focused")
+    if vendor not in {"claude", "codex"}:
+        raise InvalidInputError()
+    routes = policy.get("routes")
+    if not isinstance(routes, list):
+        raise InvalidInputError()
+    seen_tiers: set[str] = set()
+    for route in routes:
+        if not isinstance(route, dict):
+            raise InvalidInputError()
+        tier = route.get("tier")
+        command = route.get("command")
+        if tier not in {"low", "standard", "high"} or not isinstance(command, list):
+            raise InvalidInputError()
+        seen_tiers.add(tier)
+        model = overrides.model_for(tier)
+        effort = overrides.effort_for(tier)
+        if model is not None:
+            reviewed_model = _validate_preset_override_label(model)
+            _replace_or_insert_option(
+                command,
+                "--model",
+                reviewed_model,
+                insert_before="--effort" if vendor == "claude" else "-c",
+            )
+        if effort is not None:
+            reviewed_effort = _validate_preset_override_label(effort)
+            if vendor == "claude":
+                _replace_or_insert_option(
+                    command,
+                    "--effort",
+                    reviewed_effort,
+                    insert_before="--effort",
+                )
+            else:
+                config_indices = [
+                    index
+                    for index, token in enumerate(command)
+                    if isinstance(token, str) and token.startswith("model_reasoning_effort=")
+                ]
+                if len(config_indices) != 1:
+                    raise InvalidInputError()
+                command[config_indices[0]] = f"model_reasoning_effort={reviewed_effort}"
+    if seen_tiers != {"low", "standard", "high"}:
+        raise InvalidInputError()
+
+
+def _render_example_policy(
+    name: str,
+    model: str | None,
+    overrides: PresetOverrides | None = None,
+) -> str:
+    overrides = overrides or PresetOverrides()
     try:
         policy_text = (
             files("weightclass")
@@ -144,33 +249,39 @@ def _render_example_policy(name: str, model: str | None) -> str:
         )
     except (KeyError, OSError, UnicodeError) as error:
         raise InvalidInputError() from error
-    if model is None:
+    if model is None and overrides.is_empty():
         return policy_text
-    if name != "codex-cost-focused":
+    if model is not None and name != "codex-cost-focused":
+        raise InvalidInputError()
+    if model is not None and any(
+        (overrides.low_model, overrides.standard_model, overrides.high_model)
+    ):
         raise InvalidInputError()
 
-    reviewed_model = _validate_example_model_label(model)
     try:
         policy = json.loads(policy_text)
     except (json.JSONDecodeError, UnicodeError) as error:
         raise InvalidInputError() from error
     if not isinstance(policy, dict) or not isinstance(policy.get("routes"), list):
         raise InvalidInputError()
-    changed_tiers: set[str] = set()
-    for route in policy["routes"]:
-        if not isinstance(route, dict):
+    if model is not None:
+        reviewed_model = _validate_preset_override_label(model)
+        changed_tiers: set[str] = set()
+        for route in policy["routes"]:
+            if not isinstance(route, dict):
+                raise InvalidInputError()
+            tier = route.get("tier")
+            if tier not in {"low", "standard"}:
+                continue
+            command = route.get("command")
+            if not isinstance(command, list) or "-c" not in command or "--model" in command:
+                raise InvalidInputError()
+            config_index = command.index("-c")
+            command[config_index:config_index] = ["--model", reviewed_model]
+            changed_tiers.add(tier)
+        if changed_tiers != {"low", "standard"}:
             raise InvalidInputError()
-        tier = route.get("tier")
-        if tier not in {"low", "standard"}:
-            continue
-        command = route.get("command")
-        if not isinstance(command, list) or "-c" not in command or "--model" in command:
-            raise InvalidInputError()
-        config_index = command.index("-c")
-        command[config_index:config_index] = ["--model", reviewed_model]
-        changed_tiers.add(tier)
-    if changed_tiers != {"low", "standard"}:
-        raise InvalidInputError()
+    _apply_preset_overrides(policy, name, overrides)
     return json.dumps(policy, ensure_ascii=False, indent=2) + "\n"
 
 
@@ -180,16 +291,20 @@ def _automatic_cost_policy(
     source_vendor: str | None,
     source_profile: str | None,
     model: str | None,
+    overrides: PresetOverrides | None = None,
 ) -> RoutingPolicy | None:
     """Resolve one packaged opt-in without writing router state or policy files."""
+    overrides = overrides or PresetOverrides()
     if not enabled:
-        if model is not None:
+        if model is not None or not overrides.is_empty():
             raise InvalidInputError()
         return None
     if policy_path is not None or source_vendor is None or source_profile is not None:
         raise InvalidInputError()
     try:
-        raw_policy = json.loads(_render_example_policy(f"{source_vendor}-cost-focused", model))
+        raw_policy = json.loads(
+            _render_example_policy(f"{source_vendor}-cost-focused", model, overrides)
+        )
     except (InvalidInputError, json.JSONDecodeError, UnicodeError) as error:
         raise InvalidInputError() from error
     if not isinstance(raw_policy, dict):
@@ -204,6 +319,27 @@ def _automatic_cost_policy(
     if policy.allow_mixed_vendors or any(route.vendor != source_vendor for route in policy.routes):
         raise InvalidInputError()
     return policy
+
+
+def _resolve_packaged_policy_selection(
+    preset: str | None,
+    cost_focused: bool,
+    policy_path: Path | None,
+    source_vendor: str | None,
+    source_profile: str | None,
+) -> tuple[bool, str | None]:
+    """Resolve the preset shorthand without allowing ambiguous policy inputs."""
+    if preset is None:
+        return cost_focused, source_vendor
+    if (
+        preset not in EXAMPLE_POLICY_RESOURCES
+        or cost_focused
+        or policy_path is not None
+        or source_vendor is not None
+        or source_profile is not None
+    ):
+        raise InvalidInputError()
+    return True, preset.removesuffix("-cost-focused")
 
 
 def _report_executor_result(completed_process: subprocess.CompletedProcess[bytes]) -> int:
@@ -425,6 +561,29 @@ def _add_delegation_route_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_preset_override_arguments(parser: argparse.ArgumentParser) -> None:
+    for tier in ("low", "standard", "high"):
+        parser.add_argument(
+            f"--{tier}-model",
+            help=f"Bind an opaque model label to the {tier} preset route.",
+        )
+        parser.add_argument(
+            f"--{tier}-effort",
+            help=f"Bind an opaque effort label to the {tier} preset route.",
+        )
+
+
+def _preset_overrides_from_arguments(arguments: argparse.Namespace) -> PresetOverrides:
+    return PresetOverrides(
+        low_model=arguments.low_model,
+        standard_model=arguments.standard_model,
+        high_model=arguments.high_model,
+        low_effort=arguments.low_effort,
+        standard_effort=arguments.standard_effort,
+        high_effort=arguments.high_effort,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the whole command surface so `--help` lists every reachable mode.
 
@@ -463,6 +622,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     example_policy.add_argument("name", choices=tuple(EXAMPLE_POLICY_RESOURCES))
     example_policy.add_argument("--model")
+    review_preset = subcommands.add_parser(
+        "review-preset",
+        allow_abbrev=False,
+        description="Review every task-free route in one packaged policy.",
+    )
+    review_preset.add_argument("name", choices=tuple(EXAMPLE_POLICY_RESOURCES))
+    review_preset.add_argument("--model")
+    _add_preset_override_arguments(review_preset)
     for name, description in (
         ("route", "Select and print a command for a task read from standard input."),
         ("run", "Select and start a command for a task read from standard input."),
@@ -477,9 +644,15 @@ def build_parser() -> argparse.ArgumentParser:
             help="Select the packaged opt-in policy for --source-vendor.",
         )
         native.add_argument(
+            "--preset",
+            choices=tuple(EXAMPLE_POLICY_RESOURCES),
+            help="Select one packaged policy without a separate vendor flag.",
+        )
+        native.add_argument(
             "--model",
             help="Bind an opaque model label to cost-focused Codex low/standard routes.",
         )
+        _add_preset_override_arguments(native)
         # wclass classify 가 낸 티어를 그대로 받는다. route 와 run 은 이 경로에서도
         # 네트워크를 쓰지 않는다. 판정은 별도 명령에서 이미 끝났다.
         native.add_argument("--tier", choices=("low", "standard", "high"))
@@ -1061,6 +1234,60 @@ def select_task_route(
     return tier, reason_code, route, policy
 
 
+def _packaged_configuration_status(name: str, model: str | None, overrides: PresetOverrides) -> str:
+    if model is not None or not overrides.is_empty():
+        return "unqualified_custom"
+    if name == "claude-cost-focused":
+        return "measured_low_route_only"
+    return "unqualified_experiment"
+
+
+def review_packaged_preset(
+    name: str,
+    model: str | None = None,
+    overrides: PresetOverrides | None = None,
+) -> int:
+    """Render every bound command in one preset without accessing task input."""
+    overrides = overrides or PresetOverrides()
+    if name not in EXAMPLE_POLICY_RESOURCES:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    source_vendor = name.removesuffix("-cost-focused")
+    try:
+        policy = _automatic_cost_policy(True, None, source_vendor, None, model, overrides)
+    except InvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    if policy is None:
+        raise AssertionError("packaged policy resolution returned no policy")
+    routes = [
+        {
+            "command": list(route.command),
+            "route": route.route_id,
+            "route_fingerprint": native_route_fingerprint(
+                route, policy.allow_mixed_vendors, policy.posture
+            ),
+            "task_delivery": ("argv" if uses_argv_task_delivery(route.command) else "stdin"),
+            "tier": route.tier,
+            "vendor": route.vendor,
+        }
+        for route in policy.routes
+    ]
+    print(
+        json.dumps(
+            {
+                "allow_mixed_vendors": policy.allow_mixed_vendors,
+                "configuration_status": _packaged_configuration_status(name, model, overrides),
+                "posture": policy.posture,
+                "preset": name,
+                "routes": routes,
+                "vendor": source_vendor,
+            }
+        )
+    )
+    return 0
+
+
 def route_from_standard_input(
     policy_path: Path | None,
     source_vendor: str | None,
@@ -1068,11 +1295,22 @@ def route_from_standard_input(
     source_profile: str | None = None,
     cost_focused: bool = False,
     model: str | None = None,
+    preset: str | None = None,
+    overrides: PresetOverrides | None = None,
 ) -> int:
     """Select and render a command without echoing or persisting the task."""
+    overrides = overrides or PresetOverrides()
     try:
+        automatic_enabled, effective_source_vendor = _resolve_packaged_policy_selection(
+            preset, cost_focused, policy_path, source_vendor, source_profile
+        )
         automatic_policy = _automatic_cost_policy(
-            cost_focused, policy_path, source_vendor, source_profile, model
+            automatic_enabled,
+            policy_path,
+            effective_source_vendor,
+            source_profile,
+            model,
+            overrides,
         )
     except InvalidInputError:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
@@ -1102,7 +1340,7 @@ def route_from_standard_input(
             )
         )
         tier, reason_code, route, policy = select_task_route(
-            read_task_from_standard_input(), policy, source_vendor, explicit_tier
+            read_task_from_standard_input(), policy, effective_source_vendor, explicit_tier
         )
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
@@ -1129,6 +1367,11 @@ def route_from_standard_input(
     if policy.posture is not None:
         response["posture"] = policy.posture
         response["reason_code"] = reason_code
+    if automatic_policy is not None:
+        assert effective_source_vendor is not None
+        response["configuration_status"] = _packaged_configuration_status(
+            f"{effective_source_vendor}-cost-focused", model, overrides
+        )
     # argv 전달은 태스크를 명령줄에 싣는다. 같은 머신의 다른 사용자가 ps 로 볼 수
     # 있으므로, 검토하는 사람이 이 사실을 모르고 지나치지 않게 명시한다.
     if uses_argv_task_delivery(route.command):
@@ -1145,11 +1388,22 @@ def run_from_standard_input(
     source_profile: str | None = None,
     cost_focused: bool = False,
     model: str | None = None,
+    preset: str | None = None,
+    overrides: PresetOverrides | None = None,
 ) -> int:
     """Run a selected native command without a shell or output capture."""
+    overrides = overrides or PresetOverrides()
     try:
+        automatic_enabled, effective_source_vendor = _resolve_packaged_policy_selection(
+            preset, cost_focused, policy_path, source_vendor, source_profile
+        )
         automatic_policy = _automatic_cost_policy(
-            cost_focused, policy_path, source_vendor, source_profile, model
+            automatic_enabled,
+            policy_path,
+            effective_source_vendor,
+            source_profile,
+            model,
+            overrides,
         )
     except InvalidInputError:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
@@ -1204,7 +1458,9 @@ def run_from_standard_input(
             )
         )
         task = read_task_from_standard_input()
-        _, _, route, policy = select_task_route(task, policy, source_vendor, explicit_tier)
+        _, _, route, policy = select_task_route(
+            task, policy, effective_source_vendor, explicit_tier
+        )
         if acknowledged_fingerprint is not None and acknowledged_fingerprint != (
             native_route_fingerprint(route, policy.allow_mixed_vendors, policy.posture)
         ):
@@ -1406,6 +1662,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         print(policy_text, end="" if policy_text.endswith("\n") else "\n")
         return 0
+    if arguments.command == "review-preset":
+        return review_packaged_preset(
+            arguments.name,
+            arguments.model,
+            _preset_overrides_from_arguments(arguments),
+        )
     if arguments.command == "route":
         return route_from_standard_input(
             arguments.policy,
@@ -1414,6 +1676,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.source_profile,
             arguments.cost_focused,
             arguments.model,
+            arguments.preset,
+            _preset_overrides_from_arguments(arguments),
         )
     if arguments.command == "run":
         return run_from_standard_input(
@@ -1424,6 +1688,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.source_profile,
             arguments.cost_focused,
             arguments.model,
+            arguments.preset,
+            _preset_overrides_from_arguments(arguments),
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)

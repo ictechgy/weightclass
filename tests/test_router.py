@@ -330,6 +330,21 @@ class PolicyRunBindingTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
 
+    def test_a_preset_run_still_requires_an_acknowledgement(self) -> None:
+        """Breaks if the preset shorthand accidentally authorizes execution."""
+        result = _weightclass(
+            "run",
+            "--preset",
+            "codex-cost-focused",
+            "--tier",
+            "standard",
+            task="",
+        )
+
+        self.assertEqual(result.returncode, 6)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+
     def test_an_acknowledged_automatic_codex_policy_runs_its_bound_model(self) -> None:
         """Breaks if run selects a different automatic command than route reviewed."""
         errors = io.StringIO()
@@ -370,6 +385,49 @@ class PolicyRunBindingTests(unittest.TestCase):
                 "-",
             ),
             b"Fix a typo.",
+            cleanup_grace_seconds=0,
+            terminate_grace_seconds=0,
+        )
+
+    def test_an_acknowledged_custom_preset_runs_the_exact_reviewed_tier(self) -> None:
+        """Breaks if custom preset review and execution build different argv."""
+        task = "Fix a typo."
+        options = (
+            "--preset",
+            "codex-cost-focused",
+            "--tier",
+            "standard",
+            "--standard-model",
+            "codex-standard-model",
+            "--standard-effort",
+            "medium",
+        )
+        review = _weightclass("route", *options, task=task)
+        self.assertEqual(review.returncode, 0, review.stderr)
+        descriptor = json.loads(review.stdout)
+        self.assertEqual(descriptor["configuration_status"], "unqualified_custom")
+
+        errors = io.StringIO()
+        completed = subprocess.CompletedProcess[bytes]((), 0)
+        task_input = io.TextIOWrapper(io.BytesIO(task.encode("utf-8")), encoding="utf-8")
+        with (
+            mock.patch.object(sys, "stdin", task_input),
+            mock.patch.object(cli, "run_owned_foreground", return_value=completed) as spawn,
+            contextlib.redirect_stderr(errors),
+        ):
+            exit_code = cli.main(
+                [
+                    "run",
+                    *options,
+                    "--ack-route-fingerprint",
+                    descriptor["route_fingerprint"],
+                ]
+            )
+
+        self.assertEqual(exit_code, 0, errors.getvalue())
+        spawn.assert_called_once_with(
+            tuple(descriptor["command"]),
+            task.encode("utf-8"),
             cleanup_grace_seconds=0,
             terminate_grace_seconds=0,
         )
@@ -1121,6 +1179,281 @@ class CommandSurfaceTests(unittest.TestCase):
                 self.assertTrue(descriptor["route_fingerprint"].startswith("sha256:"))
                 self.assertNotIn("private task text", result.stdout)
 
+    def test_preset_shorthand_selects_its_vendor_without_a_separate_flag(self) -> None:
+        """Breaks if preset selection requires duplicated or inferred vendor input."""
+        result = _weightclass(
+            "route",
+            "--preset",
+            "codex-cost-focused",
+            "--tier",
+            "standard",
+            "--model",
+            "reviewed-codex-model",
+            task="private task text",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        descriptor = json.loads(result.stdout)
+        self.assertEqual(descriptor["route"], "codex-cost-experiment-standard")
+        self.assertEqual(descriptor["vendor"], "codex")
+        self.assertEqual(
+            descriptor["command"],
+            [
+                "codex",
+                "exec",
+                "--ephemeral",
+                "--sandbox",
+                "workspace-write",
+                "--model",
+                "reviewed-codex-model",
+                "-c",
+                "model_reasoning_effort=low",
+                "-",
+            ],
+        )
+        self.assertTrue(descriptor["route_fingerprint"].startswith("sha256:"))
+        self.assertNotIn("private task text", result.stdout)
+
+    def test_review_preset_reports_every_bound_route_without_reading_a_task(self) -> None:
+        """Breaks if policy review needs task content or omits execution boundaries."""
+        output = io.StringIO()
+        errors = io.StringIO()
+        with (
+            mock.patch.object(
+                cli,
+                "read_task_from_standard_input",
+                side_effect=AssertionError("task input was read"),
+            ),
+            mock.patch.object(
+                cli,
+                "run_owned_foreground",
+                side_effect=AssertionError("vendor process was started"),
+            ),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(errors),
+        ):
+            exit_code = cli.main(["review-preset", "claude-cost-focused"])
+
+        self.assertEqual(exit_code, 0, errors.getvalue())
+        descriptor = json.loads(output.getvalue())
+        self.assertEqual(
+            set(descriptor),
+            {
+                "allow_mixed_vendors",
+                "configuration_status",
+                "posture",
+                "preset",
+                "routes",
+                "vendor",
+            },
+        )
+        self.assertEqual(descriptor["preset"], "claude-cost-focused")
+        self.assertEqual(descriptor["vendor"], "claude")
+        self.assertEqual(descriptor["configuration_status"], "measured_low_route_only")
+        self.assertFalse(descriptor["allow_mixed_vendors"])
+        self.assertEqual(descriptor["posture"], "balanced")
+        self.assertEqual(
+            [route["route"] for route in descriptor["routes"]],
+            [
+                "claude-cost-experiment-low",
+                "claude-cost-experiment-standard",
+                "claude-cost-experiment-high",
+            ],
+        )
+        self.assertEqual(
+            [route["tier"] for route in descriptor["routes"]],
+            ["low", "standard", "high"],
+        )
+        for route in descriptor["routes"]:
+            self.assertEqual(route["vendor"], "claude")
+            self.assertEqual(route["task_delivery"], "stdin")
+            self.assertTrue(route["route_fingerprint"].startswith("sha256:"))
+            self.assertIsInstance(route["command"], list)
+
+    def test_review_preset_applies_claude_model_and_effort_by_tier(self) -> None:
+        """Breaks if Claude tier overrides drift or retain measured status."""
+        baseline = _weightclass("review-preset", "claude-cost-focused", task="")
+        self.assertEqual(baseline.returncode, 0, baseline.stderr)
+        result = _weightclass(
+            "review-preset",
+            "claude-cost-focused",
+            "--low-model",
+            "claude-low-model",
+            "--standard-model",
+            "claude-standard-model",
+            "--high-model",
+            "claude-high-model",
+            "--low-effort",
+            "minimal",
+            "--standard-effort",
+            "low",
+            "--high-effort",
+            "maximum",
+            task="",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        descriptor = json.loads(result.stdout)
+        self.assertEqual(descriptor["configuration_status"], "unqualified_custom")
+        self.assertNotEqual(
+            [route["route_fingerprint"] for route in descriptor["routes"]],
+            [route["route_fingerprint"] for route in json.loads(baseline.stdout)["routes"]],
+        )
+        for route, model, effort in zip(
+            descriptor["routes"],
+            ("claude-low-model", "claude-standard-model", "claude-high-model"),
+            ("minimal", "low", "maximum"),
+            strict=True,
+        ):
+            model_index = route["command"].index("--model")
+            effort_index = route["command"].index("--effort")
+            self.assertEqual(route["command"][model_index + 1], model)
+            self.assertEqual(route["command"][effort_index + 1], effort)
+
+    def test_review_preset_applies_codex_model_and_effort_by_tier(self) -> None:
+        """Breaks if Codex tier overrides mutate the wrong configuration tokens."""
+        baseline = _weightclass("review-preset", "codex-cost-focused", task="")
+        self.assertEqual(baseline.returncode, 0, baseline.stderr)
+        result = _weightclass(
+            "review-preset",
+            "codex-cost-focused",
+            "--low-model",
+            "codex-low-model",
+            "--standard-model",
+            "codex-standard-model",
+            "--high-model",
+            "codex-high-model",
+            "--low-effort",
+            "minimal",
+            "--standard-effort",
+            "medium",
+            "--high-effort",
+            "maximum",
+            task="",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        descriptor = json.loads(result.stdout)
+        self.assertEqual(descriptor["configuration_status"], "unqualified_custom")
+        self.assertNotEqual(
+            [route["route_fingerprint"] for route in descriptor["routes"]],
+            [route["route_fingerprint"] for route in json.loads(baseline.stdout)["routes"]],
+        )
+        for route, model, effort in zip(
+            descriptor["routes"],
+            ("codex-low-model", "codex-standard-model", "codex-high-model"),
+            ("minimal", "medium", "maximum"),
+            strict=True,
+        ):
+            model_index = route["command"].index("--model")
+            config_index = route["command"].index("-c")
+            self.assertEqual(route["command"][model_index + 1], model)
+            self.assertEqual(
+                route["command"][config_index + 1],
+                f"model_reasoning_effort={effort}",
+            )
+
+    def test_preset_overrides_reject_unsupported_vendors_and_unsafe_labels(self) -> None:
+        """Breaks if unreviewed argv shapes or task-like labels reach a route."""
+        cases = (
+            ("agy-cost-focused", "--low-model", "reviewed-model"),
+            ("grok-cost-focused", "--standard-effort", "low"),
+            ("claude-cost-focused", "--high-model", "contains whitespace"),
+            ("codex-cost-focused", "--low-effort", "control\u001fvalue"),
+        )
+        for preset, option, value in cases:
+            with self.subTest(preset=preset, option=option):
+                task = "private invalid override task"
+                result = _weightclass(
+                    "route",
+                    "--preset",
+                    preset,
+                    option,
+                    value,
+                    task=task,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, '{"error": "invalid_input"}\n')
+                self.assertNotIn(task, result.stderr)
+
+    def test_review_preset_labels_unqualified_vendors_and_argv_delivery(self) -> None:
+        """Breaks if task-in-argv presets or their evidence scope become hidden."""
+        for preset, task_delivery in (
+            ("agy-cost-focused", "argv"),
+            ("codex-cost-focused", "stdin"),
+            ("grok-cost-focused", "argv"),
+        ):
+            with self.subTest(preset=preset):
+                result = _weightclass("review-preset", preset, task="")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                descriptor = json.loads(result.stdout)
+                self.assertEqual(descriptor["configuration_status"], "unqualified_experiment")
+                self.assertEqual(
+                    {route["task_delivery"] for route in descriptor["routes"]},
+                    {task_delivery},
+                )
+
+    def test_cost_focused_selector_accepts_the_same_claude_tier_overrides(self) -> None:
+        """Breaks if the compatibility selector diverges from preset behavior."""
+        result = _weightclass(
+            "route",
+            "--cost-focused",
+            "--source-vendor",
+            "claude",
+            "--tier",
+            "standard",
+            "--standard-model",
+            "claude-standard-model",
+            "--standard-effort",
+            "low",
+            task="Fix a typo.",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        descriptor = json.loads(result.stdout)
+        self.assertEqual(descriptor["configuration_status"], "unqualified_custom")
+        self.assertEqual(
+            descriptor["command"][-4:],
+            ["--model", "claude-standard-model", "--effort", "low"],
+        )
+
+    def test_preset_overrides_require_a_packaged_policy_selector(self) -> None:
+        """Breaks if overrides can silently mutate built-in or file-backed routes."""
+        task = "private selector-free override task"
+        result = _weightclass(
+            "route",
+            "--source-vendor",
+            "codex",
+            "--low-model",
+            "codex-low-model",
+            task=task,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, '{"error": "invalid_input"}\n')
+        self.assertNotIn(task, result.stderr)
+
+    def test_legacy_and_tier_model_overrides_cannot_be_combined(self) -> None:
+        """Breaks if two model selectors can silently override one another."""
+        task = "private ambiguous model task"
+        result = _weightclass(
+            "route",
+            "--preset",
+            "codex-cost-focused",
+            "--model",
+            "legacy-model",
+            "--standard-model",
+            "tier-model",
+            task=task,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, '{"error": "invalid_input"}\n')
+        self.assertNotIn(task, result.stderr)
+
     def test_cost_focused_option_rejects_conflicting_policy_inputs(self) -> None:
         """Breaks if automatic and caller-provided commands can become ambiguous."""
         with tempfile.TemporaryDirectory() as directory:
@@ -1156,6 +1489,23 @@ class CommandSurfaceTests(unittest.TestCase):
         self.assertEqual(result.stderr, '{"error": "invalid_input"}\n')
         self.assertNotIn("Fix a typo.", result.stderr)
 
+    def test_preset_rejects_ambiguous_policy_inputs_before_reading_the_task(self) -> None:
+        """Breaks if preset and separately supplied routing inputs can be combined."""
+        task = "private preset conflict task"
+        result = _weightclass(
+            "route",
+            "--preset",
+            "codex-cost-focused",
+            "--source-vendor",
+            "codex",
+            task=task,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, '{"error": "invalid_input"}\n')
+        self.assertNotIn(task, result.stderr)
+
     def test_help_lists_every_reachable_subcommand(self) -> None:
         """Breaks if a mode becomes undiscoverable from the command line."""
         result = subprocess.run(
@@ -1166,7 +1516,14 @@ class CommandSurfaceTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        for subcommand in ("classify", "route", "run", "render", "v2"):
+        for subcommand in (
+            "classify",
+            "review-preset",
+            "route",
+            "run",
+            "render",
+            "v2",
+        ):
             with self.subTest(subcommand=subcommand):
                 self.assertIn(subcommand, result.stdout)
 

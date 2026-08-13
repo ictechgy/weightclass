@@ -68,12 +68,14 @@ ownership labels remain opaque caller declarations. See the
 `wclass --help` lists the whole surface:
 
 ```text
-wclass [-h] [--version] {classify,route,run,render,delegate,v2} ...
+wclass [-h] [--version] {classify,example-policy,review-preset,route,run,render,delegate,v2} ...
 ```
 
 `classify`, `route`, and `run` read the task from standard input. `render`
 prints the command of a policy route named by a workflow descriptor and never
-reads a task. `v2` selects a declarative API route; see
+reads a task. `example-policy` emits packaged policy JSON; `review-preset`
+prints every command and fingerprint in one packaged policy. Neither reads a
+task or invokes a vendor. `v2` selects a declarative API route; see
 [V2 API routing](#v2-api-routing-through-an-external-runtime).
 `delegate route` reads only its policy and manifest and does not consume task
 standard input or inspect the supplied runtime path. `delegate run` reads the
@@ -474,38 +476,84 @@ Keep them opt-in, review the exact route and fingerprint, and evaluate each
 vendor independently before broader use.
 
 All four examples keep `allow_mixed_vendors` false. Supply the matching
-`--source-vendor` when routing or running them. Codex and Claude receive the
-task through stdin; `agy` and Grok retain their documented `{{task}}` argv
-delivery and local process-inspection exposure.
+`--source-vendor` when routing or running a materialized policy file; the
+in-memory preset shorthand below already carries that vendor. Codex and Claude
+receive the task through stdin; `agy` and Grok retain their documented
+`{{task}}` argv delivery and local process-inspection exposure.
 
-You do not have to materialize those JSON files. Native schema-1 `route` and
-`run` can select the matching packaged policy in memory with
-`--cost-focused`:
+For a task-free review of all three routes, use the packaged preset name:
+
+```sh
+wclass review-preset claude-cost-focused
+wclass review-preset codex-cost-focused
+```
+
+The JSON output includes every exact command, route fingerprint, tier, vendor,
+and `stdin`/`argv` task-delivery boundary. It also labels the unchanged Claude
+preset `measured_low_route_only`; the other packaged presets are
+`unqualified_experiment`. This command neither reads task stdin nor invokes a
+vendor.
+
+You do not have to materialize those JSON files or repeat the vendor name.
+Native schema-1 `route` and `run` can select a packaged policy in memory with
+`--preset`:
 
 ```sh
 printf '%s' 'Add a focused unit test.' |
-  wclass route --cost-focused --source-vendor codex \
+  wclass route --preset codex-cost-focused \
     --model your-reviewed-codex-model
 ```
 
-Claude, `agy`, and Grok use the same option without `--model`. The existing
-`--source-vendor` remains mandatory because weightclass never guesses its
-parent agent. `--cost-focused` cannot be combined with `--policy` or
-`--source-profile`, and `--model` is accepted only for the cost-focused Codex
-policy. Invalid combinations fail before task input is read.
+`--preset` carries its source vendor explicitly in the reviewed name; it cannot
+be combined with `--source-vendor`, `--cost-focused`, `--policy`, or
+`--source-profile`. The older `--cost-focused --source-vendor <vendor>` form
+remains supported. Invalid combinations fail before task input is read.
 
-The option selects a policy; it does not waive review. Copy the exact
+Claude and Codex presets also accept independent model and effort labels for
+each tier:
+
+```sh
+wclass review-preset claude-cost-focused \
+  --low-model your-claude-low-model --low-effort low \
+  --standard-model your-claude-standard-model --standard-effort medium \
+  --high-model your-claude-high-model --high-effort high
+
+wclass review-preset codex-cost-focused \
+  --low-model your-codex-low-model --low-effort low \
+  --standard-model your-codex-standard-model --standard-effort medium \
+  --high-model your-codex-high-model --high-effort high
+```
+
+The same `--low-*`, `--standard-*`, and `--high-*` flags work on `route` and
+`run` with either `--preset` or the older `--cost-focused` selector. Labels are
+opaque: weightclass checks only that each is one printable, non-whitespace,
+non-option argv token of at most 240 UTF-8 bytes. It does not infer model
+availability, effort vocabulary, subscription access, quality, or price.
+`agy` and Grok reject these overrides because their dynamic model/effort
+argument shapes have not been reviewed. The older Codex `--model` shorthand
+still applies one model to low and standard; it cannot be combined with any
+tier-specific model flag.
+
+Any model or effort override is labeled `unqualified_custom`; whenever it
+changes the reviewed command, the fingerprint changes with it. Even if a label
+happens to reproduce an existing command byte-for-byte, the explicit custom
+selection remains outside the packaged Claude low-route claim. Evaluate custom
+configurations independently before claiming token or cost savings.
+
+Either selector chooses a policy; it does not waive review. Copy the exact
 `route_fingerprint` from `route` into the otherwise identical `run` command:
 
 ```sh
 printf '%s' 'Add a focused unit test.' |
-  wclass run --cost-focused --source-vendor codex \
-    --model your-reviewed-codex-model \
+  wclass run --preset codex-cost-focused \
+    --standard-model your-codex-standard-model \
+    --standard-effort medium \
     --ack-route-fingerprint 'sha256:REVIEWED_FINGERPRINT'
 ```
 
 No preference is persisted and no router configuration file is written.
-Removing `--cost-focused` immediately restores the built-in route selection.
+Removing `--preset` or `--cost-focused` immediately restores the built-in route
+selection.
 
 A route's `vendor` is a containment label you choose, not a list of tools
 weightclass knows. Any printable identifier without whitespace, up to 64 bytes,
