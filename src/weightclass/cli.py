@@ -121,7 +121,7 @@ class InvalidInputError(ValueError):
 
 @dataclass(frozen=True)
 class PresetOverrides:
-    """Opaque, tier-specific arguments for the two reviewed native CLI shapes."""
+    """Opaque, tier-specific arguments for reviewed native CLI shapes."""
 
     low_model: str | None = None
     standard_model: str | None = None
@@ -189,8 +189,17 @@ def _apply_preset_overrides(policy: dict[str, Any], name: str, overrides: Preset
     if overrides.is_empty():
         return
     vendor = name.removesuffix("-cost-focused")
-    if vendor not in {"claude", "codex"}:
+    if vendor not in {"claude", "codex", "grok"}:
         raise InvalidInputError()
+    if vendor == "grok" and any(
+        (overrides.low_effort, overrides.standard_effort, overrides.high_effort)
+    ):
+        raise InvalidInputError()
+    model_insertion_point = {
+        "claude": "--effort",
+        "codex": "-c",
+        "grok": "--reasoning-effort",
+    }[vendor]
     routes = policy.get("routes")
     if not isinstance(routes, list):
         raise InvalidInputError()
@@ -211,7 +220,7 @@ def _apply_preset_overrides(policy: dict[str, Any], name: str, overrides: Preset
                 command,
                 "--model",
                 reviewed_model,
-                insert_before="--effort" if vendor == "claude" else "-c",
+                insert_before=model_insertion_point,
             )
         if effort is not None:
             reviewed_effort = _validate_preset_override_label(effort)
@@ -222,7 +231,7 @@ def _apply_preset_overrides(policy: dict[str, Any], name: str, overrides: Preset
                     reviewed_effort,
                     insert_before="--effort",
                 )
-            else:
+            elif vendor == "codex":
                 config_indices = [
                     index
                     for index, token in enumerate(command)
@@ -231,6 +240,8 @@ def _apply_preset_overrides(policy: dict[str, Any], name: str, overrides: Preset
                 if len(config_indices) != 1:
                     raise InvalidInputError()
                 command[config_indices[0]] = f"model_reasoning_effort={reviewed_effort}"
+            else:
+                raise InvalidInputError()
     if seen_tiers != {"low", "standard", "high"}:
         raise InvalidInputError()
 

@@ -432,6 +432,82 @@ class PolicyRunBindingTests(unittest.TestCase):
             terminate_grace_seconds=0,
         )
 
+    def test_an_acknowledged_grok_model_preset_runs_the_reviewed_argv_route(self) -> None:
+        """Breaks if Grok model review drifts from task substitution at execution."""
+        task = "Fix a typo."
+        options = (
+            "--preset",
+            "grok-cost-focused",
+            "--tier",
+            "standard",
+            "--standard-model",
+            "grok-standard-model",
+        )
+        review = _weightclass("route", *options, task=task)
+        self.assertEqual(review.returncode, 0, review.stderr)
+        descriptor = json.loads(review.stdout)
+        self.assertEqual(
+            descriptor,
+            {
+                "command": [
+                    "grok",
+                    "-p",
+                    "{{task}}",
+                    "--permission-mode",
+                    "acceptEdits",
+                    "--model",
+                    "grok-standard-model",
+                    "--reasoning-effort",
+                    "low",
+                ],
+                "route": "grok-cost-experiment-standard",
+                "tier": "standard",
+                "vendor": "grok",
+                "route_fingerprint": descriptor["route_fingerprint"],
+                "posture": "balanced",
+                "reason_code": "explicit.requested_tier",
+                "configuration_status": "unqualified_custom",
+                "task_delivery": "argv",
+            },
+        )
+        self.assertTrue(descriptor["route_fingerprint"].startswith("sha256:"))
+        self.assertNotIn(task, review.stdout)
+
+        errors = io.StringIO()
+        completed = subprocess.CompletedProcess[bytes]((), 0)
+        task_input = io.TextIOWrapper(io.BytesIO(task.encode("utf-8")), encoding="utf-8")
+        with (
+            mock.patch.object(sys, "stdin", task_input),
+            mock.patch.object(cli, "run_owned_foreground", return_value=completed) as spawn,
+            contextlib.redirect_stderr(errors),
+        ):
+            exit_code = cli.main(
+                [
+                    "run",
+                    *options,
+                    "--ack-route-fingerprint",
+                    descriptor["route_fingerprint"],
+                ]
+            )
+
+        self.assertEqual(exit_code, 0, errors.getvalue())
+        spawn.assert_called_once_with(
+            (
+                "grok",
+                "-p",
+                task,
+                "--permission-mode",
+                "acceptEdits",
+                "--model",
+                "grok-standard-model",
+                "--reasoning-effort",
+                "low",
+            ),
+            b"",
+            cleanup_grace_seconds=0,
+            terminate_grace_seconds=0,
+        )
+
     def test_the_refusal_happens_before_the_task_is_read(self) -> None:
         """Breaks if a doomed run consumes the task before failing closed."""
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1352,6 +1428,73 @@ class CommandSurfaceTests(unittest.TestCase):
                 route["command"][config_index + 1],
                 f"model_reasoning_effort={effort}",
             )
+
+    def test_review_preset_applies_grok_model_by_tier(self) -> None:
+        """Breaks if Grok tier models share a command or lose fingerprint binding."""
+        baseline = _weightclass("review-preset", "grok-cost-focused", task="")
+        self.assertEqual(baseline.returncode, 0, baseline.stderr)
+        result = _weightclass(
+            "review-preset",
+            "grok-cost-focused",
+            "--low-model",
+            "grok-low-model",
+            "--standard-model",
+            "grok-standard-model",
+            "--high-model",
+            "grok-high-model",
+            task="",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        descriptor = json.loads(result.stdout)
+        self.assertEqual(descriptor["configuration_status"], "unqualified_custom")
+        self.assertNotEqual(
+            [route["route_fingerprint"] for route in descriptor["routes"]],
+            [route["route_fingerprint"] for route in json.loads(baseline.stdout)["routes"]],
+        )
+        expected_commands = (
+            [
+                "grok",
+                "-p",
+                "{{task}}",
+                "--permission-mode",
+                "acceptEdits",
+                "--model",
+                "grok-low-model",
+                "--reasoning-effort",
+                "low",
+            ],
+            [
+                "grok",
+                "-p",
+                "{{task}}",
+                "--permission-mode",
+                "acceptEdits",
+                "--model",
+                "grok-standard-model",
+                "--reasoning-effort",
+                "low",
+            ],
+            [
+                "grok",
+                "-p",
+                "{{task}}",
+                "--permission-mode",
+                "acceptEdits",
+                "--model",
+                "grok-high-model",
+                "--reasoning-effort",
+                "high",
+            ],
+        )
+        self.assertEqual(
+            [route["command"] for route in descriptor["routes"]],
+            list(expected_commands),
+        )
+        self.assertEqual(
+            {route["task_delivery"] for route in descriptor["routes"]},
+            {"argv"},
+        )
 
     def test_preset_overrides_reject_unsupported_vendors_and_unsafe_labels(self) -> None:
         """Breaks if unreviewed argv shapes or task-like labels reach a route."""

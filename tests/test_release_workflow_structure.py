@@ -61,6 +61,11 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
                     "--standard-effort medium --tier standard",
                     block,
                 )
+                self.assertIn(
+                    '"$installed_venv/bin/wclass" route --preset grok-cost-focused '
+                    "--standard-model release-smoke-grok-model --tier standard",
+                    block,
+                )
                 installed_wheel_checks = block.split('installed_wheel="$RUNNER_TEMP', 1)[1]
                 self.assertNotIn("PYTHONPATH=src python", installed_wheel_checks)
 

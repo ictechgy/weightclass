@@ -468,10 +468,11 @@ before execution; changing the model changes that fingerprint.
 These three policies are intentionally narrower claims than the evaluated
 Claude policy. Their static forms pin no model and make one change from the
 corresponding built-in routes: a `standard` task uses that vendor's already
-reviewed `low` effort command. The optional Codex model override also changes
-its low route and therefore requires separate evidence. No provider usage,
-pricing, or quality evidence has qualified these experiments, so their names
-describe an optimization hypothesis—not measured token or billing savings.
+reviewed `low` effort command. Optional Codex or Grok model overrides also
+change the exact reviewed command and therefore require separate evidence. No
+provider usage, pricing, or quality evidence has qualified these experiments,
+so their names describe an optimization hypothesis—not measured token or
+billing savings.
 Keep them opt-in, review the exact route and fingerprint, and evaluate each
 vendor independently before broader use.
 
@@ -486,6 +487,7 @@ For a task-free review of all three routes, use the packaged preset name:
 ```sh
 wclass review-preset claude-cost-focused
 wclass review-preset codex-cost-focused
+wclass review-preset grok-cost-focused
 ```
 
 The JSON output includes every exact command, route fingerprint, tier, vendor,
@@ -509,8 +511,9 @@ be combined with `--source-vendor`, `--cost-focused`, `--policy`, or
 `--source-profile`. The older `--cost-focused --source-vendor <vendor>` form
 remains supported. Invalid combinations fail before task input is read.
 
-Claude and Codex presets also accept independent model and effort labels for
-each tier:
+Claude and Codex presets accept independent model and effort labels for each
+tier. Grok accepts the same tier-specific model labels while retaining the
+packaged effort command:
 
 ```sh
 wclass review-preset claude-cost-focused \
@@ -522,17 +525,23 @@ wclass review-preset codex-cost-focused \
   --low-model your-codex-low-model --low-effort low \
   --standard-model your-codex-standard-model --standard-effort medium \
   --high-model your-codex-high-model --high-effort high
+
+wclass review-preset grok-cost-focused \
+  --low-model your-grok-low-model \
+  --standard-model your-grok-standard-model \
+  --high-model your-grok-high-model
 ```
 
-The same `--low-*`, `--standard-*`, and `--high-*` flags work on `route` and
-`run` with either `--preset` or the older `--cost-focused` selector. Labels are
-opaque: weightclass checks only that each is one printable, non-whitespace,
-non-option argv token of at most 240 UTF-8 bytes. It does not infer model
-availability, effort vocabulary, subscription access, quality, or price.
-`agy` and Grok reject these overrides because their dynamic model/effort
-argument shapes have not been reviewed. The older Codex `--model` shorthand
-still applies one model to low and standard; it cannot be combined with any
-tier-specific model flag.
+The same vendor-supported tier flags work on `route` and `run` with either
+`--preset` or the older `--cost-focused` selector. Labels are opaque:
+weightclass checks only that each is one printable, non-whitespace, non-option
+argv token of at most 240 UTF-8 bytes. It does not infer model availability,
+effort vocabulary, subscription access, quality, or price.
+`agy` rejects all tier overrides. Grok accepts model overrides through its
+reviewed `--model` shape but rejects effort overrides; the packaged
+`--reasoning-effort` values remain unchanged. The older Codex `--model`
+shorthand still applies one model to low and standard; it cannot be combined
+with any tier-specific model flag.
 
 Any model or effort override is labeled `unqualified_custom`; whenever it
 changes the reviewed command, the fingerprint changes with it. Even if a label
