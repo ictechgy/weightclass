@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "allow_mixed_vendors": false,
+  "posture": "balanced",
+  "routes": [
+    {
+      "id": "codex-cost-experiment-low",
+      "vendor": "codex",
+      "tier": "low",
+      "command": [
+        "codex",
+        "exec",
+        "--ephemeral",
+        "--sandbox",
+        "workspace-write",
+        "-c",
+        "model_reasoning_effort=low",
+        "-"
+      ]
+    },
+    {
+      "id": "codex-cost-experiment-standard",
+      "vendor": "codex",
+      "tier": "standard",
+      "command": [
+        "codex",
+        "exec",
+        "--ephemeral",
+        "--sandbox",
+        "workspace-write",
+        "-c",
+        "model_reasoning_effort=low",
+        "-"
+      ]
+    },
+    {
+      "id": "codex-cost-experiment-high",
+      "vendor": "codex",
+      "tier": "high",
+      "command": [
+        "codex",
+        "exec",
+        "--ephemeral",
+        "--sandbox",
+        "workspace-write",
+        "-c",
+        "model_reasoning_effort=high",
+        "-"
+      ]
+    }
+  ]
+}

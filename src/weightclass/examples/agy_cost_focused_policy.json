@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "allow_mixed_vendors": false,
+  "posture": "balanced",
+  "routes": [
+    {
+      "id": "agy-cost-experiment-low",
+      "vendor": "agy",
+      "tier": "low",
+      "command": [
+        "agy",
+        "--print",
+        "{{task}}",
+        "--mode",
+        "accept-edits",
+        "--effort",
+        "low"
+      ]
+    },
+    {
+      "id": "agy-cost-experiment-standard",
+      "vendor": "agy",
+      "tier": "standard",
+      "command": [
+        "agy",
+        "--print",
+        "{{task}}",
+        "--mode",
+        "accept-edits",
+        "--effort",
+        "low"
+      ]
+    },
+    {
+      "id": "agy-cost-experiment-high",
+      "vendor": "agy",
+      "tier": "high",
+      "command": [
+        "agy",
+        "--print",
+        "{{task}}",
+        "--mode",
+        "accept-edits",
+        "--effort",
+        "high"
+      ]
+    }
+  ]
+}

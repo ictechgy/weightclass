@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "allow_mixed_vendors": false,
+  "posture": "balanced",
+  "routes": [
+    {
+      "id": "grok-cost-experiment-low",
+      "vendor": "grok",
+      "tier": "low",
+      "command": [
+        "grok",
+        "-p",
+        "{{task}}",
+        "--permission-mode",
+        "acceptEdits",
+        "--reasoning-effort",
+        "low"
+      ]
+    },
+    {
+      "id": "grok-cost-experiment-standard",
+      "vendor": "grok",
+      "tier": "standard",
+      "command": [
+        "grok",
+        "-p",
+        "{{task}}",
+        "--permission-mode",
+        "acceptEdits",
+        "--reasoning-effort",
+        "low"
+      ]
+    },
+    {
+      "id": "grok-cost-experiment-high",
+      "vendor": "grok",
+      "tier": "high",
+      "command": [
+        "grok",
+        "-p",
+        "{{task}}",
+        "--permission-mode",
+        "acceptEdits",
+        "--reasoning-effort",
+        "high"
+      ]
+    }
+  ]
+}

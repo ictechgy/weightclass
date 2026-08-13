@@ -314,6 +314,66 @@ class PolicyRunBindingTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
 
+    def test_an_automatic_cost_policy_still_requires_an_acknowledgement(self) -> None:
+        """Breaks if enabling a packaged experiment also authorizes execution."""
+        result = _weightclass(
+            "run",
+            "--cost-focused",
+            "--source-vendor",
+            "codex",
+            "--tier",
+            "standard",
+            task="",
+        )
+
+        self.assertEqual(result.returncode, 6)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+
+    def test_an_acknowledged_automatic_codex_policy_runs_its_bound_model(self) -> None:
+        """Breaks if run selects a different automatic command than route reviewed."""
+        errors = io.StringIO()
+        completed = subprocess.CompletedProcess[bytes]((), 0)
+        task_input = io.TextIOWrapper(io.BytesIO(b"Fix a typo."), encoding="utf-8")
+        with (
+            mock.patch.object(sys, "stdin", task_input),
+            mock.patch.object(cli, "run_owned_foreground", return_value=completed) as spawn,
+            contextlib.redirect_stderr(errors),
+        ):
+            exit_code = cli.main(
+                [
+                    "run",
+                    "--cost-focused",
+                    "--source-vendor",
+                    "codex",
+                    "--model",
+                    "reviewed-codex-model",
+                    "--tier",
+                    "standard",
+                    "--ack-route-fingerprint",
+                    "sha256:ae44aca2326c00a60fe0ecdbb3205f41da73c3663dce1f9ef3e7aaf9a4f8e621",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0, errors.getvalue())
+        spawn.assert_called_once_with(
+            (
+                "codex",
+                "exec",
+                "--ephemeral",
+                "--sandbox",
+                "workspace-write",
+                "--model",
+                "reviewed-codex-model",
+                "-c",
+                "model_reasoning_effort=low",
+                "-",
+            ),
+            b"Fix a typo.",
+            cleanup_grace_seconds=0,
+            terminate_grace_seconds=0,
+        )
+
     def test_the_refusal_happens_before_the_task_is_read(self) -> None:
         """Breaks if a doomed run consumes the task before failing closed."""
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -745,6 +805,356 @@ class CommandSurfaceTests(unittest.TestCase):
         )
         self.assertNotIn("--model", routes["standard"]["command"])
         self.assertNotIn("--model", routes["high"]["command"])
+
+    def test_prints_installable_cost_experiments_for_every_other_builtin_vendor(self) -> None:
+        """Breaks if a supported vendor loses its explicit lower-effort opt-in."""
+        expected_commands = {
+            "codex-cost-focused": {
+                "low": [
+                    "codex",
+                    "exec",
+                    "--ephemeral",
+                    "--sandbox",
+                    "workspace-write",
+                    "-c",
+                    "model_reasoning_effort=low",
+                    "-",
+                ],
+                "standard": [
+                    "codex",
+                    "exec",
+                    "--ephemeral",
+                    "--sandbox",
+                    "workspace-write",
+                    "-c",
+                    "model_reasoning_effort=low",
+                    "-",
+                ],
+                "high": [
+                    "codex",
+                    "exec",
+                    "--ephemeral",
+                    "--sandbox",
+                    "workspace-write",
+                    "-c",
+                    "model_reasoning_effort=high",
+                    "-",
+                ],
+            },
+            "agy-cost-focused": {
+                "low": [
+                    "agy",
+                    "--print",
+                    "{{task}}",
+                    "--mode",
+                    "accept-edits",
+                    "--effort",
+                    "low",
+                ],
+                "standard": [
+                    "agy",
+                    "--print",
+                    "{{task}}",
+                    "--mode",
+                    "accept-edits",
+                    "--effort",
+                    "low",
+                ],
+                "high": [
+                    "agy",
+                    "--print",
+                    "{{task}}",
+                    "--mode",
+                    "accept-edits",
+                    "--effort",
+                    "high",
+                ],
+            },
+            "grok-cost-focused": {
+                "low": [
+                    "grok",
+                    "-p",
+                    "{{task}}",
+                    "--permission-mode",
+                    "acceptEdits",
+                    "--reasoning-effort",
+                    "low",
+                ],
+                "standard": [
+                    "grok",
+                    "-p",
+                    "{{task}}",
+                    "--permission-mode",
+                    "acceptEdits",
+                    "--reasoning-effort",
+                    "low",
+                ],
+                "high": [
+                    "grok",
+                    "-p",
+                    "{{task}}",
+                    "--permission-mode",
+                    "acceptEdits",
+                    "--reasoning-effort",
+                    "high",
+                ],
+            },
+        }
+
+        for name, commands in expected_commands.items():
+            with self.subTest(name=name):
+                result = _weightclass("example-policy", name, task="")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
+                policy = json.loads(result.stdout)
+                self.assertEqual(policy["schema_version"], 1)
+                self.assertFalse(policy["allow_mixed_vendors"])
+                self.assertEqual(policy["posture"], "balanced")
+                routes = {route["tier"]: route for route in policy["routes"]}
+                self.assertEqual(set(routes), {"low", "standard", "high"})
+                self.assertEqual(
+                    {route["vendor"] for route in routes.values()},
+                    {name.removesuffix("-cost-focused")},
+                )
+                self.assertEqual(
+                    {tier: route["command"] for tier, route in routes.items()},
+                    commands,
+                )
+                with tempfile.TemporaryDirectory() as directory:
+                    policy_path = Path(directory) / "policy.json"
+                    policy_path.write_text(result.stdout, encoding="utf-8")
+                    routed = _weightclass(
+                        "route",
+                        "--policy",
+                        str(policy_path),
+                        "--source-vendor",
+                        name.removesuffix("-cost-focused"),
+                        "--tier",
+                        "standard",
+                        task="Fix a spelling typo.",
+                    )
+                self.assertEqual(routed.returncode, 0, routed.stderr)
+                descriptor = json.loads(routed.stdout)
+                self.assertEqual(descriptor["command"], commands["standard"])
+                self.assertEqual(
+                    descriptor.get("task_delivery"),
+                    "argv" if name in {"agy-cost-focused", "grok-cost-focused"} else None,
+                )
+                self.assertNotIn("Fix a spelling typo.", routed.stdout)
+
+    def test_codex_cost_experiment_accepts_an_explicit_model_for_lower_effort_routes(self) -> None:
+        """Breaks if users cannot bind a reviewed Codex model without editing JSON."""
+        result = _weightclass(
+            "example-policy",
+            "codex-cost-focused",
+            "--model",
+            "reviewed-codex-model",
+            task="",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        routes = {route["tier"]: route for route in json.loads(result.stdout)["routes"]}
+        for tier in ("low", "standard"):
+            with self.subTest(tier=tier):
+                self.assertEqual(
+                    routes[tier]["command"],
+                    [
+                        "codex",
+                        "exec",
+                        "--ephemeral",
+                        "--sandbox",
+                        "workspace-write",
+                        "--model",
+                        "reviewed-codex-model",
+                        "-c",
+                        "model_reasoning_effort=low",
+                        "-",
+                    ],
+                )
+        self.assertNotIn("--model", routes["high"]["command"])
+
+        without_model = _weightclass("example-policy", "codex-cost-focused", task="")
+        self.assertEqual(without_model.returncode, 0, without_model.stderr)
+        fingerprints = []
+        for policy_text in (without_model.stdout, result.stdout):
+            with tempfile.TemporaryDirectory() as directory:
+                policy_path = Path(directory) / "policy.json"
+                policy_path.write_text(policy_text, encoding="utf-8")
+                routed = _weightclass(
+                    "route",
+                    "--policy",
+                    str(policy_path),
+                    "--source-vendor",
+                    "codex",
+                    "--tier",
+                    "standard",
+                    task="private task text",
+                )
+            self.assertEqual(routed.returncode, 0, routed.stderr)
+            self.assertNotIn("private task text", routed.stdout)
+            fingerprints.append(json.loads(routed.stdout)["route_fingerprint"])
+        self.assertNotEqual(*fingerprints)
+
+    def test_example_policy_rejects_model_overrides_outside_codex(self) -> None:
+        """Breaks if a generic flag silently changes an unevaluated vendor command."""
+        for name in ("agy-cost-focused", "claude-cost-focused", "grok-cost-focused"):
+            with self.subTest(name=name):
+                result = _weightclass(
+                    "example-policy",
+                    name,
+                    "--model",
+                    "reviewed-model",
+                    task="",
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, '{"error": "invalid_input"}\n')
+
+    def test_codex_cost_experiment_rejects_an_unsafe_model_label(self) -> None:
+        """Breaks if task-like or option-like text can enter a generated command."""
+        for model in ("", "contains whitespace", "--option", "control\u001fvalue"):
+            with self.subTest(model=model):
+                result = _weightclass(
+                    "example-policy",
+                    "codex-cost-focused",
+                    "--model",
+                    model,
+                    task="",
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, '{"error": "invalid_input"}\n')
+
+    def test_cost_focused_option_selects_each_packaged_vendor_policy(self) -> None:
+        """Breaks if the opt-in flag falls back to a built-in or another vendor."""
+        cases = (
+            (
+                "claude",
+                "low",
+                (),
+                "claude-cost-experiment-low",
+                [
+                    "claude",
+                    "--print",
+                    "--no-session-persistence",
+                    "--safe-mode",
+                    "--permission-mode",
+                    "acceptEdits",
+                    "--tools",
+                    "Read,Edit,Glob,Grep",
+                    "--output-format",
+                    "json",
+                    "--model",
+                    "haiku",
+                    "--effort",
+                    "low",
+                ],
+            ),
+            (
+                "codex",
+                "standard",
+                ("--model", "reviewed-codex-model"),
+                "codex-cost-experiment-standard",
+                [
+                    "codex",
+                    "exec",
+                    "--ephemeral",
+                    "--sandbox",
+                    "workspace-write",
+                    "--model",
+                    "reviewed-codex-model",
+                    "-c",
+                    "model_reasoning_effort=low",
+                    "-",
+                ],
+            ),
+            (
+                "agy",
+                "standard",
+                (),
+                "agy-cost-experiment-standard",
+                [
+                    "agy",
+                    "--print",
+                    "{{task}}",
+                    "--mode",
+                    "accept-edits",
+                    "--effort",
+                    "low",
+                ],
+            ),
+            (
+                "grok",
+                "standard",
+                (),
+                "grok-cost-experiment-standard",
+                [
+                    "grok",
+                    "-p",
+                    "{{task}}",
+                    "--permission-mode",
+                    "acceptEdits",
+                    "--reasoning-effort",
+                    "low",
+                ],
+            ),
+        )
+
+        for vendor, tier, extra, expected_route, expected_command in cases:
+            with self.subTest(vendor=vendor):
+                result = _weightclass(
+                    "route",
+                    "--cost-focused",
+                    "--source-vendor",
+                    vendor,
+                    "--tier",
+                    tier,
+                    *extra,
+                    task="private task text",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                descriptor = json.loads(result.stdout)
+                self.assertEqual(descriptor["route"], expected_route)
+                self.assertEqual(descriptor["vendor"], vendor)
+                self.assertEqual(descriptor["command"], expected_command)
+                self.assertTrue(descriptor["route_fingerprint"].startswith("sha256:"))
+                self.assertNotIn("private task text", result.stdout)
+
+    def test_cost_focused_option_rejects_conflicting_policy_inputs(self) -> None:
+        """Breaks if automatic and caller-provided commands can become ambiguous."""
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "routes": [
+                            {
+                                "id": "caller-policy-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": ["/bin/echo", "caller-policy"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = _weightclass(
+                "route",
+                "--cost-focused",
+                "--policy",
+                str(policy_path),
+                "--source-vendor",
+                "codex",
+                task="Fix a typo.",
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, '{"error": "invalid_input"}\n')
+        self.assertNotIn("Fix a typo.", result.stderr)
 
     def test_help_lists_every_reachable_subcommand(self) -> None:
         """Breaks if a mode becomes undiscoverable from the command line."""

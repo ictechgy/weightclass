@@ -203,6 +203,39 @@ _Last updated: 2026-08-13 KST by Codex_
 - No independent promotion-grade provider token-savings evidence exists, so
   token/default promotion remains `no-go`.
 
+## Current unreleased worktree
+
+- Added installable `codex-cost-focused`, `agy-cost-focused`, and
+  `grok-cost-focused` schema-1 example policies beside the evaluated
+  `claude-cost-focused` policy. Each new policy changes only its `standard`
+  route from the built-in medium effort command to the already reviewed low
+  effort command; low/high stay identical to their built-in commands.
+- `wclass example-policy codex-cost-focused --model <opaque-label>` can now
+  bind a user-reviewed model to only the Codex low and standard routes. High
+  retains the installed Codex default. The label is validated as one bounded,
+  printable, non-whitespace, non-option argv token; no availability or price
+  claim is made, and the generated route fingerprint changes with the model.
+- Native schema-1 `route` and `run` now accept `--cost-focused` and select the
+  matching packaged policy in memory from the existing explicit
+  `--source-vendor`. Codex also accepts the same `--model` override. No policy
+  file or router preference is written; `--policy`/`--source-profile`
+  conflicts and missing/unsupported vendors fail before task access.
+- Automatic `run` still requires the exact fingerprint emitted by an
+  otherwise identical automatic `route`; the opt-in flag never acts as
+  execution acknowledgement. Removing the flag returns immediately to the
+  unchanged built-in routes.
+- The new examples are explicit optimization hypotheses only. They pin no
+  model and have no provider usage, price, quality, token, or billing evidence.
+  Built-ins, posture vocabulary, schemas, and default routing are unchanged.
+- CLI integration coverage loads every example through the real schema-1
+  parser and route path, verifies source-vendor containment and exact commands,
+  preserves stdin delivery for Codex, preserves argv delivery for `agy`/Grok,
+  and proves task text does not enter route output.
+- Release candidate validation now requires every example policy to be
+  available from clean installed wheels on Python 3.10 and 3.14, and exercises
+  a cost-focused Codex route directly from the installed CLI without a policy
+  file.
+
 ## Key Files & State
 
 - `src/weightclass/cli.py`: V2 route/run ordering and pre-spawn identity check.
@@ -227,6 +260,9 @@ _Last updated: 2026-08-13 KST by Codex_
   `tests/test_eval_cost_policy.py`: exact evaluated Claude commands, public
   low-route cost opt-in, unchanged non-low routes, stdin delivery, and
   fingerprint binding.
+- `src/weightclass/examples/{codex,agy,grok}_cost_focused_policy.json`:
+  unevaluated vendor-specific lower-effort opt-in policies; do not describe
+  them as measured savings.
 - `README.md`: documents the task-in-argv residual for `agy` and `grok`.
 - `packaging/homebrew/weightclass.rb`: source of truth copied to
   `ictechgy/homebrew-tap` after a successful PyPI publish.
@@ -262,6 +298,25 @@ _Last updated: 2026-08-13 KST by Codex_
   is required.
 
 ## Verification
+
+- Fresh current-worktree verification on 2026-08-13:
+  - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
+    `ResourceWarning` as an error: 777 tests passed on each interpreter.
+  - The affected router/release-workflow suite passed 103 tests on
+    both interpreters. Ruff 0.16.2 check/format and strict mypy passed for the
+    changed Python files.
+  - An offline sdist/wheel build succeeded with setuptools 80.9.0 and build
+    1.5.0. Both artifacts contained exactly all four cost-focused example
+    resources; a clean wheel install emitted and routed every policy using the
+    matching source vendor.
+  - A second clean wheel install generated the Codex example with
+    `--model release-smoke-model`, proved the label was present only in low and
+    standard commands, routed standard through the generated command, and
+    emitted a bound SHA-256 route fingerprint.
+  - A fresh clean-wheel installation selected all four packaged policies
+    directly with `route --cost-focused`, including the Codex model override.
+    Automatic `run` without a fingerprint returned exact exit 6 and
+    `route_fingerprint_mismatch` before reading a task.
 
 - Fresh `0.10.0` verification on 2026-08-13:
   - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
@@ -348,6 +403,9 @@ _Last updated: 2026-08-13 KST by Codex_
   add an `efficient` posture or change built-in/schema-2 effort behavior based
   on the exploratory pilot. A fresh, blind, fingerprint-bound evidence set
   must pass the offline token gate first.
+- Codex, `agy`, and Grok cost-focused examples are unqualified experiments.
+  Do not promote them, infer provider pricing, or claim savings until each
+  vendor independently passes the applicable aggregate gates.
 - Real installed-Claude compatibility under the Darwin sandbox was not tested
   because that would invoke an external runtime/network boundary.
 - Optional future work: collect real-user routing feedback; qualify a concrete
@@ -365,9 +423,11 @@ _Last updated: 2026-08-13 KST by Codex_
 3. Any future token-efficiency candidate still needs fresh task-free paired
    evidence and must pass the separate raw-token gate; the cost `go` does not
    satisfy it.
-4. Re-enable Linux Claude semantic triage only after reviewing a concrete
+4. Evaluate the Codex, `agy`, and Grok cost-focused examples independently
+   before any promotion; do not combine vendor results or infer pricing.
+5. Re-enable Linux Claude semantic triage only after reviewing a concrete
    filesystem-containment command and its process-tree boundary.
-5. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
+6. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
    no-retention, and the single-reviewed-child boundary.
 
 ## Resume Prompt
@@ -375,5 +435,7 @@ _Last updated: 2026-08-13 KST by Codex_
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`
 and `AGENTS.md`, then continue from: `weightclass 0.10.0 is published to PyPI,
 has a GitHub Release, and is deployed through the verified Homebrew tap. Its
-cost-focused Claude low route remains explicit opt-in; the measured cost gate
-passed while raw tokens increased, so token/default promotion remains no-go.`
+cost-focused Claude low route remains the only measured cost opt-in. The
+unreleased worktree adds unqualified lower-effort examples for Codex, agy, and
+Grok; built-ins remain unchanged and each vendor still needs independent
+evaluation before promotion.`

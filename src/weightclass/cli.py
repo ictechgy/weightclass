@@ -105,10 +105,105 @@ from .v2_validation import V2ValidationError
 EXECUTOR_FAILED_EXIT_CODE: Final = 7
 MAX_NATIVE_POLICY_BYTES: Final = 262_144
 MAX_NATIVE_DESCRIPTOR_BYTES: Final = 262_144
+MAX_EXAMPLE_MODEL_LABEL_BYTES: Final = 240
+EXAMPLE_POLICY_RESOURCES: Final = {
+    "agy-cost-focused": "agy_cost_focused_policy.json",
+    "claude-cost-focused": "claude_cost_focused_policy.json",
+    "codex-cost-focused": "codex_cost_focused_policy.json",
+    "grok-cost-focused": "grok_cost_focused_policy.json",
+}
 
 
 class InvalidInputError(ValueError):
     """Raised for invalid policy or descriptor data without exposing it."""
+
+
+def _validate_example_model_label(value: object) -> str:
+    """Accept one opaque, reviewable argv token without interpreting the model."""
+    if not isinstance(value, str):
+        raise InvalidInputError()
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise InvalidInputError() from error
+    if (
+        not 1 <= len(encoded) <= MAX_EXAMPLE_MODEL_LABEL_BYTES
+        or value.startswith("-")
+        or any(character.isspace() or not character.isprintable() for character in value)
+    ):
+        raise InvalidInputError()
+    return value
+
+
+def _render_example_policy(name: str, model: str | None) -> str:
+    try:
+        policy_text = (
+            files("weightclass")
+            .joinpath("examples", EXAMPLE_POLICY_RESOURCES[name])
+            .read_text(encoding="utf-8")
+        )
+    except (KeyError, OSError, UnicodeError) as error:
+        raise InvalidInputError() from error
+    if model is None:
+        return policy_text
+    if name != "codex-cost-focused":
+        raise InvalidInputError()
+
+    reviewed_model = _validate_example_model_label(model)
+    try:
+        policy = json.loads(policy_text)
+    except (json.JSONDecodeError, UnicodeError) as error:
+        raise InvalidInputError() from error
+    if not isinstance(policy, dict) or not isinstance(policy.get("routes"), list):
+        raise InvalidInputError()
+    changed_tiers: set[str] = set()
+    for route in policy["routes"]:
+        if not isinstance(route, dict):
+            raise InvalidInputError()
+        tier = route.get("tier")
+        if tier not in {"low", "standard"}:
+            continue
+        command = route.get("command")
+        if not isinstance(command, list) or "-c" not in command or "--model" in command:
+            raise InvalidInputError()
+        config_index = command.index("-c")
+        command[config_index:config_index] = ["--model", reviewed_model]
+        changed_tiers.add(tier)
+    if changed_tiers != {"low", "standard"}:
+        raise InvalidInputError()
+    return json.dumps(policy, ensure_ascii=False, indent=2) + "\n"
+
+
+def _automatic_cost_policy(
+    enabled: bool,
+    policy_path: Path | None,
+    source_vendor: str | None,
+    source_profile: str | None,
+    model: str | None,
+) -> RoutingPolicy | None:
+    """Resolve one packaged opt-in without writing router state or policy files."""
+    if not enabled:
+        if model is not None:
+            raise InvalidInputError()
+        return None
+    if policy_path is not None or source_vendor is None or source_profile is not None:
+        raise InvalidInputError()
+    try:
+        raw_policy = json.loads(_render_example_policy(f"{source_vendor}-cost-focused", model))
+    except (InvalidInputError, json.JSONDecodeError, UnicodeError) as error:
+        raise InvalidInputError() from error
+    if not isinstance(raw_policy, dict):
+        raise InvalidInputError()
+    try:
+        version, dispatched = dispatch_native_policy_schema(raw_policy)
+    except V2ValidationError as error:
+        raise InvalidInputError() from error
+    if version != 1 or not isinstance(dispatched, dict):
+        raise InvalidInputError()
+    policy = _parse_routing_policy(dispatched)
+    if policy.allow_mixed_vendors or any(route.vendor != source_vendor for route in policy.routes):
+        raise InvalidInputError()
+    return policy
 
 
 def _report_executor_result(completed_process: subprocess.CompletedProcess[bytes]) -> int:
@@ -366,7 +461,8 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
         description="Print an installable reviewed policy example.",
     )
-    example_policy.add_argument("name", choices=("claude-cost-focused",))
+    example_policy.add_argument("name", choices=tuple(EXAMPLE_POLICY_RESOURCES))
+    example_policy.add_argument("--model")
     for name, description in (
         ("route", "Select and print a command for a task read from standard input."),
         ("run", "Select and start a command for a task read from standard input."),
@@ -375,6 +471,15 @@ def build_parser() -> argparse.ArgumentParser:
         native.add_argument("--policy", type=Path)
         native.add_argument("--source-vendor")
         native.add_argument("--source-profile")
+        native.add_argument(
+            "--cost-focused",
+            action="store_true",
+            help="Select the packaged opt-in policy for --source-vendor.",
+        )
+        native.add_argument(
+            "--model",
+            help="Bind an opaque model label to cost-focused Codex low/standard routes.",
+        )
         # wclass classify 가 낸 티어를 그대로 받는다. route 와 run 은 이 경로에서도
         # 네트워크를 쓰지 않는다. 판정은 별도 명령에서 이미 끝났다.
         native.add_argument("--tier", choices=("low", "standard", "high"))
@@ -961,9 +1066,18 @@ def route_from_standard_input(
     source_vendor: str | None,
     explicit_tier: Tier | None = None,
     source_profile: str | None = None,
+    cost_focused: bool = False,
+    model: str | None = None,
 ) -> int:
     """Select and render a command without echoing or persisting the task."""
-    if policy_path is not None:
+    try:
+        automatic_policy = _automatic_cost_policy(
+            cost_focused, policy_path, source_vendor, source_profile, model
+        )
+    except InvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    if policy_path is not None and automatic_policy is None:
         try:
             raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
             version, dispatched = dispatch_native_policy_schema(raw_policy)
@@ -979,9 +1093,13 @@ def route_from_standard_input(
         return 2
     try:
         policy = (
-            _parse_routing_policy(cast(dict[str, Any], dispatched))
-            if policy_path is not None
-            else RoutingPolicy(DEFAULT_ROUTES)
+            automatic_policy
+            if automatic_policy is not None
+            else (
+                _parse_routing_policy(cast(dict[str, Any], dispatched))
+                if policy_path is not None
+                else RoutingPolicy(DEFAULT_ROUTES)
+            )
         )
         tier, reason_code, route, policy = select_task_route(
             read_task_from_standard_input(), policy, source_vendor, explicit_tier
@@ -1025,9 +1143,18 @@ def run_from_standard_input(
     acknowledged_fingerprint: str | None = None,
     explicit_tier: Tier | None = None,
     source_profile: str | None = None,
+    cost_focused: bool = False,
+    model: str | None = None,
 ) -> int:
     """Run a selected native command without a shell or output capture."""
-    if policy_path is not None:
+    try:
+        automatic_policy = _automatic_cost_policy(
+            cost_focused, policy_path, source_vendor, source_profile, model
+        )
+    except InvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    if policy_path is not None and automatic_policy is None:
         try:
             raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
             version, dispatched = dispatch_native_policy_schema(raw_policy)
@@ -1056,7 +1183,9 @@ def run_from_standard_input(
     #
     # 코드에 고정되어 교체할 수 없는 기본 라우트에는 이 요구가 없다. 검토 대상이
     # 되는 사용자 소유 파일이 관여할 때만 적용한다.
-    if policy_path is not None and acknowledged_fingerprint is None:
+    if (policy_path is not None or automatic_policy is not None) and (
+        acknowledged_fingerprint is None
+    ):
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
     try:
@@ -1066,9 +1195,13 @@ def run_from_standard_input(
         return 4
     try:
         policy = (
-            _parse_routing_policy(cast(dict[str, Any], dispatched))
-            if policy_path is not None
-            else RoutingPolicy(DEFAULT_ROUTES)
+            automatic_policy
+            if automatic_policy is not None
+            else (
+                _parse_routing_policy(cast(dict[str, Any], dispatched))
+                if policy_path is not None
+                else RoutingPolicy(DEFAULT_ROUTES)
+            )
         )
         task = read_task_from_standard_input()
         _, _, route, policy = select_task_route(task, policy, source_vendor, explicit_tier)
@@ -1267,19 +1400,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if arguments.command == "example-policy":
         try:
-            policy_text = (
-                files("weightclass")
-                .joinpath("examples", "claude_cost_focused_policy.json")
-                .read_text(encoding="utf-8")
-            )
-        except (OSError, UnicodeError):
+            policy_text = _render_example_policy(arguments.name, arguments.model)
+        except InvalidInputError:
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
         print(policy_text, end="" if policy_text.endswith("\n") else "\n")
         return 0
     if arguments.command == "route":
         return route_from_standard_input(
-            arguments.policy, arguments.source_vendor, arguments.tier, arguments.source_profile
+            arguments.policy,
+            arguments.source_vendor,
+            arguments.tier,
+            arguments.source_profile,
+            arguments.cost_focused,
+            arguments.model,
         )
     if arguments.command == "run":
         return run_from_standard_input(
@@ -1288,6 +1422,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.ack_route_fingerprint,
             arguments.tier,
             arguments.source_profile,
+            arguments.cost_focused,
+            arguments.model,
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)

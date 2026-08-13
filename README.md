@@ -440,6 +440,73 @@ token and estimated-cost gates in
 [`tests/eval/README.md`](tests/eval/README.md); the result authorizes only this
 cost-focused low-route opt-in and does not change any built-in.
 
+The same installable command surface also exposes explicit cost experiments
+for every other built-in vendor:
+
+```sh
+wclass example-policy codex-cost-focused > codex-policy.json
+wclass example-policy agy-cost-focused > agy-policy.json
+wclass example-policy grok-cost-focused > grok-policy.json
+```
+
+Codex additionally accepts an opaque model label for its low and standard
+routes, without weightclass trying to validate availability or price:
+
+```sh
+wclass example-policy codex-cost-focused \
+  --model your-reviewed-codex-model > codex-policy.json
+```
+
+The generated command carries `--model your-reviewed-codex-model` only on the
+low and standard routes. High remains on the installed Codex default model.
+The label must be one printable non-whitespace argv token of at most 240 UTF-8
+bytes and must not begin with `-`. Review the generated route fingerprint
+before execution; changing the model changes that fingerprint.
+
+These three policies are intentionally narrower claims than the evaluated
+Claude policy. Their static forms pin no model and make one change from the
+corresponding built-in routes: a `standard` task uses that vendor's already
+reviewed `low` effort command. The optional Codex model override also changes
+its low route and therefore requires separate evidence. No provider usage,
+pricing, or quality evidence has qualified these experiments, so their names
+describe an optimization hypothesis—not measured token or billing savings.
+Keep them opt-in, review the exact route and fingerprint, and evaluate each
+vendor independently before broader use.
+
+All four examples keep `allow_mixed_vendors` false. Supply the matching
+`--source-vendor` when routing or running them. Codex and Claude receive the
+task through stdin; `agy` and Grok retain their documented `{{task}}` argv
+delivery and local process-inspection exposure.
+
+You do not have to materialize those JSON files. Native schema-1 `route` and
+`run` can select the matching packaged policy in memory with
+`--cost-focused`:
+
+```sh
+printf '%s' 'Add a focused unit test.' |
+  wclass route --cost-focused --source-vendor codex \
+    --model your-reviewed-codex-model
+```
+
+Claude, `agy`, and Grok use the same option without `--model`. The existing
+`--source-vendor` remains mandatory because weightclass never guesses its
+parent agent. `--cost-focused` cannot be combined with `--policy` or
+`--source-profile`, and `--model` is accepted only for the cost-focused Codex
+policy. Invalid combinations fail before task input is read.
+
+The option selects a policy; it does not waive review. Copy the exact
+`route_fingerprint` from `route` into the otherwise identical `run` command:
+
+```sh
+printf '%s' 'Add a focused unit test.' |
+  wclass run --cost-focused --source-vendor codex \
+    --model your-reviewed-codex-model \
+    --ack-route-fingerprint 'sha256:REVIEWED_FINGERPRINT'
+```
+
+No preference is persisted and no router configuration file is written.
+Removing `--cost-focused` immediately restores the built-in route selection.
+
 A route's `vendor` is a containment label you choose, not a list of tools
 weightclass knows. Any printable identifier without whitespace, up to 64 bytes,
 is valid. Routing compares it as a string and the fingerprint hashes it as a

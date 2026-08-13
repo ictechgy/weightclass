@@ -29,8 +29,24 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
                 self.assertIn('python -m venv "$installed_venv"', block)
                 self.assertIn('"$installed_venv/bin/wclass" --version', block)
                 self.assertIn('"$installed_venv/bin/wclass" classify', block)
+                for policy_name in (
+                    "agy-cost-focused",
+                    "claude-cost-focused",
+                    "codex-cost-focused",
+                    "grok-cost-focused",
+                ):
+                    self.assertIn(
+                        f'"$installed_venv/bin/wclass" example-policy {policy_name}',
+                        block,
+                    )
                 self.assertIn(
-                    '"$installed_venv/bin/wclass" example-policy claude-cost-focused',
+                    '"$installed_venv/bin/wclass" example-policy codex-cost-focused '
+                    "--model release-smoke-model",
+                    block,
+                )
+                self.assertIn(
+                    '"$installed_venv/bin/wclass" route --cost-focused '
+                    "--source-vendor codex --model release-smoke-model --tier standard",
                     block,
                 )
                 installed_wheel_checks = block.split('installed_wheel="$RUNNER_TEMP', 1)[1]
