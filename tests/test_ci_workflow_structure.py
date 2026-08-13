@@ -71,6 +71,20 @@ class CIWorkflowStructureTests(unittest.TestCase):
         self.assertIn("fetch-depth: 2", quality)
         self.assertIn("git diff --check HEAD^1 HEAD", quality)
 
+    def test_setup_python_actions_use_one_pinned_node24_generation(self) -> None:
+        """Breaks if CI regresses to a Node 20 setup-python action."""
+        release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        matches = re.findall(
+            r"actions/setup-python@(?P<sha>[0-9a-f]{40}) # v(?P<major>[0-9]+)\.[0-9]+\.[0-9]+",
+            self.text + release,
+        )
+
+        self.assertEqual(len(matches), 7)
+        self.assertEqual(
+            set(matches),
+            {("5fda3b95a4ea91299a34e894583c3862153e4b97", "7")},
+        )
+
     def test_macos_boundary_matrix_and_claimed_suites_are_exact(self) -> None:
         block = self.text.split("\n  macos-routing-boundaries:\n", 1)[1]
         self.assertIn('python-version: ["3.10", "3.14"]', block)

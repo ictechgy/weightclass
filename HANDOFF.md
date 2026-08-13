@@ -26,10 +26,11 @@ _Last updated: 2026-08-13 KST by Codex_
   tier-specific opaque model/effort overrides for the packaged Claude and
   Codex policies. Custom selections remain explicitly unqualified; built-in
   routes and provider boundaries are unchanged.
-- An unreleased source increment adds tier-specific opaque Grok model overrides
-  to packaged `review-preset`, `route`, and `run`. It is implemented and
-  verified but not tagged, published, or installed through Homebrew; the
-  installed `0.12.0` does not contain it.
+- An unreleased `0.13.0` source increment adds tier-specific opaque Grok model
+  overrides to packaged `review-preset`, `route`, and `run`, together with the
+  repository security/performance hardening described below. It is implemented
+  and verified but not yet tagged, published, or installed through Homebrew;
+  the installed `0.12.0` does not contain it.
 - The source-of-truth Homebrew formula was updated on `main` by
   `8e90b4e7a8e791d4400d6132719fb6a15f7dc3c1`. The matching tap commit is
   [`8d2b702`](https://github.com/ictechgy/homebrew-tap/commit/8d2b702851a09a770530f45bad101137d3a5a778).
@@ -296,6 +297,9 @@ _Last updated: 2026-08-13 KST by Codex_
 - Local `classify` now enters through a small command-family dispatcher and
   does not import delegation, V2, native runtime, or triage modules. Vendor
   triage remains lazy and explicit; all other commands retain the full parser.
+- CI and release workflows use SHA-pinned `actions/setup-python` v7.0.0. Its
+  reviewed action metadata runs on Node 24, replacing the Node 20-based v5
+  generation that GitHub runners warned about.
 
 ## Key Files & State
 
@@ -371,7 +375,7 @@ _Last updated: 2026-08-13 KST by Codex_
     decoder recursion tracebacks, unmerged Git release commits, eager protocol
     imports on local classification, and an overbroad local exception catch.
   - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
-    `ResourceWarning` as an error: 799 tests passed on each interpreter.
+    `ResourceWarning` as an error: 800 tests passed on each interpreter.
   - Ruff 0.16.2 check/format over 104 files, strict mypy over 103 source files,
     compileall, and `git diff --check` passed.
   - An offline wheel/sdist build with build 1.5.0 and setuptools 84.0.0 plus
@@ -382,6 +386,17 @@ _Last updated: 2026-08-13 KST by Codex_
   - Twenty-process local measurement: classification entrypoint median
     20.20 ms; end-to-end local classify median 34.84 ms, down from the reviewed
     71.57 ms baseline. This is host-local evidence, not a cross-platform SLA.
+  - The Node-runtime follow-up first failed against all seven SHA-pinned
+    setup-python v5.6.0 uses, then passed after moving them together to the
+    verified v7.0.0 commit. The official tag points directly to that commit,
+    its GitHub signature is valid, and its action metadata declares Node 24.
+  - A clean Python 3.13 release-tool installation exposed that the first
+    release lock omitted Twine's transitive runtime dependencies. The lock was
+    regenerated for CPython 3.13 on x86_64 Linux with all 37 exact transitive
+    packages and hashes. A fresh environment then executed Ruff, mypy, build,
+    and Twine; the rebuilt `0.13.0` sdist passed 794 tests with 13 platform
+    skips, and a clean wheel install passed version, classification, and Grok
+    custom-model routing smokes.
 
 - Fresh unreleased Grok model-routing verification on 2026-08-13:
   - RED: the two focused review/run tests both returned `invalid_input` before

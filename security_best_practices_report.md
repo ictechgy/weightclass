@@ -6,13 +6,13 @@ Scope: repository-wide architecture, performance, security, release workflow, an
 
 ## Executive summary
 
-The runtime boundary is generally conservative: task input is bounded, ordinary routing launches one foreground child, subprocesses do not use a shell, API egress requires explicit acknowledgement, runtime dependencies are empty, and GitHub Actions are SHA-pinned. The current 799-test suite and strict static checks are strong regression evidence.
+The runtime boundary is generally conservative: task input is bounded, ordinary routing launches one foreground child, subprocesses do not use a shell, API egress requires explicit acknowledgement, runtime dependencies are empty, and GitHub Actions are SHA-pinned. The current 800-test suite and strict static checks are strong regression evidence.
 
 The baseline review found four actionable items. The current working tree implements repository-side remediations for all four: a hash-pinned release toolchain, centralized recursion redaction, a tag-to-main ancestry gate, and a lightweight classification entrypoint. GitHub now also has an active `v*` tag ruleset that blocks tag updates and deletions without a bypass, plus one required reviewer on the `pypi` environment.
 
 ## Remediation status
 
-- R-01: repository fix implemented. The release uses a reviewed hash allow-list, exact CPython and setuptools versions, `--no-deps`, and `--no-isolation`. The next live Ubuntu release run remains the platform-specific installation proof.
+- R-01: repository fix implemented. The release uses a reviewed full transitive hash allow-list, exact CPython and setuptools versions, `--no-deps`, and `--no-isolation`. A clean Python 3.13 environment executes the entire toolchain; the next live Ubuntu release remains the platform-specific wheel-selection proof.
 - R-02: fixed and covered by native/V2 public-CLI regressions on Python 3.10 and 3.14.
 - R-03: fixed and independently re-read from GitHub. Repository defense in depth is behavior-tested with real temporary Git histories; the active `v*` ruleset blocks updates and deletions, and `pypi` has one required reviewer.
 - R-04: the local `classify` command now bypasses the full CLI module and lazily imports vendor triage only when requested. Its measured cold-start median fell from 71.57 ms to 34.84 ms on the same local host.
