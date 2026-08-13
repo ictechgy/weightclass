@@ -13,24 +13,27 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Current Status
 
-- `weightclass 0.9.0` is merged, tagged, published, and installable.
-  - Release commit and annotated `v0.9.0` tag target:
-    `a61f973d9d32974b7db34a591d08f4cc20921f42`.
-  - GitHub Release: <https://github.com/ictechgy/weightclass/releases/tag/v0.9.0>.
+- `weightclass 0.10.0` is merged, tagged, published, and installable.
+  - Release commit and annotated `v0.10.0` tag target:
+    `09b92c0239aa9650274cf02716723bfb79732b5e`.
+  - GitHub Release: <https://github.com/ictechgy/weightclass/releases/tag/v0.10.0>.
   - Final release-gating CI:
-    [31566006243](https://github.com/ictechgy/weightclass/actions/runs/31566006243), completed successfully.
+    [31660433300](https://github.com/ictechgy/weightclass/actions/runs/31660433300), completed successfully.
   - Immutable Release workflow:
-    [31566160612](https://github.com/ictechgy/weightclass/actions/runs/31566160612), completed successfully.
-  - PyPI: <https://pypi.org/project/weightclass/0.9.0/>.
+    [31660580129](https://github.com/ictechgy/weightclass/actions/runs/31660580129), completed successfully.
+  - PyPI: <https://pypi.org/project/weightclass/0.10.0/>.
 - The source-of-truth Homebrew formula was updated on `main` by
-  `d5d5b75a81de17c226a385b986302f440bb58ac1`. The matching tap commit is
-  [`a462ec4`](https://github.com/ictechgy/homebrew-tap/commit/a462ec47de49cdca8abe1549c4d075dd3e3d391c).
+  `b29950a9349d17532474e7b8d355ee61a1facc77`. The matching tap commit is
+  [`f725982`](https://github.com/ictechgy/homebrew-tap/commit/f725982d1084e81fd2ad2fb2c1c92e98a68c84a3).
 - `v0.8.1` was never published to PyPI: its Release workflow failed only on
   Ruff import ordering. It had no GitHub Release and was deliberately deleted
   from both the local and `origin` tag namespaces. Do not recreate it.
-- `0.8.2` is the previous published release. The `0.9.0` minor bump is
+- `0.8.2` is an earlier published release. The `0.9.0` minor bump was
   intentional because Linux Claude semantic triage now fails closed before
   task egress; ordinary native Claude routing remains unchanged.
+- `0.9.0` is the previous published release. The `0.10.0` minor adds offline
+  evaluation commands and an additive example-policy CLI surface; built-in
+  route behavior and policy schemas remain unchanged.
 
 ## Completed in 0.8.2
 
@@ -68,7 +71,7 @@ _Last updated: 2026-08-13 KST by Codex_
 - macOS CI and release boundary jobs explicitly include the new
   `tests.test_foreground_process` and `tests.test_process_context` suites.
 
-## Current unreleased worktree
+## Completed in 0.10.0
 
 - Added an evaluation-only offline paired token scorer at
   `tests/eval/token_benchmark.py`. It accepts bounded task-free evidence,
@@ -260,7 +263,7 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Verification
 
-- Fresh unreleased-worktree verification on 2026-08-13:
+- Fresh `0.10.0` verification on 2026-08-13:
   - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
     `ResourceWarning` as an error: 769 tests passed on each interpreter.
   - Ruff 0.16.2 check/format over `src` and `tests`, strict mypy over 98 source
@@ -286,6 +289,24 @@ _Last updated: 2026-08-13 KST by Codex_
     delivery, and emitted a 71-character review fingerprint.
   - Approved Claude measurement used the vendor CLI/network. No credential or
     secret-bearing file was read, and no task/response/workspace was retained.
+  - Main CI run `31660433300` passed on release commit `09b92c0`: Python
+    3.10-3.14, macOS 3.10/3.14 boundaries, lint, strict typing, build, strict
+    metadata, and extracted-sdist isolation.
+  - Release workflow `31660580129` passed on annotated tag `v0.10.0` and
+    published the exact immutable candidate. PyPI exposes one wheel and one
+    sdist; independent downloads matched their published SHA-256 values.
+  - PyPI wheel SHA-256:
+    `5fd21911bbe2fe43d1749a27324cc0690b079a98ea3144db6a258d7ddc2cc674`.
+    PyPI sdist SHA-256:
+    `65d19d4b5887913d933dd80d63d9f0789ef00e5375605bc491fe8a03e999603e`.
+  - A clean PyPI install reported `weightclass 0.10.0`, classified the low
+    smoke correctly, and emitted the packaged cost-focused policy.
+  - Formula-scoped `brew style`, strict audit, source reinstall, `brew test`,
+    and direct classification/example-policy smokes passed. The installed
+    `/opt/homebrew/bin/wclass` reports `weightclass 0.10.0`.
+  - Post-release source-formula CI run `31661083029` passed on commit
+    `b29950a`: Python 3.10-3.14, macOS boundaries, lint, strict typing, build,
+    metadata, and extracted-sdist isolation.
 
 - Fresh pre-release verification of `0.9.0` on 2026-08-12:
   - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
@@ -321,8 +342,8 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Blockers & Open Questions
 
-- No known blocker remains from the published 0.9.0 release review.
-- No mandatory release or deployment step remains for `0.9.0`.
+- No known blocker remains from the published `0.10.0` release.
+- No mandatory release or deployment step remains for `0.10.0`.
 - No promotion-grade paired provider token-savings evidence has been collected. Do not
   add an `efficient` posture or change built-in/schema-2 effort behavior based
   on the exploratory pilot. A fresh, blind, fingerprint-bound evidence set
@@ -335,7 +356,7 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Next Steps
 
-1. No mandatory work remains for the `0.9.0` release. Monitor installation and
+1. No mandatory work remains for the `0.10.0` release. Monitor installation and
    routing feedback without inferring provider entitlement or quota.
 2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
    compatibility feedback without task telemetry, provider-price inference, or
@@ -352,8 +373,7 @@ _Last updated: 2026-08-13 KST by Codex_
 ## Resume Prompt
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`
-and `AGENTS.md`, then continue from: `weightclass 0.9.0 is published and
-deployed; the unreleased worktree adds an offline aggregate token-efficiency
-and estimated-cost gates plus an exact cost-focused Claude low-route opt-in.
-The low-target cost gate passed, while raw tokens increased; built-ins remain
-unchanged and token/default promotion is still no-go.`
+and `AGENTS.md`, then continue from: `weightclass 0.10.0 is published to PyPI,
+has a GitHub Release, and is deployed through the verified Homebrew tap. Its
+cost-focused Claude low route remains explicit opt-in; the measured cost gate
+passed while raw tokens increased, so token/default promotion remains no-go.`
