@@ -130,7 +130,7 @@ _Last updated: 2026-08-13 KST by Codex_
 - Added exact schema-1 policies for that cost comparison. The baseline remains
   at `tests/eval/claude_cost_baseline_policy.json`; after qualification, the
   byte-identical candidate moved to
-  `examples/claude_cost_focused_policy.json`. Only the low route differs;
+  `src/weightclass/examples/claude_cost_focused_policy.json`. Only the low route differs;
   standard/high routes and fingerprints are identical, both low routes deliver
   the task on stdin, and their reviewed low fingerprints differ. A real
   `wclass route` acknowledgement followed by `wclass run` succeeded for both
@@ -189,10 +189,14 @@ _Last updated: 2026-08-13 KST by Codex_
   -4.02% to +4.02%, and every machine gate passed. All task artifacts and the
   task-free checkpoint were deleted.
 - Moved the byte-identical evaluated candidate to
-  `examples/claude_cost_focused_policy.json` as a public explicit opt-in. Its
+  `src/weightclass/examples/claude_cost_focused_policy.json` as a public explicit opt-in. Its
   route IDs remain unchanged to preserve the evaluated configuration binding.
   This is a cost-focused low-route `go`, not token savings or permission to
   change built-ins, standard/high, schema 2, or the posture vocabulary.
+- Added `wclass example-policy claude-cost-focused` so wheel installs can emit
+  that exact reviewed JSON without invoking a vendor or reading a task. The
+  package-data and release-candidate gates now require the resource in the
+  installed wheel.
 - No independent promotion-grade provider token-savings evidence exists, so
   token/default promotion remains `no-go`.
 
@@ -216,7 +220,7 @@ _Last updated: 2026-08-13 KST by Codex_
   externally normalized estimated-cost evidence without internal pricing or
   billing claims.
 - `tests/eval/claude_cost_baseline_policy.json`,
-  `examples/claude_cost_focused_policy.json`, and
+  `src/weightclass/examples/claude_cost_focused_policy.json`, and
   `tests/test_eval_cost_policy.py`: exact evaluated Claude commands, public
   low-route cost opt-in, unchanged non-low routes, stdin delivery, and
   fingerprint binding.
@@ -258,7 +262,7 @@ _Last updated: 2026-08-13 KST by Codex_
 
 - Fresh unreleased-worktree verification on 2026-08-13:
   - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
-    `ResourceWarning` as an error: 768 tests passed on each interpreter.
+    `ResourceWarning` as an error: 769 tests passed on each interpreter.
   - Ruff 0.16.2 check/format over `src` and `tests`, strict mypy over 98 source
     files, compileall, and `git diff --check`: clean.
   - The README experimental policy parsed through the real schema-1 parser;
@@ -275,10 +279,11 @@ _Last updated: 2026-08-13 KST by Codex_
     predeclared 90-pair low-target qualification then passed every machine gate
     with a 46.28% to 64.00% cost-savings interval and -4.02% to +4.02% quality
     interval. Scope remains explicit low-route opt-in only.
-  - Offline sdist/wheel build succeeded; the source distribution includes
-    `examples/claude_cost_focused_policy.json`. The real schema-1 route command
-    selected its low Claude route, used stdin delivery, and emitted a
-    71-character review fingerprint.
+  - Offline sdist/wheel build succeeded; both distributions include
+    `src/weightclass/examples/claude_cost_focused_policy.json`. A clean local
+    wheel install emitted the same policy through `wclass example-policy`, and
+    the real schema-1 route command selected its low Claude route, used stdin
+    delivery, and emitted a 71-character review fingerprint.
   - Approved Claude measurement used the vendor CLI/network. No credential or
     secret-bearing file was read, and no task/response/workspace was retained.
 

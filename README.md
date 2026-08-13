@@ -428,12 +428,14 @@ low-risk task across disposable layouts and used JSON output for usage
 collection. The exact evaluation baseline remains in
 [`tests/eval/claude_cost_baseline_policy.json`](tests/eval/claude_cost_baseline_policy.json)
 and the exactly evaluated candidate is available as the explicit opt-in
-[`examples/claude_cost_focused_policy.json`](examples/claude_cost_focused_policy.json).
+[`src/weightclass/examples/claude_cost_focused_policy.json`](src/weightclass/examples/claude_cost_focused_policy.json).
 Only its low route changes model/effort; standard and high remain identical to
 the baseline. The candidate passed the predeclared low-target estimated-cost
 gate, but used more raw tokens. It deliberately exposes JSON as user output for
 measurement and is neither a built-in nor a general-use default. Review its
-exact `wclass route` command and fingerprint before `run`. See the separate
+exact `wclass route` command and fingerprint before `run`. Wheel installs can
+materialize the same reviewed policy with
+`wclass example-policy claude-cost-focused > policy.json`. See the separate
 token and estimated-cost gates in
 [`tests/eval/README.md`](tests/eval/README.md); the result authorizes only this
 cost-focused low-route opt-in and does not change any built-in.

@@ -5,7 +5,7 @@ from weightclass import cli
 from weightclass.router import native_route_fingerprint, uses_argv_task_delivery
 
 EVAL_DIRECTORY = Path(__file__).parent / "eval"
-EXAMPLES_DIRECTORY = Path(__file__).parent.parent / "examples"
+EXAMPLES_DIRECTORY = Path(__file__).parent.parent / "src" / "weightclass" / "examples"
 BASELINE_POLICY = EVAL_DIRECTORY / "claude_cost_baseline_policy.json"
 CANDIDATE_POLICY = EXAMPLES_DIRECTORY / "claude_cost_focused_policy.json"
 

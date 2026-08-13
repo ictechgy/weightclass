@@ -29,6 +29,10 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
                 self.assertIn('python -m venv "$installed_venv"', block)
                 self.assertIn('"$installed_venv/bin/wclass" --version', block)
                 self.assertIn('"$installed_venv/bin/wclass" classify', block)
+                self.assertIn(
+                    '"$installed_venv/bin/wclass" example-policy claude-cost-focused',
+                    block,
+                )
                 installed_wheel_checks = block.split('installed_wheel="$RUNNER_TEMP', 1)[1]
                 self.assertNotIn("PYTHONPATH=src python", installed_wheel_checks)
 

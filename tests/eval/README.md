@@ -220,7 +220,7 @@ change a built-in or publish an opt-in route.
 
 The follow-up router canary freezes those two exact low-tier commands in
 `claude_cost_baseline_policy.json` and
-`../../examples/claude_cost_focused_policy.json`. They are schema-1,
+`../../src/weightclass/examples/claude_cost_focused_policy.json`. They are schema-1,
 same-vendor, stdin-delivery policies. Only the low route differs: the baseline
 requests medium effort with the default model, while the candidate requests
 Haiku with low effort. Their standard and high routes are identical. Both low

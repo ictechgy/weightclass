@@ -730,6 +730,22 @@ class OpenVendorLabelTests(unittest.TestCase):
 
 
 class CommandSurfaceTests(unittest.TestCase):
+    def test_prints_the_installable_cost_focused_policy_example(self) -> None:
+        """Breaks if wheel users can no longer retrieve the reviewed opt-in policy."""
+        result = _weightclass("example-policy", "claude-cost-focused", task="")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        policy = json.loads(result.stdout)
+        routes = {route["tier"]: route for route in policy["routes"]}
+        self.assertEqual(policy["schema_version"], 1)
+        self.assertEqual(
+            routes["low"]["command"][-4:],
+            ["--model", "haiku", "--effort", "low"],
+        )
+        self.assertNotIn("--model", routes["standard"]["command"])
+        self.assertNotIn("--model", routes["high"]["command"])
+
     def test_help_lists_every_reachable_subcommand(self) -> None:
         """Breaks if a mode becomes undiscoverable from the command line."""
         result = subprocess.run(

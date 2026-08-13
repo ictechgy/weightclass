@@ -6,6 +6,7 @@ import subprocess
 import sys
 import unicodedata
 from collections.abc import Sequence
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Final, NoReturn, cast
 
@@ -360,6 +361,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include static reason-code and local policy metadata.",
     )
+    example_policy = subcommands.add_parser(
+        "example-policy",
+        allow_abbrev=False,
+        description="Print an installable reviewed policy example.",
+    )
+    example_policy.add_argument("name", choices=("claude-cost-focused",))
     for name, description in (
         ("route", "Select and print a command for a task read from standard input."),
         ("run", "Select and start a command for a task read from standard input."),
@@ -1258,6 +1265,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.show_triage_command,
             arguments.explain,
         )
+    if arguments.command == "example-policy":
+        try:
+            policy_text = (
+                files("weightclass")
+                .joinpath("examples", "claude_cost_focused_policy.json")
+                .read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError):
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        print(policy_text, end="" if policy_text.endswith("\n") else "\n")
+        return 0
     if arguments.command == "route":
         return route_from_standard_input(
             arguments.policy, arguments.source_vendor, arguments.tier, arguments.source_profile
