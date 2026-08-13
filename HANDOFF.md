@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-14 02:06 KST by Codex_
+_Last updated: 2026-08-14 02:34 KST by Codex_
 
 ## Goal
 
@@ -13,25 +13,24 @@ _Last updated: 2026-08-14 02:06 KST by Codex_
 
 ## Current Status
 
-- `weightclass 0.13.0` is merged, tagged, published, and installable.
-  - Release commit and annotated `v0.13.0` tag target:
-    `155f7446b295f3d226c0a392c3b52d93a4b5644f`.
-  - GitHub Release: <https://github.com/ictechgy/weightclass/releases/tag/v0.13.0>.
-  - Final release-gating CI:
-    [31686174951](https://github.com/ictechgy/weightclass/actions/runs/31686174951), completed successfully.
+- `weightclass 0.14.0` is merged, tagged, published, and installable.
+  - Release commit and annotated `v0.14.0` tag target:
+    `7860d0ba3aed3f43f4de3401fb137e0114a5cfcf`.
+  - GitHub Release: <https://github.com/ictechgy/weightclass/releases/tag/v0.14.0>.
+  - Release-candidate PR CI runs
+    [31724967486](https://github.com/ictechgy/weightclass/actions/runs/31724967486)
+    and [31724971200](https://github.com/ictechgy/weightclass/actions/runs/31724971200)
+    completed successfully.
   - Immutable Release workflow:
-    [31686408438](https://github.com/ictechgy/weightclass/actions/runs/31686408438), completed successfully.
-  - PyPI: <https://pypi.org/project/weightclass/0.13.0/>.
-- `0.13.0` adds tier-specific opaque Grok model overrides to packaged
-  `review-preset`, `route`, and `run`, together with the repository
-  security/performance and release hardening described below. Custom selections
-  remain explicitly unqualified; built-in routes and provider boundaries are
-  unchanged.
-- The merged `0.14.0` release candidate adds the cost-recommendation feature:
+    [31725291232](https://github.com/ictechgy/weightclass/actions/runs/31725291232), completed successfully.
+  - PyPI: <https://pypi.org/project/weightclass/0.14.0/>.
+- `0.14.0` adds the cost-recommendation feature:
   task-free `review-cost-profile` plus non-executing `recommend`, together with
-  aggregate-only sanitized provider-usage evaluation. It is not tagged,
-  published, or installed through Homebrew yet. Built-in routes and every
+  aggregate-only sanitized provider-usage evaluation. Built-in routes and every
   execution path remain unchanged.
+- `0.13.0` is an earlier published release. It added tier-specific opaque Grok
+  model overrides to packaged `review-preset`, `route`, and `run`; custom
+  selections remain explicitly unqualified.
 - An approved exact-command measurement probe used one already-public standard
   fixture and exactly six vendor calls: built-in standard/medium versus the
   packaged standard/low candidate for Codex, `agy`, and Grok. All six commands
@@ -103,9 +102,9 @@ _Last updated: 2026-08-14 02:06 KST by Codex_
   output. A passing fixed-subscription quota result is `capacity_only`, never a
   monthly-bill claim or cost-recommendation input. A nine-pair canary remains a
   scored `no-go`; the fixed 30-pair and slice/quality gates are unchanged.
-- The source-of-truth Homebrew formula was updated on `main` by
-  `e18fd3988a6fa6ad642f44a084b436c6507a2f6b`. The matching tap commit is
-  [`1244ed6`](https://github.com/ictechgy/homebrew-tap/commit/1244ed6f0baf6cf2c557bec356230e3ea199961d).
+- The source-of-truth Homebrew formula and public tap install the canonical
+  PyPI 0.14.0 sdist. The matching tap commit is
+  [`7d393d0`](https://github.com/ictechgy/homebrew-tap/commit/7d393d0a3d41405c883e48a6bb53197473c6c600).
 - `v0.8.1` was never published to PyPI: its Release workflow failed only on
   Ruff import ordering. It had no GitHub Release and was deliberately deleted
   from both the local and `origin` tag namespaces. Do not recreate it.
@@ -373,7 +372,7 @@ _Last updated: 2026-08-14 02:06 KST by Codex_
   reviewed action metadata runs on Node 24, replacing the Node 20-based v5
   generation that GitHub runners warned about.
 
-## Current Unreleased Cost Recommendation
+## Completed in 0.14.0
 
 - Added `src/weightclass/cost_recommendation.py` with strict version-1 cost
   profile and qualification-card schemas. Inputs are bounded regular JSON,
@@ -486,6 +485,30 @@ _Last updated: 2026-08-14 02:06 KST by Codex_
   is required.
 
 ## Verification
+
+- Fresh `0.14.0` release verification on 2026-08-14:
+  - PR #35 merged the provider-usage gate and rejected-candidate safeguards;
+    PR #36 merged the single version bump. Both PR push/merge CI runs passed
+    Python 3.10-3.14, macOS 3.10/3.14 boundaries, lint, strict typing, build,
+    metadata, and extracted-sdist isolation.
+  - Local Python 3.10.20 and Python 3.14.6 full suites passed 816 tests each
+    with `ResourceWarning` as an error. Ruff 0.16.2, strict mypy over 107 source
+    files, compileall, strict Twine metadata, and `git diff --check` passed.
+  - The Python 3.13 build produced exactly the 0.14.0 wheel and sdist. Extracted
+    sdist isolation passed 810 tests with 13 platform skips, and a clean wheel
+    install passed version, classification, and recommendation parser smokes.
+  - Release workflow `31725291232` built one immutable candidate, revalidated
+    it on Python 3.10/3.14 and macOS 3.10/3.14, and published it through PyPI
+    Trusted Publishing after the required environment review.
+  - PyPI exposes exactly one wheel and one sdist, neither yanked. Independent
+    downloads matched SHA-256: wheel
+    `68262b12b7007a580201e0e37e2fd3edb0e2555f077b096519bf1deff8180cbc`;
+    sdist `051345050e467455d8c2eedf963b690a4e49dfe1c1219ea6541e2f8be3b68d97`.
+    The downloaded wheel reported `weightclass 0.14.0` and passed the local
+    low-tier and `recommend` smokes.
+  - Formula-scoped style and strict audit, source reinstall, `brew test`, and
+    direct low/high classification plus recommendation parser smokes passed.
+    `/opt/homebrew/bin/wclass --version` reports `weightclass 0.14.0`.
 
 - Fresh unreleased cost-recommendation verification on 2026-08-13:
   - Behavior-first RED→GREEN covered missing `recommend`, flat-cost
@@ -747,11 +770,8 @@ _Last updated: 2026-08-14 02:06 KST by Codex_
 
 ## Blockers & Open Questions
 
-- No known blocker or mandatory release/deployment step remains for `0.13.0`.
-- The cost-recommendation and provider-usage work is merged to `main` by PRs
-  #34 and #35. The `0.14.0` release candidate still needs its immutable tag,
-  Release workflow, PyPI verification, and Homebrew formula update. Do not
-  republish immutable `0.13.0`.
+- No known blocker or mandatory release/deployment step remains for `0.14.0`.
+  Do not republish or move its immutable version tag.
 - GitHub repository settings were updated and re-read through the API on
   2026-08-13. The active `Protect version tags` ruleset targets `refs/tags/v*`,
   has no bypass actor, and blocks updates and deletions. The `pypi` environment
@@ -782,42 +802,39 @@ _Last updated: 2026-08-14 02:06 KST by Codex_
 
 ## Next Steps
 
-1. Merge the `0.14.0` release-version change, run the full immutable release
-   gates, create the protected annotated `v0.14.0` tag, approve and verify the
-   PyPI publication, then update and test the Homebrew formula.
-2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
+1. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
    compatibility feedback without task telemetry, provider-price inference, or
    a claim about actual bills. Do not change built-ins, standard/high routes,
    schema 2, or posture vocabulary from the low-target result.
-3. Keep the rejected Codex Terra-to-Luna low-model candidate out of automatic
+2. Keep the rejected Codex Terra-to-Luna low-model candidate out of automatic
    routing and cost recommendations. If testing a materially different future
    candidate, bind only `--low-model` plus reviewed low effort, keep standard
    and high unchanged, and require a fresh canary plus an exact packaged-route
    qualification. Stop on any new critical failure; do not reuse the Luna
    aggregate as evidence for another model or for subscription quota savings.
-4. Treat a passing quota result as capacity evidence only. Only passing
+3. Treat a passing quota result as capacity evidence only. Only passing
    metered-cost evidence may feed a cost profile/qualification card, and even
    then keep the exact qualified tier explicit opt-in. Evaluate Codex, `agy`,
    and Grok independently; do not combine results or infer pricing.
-5. Re-enable Linux Claude semantic triage only after reviewing a concrete
+4. Re-enable Linux Claude semantic triage only after reviewing a concrete
    filesystem-containment command and its process-tree boundary.
-6. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
+5. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
    no-retention, and the single-reviewed-child boundary.
 
 ## Resume Prompt
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`
-and `AGENTS.md`, then continue from: `weightclass 0.13.0 remains the immutable
-published release. The 0.14.0 release candidate contains the merged same-vendor
-advisory cost router: review-cost-profile plus recommend, strict cost/qualification
+and `AGENTS.md`, then continue from: `weightclass 0.14.0 is the immutable
+published and Homebrew-installed release. It contains the same-vendor advisory
+cost router: review-cost-profile plus recommend, strict cost/qualification
 schemas, full evidence fingerprints, fixed conservative gates, explicit
 abstention, provider capability/task-delivery receipts, docs, and ten focused
 tests. Built-ins and execution paths are unchanged. Python 3.10/3.14 each
 passed 810 tests; Ruff, strict mypy, compileall, build, strict
 Twine, extracted-sdist isolation, and a clean-wheel recommendation smoke are
-green. Run the immutable 0.14.0 release process before publishing; do not
-republish 0.13.0. The merged provider-cost follow-up keeps unqualified standard
-routes at medium, rejects no-op cost candidates, and adds sanitized provider-export
+green. Do not republish or move v0.14.0. The merged provider-cost follow-up keeps
+unqualified standard routes at medium, rejects no-op cost candidates, and adds
+sanitized provider-export
 metered-cost/quota scoring. Its local full suites currently pass 816 tests on
 Python 3.10 and 3.14. Do not start another provider run until the user supplies
 the exact low-tier model label and approves a bounded external measurement
