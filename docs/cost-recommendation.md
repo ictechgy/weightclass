@@ -12,6 +12,17 @@ Those units should include every authorized attempt and rework needed to reach
 the frozen completion rule. weightclass validates and binds the documents, but
 does not verify their measurements or infer provider pricing.
 
+Fixed-price subscription quota is a different objective. A lower quota draw can
+increase remaining capacity without lowering the monthly bill. Use
+`tests/eval/provider_usage_benchmark.py` for that comparison; its
+`subscription_quota` result is explicitly `capacity_only` and cannot authorize
+this cost recommendation path. The same adapter accepts sanitized
+`metered_cost` units from a provider export, but it does not parse or verify the
+raw export. Raw billing exports may contain account identifiers or other
+sensitive metadata and must stay outside the repository and outside
+weightclass; normalize them externally to bounded integer units after removing
+task data and account identifiers.
+
 ## Workflow
 
 1. Review the built-in baseline and packaged candidate for the same tier:
@@ -152,6 +163,11 @@ A recommendation requires all of these conditions:
 - all attempts included and independent quality review asserted; and
 - exact coverage of both languages, all nine fixed categories, and all three
   tiers.
+
+The candidate command must also differ from the baseline command. A different
+route ID or fingerprint around byte-identical executable arguments is not an
+economic candidate and returns `abstain` with
+`candidate_route_unchanged`.
 
 These are conservative machine floors, not a claim that the evaluator's
 assertions are true. The receipt says `assertions_verified_by_router: false`.

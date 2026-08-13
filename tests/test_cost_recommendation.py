@@ -319,6 +319,21 @@ class CostRecommendationCliTests(unittest.TestCase):
         self.assertEqual(receipt["reason_code"], "no_cost_advantage")
         self.assertEqual(receipt["cost_profile"]["profile_cost_savings_basis_points"], 0)
 
+    def test_abstains_when_candidate_and_baseline_commands_are_identical(self) -> None:
+        """Breaks if a new route ID can make an unchanged command look cost-qualified."""
+        baseline = _route("--source-vendor", "codex")
+        candidate = _route("--preset", "codex-cost-focused")
+        self.assertEqual(baseline["command"], candidate["command"])
+        profile = _cost_profile(baseline, candidate)
+        card = _qualification_card(profile, baseline, candidate)
+
+        completed = _recommend("codex-cost-focused", profile, card)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        receipt = json.loads(completed.stdout)
+        self.assertEqual(receipt["decision"], "abstain")
+        self.assertEqual(receipt["reason_code"], "candidate_route_unchanged")
+
     def test_recommendation_fingerprint_binds_the_entire_qualification_card(self) -> None:
         """Breaks if evidence can drift without invalidating its recommendation."""
         baseline = _route("--source-vendor", "claude")
@@ -364,21 +379,25 @@ class CostRecommendationCliTests(unittest.TestCase):
         """Breaks if provider differences are normalized into unsupported claims."""
         expected = {
             "agy": {
+                "decision": "abstain",
                 "task_delivery": "argv",
                 "tier_effort_override": False,
                 "tier_model_override": False,
             },
             "claude": {
+                "decision": "recommend",
                 "task_delivery": "stdin",
                 "tier_effort_override": True,
                 "tier_model_override": True,
             },
             "codex": {
+                "decision": "abstain",
                 "task_delivery": "stdin",
                 "tier_effort_override": True,
                 "tier_model_override": True,
             },
             "grok": {
+                "decision": "abstain",
                 "task_delivery": "argv",
                 "tier_effort_override": False,
                 "tier_model_override": True,
@@ -397,7 +416,9 @@ class CostRecommendationCliTests(unittest.TestCase):
 
                 self.assertEqual(completed.returncode, 0, completed.stderr)
                 receipt = json.loads(completed.stdout)
-                self.assertEqual(receipt["decision"], "recommend")
+                self.assertEqual(receipt["decision"], expected_fields["decision"])
+                if expected_fields["decision"] == "abstain":
+                    self.assertEqual(receipt["reason_code"], "candidate_route_unchanged")
                 self.assertTrue(receipt["capability"]["reviewed_effort_routing"])
                 self.assertEqual(
                     receipt["capability"]["tier_effort_override"],

@@ -454,28 +454,35 @@ wclass example-policy agy-cost-focused > agy-policy.json
 wclass example-policy grok-cost-focused > grok-policy.json
 ```
 
-Codex additionally accepts an opaque model label for its low and standard
-routes, without weightclass trying to validate availability or price:
+Codex additionally accepts an opaque model label without weightclass trying to
+validate availability or price. Prefer the tier-specific low-only form for a
+cost experiment so the failed standard-low candidate stays removed:
 
 ```sh
 wclass example-policy codex-cost-focused \
-  --model your-reviewed-codex-model > codex-policy.json
+  --low-model your-reviewed-codex-low-model > codex-policy.json
 ```
 
-The generated command carries `--model your-reviewed-codex-model` only on the
-low and standard routes. High remains on the installed Codex default model.
+The generated command carries `--model your-reviewed-codex-low-model` only on
+the low route. Standard remains on medium effort with the installed Codex
+default model, and high remains unchanged. The older `--model` shorthand still
+changes low and standard together for compatibility, but that custom shape is
+unqualified and is not the recommended cost-evaluation candidate.
 The label must be one printable non-whitespace argv token of at most 240 UTF-8
 bytes and must not begin with `-`. Review the generated route fingerprint
 before execution; changing the model changes that fingerprint.
 
 These three policies are intentionally narrower claims than the evaluated
-Claude policy. Their static forms pin no model and make one change from the
-corresponding built-in routes: a `standard` task uses that vendor's already
-reviewed `low` effort command. Optional Codex or Grok model overrides also
-change the exact reviewed command and therefore require separate evidence. No
-provider usage, pricing, or quality evidence has qualified these experiments,
-so their names describe an optimization hypothesis—not measured token or
-billing savings.
+Claude policy. Their static forms pin no model and now keep low, standard, and
+high effort aligned with the corresponding built-ins; in particular, standard
+remains medium after the standard-low Codex canary used more tokens. Therefore
+an unmodified Codex, `agy`, or Grok preset is only a reviewable experiment
+scaffold, not an economic candidate. `wclass recommend` abstains when candidate
+and baseline commands are identical. Optional tier-specific Codex or Grok
+model overrides change the exact reviewed command and require separate
+evidence. No provider usage, pricing, or quality evidence has qualified those
+custom configurations, so their names describe an optimization hypothesis—not
+measured token or billing savings.
 Keep them opt-in, review the exact route and fingerprint, and evaluate each
 vendor independently before broader use.
 
@@ -579,6 +586,13 @@ and acknowledgement.
 See [Cost-aware recommendations](docs/cost-recommendation.md) for the input
 schemas, fixed quality and uncertainty gates, canonical fingerprints, provider
 capability differences, and end-to-end workflow.
+
+For sanitized provider-export measurements, use the separate offline
+`tests/eval/provider_usage_benchmark.py` adapter. It distinguishes metered cost
+from fixed-price subscription quota. A passing quota result is capacity-only
+and is never eligible for a cost recommendation or a monthly-bill reduction
+claim. Never give the scorer a raw billing export; normalize it outside the
+repository after removing task data and account identifiers.
 
 A route's `vendor` is a containment label you choose, not a list of tools
 weightclass knows. Any printable identifier without whitespace, up to 64 bytes,

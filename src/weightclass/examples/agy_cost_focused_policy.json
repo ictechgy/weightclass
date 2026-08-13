@@ -28,7 +28,7 @@
         "--mode",
         "accept-edits",
         "--effort",
-        "low"
+        "medium"
       ]
     },
     {

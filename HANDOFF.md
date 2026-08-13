@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-13 21:24 KST by Codex_
+_Last updated: 2026-08-13 21:44 KST by Codex_
 
 ## Goal
 
@@ -58,6 +58,22 @@ _Last updated: 2026-08-13 21:24 KST by Codex_
   per-call output, and disposable workspaces were not retained. Together with
   the earlier single-pair decrease, the conflicting diagnostic evidence is a
   reason not to promote the Codex standard/low candidate.
+- The current follow-up branch converts that `no-go` into the safe packaged
+  state: Codex, `agy`, and Grok cost-focused scaffolds again keep standard at
+  medium, while low/high retain their built-in effort values. Their static
+  commands are therefore not economic candidates by themselves. A candidate
+  whose exact command matches the baseline now returns
+  `candidate_route_unchanged`/`abstain`, so a different route ID cannot make a
+  no-op look qualified. A future Codex experiment should use the existing
+  low-tier-only `--low-model` plus low effort and keep standard/high unchanged;
+  the opaque model label must be supplied and reviewed by the user.
+- Added an evaluation-only, offline provider-usage scorer that accepts only
+  evaluator-normalized integer evidence, never a raw provider export. It
+  separates `metered_cost` from `subscription_quota`, requires assertions that
+  task data and account identifiers were removed, and emits aggregate-only
+  output. A passing fixed-subscription quota result is `capacity_only`, never a
+  monthly-bill claim or cost-recommendation input. A nine-pair canary remains a
+  scored `no-go`; the fixed 30-pair and slice/quality gates are unchanged.
 - The source-of-truth Homebrew formula was updated on `main` by
   `e18fd3988a6fa6ad642f44a084b436c6507a2f6b`. The matching tap commit is
   [`1244ed6`](https://github.com/ictechgy/homebrew-tap/commit/1244ed6f0baf6cf2c557bec356230e3ea199961d).
@@ -383,14 +399,19 @@ _Last updated: 2026-08-13 21:24 KST by Codex_
 - `tests/eval/cost_benchmark.py` and `tests/test_eval_cost_benchmark.py`:
   externally normalized estimated-cost evidence without internal pricing or
   billing claims.
+- `tests/eval/provider_usage_benchmark.py` and
+  `tests/test_eval_provider_usage_benchmark.py`: sanitized provider-export
+  metered-cost versus fixed-subscription quota evidence, with cost promotion
+  disabled for quota results.
 - `tests/eval/claude_cost_baseline_policy.json`,
   `src/weightclass/examples/claude_cost_focused_policy.json`, and
   `tests/test_eval_cost_policy.py`: exact evaluated Claude commands, public
   low-route cost opt-in, unchanged non-low routes, stdin delivery, and
   fingerprint binding.
 - `src/weightclass/examples/{codex,agy,grok}_cost_focused_policy.json`:
-  unevaluated vendor-specific lower-effort opt-in policies; do not describe
-  them as measured savings.
+  unevaluated vendor-specific experiment scaffolds. Their static tier efforts
+  now match the built-ins; only an explicit reviewed model/effort override can
+  make a distinct candidate, and no such candidate has measured savings.
 - `README.md`: documents the task-in-argv residual for `agy` and `grok`.
 - `packaging/homebrew/weightclass.rb`: source of truth copied to
   `ictechgy/homebrew-tap` after a successful PyPI publish.
@@ -712,6 +733,11 @@ _Last updated: 2026-08-13 21:24 KST by Codex_
   add an `efficient` posture or change built-in/schema-2 effort behavior based
   on the exploratory pilot. A fresh, blind, fingerprint-bound evidence set
   must pass the offline token gate first.
+- The Codex standard-low canary is a completed `no-go`; do not spend a 30-pair
+  run on it. A new low-tier model/effort canary requires a user-reviewed opaque
+  Codex model label and a reviewed sanitized metered-cost or quota measurement
+  contract. Do not choose a model or infer a price/entitlement inside the
+  router.
 - Codex, `agy`, and Grok cost-focused examples are unqualified experiments.
   Do not promote them, infer provider pricing, or claim savings until each
   vendor independently passes the applicable aggregate gates.
@@ -730,11 +756,16 @@ _Last updated: 2026-08-13 21:24 KST by Codex_
    compatibility feedback without task telemetry, provider-price inference, or
    a claim about actual bills. Do not change built-ins, standard/high routes,
    schema 2, or posture vocabulary from the low-target result.
-3. Any future token-efficiency candidate still needs fresh task-free paired
-   evidence and must pass the separate raw-token gate; the cost `go` does not
-   satisfy it.
-4. Evaluate the Codex, `agy`, and Grok cost-focused examples independently
-   before any promotion; do not combine vendor results or infer pricing.
+3. For a future Codex economic candidate, bind only `--low-model` plus the
+   reviewed low effort, keep standard medium/high unchanged, and run a fresh
+   nine-pair canary only after the user supplies the opaque model label and a
+   sanitized metered-cost or subscription-quota measurement contract. Expand
+   to at least 30 pairs only if the canary is directionally favorable and
+   quality-safe.
+4. Treat a passing quota result as capacity evidence only. Only passing
+   metered-cost evidence may feed a cost profile/qualification card, and even
+   then keep the exact qualified tier explicit opt-in. Evaluate Codex, `agy`,
+   and Grok independently; do not combine results or infer pricing.
 5. Re-enable Linux Claude semantic triage only after reviewing a concrete
    filesystem-containment command and its process-tree boundary.
 6. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
@@ -752,4 +783,10 @@ tests. Built-ins and execution paths are unchanged. Python 3.10/3.14 each
 passed 810 tests; Ruff, strict mypy, compileall, build, strict
 Twine, extracted-sdist isolation, and a clean-wheel recommendation smoke are
 green. Choose a new version and run the immutable release process before
-publishing; do not republish 0.13.0.`
+publishing; do not republish 0.13.0. The local
+`eval/provider-cost-evidence` follow-up keeps unqualified standard routes at
+medium, rejects no-op cost candidates, and adds sanitized provider-export
+metered-cost/quota scoring. Its local full suites currently pass 816 tests on
+Python 3.10 and 3.14. Do not start another provider run until the user supplies
+the exact low-tier model label and approves a bounded external measurement
+scope.`

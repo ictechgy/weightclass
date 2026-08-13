@@ -112,6 +112,10 @@ posture is a measured token-saving mode. Use the offline paired gate in
 `tests/eval/README.md` before making an efficiency claim about a custom policy.
 Use its separate estimated-cost gate for provider-reported cost evidence;
 lower estimated cost does not imply fewer raw tokens or an actual lower bill.
+For sanitized provider-export evidence, use
+`tests/eval/provider_usage_benchmark.py`: metered cost can support a later
+explicit opt-in review, while fixed-price subscription quota is capacity-only
+and never a monthly-bill claim. Never pass a raw billing export to the scorer.
 For API routes, use `wclass v2 route` followed by the explicit egress
 acknowledgement described in the main README; native integration commands never
 read API credentials.

@@ -366,7 +366,7 @@ class PolicyRunBindingTests(unittest.TestCase):
                     "--tier",
                     "standard",
                     "--ack-route-fingerprint",
-                    "sha256:ae44aca2326c00a60fe0ecdbb3205f41da73c3663dce1f9ef3e7aaf9a4f8e621",
+                    "sha256:195c5c54f3332910ccf8113540d0251b3495977110ff226754fea1e4ecf83c8d",
                 ]
             )
 
@@ -381,7 +381,7 @@ class PolicyRunBindingTests(unittest.TestCase):
                 "--model",
                 "reviewed-codex-model",
                 "-c",
-                "model_reasoning_effort=low",
+                "model_reasoning_effort=medium",
                 "-",
             ),
             b"Fix a typo.",
@@ -458,7 +458,7 @@ class PolicyRunBindingTests(unittest.TestCase):
                     "--model",
                     "grok-standard-model",
                     "--reasoning-effort",
-                    "low",
+                    "medium",
                 ],
                 "route": "grok-cost-experiment-standard",
                 "tier": "standard",
@@ -501,7 +501,7 @@ class PolicyRunBindingTests(unittest.TestCase):
                 "--model",
                 "grok-standard-model",
                 "--reasoning-effort",
-                "low",
+                "medium",
             ),
             b"",
             cleanup_grace_seconds=0,
@@ -940,8 +940,8 @@ class CommandSurfaceTests(unittest.TestCase):
         self.assertNotIn("--model", routes["standard"]["command"])
         self.assertNotIn("--model", routes["high"]["command"])
 
-    def test_prints_installable_cost_experiments_for_every_other_builtin_vendor(self) -> None:
-        """Breaks if a supported vendor loses its explicit lower-effort opt-in."""
+    def test_prints_installable_cost_experiments_without_lowering_standard_effort(self) -> None:
+        """Breaks if a failed standard-low experiment remains in a packaged preset."""
         expected_commands = {
             "codex-cost-focused": {
                 "low": [
@@ -961,7 +961,7 @@ class CommandSurfaceTests(unittest.TestCase):
                     "--sandbox",
                     "workspace-write",
                     "-c",
-                    "model_reasoning_effort=low",
+                    "model_reasoning_effort=medium",
                     "-",
                 ],
                 "high": [
@@ -992,7 +992,7 @@ class CommandSurfaceTests(unittest.TestCase):
                     "--mode",
                     "accept-edits",
                     "--effort",
-                    "low",
+                    "medium",
                 ],
                 "high": [
                     "agy",
@@ -1021,7 +1021,7 @@ class CommandSurfaceTests(unittest.TestCase):
                     "--permission-mode",
                     "acceptEdits",
                     "--reasoning-effort",
-                    "low",
+                    "medium",
                 ],
                 "high": [
                     "grok",
@@ -1076,7 +1076,7 @@ class CommandSurfaceTests(unittest.TestCase):
                 )
                 self.assertNotIn("Fix a spelling typo.", routed.stdout)
 
-    def test_codex_cost_experiment_accepts_an_explicit_model_for_lower_effort_routes(self) -> None:
+    def test_codex_cost_experiment_accepts_an_explicit_model_with_tier_efforts(self) -> None:
         """Breaks if users cannot bind a reviewed Codex model without editing JSON."""
         result = _weightclass(
             "example-policy",
@@ -1089,7 +1089,8 @@ class CommandSurfaceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
         routes = {route["tier"]: route for route in json.loads(result.stdout)["routes"]}
-        for tier in ("low", "standard"):
+        expected_efforts = {"low": "low", "standard": "medium"}
+        for tier, effort in expected_efforts.items():
             with self.subTest(tier=tier):
                 self.assertEqual(
                     routes[tier]["command"],
@@ -1102,7 +1103,7 @@ class CommandSurfaceTests(unittest.TestCase):
                         "--model",
                         "reviewed-codex-model",
                         "-c",
-                        "model_reasoning_effort=low",
+                        f"model_reasoning_effort={effort}",
                         "-",
                     ],
                 )
@@ -1199,7 +1200,7 @@ class CommandSurfaceTests(unittest.TestCase):
                     "--model",
                     "reviewed-codex-model",
                     "-c",
-                    "model_reasoning_effort=low",
+                    "model_reasoning_effort=medium",
                     "-",
                 ],
             ),
@@ -1215,7 +1216,7 @@ class CommandSurfaceTests(unittest.TestCase):
                     "--mode",
                     "accept-edits",
                     "--effort",
-                    "low",
+                    "medium",
                 ],
             ),
             (
@@ -1230,7 +1231,7 @@ class CommandSurfaceTests(unittest.TestCase):
                     "--permission-mode",
                     "acceptEdits",
                     "--reasoning-effort",
-                    "low",
+                    "medium",
                 ],
             ),
         )
@@ -1283,7 +1284,7 @@ class CommandSurfaceTests(unittest.TestCase):
                 "--model",
                 "reviewed-codex-model",
                 "-c",
-                "model_reasoning_effort=low",
+                "model_reasoning_effort=medium",
                 "-",
             ],
         )
@@ -1473,7 +1474,7 @@ class CommandSurfaceTests(unittest.TestCase):
                 "--model",
                 "grok-standard-model",
                 "--reasoning-effort",
-                "low",
+                "medium",
             ],
             [
                 "grok",

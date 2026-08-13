@@ -263,6 +263,17 @@ the fixed 15% floor, while raw tokens rose 6.49%. The standard slice itself was
 11.08% more expensive. The original low-only cost candidate remains the sole
 promotion-scale experiment.
 
+A later exact Codex standard-tier diagnostic independently confirmed that the
+standard-low direction is not a savings basis. Across nine existing public
+standard fixtures, low effort used 111,567 raw tokens versus 101,602 for medium
+(+9.81%), although the blind reviewer passed 8/9 low answers versus 5/9 medium
+answers. The earlier one-pair probe had shown a decrease, so the token signal is
+unstable as well as non-saving in the larger canary. Packaged Codex, `agy`, and
+Grok experiment scaffolds therefore keep standard at medium. Future economic
+experiments must change an explicit low-tier model/effort configuration and
+bind actual sanitized metered-cost or quota evidence; an identical command is
+ineligible even if its route ID differs.
+
 That retained candidate next completed a fresh balanced 150-pair run. Quality
 was non-inferior (143/150 versus 142/150, exact 95% difference interval -2.41%
 to +3.66%) with no new critical failure. Reported cost fell 17.57%, but its
