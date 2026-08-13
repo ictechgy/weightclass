@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-14 01:35 KST by Codex_
+_Last updated: 2026-08-14 02:06 KST by Codex_
 
 ## Goal
 
@@ -27,10 +27,11 @@ _Last updated: 2026-08-14 01:35 KST by Codex_
   security/performance and release hardening described below. Custom selections
   remain explicitly unqualified; built-in routes and provider boundaries are
   unchanged.
-- The current unreleased code adds the cost-recommendation feature:
-  task-free `review-cost-profile` plus non-executing `recommend`. It is not
-  tagged, published, or installed through Homebrew yet. Built-in routes and
-  every execution path remain unchanged.
+- The merged `0.14.0` release candidate adds the cost-recommendation feature:
+  task-free `review-cost-profile` plus non-executing `recommend`, together with
+  aggregate-only sanitized provider-usage evaluation. It is not tagged,
+  published, or installed through Homebrew yet. Built-in routes and every
+  execution path remain unchanged.
 - An approved exact-command measurement probe used one already-public standard
   fixture and exactly six vendor calls: built-in standard/medium versus the
   packaged standard/low candidate for Codex, `agy`, and Grok. All six commands
@@ -86,8 +87,8 @@ _Last updated: 2026-08-14 01:35 KST by Codex_
   qualification. Task text, answers, pair rows, and workspaces were deleted;
   only aggregate facts remain. These are API-price estimates, not subscription
   charges or quota evidence.
-- The current follow-up branch converts that `no-go` into the safe packaged
-  state: Codex, `agy`, and Grok cost-focused scaffolds again keep standard at
+- The merged follow-up converts that `no-go` into the safe packaged state:
+  Codex, `agy`, and Grok cost-focused scaffolds again keep standard at
   medium, while low/high retain their built-in effort values. Their static
   commands are therefore not economic candidates by themselves. A candidate
   whose exact command matches the baseline now returns
@@ -452,7 +453,7 @@ _Last updated: 2026-08-14 01:35 KST by Codex_
   local-classification dispatch and lazy vendor-triage loading.
 - `src/weightclass/cost_recommendation.py`,
   `tests/test_cost_recommendation.py`, and
-  `docs/cost-recommendation.md`: unreleased advisory expected-completed-cost
+  `docs/cost-recommendation.md`: 0.14.0 advisory expected-completed-cost
   contracts, CLI regressions, and user workflow.
 - `tests/verify_release_source.py`: redacted release-tag ancestry gate used
   before the release job installs networked tools.
@@ -747,9 +748,10 @@ _Last updated: 2026-08-14 01:35 KST by Codex_
 ## Blockers & Open Questions
 
 - No known blocker or mandatory release/deployment step remains for `0.13.0`.
-- The cost-recommendation work is merged to `main` by PR #34 but deliberately
-  unreleased. Decide its next version and release notes before publishing. Do
-  not republish immutable `0.13.0`.
+- The cost-recommendation and provider-usage work is merged to `main` by PRs
+  #34 and #35. The `0.14.0` release candidate still needs its immutable tag,
+  Release workflow, PyPI verification, and Homebrew formula update. Do not
+  republish immutable `0.13.0`.
 - GitHub repository settings were updated and re-read through the API on
   2026-08-13. The active `Protect version tags` ruleset targets `refs/tags/v*`,
   has no bypass actor, and blocks updates and deletions. The `pypi` environment
@@ -780,9 +782,9 @@ _Last updated: 2026-08-14 01:35 KST by Codex_
 
 ## Next Steps
 
-1. If publishing the merged cost-recommendation feature, choose a new version,
-   update release notes/HANDOFF, and run the normal immutable release process;
-   never overwrite `0.13.0`.
+1. Merge the `0.14.0` release-version change, run the full immutable release
+   gates, create the protected annotated `v0.14.0` tag, approve and verify the
+   PyPI publication, then update and test the Homebrew formula.
 2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
    compatibility feedback without task telemetry, provider-price inference, or
    a claim about actual bills. Do not change built-ins, standard/high routes,
@@ -806,17 +808,16 @@ _Last updated: 2026-08-14 01:35 KST by Codex_
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`
 and `AGENTS.md`, then continue from: `weightclass 0.13.0 remains the immutable
-published release. Main contains the merged, unreleased same-vendor advisory
-cost router: review-cost-profile plus recommend, strict cost/qualification
+published release. The 0.14.0 release candidate contains the merged same-vendor
+advisory cost router: review-cost-profile plus recommend, strict cost/qualification
 schemas, full evidence fingerprints, fixed conservative gates, explicit
 abstention, provider capability/task-delivery receipts, docs, and ten focused
 tests. Built-ins and execution paths are unchanged. Python 3.10/3.14 each
 passed 810 tests; Ruff, strict mypy, compileall, build, strict
 Twine, extracted-sdist isolation, and a clean-wheel recommendation smoke are
-green. Choose a new version and run the immutable release process before
-publishing; do not republish 0.13.0. The local
-`eval/provider-cost-evidence` follow-up keeps unqualified standard routes at
-medium, rejects no-op cost candidates, and adds sanitized provider-export
+green. Run the immutable 0.14.0 release process before publishing; do not
+republish 0.13.0. The merged provider-cost follow-up keeps unqualified standard
+routes at medium, rejects no-op cost candidates, and adds sanitized provider-export
 metered-cost/quota scoring. Its local full suites currently pass 816 tests on
 Python 3.10 and 3.14. Do not start another provider run until the user supplies
 the exact low-tier model label and approves a bounded external measurement
