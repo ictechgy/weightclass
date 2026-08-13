@@ -22,11 +22,11 @@ _Last updated: 2026-08-13 KST by Codex_
   - Immutable Release workflow:
     [31668338506](https://github.com/ictechgy/weightclass/actions/runs/31668338506), completed successfully.
   - PyPI: <https://pypi.org/project/weightclass/0.11.0/>.
-- The current working tree contains an unreleased additive preset increment:
+- `0.12.0` is the intended next release for the additive preset increment:
   task-free `review-preset`, `route`/`run --preset`, and tier-specific opaque
   model/effort overrides for the packaged Claude and Codex policies. The
-  package version remains `0.11.0`; these working-tree changes are not tagged,
-  published, or installed through Homebrew.
+  feature is committed locally and the declared package version is `0.12.0`,
+  but it is not yet tagged, published, or installed through Homebrew.
 - The source-of-truth Homebrew formula was updated on `main` by
   `2c10b38020d93e13c513f36c3159da5e0e9311e9`. The matching tap commit is
   [`ba721f2`](https://github.com/ictechgy/homebrew-tap/commit/ba721f25ef7b94654e6ad7a5021bfa94f1c9a016).
@@ -245,7 +245,7 @@ _Last updated: 2026-08-13 KST by Codex_
   a cost-focused Codex route directly from the installed CLI without a policy
   file.
 
-## Unreleased after 0.11.0
+## Prepared for 0.12.0
 
 - Added `route`/`run --preset <vendor>-cost-focused` as a shorthand that binds
   the packaged source vendor without a separate `--source-vendor`. It conflicts
@@ -334,7 +334,7 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Verification
 
-- Fresh unreleased preset verification on 2026-08-13:
+- Fresh `0.12.0` pre-release verification on 2026-08-13:
   - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
     `ResourceWarning` as an error: 789 tests passed on each interpreter.
   - The focused router and release-workflow suite passed 115 tests.
@@ -342,9 +342,10 @@ _Last updated: 2026-08-13 KST by Codex_
     compileall, and `git diff --check` passed.
   - Offline wheel/sdist build and strict Twine checks passed. The extracted
     sdist passed 784 tests with 11 platform skips.
-  - A clean offline wheel install reported `weightclass 0.11.0`, reviewed a
-    custom Claude preset without a task/vendor invocation, and routed a custom
-    Codex standard model/effort command with `unqualified_custom` status.
+  - A clean offline `0.12.0` wheel install reported `weightclass 0.12.0`,
+    reviewed a custom Claude preset without a task/vendor invocation, and
+    routed a custom Codex standard model/effort command with
+    `unqualified_custom` status.
 
 - Fresh `0.11.0` verification on 2026-08-13:
   - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
@@ -477,9 +478,9 @@ _Last updated: 2026-08-13 KST by Codex_
 
 - No known blocker remains from the published `0.11.0` release.
 - No mandatory release or deployment step remains for `0.11.0`.
-- The preset increment is implemented and locally verified but remains
-  uncommitted and unreleased. Decide its next version and release scope before
-  tagging; do not describe the installed 0.11.0 CLI as having these options.
+- The preset increment is committed and declared as `0.12.0` but remains
+  unpublished. Do not describe the installed 0.11.0 CLI as having these
+  options until the immutable release and formula update both complete.
 - No promotion-grade paired provider token-savings evidence has been collected. Do not
   add an `efficient` posture or change built-in/schema-2 effort behavior based
   on the exploratory pilot. A fresh, blind, fingerprint-bound evidence set
@@ -495,8 +496,9 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Next Steps
 
-1. Review and commit the unreleased preset increment, then choose a new version
-   and run the normal immutable release pipeline if publication is requested.
+1. With explicit network approval, push the prepared `0.12.0` `main`, wait for
+   green CI, and only then cut annotated tag `v0.12.0` and monitor the immutable
+   release workflow.
 2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
    compatibility feedback without task telemetry, provider-price inference, or
    a claim about actual bills. Do not change built-ins, standard/high routes,
@@ -519,7 +521,7 @@ has a GitHub Release, and is deployed through the verified Homebrew tap. Its
 cost-focused Claude low route remains the only measured cost opt-in. Codex,
 agy, and Grok cost-focused policies remain unqualified experiments; built-ins
 remain unchanged and each vendor still needs independent evaluation before
-promotion. The working tree has a verified but uncommitted/unreleased preset
-increment: task-free review-preset, --preset routing, and custom Claude/Codex
-tier model/effort overrides. Do not claim these are present in installed
-0.11.0.`
+promotion. The local branch has a verified `0.12.0` preset increment awaiting
+network-approved push/tag/publication: task-free review-preset, --preset
+routing, and custom Claude/Codex tier model/effort overrides. Do not claim
+these are present in installed 0.11.0.`
