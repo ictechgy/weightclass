@@ -12,6 +12,7 @@ MACOS_BOUNDARY_MODULES = (
     "tests.test_process_context",
     "tests.test_triage",
     "tests.test_json_input",
+    "tests.test_cost_recommendation",
     "tests.test_delegation_runtime",
     "tests.test_delegation_v2_runtime",
     "tests.test_guarded_runtime_suite",

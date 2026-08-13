@@ -29,6 +29,8 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
                 self.assertIn('python -m venv "$installed_venv"', block)
                 self.assertIn('"$installed_venv/bin/wclass" --version', block)
                 self.assertIn('"$installed_venv/bin/wclass" classify', block)
+                self.assertIn('"$installed_venv/bin/wclass" review-cost-profile --help', block)
+                self.assertIn('"$installed_venv/bin/wclass" recommend --help', block)
                 for policy_name in (
                     "agy-cost-focused",
                     "claude-cost-focused",

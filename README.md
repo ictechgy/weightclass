@@ -68,14 +68,17 @@ ownership labels remain opaque caller declarations. See the
 `wclass --help` lists the whole surface:
 
 ```text
-wclass [-h] [--version] {classify,example-policy,review-preset,route,run,render,delegate,v2} ...
+wclass [-h] [--version] {classify,example-policy,review-preset,review-cost-profile,recommend,route,run,render,delegate,v2} ...
 ```
 
-`classify`, `route`, and `run` read the task from standard input. `render`
+`classify`, `recommend`, `route`, and `run` read the task from standard input. `render`
 prints the command of a policy route named by a workflow descriptor and never
 reads a task. `example-policy` emits packaged policy JSON; `review-preset`
-prints every command and fingerprint in one packaged policy. Neither reads a
-task or invokes a vendor. `v2` selects a declarative API route; see
+prints every command and fingerprint in one packaged policy.
+`review-cost-profile` validates and fingerprints task-free cost input. None of
+those three review commands reads a task or invokes a vendor. `recommend`
+emits evidence-bound advice or an explicit abstention and never invokes a
+vendor. `v2` selects a declarative API route; see
 [V2 API routing](#v2-api-routing-through-an-external-runtime).
 `delegate route` reads only its policy and manifest and does not consume task
 standard input or inspect the supplied runtime path. `delegate run` reads the
@@ -563,6 +566,19 @@ printf '%s' 'Add a focused unit test.' |
 No preference is persisted and no router configuration file is written.
 Removing `--preset` or `--cost-focused` immediately restores the built-in route
 selection.
+
+### Evidence-gated cost recommendation
+
+`wclass recommend` is a non-executing, same-vendor advisory layer over the
+packaged presets. It consumes a user-reviewed opaque cost profile and a strict
+qualification card, then returns either `recommend` or `abstain`. It does not
+infer provider pricing, inspect billing, start a child, retry, fall back, or
+change built-ins. A later `run` still requires the ordinary exact route review
+and acknowledgement.
+
+See [Cost-aware recommendations](docs/cost-recommendation.md) for the input
+schemas, fixed quality and uncertainty gates, canonical fingerprints, provider
+capability differences, and end-to-end workflow.
 
 A route's `vendor` is a containment label you choose, not a list of tools
 weightclass knows. Any printable identifier without whitespace, up to 64 bytes,

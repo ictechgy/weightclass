@@ -21,6 +21,13 @@ from .classification import (
     read_task_from_standard_input,
     validate_task,
 )
+from .cost_recommendation import (
+    CostRecommendationError,
+    build_cost_profile_review,
+    build_recommendation_receipt,
+    load_cost_profile,
+    load_qualification_card,
+)
 from .delegation_compile import (
     canonical_json_bytes,
     compile_delegation_descriptor,
@@ -642,6 +649,23 @@ def build_parser() -> argparse.ArgumentParser:
     review_preset.add_argument("name", choices=tuple(EXAMPLE_POLICY_RESOURCES))
     review_preset.add_argument("--model")
     _add_preset_override_arguments(review_preset)
+    review_cost_profile = subcommands.add_parser(
+        "review-cost-profile",
+        allow_abbrev=False,
+        description="Validate and fingerprint one task-free cost profile.",
+    )
+    review_cost_profile.add_argument("--cost-profile", required=True, type=Path)
+    recommend = subcommands.add_parser(
+        "recommend",
+        allow_abbrev=False,
+        description="Recommend or abstain without starting a vendor process.",
+    )
+    recommend.add_argument("--preset", required=True, choices=tuple(EXAMPLE_POLICY_RESOURCES))
+    recommend.add_argument("--cost-profile", required=True, type=Path)
+    recommend.add_argument("--qualification-card", required=True, type=Path)
+    recommend.add_argument("--model")
+    recommend.add_argument("--tier", choices=("low", "standard", "high"))
+    _add_preset_override_arguments(recommend)
     for name, description in (
         ("route", "Select and print a command for a task read from standard input."),
         ("run", "Select and start a command for a task read from standard input."),
@@ -1253,6 +1277,81 @@ def review_packaged_preset(
     return 0
 
 
+def recommend_from_standard_input(
+    preset: str,
+    cost_profile_path: Path,
+    qualification_card_path: Path,
+    explicit_tier: Tier | None = None,
+    model: str | None = None,
+    overrides: PresetOverrides | None = None,
+) -> int:
+    """Render one evidence-bound recommendation without starting a vendor."""
+    overrides = overrides or PresetOverrides()
+    source_vendor = preset.removesuffix("-cost-focused")
+    try:
+        profile = load_cost_profile(cost_profile_path)
+        card = load_qualification_card(qualification_card_path)
+        candidate_policy = _automatic_cost_policy(
+            True,
+            None,
+            source_vendor,
+            None,
+            model,
+            overrides,
+        )
+    except (CostRecommendationError, InvalidInputError):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    if candidate_policy is None:
+        raise AssertionError("packaged policy resolution returned no policy")
+    try:
+        tier, routing_reason_code, candidate_route, candidate_policy = select_task_route(
+            read_task_from_standard_input(),
+            candidate_policy,
+            source_vendor,
+            explicit_tier,
+        )
+        baseline_route = select_tier_route(DEFAULT_ROUTES, tier, source_vendor, False)
+        baseline_fingerprint = native_route_fingerprint(baseline_route, False)
+        candidate_fingerprint = native_route_fingerprint(
+            candidate_route,
+            candidate_policy.allow_mixed_vendors,
+            candidate_policy.posture,
+        )
+        receipt = build_recommendation_receipt(
+            profile,
+            card,
+            baseline_route=baseline_route,
+            baseline_route_fingerprint=baseline_fingerprint,
+            candidate_route=candidate_route,
+            candidate_route_fingerprint=candidate_fingerprint,
+            routing_reason_code=routing_reason_code,
+            candidate_configuration_status=_packaged_configuration_status(preset, model, overrides),
+        )
+    except InvalidTaskError:
+        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
+        return 2
+    except CostRecommendationError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    except RouteSelectionError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+    print(json.dumps(receipt))
+    return 0
+
+
+def review_cost_profile(cost_profile_path: Path) -> int:
+    """Validate and fingerprint one cost profile without reading task input."""
+    try:
+        profile = load_cost_profile(cost_profile_path)
+    except CostRecommendationError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    print(json.dumps(build_cost_profile_review(profile)))
+    return 0
+
+
 def route_from_standard_input(
     policy_path: Path | None,
     source_vendor: str | None,
@@ -1633,6 +1732,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.model,
             _preset_overrides_from_arguments(arguments),
         )
+    if arguments.command == "recommend":
+        return recommend_from_standard_input(
+            arguments.preset,
+            arguments.cost_profile,
+            arguments.qualification_card,
+            arguments.tier,
+            arguments.model,
+            _preset_overrides_from_arguments(arguments),
+        )
+    if arguments.command == "review-cost-profile":
+        return review_cost_profile(arguments.cost_profile)
     if arguments.command == "route":
         return route_from_standard_input(
             arguments.policy,
