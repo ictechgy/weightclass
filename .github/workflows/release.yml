@@ -100,6 +100,8 @@ jobs:
           "$installed_venv/bin/python" -m pip install --no-index --no-deps "${packages[0]}"
           test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
           test "$(printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" classify)" = '{"tier": "low"}'
+          "$installed_venv/bin/wclass" review-cost-profile --help >/dev/null
+          "$installed_venv/bin/wclass" recommend --help >/dev/null
           "$installed_venv/bin/wclass" example-policy agy-cost-focused >/dev/null
           "$installed_venv/bin/wclass" example-policy claude-cost-focused >/dev/null
           "$installed_venv/bin/wclass" example-policy codex-cost-focused --model release-smoke-model >/dev/null
@@ -149,6 +151,8 @@ jobs:
           "$installed_venv/bin/python" -m pip install --no-index --no-deps "${packages[0]}"
           test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
           test "$(printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" classify)" = '{"tier": "low"}'
+          "$installed_venv/bin/wclass" review-cost-profile --help >/dev/null
+          "$installed_venv/bin/wclass" recommend --help >/dev/null
           "$installed_venv/bin/wclass" example-policy agy-cost-focused >/dev/null
           "$installed_venv/bin/wclass" example-policy claude-cost-focused >/dev/null
           "$installed_venv/bin/wclass" example-policy codex-cost-focused --model release-smoke-model >/dev/null
@@ -180,6 +184,7 @@ jobs:
             tests.test_router tests.test_native_v2_runtime \
             tests.test_executable_observation tests.test_foreground_process \
             tests.test_process_context tests.test_triage tests.test_json_input \
+            tests.test_cost_recommendation \
             tests.test_delegation_runtime tests.test_delegation_v2_runtime \
             tests.test_guarded_runtime_suite tests.test_delegation_conformance
 

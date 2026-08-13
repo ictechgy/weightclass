@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-13 18:36 KST by Codex_
+_Last updated: 2026-08-13 19:35 KST by Codex_
 
 ## Goal
 
@@ -27,6 +27,10 @@ _Last updated: 2026-08-13 18:36 KST by Codex_
   security/performance and release hardening described below. Custom selections
   remain explicitly unqualified; built-in routes and provider boundaries are
   unchanged.
+- The current unreleased code adds the cost-recommendation feature:
+  task-free `review-cost-profile` plus non-executing `recommend`. It is not
+  tagged, published, or installed through Homebrew yet. Built-in routes and
+  every execution path remain unchanged.
 - The source-of-truth Homebrew formula was updated on `main` by
   `e18fd3988a6fa6ad642f44a084b436c6507a2f6b`. The matching tap commit is
   [`1244ed6`](https://github.com/ictechgy/homebrew-tap/commit/1244ed6f0baf6cf2c557bec356230e3ea199961d).
@@ -297,6 +301,42 @@ _Last updated: 2026-08-13 18:36 KST by Codex_
   reviewed action metadata runs on Node 24, replacing the Node 20-based v5
   generation that GitHub runners warned about.
 
+## Current Unreleased Cost Recommendation
+
+- Added `src/weightclass/cost_recommendation.py` with strict version-1 cost
+  profile and qualification-card schemas. Inputs are bounded regular JSON,
+  duplicate-safe through the shared loader, and must assert that opaque IDs
+  are not task-derived. User/evaluator cost and quality assertions remain
+  explicitly unverified by the router.
+- Added task-free `wclass review-cost-profile`, which validates the profile
+  and emits its canonical fingerprint without reading task stdin or starting a
+  vendor.
+- Added `wclass recommend --preset <vendor>-cost-focused --cost-profile ...
+  --qualification-card ...`. It loads both documents before task access,
+  selects the packaged candidate and same-vendor built-in baseline for one
+  tier, and emits `recommend` or valid `abstain` without starting a child.
+- The fixed machine floors are 30 paired outcomes, 15% estimated-cost lower
+  bound, 20% maximum savings interval width, 5% maximum quality margin, zero
+  new critical failures, complete attempts, independent quality review, both
+  languages, all nine categories, and all three tiers. Stale, mismatched,
+  incomplete, or economically flat evidence abstains rather than falling back.
+- The cost-profile fingerprint binds every cost and route value. A separate
+  canonical qualification-card fingerprint binds every aggregate evidence
+  field; both exact route fingerprints and both evidence fingerprints feed the
+  recommendation fingerprint. It does not authorize execution: ordinary
+  `run` acknowledgement is still required.
+- Receipts expose provider differences without normalizing their semantics:
+  Claude/Codex have reviewed model+effort override surfaces, Grok model only,
+  and `agy` no model override. Claude/Codex retain stdin; `agy`/Grok retain
+  `task_delivery: argv` and the existing process-inspection disclosure.
+- Added `docs/cost-recommendation.md` and README entry-point documentation.
+  Same-vendor packaged presets are the only initial scope; no runtime learning,
+  retry, fallback, telemetry, provider access, price inference, built-in
+  change, cross-vendor recommendation, or automatic execution was added.
+- macOS CI/release boundary suites now include the focused recommendation
+  module, and clean installed-wheel release jobs smoke both new command
+  parsers.
+
 ## Key Files & State
 
 - `src/weightclass/cli.py`: V2 route/run ordering and pre-spawn identity check.
@@ -334,6 +374,10 @@ _Last updated: 2026-08-13 18:36 KST by Codex_
   release tools and their exact hash-pinned installation closure.
 - `src/weightclass/entrypoint.py` and `classification_cli.py`: lightweight
   local-classification dispatch and lazy vendor-triage loading.
+- `src/weightclass/cost_recommendation.py`,
+  `tests/test_cost_recommendation.py`, and
+  `docs/cost-recommendation.md`: unreleased advisory expected-completed-cost
+  contracts, CLI regressions, and user workflow.
 - `tests/verify_release_source.py`: redacted release-tag ancestry gate used
   before the release job installs networked tools.
 - `docs/completion-audit-v2.md`: requirement-to-test completion map. Goal g12 is leader-verified; retain this audit connection when refreshing this file.
@@ -365,6 +409,31 @@ _Last updated: 2026-08-13 18:36 KST by Codex_
   is required.
 
 ## Verification
+
+- Fresh unreleased cost-recommendation verification on 2026-08-13:
+  - Behavior-first RED→GREEN covered missing `recommend`, flat-cost
+    abstention, configuration-before-task ordering, full qualification-card
+    fingerprint binding, stale route binding, every fixed gate, all four
+    provider capability/task-delivery receipts, and task-free profile review.
+    Review follow-up additionally rejects non-integer schema versions and a
+    route object whose displayed command is not bound by its supplied route
+    fingerprint.
+  - Python 3.10.20 and Python 3.14.6 full `unittest` suites with
+    `ResourceWarning` as an error: 810 tests passed on each interpreter.
+  - Ruff 0.16.2 check/format over 125 files, strict mypy over 105 source files,
+    compileall, and `git diff --check` passed.
+  - Offline wheel/sdist build and strict Twine checks passed. The artifacts
+    contain the new module, document, and focused test. Extracted-sdist
+    isolation passed 802 tests with 13 platform skips.
+  - A clean Python 3.10 wheel install completed the real
+    `route -> review-cost-profile -> recommend` flow, returned `recommend`,
+    preserved the exact candidate fingerprint, emitted no task text, and had
+    `PATH=/nonexistent` during recommendation to prove no vendor launch was
+    required.
+  - Installing the complete hash-pinned release requirements offline was not
+    possible because the macOS CPython 3.13 mypy 2.3.0 wheel was absent from
+    the local cache. The independently cached strict mypy 2.3.0 tool passed;
+    no network access was used.
 
 - Fresh repository-review remediation verification on 2026-08-13:
   - RED→GREEN evidence covers a missing release lock, Python 3.10 native/V2
@@ -602,6 +671,9 @@ _Last updated: 2026-08-13 18:36 KST by Codex_
 ## Blockers & Open Questions
 
 - No known blocker or mandatory release/deployment step remains for `0.13.0`.
+- The cost-recommendation worktree is deliberately unreleased and uncommitted.
+  Review the diff before deciding its version, commit, or deployment. Do not
+  republish immutable `0.13.0`.
 - GitHub repository settings were updated and re-read through the API on
   2026-08-13. The active `Protect version tags` ruleset targets `refs/tags/v*`,
   has no bypass actor, and blocks updates and deletions. The `pypi` environment
@@ -624,32 +696,33 @@ _Last updated: 2026-08-13 18:36 KST by Codex_
 
 ## Next Steps
 
-1. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
+1. Review and commit the unreleased cost-recommendation diff. If publishing,
+   choose a new version, update release notes/HANDOFF, and run the normal
+   immutable release process; never overwrite `0.13.0`.
+2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
    compatibility feedback without task telemetry, provider-price inference, or
    a claim about actual bills. Do not change built-ins, standard/high routes,
    schema 2, or posture vocabulary from the low-target result.
-2. Any future token-efficiency candidate still needs fresh task-free paired
+3. Any future token-efficiency candidate still needs fresh task-free paired
    evidence and must pass the separate raw-token gate; the cost `go` does not
    satisfy it.
-3. Evaluate the Codex, `agy`, and Grok cost-focused examples independently
+4. Evaluate the Codex, `agy`, and Grok cost-focused examples independently
    before any promotion; do not combine vendor results or infer pricing.
-4. Re-enable Linux Claude semantic triage only after reviewing a concrete
+5. Re-enable Linux Claude semantic triage only after reviewing a concrete
    filesystem-containment command and its process-tree boundary.
-5. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
+6. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
    no-retention, and the single-reviewed-child boundary.
 
 ## Resume Prompt
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`
-and `AGENTS.md`, then continue from: `weightclass 0.13.0 is published to PyPI,
-has a GitHub Release, and is deployed through the verified Homebrew tap. It
-adds tier-specific opaque Grok model routing while retaining packaged effort
-values and argv task delivery. Custom Claude/Codex/Grok configurations remain
-explicitly unqualified; built-ins are unchanged. The release also contains a
-fully hash-pinned toolchain, tag-to-main ancestry gate, JSON recursion
-redaction, lightweight local-classification entrypoint, and Node 24 GitHub
-Actions. The immutable release workflow, public artifact hashes, Homebrew
-style/audit/source install/test, and installed 0.13.0 smokes are green. GitHub
-blocks update/deletion of v* tags and requires a pypi environment reviewer.
-Do not attempt to republish immutable 0.13.0; use a new version for future
-changes.`
+and `AGENTS.md`, then continue from: `weightclass 0.13.0 remains the immutable
+published release. The current main worktree has an uncommitted, unreleased
+same-vendor advisory cost router: review-cost-profile plus recommend, strict
+cost/qualification schemas, full evidence fingerprints, fixed conservative
+gates, explicit abstention, provider capability/task-delivery receipts, docs,
+and eight focused tests. Built-ins and execution paths are unchanged. Python
+3.10/3.14 each passed 808 tests; Ruff, strict mypy, compileall, build, strict
+Twine, extracted-sdist isolation, and a clean-wheel recommendation smoke are
+green. Review the diff before choosing a new version/commit/release. Do not
+republish 0.13.0.`
