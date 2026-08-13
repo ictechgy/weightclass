@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-13 KST by Codex_
+_Last updated: 2026-08-13 18:36 KST by Codex_
 
 ## Goal
 
@@ -13,27 +13,23 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Current Status
 
-- `weightclass 0.12.0` is merged, tagged, published, and installable.
-  - Release commit and annotated `v0.12.0` tag target:
-    `37ea1a7d3a9c43ebd52c5faa3c8c7f88b7b428c6`.
-  - GitHub Release: <https://github.com/ictechgy/weightclass/releases/tag/v0.12.0>.
+- `weightclass 0.13.0` is merged, tagged, published, and installable.
+  - Release commit and annotated `v0.13.0` tag target:
+    `155f7446b295f3d226c0a392c3b52d93a4b5644f`.
+  - GitHub Release: <https://github.com/ictechgy/weightclass/releases/tag/v0.13.0>.
   - Final release-gating CI:
-    [31672912246](https://github.com/ictechgy/weightclass/actions/runs/31672912246), completed successfully.
+    [31686174951](https://github.com/ictechgy/weightclass/actions/runs/31686174951), completed successfully.
   - Immutable Release workflow:
-    [31673091914](https://github.com/ictechgy/weightclass/actions/runs/31673091914), completed successfully.
-  - PyPI: <https://pypi.org/project/weightclass/0.12.0/>.
-- `0.12.0` adds task-free `review-preset`, `route`/`run --preset`, and
-  tier-specific opaque model/effort overrides for the packaged Claude and
-  Codex policies. Custom selections remain explicitly unqualified; built-in
-  routes and provider boundaries are unchanged.
-- An unreleased `0.13.0` source increment adds tier-specific opaque Grok model
-  overrides to packaged `review-preset`, `route`, and `run`, together with the
-  repository security/performance hardening described below. It is implemented
-  and verified but not yet tagged, published, or installed through Homebrew;
-  the installed `0.12.0` does not contain it.
+    [31686408438](https://github.com/ictechgy/weightclass/actions/runs/31686408438), completed successfully.
+  - PyPI: <https://pypi.org/project/weightclass/0.13.0/>.
+- `0.13.0` adds tier-specific opaque Grok model overrides to packaged
+  `review-preset`, `route`, and `run`, together with the repository
+  security/performance and release hardening described below. Custom selections
+  remain explicitly unqualified; built-in routes and provider boundaries are
+  unchanged.
 - The source-of-truth Homebrew formula was updated on `main` by
-  `8e90b4e7a8e791d4400d6132719fb6a15f7dc3c1`. The matching tap commit is
-  [`8d2b702`](https://github.com/ictechgy/homebrew-tap/commit/8d2b702851a09a770530f45bad101137d3a5a778).
+  `e18fd3988a6fa6ad642f44a084b436c6507a2f6b`. The matching tap commit is
+  [`1244ed6`](https://github.com/ictechgy/homebrew-tap/commit/1244ed6f0baf6cf2c557bec356230e3ea199961d).
 - `v0.8.1` was never published to PyPI: its Release workflow failed only on
   Ruff import ordering. It had no GitHub Release and was deliberately deleted
   from both the local and `origin` tag namespaces. Do not recreate it.
@@ -275,7 +271,7 @@ _Last updated: 2026-08-13 KST by Codex_
   and direct Codex custom preset routing from the clean installed wheel on both
   Python boundary jobs.
 
-## Prepared after 0.12.0
+## Completed in 0.13.0
 
 - Packaged `grok-cost-focused` review/route/run accepts `--low-model`,
   `--standard-model`, and `--high-model`. Each selected opaque label is inserted
@@ -381,7 +377,7 @@ _Last updated: 2026-08-13 KST by Codex_
   - An offline wheel/sdist build with build 1.5.0 and setuptools 84.0.0 plus
     strict Twine checks passed. Extracted-sdist isolation passed 794 tests with
     13 platform skips, including the release ancestry helper.
-  - A clean offline wheel install reported `weightclass 0.12.0`, exposed
+  - A clean offline wheel install reported `weightclass 0.13.0`, exposed
     `weightclass.entrypoint:main`, and returned the exact local low-tier smoke.
   - Twenty-process local measurement: classification entrypoint median
     20.20 ms; end-to-end local classify median 34.84 ms, down from the reviewed
@@ -398,7 +394,7 @@ _Last updated: 2026-08-13 KST by Codex_
     skips, and a clean wheel install passed version, classification, and Grok
     custom-model routing smokes.
 
-- Fresh unreleased Grok model-routing verification on 2026-08-13:
+- Fresh `0.13.0` Grok model-routing verification on 2026-08-13:
   - RED: the two focused review/run tests both returned `invalid_input` before
     implementation. GREEN: the same tests pass and bind exact tier commands,
     fingerprints, argv delivery, task substitution, and one-child execution.
@@ -412,6 +408,30 @@ _Last updated: 2026-08-13 KST by Codex_
     compileall, and `git diff --check` passed.
   - Offline wheel/sdist build and strict Twine checks passed. The extracted
     sdist passed 786 tests with 11 platform skips.
+
+- Fresh `0.13.0` release verification on 2026-08-13:
+  - Main CI run `31686174951` passed on the exact annotated-tag target
+    `155f744`: Python 3.10-3.14, macOS 3.10/3.14 boundaries, lint, strict
+    typing, build, metadata, and extracted-sdist isolation.
+  - Release workflow `31686408438` built one immutable Python 3.13 candidate,
+    revalidated it on Python 3.10 and 3.14 plus macOS boundaries, and published
+    those exact artifacts through PyPI Trusted Publishing after the required
+    environment review.
+  - PyPI exposes exactly one wheel and one sdist, neither yanked. Independent
+    downloads matched SHA-256: wheel
+    `88865ad50f8888f20e7716d099c39f7fcbb5c3fbb8a3a8e4c72f23e0271bc241`;
+    sdist `9ba9db753c4aaf5189bf0210cd7933bd29a68168fcf473aeb1ad302586297ae9`.
+  - A clean install of the independently downloaded wheel reported
+    `weightclass 0.13.0` and returned the exact local low-tier smoke. The
+    immutable release validators exercised the Grok custom-model route from
+    that same wheel on both Python boundary versions.
+  - Formula-scoped style and strict audit, source reinstall, `brew test`, and
+    direct classification/Grok custom-model route smokes passed. Installed
+    `/opt/homebrew/bin/wclass` reports `weightclass 0.13.0`; the route retained
+    Grok argv delivery, the reviewed effort flag, and the custom model.
+  - Post-release source-formula CI run `31687162123` passed on commit
+    `e18fd39`: Python 3.10-3.14, macOS boundaries, lint, strict typing, build,
+    metadata, and extracted-sdist isolation.
 
 - Fresh `0.12.0` release verification on 2026-08-13:
   - Main CI run `31672912246` passed on the exact annotated-tag target
@@ -581,17 +601,14 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Blockers & Open Questions
 
-- No known blocker or mandatory release/deployment step remains for `0.12.0`.
-- The Grok model-routing increment is verified but remains unpublished. A
-  future release must use a new version; PyPI `0.12.0` is immutable.
+- No known blocker or mandatory release/deployment step remains for `0.13.0`.
 - GitHub repository settings were updated and re-read through the API on
   2026-08-13. The active `Protect version tags` ruleset targets `refs/tags/v*`,
   has no bypass actor, and blocks updates and deletions. The `pypi` environment
   has one required user reviewer. Repository code also enforces ancestry as
   defense in depth; do not remove either layer.
-- The hash-pinned release closure was built from locally cached package-index
-  metadata and passed structural/hash validation. The first live Ubuntu tag
-  workflow is still the authoritative Linux wheel-selection check.
+- The hash-pinned release closure passed the live Ubuntu tag workflow using
+  the pinned Python 3.13 binary-wheel target and complete transitive closure.
 - No promotion-grade paired provider token-savings evidence has been collected. Do not
   add an `efficient` posture or change built-in/schema-2 effort behavior based
   on the exploratory pilot. A fresh, blind, fingerprint-bound evidence set
@@ -607,38 +624,32 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Next Steps
 
-1. Before publishing the Grok model-routing increment, bump to a new version
-   rather than reusing immutable `0.12.0`; retain the protected-tag and
-   required-`pypi`-reviewer controls.
-2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
+1. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
    compatibility feedback without task telemetry, provider-price inference, or
    a claim about actual bills. Do not change built-ins, standard/high routes,
    schema 2, or posture vocabulary from the low-target result.
-3. Any future token-efficiency candidate still needs fresh task-free paired
+2. Any future token-efficiency candidate still needs fresh task-free paired
    evidence and must pass the separate raw-token gate; the cost `go` does not
    satisfy it.
-4. Evaluate the Codex, `agy`, and Grok cost-focused examples independently
+3. Evaluate the Codex, `agy`, and Grok cost-focused examples independently
    before any promotion; do not combine vendor results or infer pricing.
-5. Re-enable Linux Claude semantic triage only after reviewing a concrete
+4. Re-enable Linux Claude semantic triage only after reviewing a concrete
    filesystem-containment command and its process-tree boundary.
-6. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
+5. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
    no-retention, and the single-reviewed-child boundary.
 
 ## Resume Prompt
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`
-and `AGENTS.md`, then continue from: `weightclass 0.12.0 is published to PyPI,
-has a GitHub Release, and is deployed through the verified Homebrew tap. Its
-cost-focused Claude low route remains the only measured cost opt-in. Codex,
-agy, and Grok cost-focused policies remain unqualified experiments; built-ins
-remain unchanged and each vendor still needs independent evaluation before
-promotion. Task-free review-preset, --preset routing, and custom Claude/Codex
-tier model/effort overrides are available in 0.12.0; custom configurations are
-explicitly unqualified. The unreleased source adds tier-specific Grok model
-overrides while retaining packaged Grok effort values and argv task delivery.
-It also contains repository-review remediations: a hash-pinned release
-toolchain, tag-to-main ancestry gate, JSON recursion redaction, and a
-lightweight local-classification entrypoint. All repository-side tests and
-offline distribution checks are green. GitHub now blocks update/deletion of
-v* tags and requires a pypi environment reviewer. Before publication, bump to
-a new version; do not attempt to republish immutable 0.12.0.`
+and `AGENTS.md`, then continue from: `weightclass 0.13.0 is published to PyPI,
+has a GitHub Release, and is deployed through the verified Homebrew tap. It
+adds tier-specific opaque Grok model routing while retaining packaged effort
+values and argv task delivery. Custom Claude/Codex/Grok configurations remain
+explicitly unqualified; built-ins are unchanged. The release also contains a
+fully hash-pinned toolchain, tag-to-main ancestry gate, JSON recursion
+redaction, lightweight local-classification entrypoint, and Node 24 GitHub
+Actions. The immutable release workflow, public artifact hashes, Homebrew
+style/audit/source install/test, and installed 0.13.0 smokes are green. GitHub
+blocks update/deletion of v* tags and requires a pypi environment reviewer.
+Do not attempt to republish immutable 0.13.0; use a new version for future
+changes.`
