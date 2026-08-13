@@ -100,6 +100,73 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
             Path(".github/workflows/release.yml").read_text(encoding="utf-8"),
         )
 
+    def test_release_toolchain_is_exactly_hash_pinned_before_the_only_build(self) -> None:
+        """Breaks if a tag build can resolve mutable tool or backend artifacts."""
+        requirements_path = Path("requirements/release.txt")
+        self.assertTrue(requirements_path.is_file(), "release requirements lock is missing")
+        if not requirements_path.is_file():
+            return
+        requirements = requirements_path.read_text(encoding="utf-8")
+        workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        normalized_workflow = " ".join(workflow.split())
+        pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+
+        first_requirement = re.search(r"^[a-z0-9][a-z0-9._-]*==", requirements, re.MULTILINE)
+        self.assertIsNotNone(first_requirement)
+        if first_requirement is None:
+            return
+        requirement_blocks = re.split(
+            r"\n(?=[a-z0-9][a-z0-9._-]*==)", requirements[first_requirement.start() :]
+        )
+        pinned_names: set[str] = set()
+        for block in requirement_blocks:
+            stripped = block.lstrip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            first_line = stripped.splitlines()[0]
+            match = re.fullmatch(r"([a-z0-9][a-z0-9._-]*)==[^ \\]+(?: \\)?", first_line)
+            self.assertIsNotNone(match, first_line)
+            if match is None:
+                continue
+            pinned_names.add(match.group(1))
+            self.assertRegex(block, r"--hash=sha256:[0-9a-f]{64}")
+
+        self.assertEqual(
+            pinned_names,
+            {
+                "ast-serialize",
+                "build",
+                "docutils",
+                "librt",
+                "markdown-it-py",
+                "mdurl",
+                "mypy",
+                "mypy-extensions",
+                "nh3",
+                "packaging",
+                "pathspec",
+                "pygments",
+                "pyproject-hooks",
+                "readme-renderer",
+                "rich",
+                "ruff",
+                "setuptools",
+                "twine",
+                "typing-extensions",
+            },
+        )
+        self.assertIn(
+            "python -m pip install --require-hashes --only-binary=:all: --no-deps "
+            "--requirement requirements/release.txt",
+            normalized_workflow,
+        )
+        self.assertIn("python -m build --no-isolation --outdir build-output", workflow)
+        build_job = workflow.split("\n  build-candidate:\n", 1)[1].split(
+            "\n  validate-python-310:\n", 1
+        )[0]
+        self.assertIn('python-version: "3.13.12"', build_job)
+        self.assertRegex(pyproject, r'requires = \["setuptools==[0-9]+(?:\.[0-9]+)+"\]')
+
     def test_boundary_validators_use_same_candidate_and_never_rebuild(self) -> None:
         text = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertEqual(text.count("python -m build"), 1)
@@ -136,6 +203,16 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
         self.assertIn("--print-staging-paths publish-staging", block)
         self.assertIn("packages-dir: publish-staging", block)
         self.assertNotRegex(block, r"(?:\*\.whl|\*\.tar\.gz|dist/\*)")
+
+    def test_release_build_proves_the_tag_is_reachable_from_origin_main(self) -> None:
+        """Breaks if a detached or unmerged tag can reach trusted publishing."""
+        text = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        block = text.split("\n  build-candidate:\n", 1)[1].split("\n  validate-python-310:\n", 1)[0]
+
+        self.assertIn("fetch-depth: 0", block)
+        self.assertIn("tests/verify_release_source.py", block)
+        self.assertIn('--tag-commit "$GITHUB_SHA"', block)
+        self.assertIn("--main-ref refs/remotes/origin/main", block)
 
     def test_macos_release_gate_matches_protocol_two_ci_boundaries(self) -> None:
         text = Path(".github/workflows/release.yml").read_text(encoding="utf-8")

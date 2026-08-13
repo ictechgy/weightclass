@@ -14,6 +14,7 @@ from weightclass import cli, json_input
 
 MAX_RUNTIME_JSON_BYTES = 262_144
 OVERSIZED_INTEGER_JSON = '{"value":' + ("9" * 5_000) + "}"
+DEEPLY_NESTED_JSON = '{"value":' * 1_200 + "0" + "}" * 1_200
 
 
 def _native_policy() -> dict[str, object]:
@@ -311,6 +312,39 @@ class RuntimeJsonInputTests(unittest.TestCase):
             path.write_text(OVERSIZED_INTEGER_JSON, encoding="utf-8")
 
             result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+
+        self._assert_invalid_input(result)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_native_cli_redacts_json_decoder_recursion_failure(self) -> None:
+        """Breaks if supported Python 3.10 exposes a decoder recursion traceback."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "deep-policy.json"
+            path.write_text(DEEPLY_NESTED_JSON, encoding="utf-8")
+
+            result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+
+        self._assert_invalid_input(result)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_v2_cli_redacts_json_decoder_recursion_failure(self) -> None:
+        """Breaks if the API policy loader diverges from native redaction."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "deep-policy.json"
+            path.write_text(DEEPLY_NESTED_JSON, encoding="utf-8")
+
+            result = self._run(
+                [
+                    "v2",
+                    "route",
+                    "--policy",
+                    str(path),
+                    "--source-vendor",
+                    "codex",
+                    "--api-runtime",
+                    sys.executable,
+                ]
+            )
 
         self._assert_invalid_input(result)
         self.assertNotIn("Traceback", result.stderr)

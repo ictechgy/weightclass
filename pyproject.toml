@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools==84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -35,7 +35,7 @@ Repository = "https://github.com/ictechgy/weightclass"
 Issues = "https://github.com/ictechgy/weightclass/issues"
 
 [project.scripts]
-wclass = "weightclass.cli:main"
+wclass = "weightclass.entrypoint:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

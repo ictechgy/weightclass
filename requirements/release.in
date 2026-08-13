@@ -1,0 +1,7 @@
+# The only network-resolved Python toolchain used to build a release candidate.
+# Regenerate release.txt deliberately and review every version/hash change.
+build==1.5.0
+mypy==2.3.0
+ruff==0.16.2
+setuptools==84.0.0
+twine==7.0.0

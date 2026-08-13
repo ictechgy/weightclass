@@ -1150,66 +1150,19 @@ def classify_from_standard_input(
     show_triage_command: bool = False,
     explain: bool = False,
 ) -> int:
-    """Classify a task read from stdin without echoing or persisting it.
+    """Retain the historical direct-call seam while sharing the lightweight core."""
+    from .classification_cli import classify_task_input
 
-    기본값은 로컬 판정이다. --ask-vendor 는 이미 설치된 벤더 CLI 를 한 번
-    실행해 난이도를 묻는다. 로컬 키워드 판정은 어휘만 보므로 전문용어 없이
-    설명된 어려운 작업을 놓친다.
-    """
-    if (ask_vendor or show_triage_command) and source_vendor is None:
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    if explain and (ask_vendor or show_triage_command):
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    if show_triage_command:
-        assert source_vendor is not None
-        # 태스크를 읽지 않고 벤더도 부르지 않는다. 명령만 보여준다.
-        #
-        # 벤더 라벨이 열려 있으므로 이 패키지가 판정 명령을 갖지 않는 벤더도
-        # 여기까지 내려온다. triage_descriptor 는 그런 벤더에 대해 이미
-        # TriageUnavailableError 로 닫히지만(내부에서 실패), 여기서 잡지
-        # 않으면 트레이스백으로 새어 나간다. --ask-vendor 경로와 같은 진단으로
-        # 닫는다.
-        try:
-            print(json.dumps(triage_descriptor(source_vendor)))
-        except TriageUnavailableError:
-            print(json.dumps({"error": "triage_unavailable"}), file=sys.stderr)
-            return 8
-        return 0
-    try:
-        task = read_task_from_standard_input()
-        if not ask_vendor:
-            if explain:
-                decision = classify_task_with_reason(task)
-                tier = decision.tier
-            else:
-                tier = classify_task(task)
-            tier_source = "local"
-        else:
-            # 티어를 밖에서 받더라도 검증은 건너뛰지 않는다.
-            validate_task(task)
-            assert source_vendor is not None
-            tier = ask_vendor_for_tier(task, source_vendor)
-            tier_source = "vendor"
-    except InvalidTaskError:
-        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
-        return 2
-    except TriageUnavailableError:
-        # 조용히 로컬로 되돌아가지 않는다. 판정을 못 했다는 사실이 보여야 한다.
-        print(json.dumps({"error": "triage_unavailable"}), file=sys.stderr)
-        return 8
-    # 기본 경로의 출력은 글자 그대로 유지한다. packaging/homebrew/weightclass.rb
-    # 와 .github/workflows/ci.yml 이 {"tier": "low"} 를 정확히 단언하고 있고,
-    # formula 는 이미 배포되어 있다. 새 키는 --ask-vendor 를 쓴 경우에만 붙인다.
-    response: dict[str, str] = {"tier": tier}
-    if explain:
-        response["reason_code"] = decision.reason_code
-        response["policy_version"] = decision.policy_version
-    elif ask_vendor:
-        response["tier_source"] = tier_source
-    print(json.dumps(response))
-    return 0
+    return classify_task_input(
+        source_vendor,
+        ask_vendor,
+        show_triage_command,
+        explain,
+        ask_vendor_for_tier=ask_vendor_for_tier,
+        triage_descriptor=triage_descriptor,
+        triage_unavailable_error=TriageUnavailableError,
+        read_task=read_task_from_standard_input,
+    )
 
 
 def select_task_route(

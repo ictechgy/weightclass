@@ -34,9 +34,14 @@ publisher once, on PyPI:
    - Repository: `weightclass`
    - Workflow: `release.yml`
    - Environment: `pypi`
-3. Optionally, in this repository's **Settings → Environments → pypi**, add
-   yourself as a required reviewer. The release then pauses for an explicit
-   approval between the verification job and the upload.
+3. In this repository's **Settings → Environments → pypi**, add at least one
+   required reviewer. The release must pause for an explicit approval between
+   the verification job and the upload.
+4. Protect the `v*` tag pattern in repository rules so only authorized release
+   maintainers can create or update release tags. The workflow also rejects a
+   tag commit that is not reachable from `origin/main`, but repository rules
+   and the required environment review remain the authorization boundary
+   because workflow code comes from the tagged commit.
 
 ## Cutting a release
 
@@ -44,10 +49,12 @@ publisher once, on PyPI:
 2. Confirm `main` is green and reproduce the gates locally:
 
    ```sh
+   python3.13 -m pip install --require-hashes --only-binary=:all: --no-deps \
+     --requirement requirements/release.txt
    PYTHONPATH=src python3 -W error::ResourceWarning -m unittest discover -s tests
    ruff check src tests && ruff format --check src tests && mypy
    release_dist_dir=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-release.XXXXXX")
-   python3 -m build --outdir "$release_dist_dir"
+   python3.13 -m build --no-isolation --outdir "$release_dist_dir"
    twine check --strict "$release_dist_dir"/*.whl "$release_dist_dir"/*.tar.gz
    python3 tests/verify_distribution_isolation.py \
      --source . --dist-dir "$release_dist_dir" --run-sdist-tests

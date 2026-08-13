@@ -286,6 +286,16 @@ _Last updated: 2026-08-13 KST by Codex_
   substitutes the task only immediately before the one foreground spawn.
 - Release boundary jobs now exercise a Grok custom model route from the clean
   installed wheel on Python 3.10 and 3.14.
+- The repository-wide security/performance follow-up pins the Python 3.13.12
+  release toolchain with exact versions and SHA-256 hashes, builds with the
+  pinned setuptools backend and no build isolation, and rejects a release tag
+  that is not reachable from `origin/main` before installing networked tools.
+- The shared bounded JSON loader now converts decoder `RecursionError` to the
+  existing value-free `invalid_input` boundary. Native and API policy commands
+  cover the supported Python 3.10 failure mode directly.
+- Local `classify` now enters through a small command-family dispatcher and
+  does not import delegation, V2, native runtime, or triage modules. Vendor
+  triage remains lazy and explicit; all other commands retain the full parser.
 
 ## Key Files & State
 
@@ -320,6 +330,12 @@ _Last updated: 2026-08-13 KST by Codex_
 - `.github/workflows/release.yml`: builds one immutable candidate, validates it
   on Linux and macOS, then publishes the exact artifact through PyPI Trusted
   Publishing.
+- `requirements/release.in` and `requirements/release.txt`: reviewed direct
+  release tools and their exact hash-pinned installation closure.
+- `src/weightclass/entrypoint.py` and `classification_cli.py`: lightweight
+  local-classification dispatch and lazy vendor-triage loading.
+- `tests/verify_release_source.py`: redacted release-tag ancestry gate used
+  before the release job installs networked tools.
 - `docs/completion-audit-v2.md`: requirement-to-test completion map. Goal g12 is leader-verified; retain this audit connection when refreshing this file.
 
 ## Important Context / Decisions
@@ -349,6 +365,23 @@ _Last updated: 2026-08-13 KST by Codex_
   is required.
 
 ## Verification
+
+- Fresh repository-review remediation verification on 2026-08-13:
+  - RED→GREEN evidence covers a missing release lock, Python 3.10 native/V2
+    decoder recursion tracebacks, unmerged Git release commits, eager protocol
+    imports on local classification, and an overbroad local exception catch.
+  - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
+    `ResourceWarning` as an error: 799 tests passed on each interpreter.
+  - Ruff 0.16.2 check/format over 104 files, strict mypy over 103 source files,
+    compileall, and `git diff --check` passed.
+  - An offline wheel/sdist build with build 1.5.0 and setuptools 84.0.0 plus
+    strict Twine checks passed. Extracted-sdist isolation passed 794 tests with
+    13 platform skips, including the release ancestry helper.
+  - A clean offline wheel install reported `weightclass 0.12.0`, exposed
+    `weightclass.entrypoint:main`, and returned the exact local low-tier smoke.
+  - Twenty-process local measurement: classification entrypoint median
+    20.20 ms; end-to-end local classify median 34.84 ms, down from the reviewed
+    71.57 ms baseline. This is host-local evidence, not a cross-platform SLA.
 
 - Fresh unreleased Grok model-routing verification on 2026-08-13:
   - RED: the two focused review/run tests both returned `invalid_input` before
@@ -536,6 +569,14 @@ _Last updated: 2026-08-13 KST by Codex_
 - No known blocker or mandatory release/deployment step remains for `0.12.0`.
 - The Grok model-routing increment is verified but remains unpublished. A
   future release must use a new version; PyPI `0.12.0` is immutable.
+- GitHub repository settings were updated and re-read through the API on
+  2026-08-13. The active `Protect version tags` ruleset targets `refs/tags/v*`,
+  has no bypass actor, and blocks updates and deletions. The `pypi` environment
+  has one required user reviewer. Repository code also enforces ancestry as
+  defense in depth; do not remove either layer.
+- The hash-pinned release closure was built from locally cached package-index
+  metadata and passed structural/hash validation. The first live Ubuntu tag
+  workflow is still the authoritative Linux wheel-selection check.
 - No promotion-grade paired provider token-savings evidence has been collected. Do not
   add an `efficient` posture or change built-in/schema-2 effort behavior based
   on the exploratory pilot. A fresh, blind, fingerprint-bound evidence set
@@ -552,7 +593,8 @@ _Last updated: 2026-08-13 KST by Codex_
 ## Next Steps
 
 1. Before publishing the Grok model-routing increment, bump to a new version
-   rather than reusing immutable `0.12.0`.
+   rather than reusing immutable `0.12.0`; retain the protected-tag and
+   required-`pypi`-reviewer controls.
 2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
    compatibility feedback without task telemetry, provider-price inference, or
    a claim about actual bills. Do not change built-ins, standard/high routes,
@@ -579,5 +621,9 @@ promotion. Task-free review-preset, --preset routing, and custom Claude/Codex
 tier model/effort overrides are available in 0.12.0; custom configurations are
 explicitly unqualified. The unreleased source adds tier-specific Grok model
 overrides while retaining packaged Grok effort values and argv task delivery.
-Bump to a new version before publication; do not attempt to republish immutable
-0.12.0.`
+It also contains repository-review remediations: a hash-pinned release
+toolchain, tag-to-main ancestry gate, JSON recursion redaction, and a
+lightweight local-classification entrypoint. All repository-side tests and
+offline distribution checks are green. GitHub now blocks update/deletion of
+v* tags and requires a pypi environment reviewer. Before publication, bump to
+a new version; do not attempt to republish immutable 0.12.0.`

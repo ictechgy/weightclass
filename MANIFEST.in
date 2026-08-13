@@ -5,5 +5,6 @@ include tests/synthetic_*.py
 include tests/runtime_guard.py
 include tests/compare_release_candidates.py
 include tests/verify_release_candidate.py
+include tests/verify_release_source.py
 include tests/verify_distribution_isolation.py
 include tests/release-normalization-exclusions-v1.json

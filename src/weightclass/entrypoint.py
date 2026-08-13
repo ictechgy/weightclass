@@ -1,0 +1,18 @@
+"""Small command-family dispatcher for cold CLI startup."""
+
+from __future__ import annotations
+
+import sys
+from collections.abc import Sequence
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ["classify"]:
+        from .classification_cli import main as classify_main
+
+        return classify_main(arguments[1:])
+
+    from .cli import main as full_main
+
+    return full_main(arguments)

@@ -98,7 +98,7 @@ def _load_json_object_from_open_fd(
         contents = _read_bounded_bytes(file_descriptor, max_bytes)
         decoded = contents.decode("utf-8")
         value = json.loads(decoded, object_pairs_hook=json_object_pairs_without_duplicates)
-    except (OSError, ValueError):
+    except (OSError, RecursionError, ValueError):
         raise JsonInputError() from None
     finally:
         os.close(file_descriptor)
