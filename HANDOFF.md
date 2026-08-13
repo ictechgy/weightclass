@@ -13,23 +13,22 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Current Status
 
-- `weightclass 0.11.0` is merged, tagged, published, and installable.
-  - Release commit and annotated `v0.11.0` tag target:
-    `1f4a15a56934bf2aed2267b738a14868820ce7df`.
-  - GitHub Release: <https://github.com/ictechgy/weightclass/releases/tag/v0.11.0>.
+- `weightclass 0.12.0` is merged, tagged, published, and installable.
+  - Release commit and annotated `v0.12.0` tag target:
+    `37ea1a7d3a9c43ebd52c5faa3c8c7f88b7b428c6`.
+  - GitHub Release: <https://github.com/ictechgy/weightclass/releases/tag/v0.12.0>.
   - Final release-gating CI:
-    [31668199216](https://github.com/ictechgy/weightclass/actions/runs/31668199216), completed successfully.
+    [31672912246](https://github.com/ictechgy/weightclass/actions/runs/31672912246), completed successfully.
   - Immutable Release workflow:
-    [31668338506](https://github.com/ictechgy/weightclass/actions/runs/31668338506), completed successfully.
-  - PyPI: <https://pypi.org/project/weightclass/0.11.0/>.
-- `0.12.0` is the intended next release for the additive preset increment:
-  task-free `review-preset`, `route`/`run --preset`, and tier-specific opaque
-  model/effort overrides for the packaged Claude and Codex policies. The
-  feature is committed locally and the declared package version is `0.12.0`,
-  but it is not yet tagged, published, or installed through Homebrew.
+    [31673091914](https://github.com/ictechgy/weightclass/actions/runs/31673091914), completed successfully.
+  - PyPI: <https://pypi.org/project/weightclass/0.12.0/>.
+- `0.12.0` adds task-free `review-preset`, `route`/`run --preset`, and
+  tier-specific opaque model/effort overrides for the packaged Claude and
+  Codex policies. Custom selections remain explicitly unqualified; built-in
+  routes and provider boundaries are unchanged.
 - The source-of-truth Homebrew formula was updated on `main` by
-  `2c10b38020d93e13c513f36c3159da5e0e9311e9`. The matching tap commit is
-  [`ba721f2`](https://github.com/ictechgy/homebrew-tap/commit/ba721f25ef7b94654e6ad7a5021bfa94f1c9a016).
+  `8e90b4e7a8e791d4400d6132719fb6a15f7dc3c1`. The matching tap commit is
+  [`8d2b702`](https://github.com/ictechgy/homebrew-tap/commit/8d2b702851a09a770530f45bad101137d3a5a778).
 - `v0.8.1` was never published to PyPI: its Release workflow failed only on
   Ruff import ordering. It had no GitHub Release and was deliberately deleted
   from both the local and `origin` tag namespaces. Do not recreate it.
@@ -39,7 +38,7 @@ _Last updated: 2026-08-13 KST by Codex_
 - `0.9.0` is an earlier published release. The `0.10.0` minor adds offline
   evaluation commands and an additive example-policy CLI surface; built-in
   route behavior and policy schemas remain unchanged.
-- `0.10.0` is the previous published release. The `0.11.0` minor adds
+- `0.10.0` is an earlier published release. The `0.11.0` minor adds
   packaged opt-in cost-focused policies for every built-in vendor, in-memory
   `--cost-focused` selection, and an opaque Codex model override. Built-in
   route behavior and policy schemas remain unchanged.
@@ -245,7 +244,7 @@ _Last updated: 2026-08-13 KST by Codex_
   a cost-focused Codex route directly from the installed CLI without a policy
   file.
 
-## Prepared for 0.12.0
+## Completed in 0.12.0
 
 - Added `route`/`run --preset <vendor>-cost-focused` as a shorthand that binds
   the packaged source vendor without a separate `--source-vendor`. It conflicts
@@ -333,6 +332,32 @@ _Last updated: 2026-08-13 KST by Codex_
   is required.
 
 ## Verification
+
+- Fresh `0.12.0` release verification on 2026-08-13:
+  - Main CI run `31672912246` passed on the exact annotated-tag target
+    `37ea1a7`: Python 3.10-3.14, macOS 3.10/3.14 boundaries, lint, strict
+    typing, build, metadata, and extracted-sdist isolation.
+  - Release workflow `31673091914` built one immutable Python 3.13 candidate,
+    revalidated it on Python 3.10 and 3.14 plus macOS boundaries, and published
+    those exact artifacts through PyPI Trusted Publishing.
+  - PyPI exposes exactly one wheel and one sdist, neither yanked. Independent
+    downloads matched SHA-256: wheel
+    `2ffa1606ed2736e167867f7a5c007a182ded684d5be59d8cdf06b210f5e3ca5a`;
+    sdist `d65eb74c2d9a26f8001bab736f5bae8accc753f328a76479d16eae86e472828d`.
+  - A clean install of the independently downloaded wheel reported
+    `weightclass 0.12.0`; task-free Claude custom review and Codex custom
+    model/effort route smokes returned `unqualified_custom` without invoking a
+    vendor.
+  - Formula-scoped style and strict audit, source reinstall, `brew test`, and
+    direct Claude review/Codex route smokes passed. Installed
+    `/opt/homebrew/bin/wclass` reports `weightclass 0.12.0`.
+  - Post-release source-formula CI run `31673761232` passed on commit
+    `8e90b4e`: Python 3.10-3.14, macOS boundaries, lint, strict typing, build,
+    metadata, and extracted-sdist isolation.
+  - The first pre-tag CI run `31672522120` exposed a test-only macOS `/dev/fd`
+    snapshot race. Commit `37ea1a7` replaced it with exact descriptor tracking;
+    mutation testing proved the new assertion detects the intended leak, and
+    no triage production code changed.
 
 - Fresh `0.12.0` pre-release verification on 2026-08-13:
   - Python 3.14.6 and Python 3.10.20 full `unittest` suites with
@@ -476,11 +501,7 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Blockers & Open Questions
 
-- No known blocker remains from the published `0.11.0` release.
-- No mandatory release or deployment step remains for `0.11.0`.
-- The preset increment is committed and declared as `0.12.0` but remains
-  unpublished. Do not describe the installed 0.11.0 CLI as having these
-  options until the immutable release and formula update both complete.
+- No known blocker or mandatory release/deployment step remains for `0.12.0`.
 - No promotion-grade paired provider token-savings evidence has been collected. Do not
   add an `efficient` posture or change built-in/schema-2 effort behavior based
   on the exploratory pilot. A fresh, blind, fingerprint-bound evidence set
@@ -496,32 +517,28 @@ _Last updated: 2026-08-13 KST by Codex_
 
 ## Next Steps
 
-1. With explicit network approval, push the prepared `0.12.0` `main`, wait for
-   green CI, and only then cut annotated tag `v0.12.0` and monitor the immutable
-   release workflow.
-2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
+1. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
    compatibility feedback without task telemetry, provider-price inference, or
    a claim about actual bills. Do not change built-ins, standard/high routes,
    schema 2, or posture vocabulary from the low-target result.
-3. Any future token-efficiency candidate still needs fresh task-free paired
+2. Any future token-efficiency candidate still needs fresh task-free paired
    evidence and must pass the separate raw-token gate; the cost `go` does not
    satisfy it.
-4. Evaluate the Codex, `agy`, and Grok cost-focused examples independently
+3. Evaluate the Codex, `agy`, and Grok cost-focused examples independently
    before any promotion; do not combine vendor results or infer pricing.
-5. Re-enable Linux Claude semantic triage only after reviewing a concrete
+4. Re-enable Linux Claude semantic triage only after reviewing a concrete
    filesystem-containment command and its process-tree boundary.
-6. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
+5. Preserve Protocol 1 compatibility, explicit cross-vendor opt-in, task
    no-retention, and the single-reviewed-child boundary.
 
 ## Resume Prompt
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`
-and `AGENTS.md`, then continue from: `weightclass 0.11.0 is published to PyPI,
+and `AGENTS.md`, then continue from: `weightclass 0.12.0 is published to PyPI,
 has a GitHub Release, and is deployed through the verified Homebrew tap. Its
 cost-focused Claude low route remains the only measured cost opt-in. Codex,
 agy, and Grok cost-focused policies remain unqualified experiments; built-ins
 remain unchanged and each vendor still needs independent evaluation before
-promotion. The local branch has a verified `0.12.0` preset increment awaiting
-network-approved push/tag/publication: task-free review-preset, --preset
-routing, and custom Claude/Codex tier model/effort overrides. Do not claim
-these are present in installed 0.11.0.`
+promotion. Task-free review-preset, --preset routing, and custom Claude/Codex
+tier model/effort overrides are available in 0.12.0; custom configurations are
+explicitly unqualified.`
