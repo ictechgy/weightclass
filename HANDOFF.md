@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-13 19:35 KST by Codex_
+_Last updated: 2026-08-13 21:03 KST by Codex_
 
 ## Goal
 
@@ -31,6 +31,15 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
   task-free `review-cost-profile` plus non-executing `recommend`. It is not
   tagged, published, or installed through Homebrew yet. Built-in routes and
   every execution path remain unchanged.
+- An approved exact-command measurement probe used one already-public standard
+  fixture and exactly six vendor calls: built-in standard/medium versus the
+  packaged standard/low candidate for Codex, `agy`, and Grok. All six commands
+  exited successfully. Codex exposed 49,596 raw tokens for the baseline and
+  24,921 for the candidate (49.75% fewer in this single pair); neither arm
+  exposed cost. The exact `agy` and Grok commands exposed neither usage nor
+  cost metadata. This public, single-pair, non-blind probe has no independent
+  quality result and is diagnostic only. Task/response text, per-call output,
+  and disposable workspaces were not retained.
 - The source-of-truth Homebrew formula was updated on `main` by
   `e18fd3988a6fa6ad642f44a084b436c6507a2f6b`. The matching tap commit is
   [`1244ed6`](https://github.com/ictechgy/homebrew-tap/commit/1244ed6f0baf6cf2c557bec356230e3ea199961d).
@@ -671,9 +680,9 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
 ## Blockers & Open Questions
 
 - No known blocker or mandatory release/deployment step remains for `0.13.0`.
-- The cost-recommendation worktree is deliberately unreleased and uncommitted.
-  Review the diff before deciding its version, commit, or deployment. Do not
-  republish immutable `0.13.0`.
+- The cost-recommendation work is merged to `main` by PR #34 but deliberately
+  unreleased. Decide its next version and release notes before publishing. Do
+  not republish immutable `0.13.0`.
 - GitHub repository settings were updated and re-read through the API on
   2026-08-13. The active `Protect version tags` ruleset targets `refs/tags/v*`,
   has no bypass actor, and blocks updates and deletions. The `pypi` environment
@@ -696,9 +705,9 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
 
 ## Next Steps
 
-1. Review and commit the unreleased cost-recommendation diff. If publishing,
-   choose a new version, update release notes/HANDOFF, and run the normal
-   immutable release process; never overwrite `0.13.0`.
+1. If publishing the merged cost-recommendation feature, choose a new version,
+   update release notes/HANDOFF, and run the normal immutable release process;
+   never overwrite `0.13.0`.
 2. Keep the cost-focused Claude policy explicit opt-in only. Collect real-user
    compatibility feedback without task telemetry, provider-price inference, or
    a claim about actual bills. Do not change built-ins, standard/high routes,
@@ -717,12 +726,12 @@ _Last updated: 2026-08-13 19:35 KST by Codex_
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md`
 and `AGENTS.md`, then continue from: `weightclass 0.13.0 remains the immutable
-published release. The current main worktree has an uncommitted, unreleased
-same-vendor advisory cost router: review-cost-profile plus recommend, strict
-cost/qualification schemas, full evidence fingerprints, fixed conservative
-gates, explicit abstention, provider capability/task-delivery receipts, docs,
-and eight focused tests. Built-ins and execution paths are unchanged. Python
-3.10/3.14 each passed 808 tests; Ruff, strict mypy, compileall, build, strict
+published release. Main contains the merged, unreleased same-vendor advisory
+cost router: review-cost-profile plus recommend, strict cost/qualification
+schemas, full evidence fingerprints, fixed conservative gates, explicit
+abstention, provider capability/task-delivery receipts, docs, and ten focused
+tests. Built-ins and execution paths are unchanged. Python 3.10/3.14 each
+passed 810 tests; Ruff, strict mypy, compileall, build, strict
 Twine, extracted-sdist isolation, and a clean-wheel recommendation smoke are
-green. Review the diff before choosing a new version/commit/release. Do not
-republish 0.13.0.`
+green. Choose a new version and run the immutable release process before
+publishing; do not republish 0.13.0.`
