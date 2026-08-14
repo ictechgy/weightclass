@@ -82,8 +82,8 @@ profile/vendor are unchanged. The run order is fixed:
 6. obtain the first executable observation and bind the review descriptor;
 7. compare the exact acknowledgement;
 8. read and validate stdin exactly once;
-9. observe the executable again immediately before spawn;
-10. materialize once and start exactly one foreground child.
+9. materialize and validate the redacted invocation exactly once;
+10. observe the executable again, then immediately start exactly one foreground child.
 
 Every failure before step 8 reads zero task bytes and starts zero children.
 There is no fallback, recovery, or retry path. Child stdout/stderr and the
@@ -126,10 +126,10 @@ is outside that guarantee because the selected vendor process controls it.
 ## Residual executable race
 
 The route descriptor binds a complete `lstat` identity, and run compares that
-identity before task access and again immediately before spawn. This detects
-ordinary executable replacement across review/run and during the pre-spawn
-window. The final observation and path-based process creation are not atomic,
-so an actor able to replace the path after the final check can still win a
-time-of-check/time-of-use race. Keep the executable and every containing
-directory under an appropriate ownership boundary; schema 3 does not claim
-verified-object execution.
+identity before task access and again after task-dependent materialization,
+immediately before spawn. This detects ordinary executable replacement across
+review/run and narrows the final pre-spawn window. The final observation and
+path-based process creation are not atomic, so an actor able to replace the path
+after the final check can still win a time-of-check/time-of-use race. Keep the
+executable and every containing directory under an appropriate ownership
+boundary; schema 3 does not claim verified-object execution.

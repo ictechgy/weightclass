@@ -318,7 +318,7 @@ def run_interactive_selector(
             )
             for route in policy.routes
         ]
-    except (OSError, TypeError, ValueError, V2ValidationError) as error:
+    except (OSError, RuntimeError, TypeError, ValueError, V2ValidationError) as error:
         raise InteractiveSelectorError() from error
 
     # Preview stays on the injected controlling console.  It explicitly

@@ -59,11 +59,12 @@ def run_native_v3(
     task: ValidatedTaskV2,
     first_observation: ExecutableObservation,
 ) -> int:
-    """Reobserve, materialize once, and spawn one foreground child."""
+    """Materialize once, reobserve, and spawn one foreground child."""
+    invocation = _materialize(selected, task)
     try:
         final_observation = observe_executable(selected.executable)
     except (OSError, V2ValidationError, ValueError):
         raise NativeV3ExecutorUnavailableError() from None
     if final_observation != first_observation:
         raise NativeV3FingerprintMismatchError()
-    return run_owned_foreground_redacted(_materialize(selected, task))
+    return run_owned_foreground_redacted(invocation)

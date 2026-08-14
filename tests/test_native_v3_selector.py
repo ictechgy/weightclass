@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import mock_open, patch
 
 from weightclass import cli
-from weightclass.native_v3_selector import run_interactive_selector
+from weightclass.native_v3_selector import InteractiveSelectorError, run_interactive_selector
 
 
 class NativeV3SelectorTests(unittest.TestCase):
@@ -94,6 +94,23 @@ class NativeV3SelectorTests(unittest.TestCase):
         ctermid.assert_called_once_with()
         opener.assert_called_once_with("/controlled/tty", "r+", encoding="utf-8", buffering=1)
         self.assertIs(selector.call_args.args[2], __import__("sys").stdout)
+
+    def test_observation_runtime_error_is_redacted_at_the_selector_boundary(self) -> None:
+        def unavailable(path: str) -> object:
+            del path
+            raise RuntimeError("PRIVATE PATH")
+
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(InteractiveSelectorError) as raised:
+                run_interactive_selector(
+                    self.answers(),
+                    io.StringIO(),
+                    io.StringIO(),
+                    path_value=self.installed(directory),
+                    observer=unavailable,  # type: ignore[arg-type]
+                )
+
+        self.assertEqual(str(raised.exception), "")
 
 
 if __name__ == "__main__":

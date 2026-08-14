@@ -73,11 +73,13 @@ runtime. See [Native schema 3](docs/native-schema-3.md).
 `wclass --help` lists the whole surface:
 
 ```text
-wclass [-h] [--version] {discover,profile,classify,example-policy,review-preset,review-cost-profile,recommend,route,run,render,delegate,v2} ...
+wclass [-h] [--version] {discover,profile,select,classify,example-policy,review-preset,review-cost-profile,recommend,route,run,render,delegate,v2} ...
 ```
 
-`classify`, `recommend`, `route`, and `run` read the task from standard input. `discover`
-and `profile` are task-free local selection commands. `render`
+`classify`, `recommend`, `route`, and `run` read the task from standard input. `discover`,
+`profile`, and `select` are task-free local selection commands. `select` reads
+numeric choices and confirmations from the controlling terminal and writes only
+the confirmed canonical policy to standard output. `render`
 prints the command of a policy route named by a workflow descriptor and never
 reads a task. `example-policy` emits packaged policy JSON; `review-preset`
 prints every command and fingerprint in one packaged policy.
@@ -101,6 +103,7 @@ them:
 | Code | Meaning |
 | --- | --- |
 | `0` | Success. For `run` and `v2 run`, the selected command exited `0`. |
+| `1` | `select` was cancelled or reached terminal EOF before policy emission. |
 | `2` | `invalid_task` or `invalid_input`. |
 | `3` | `unsupported_route` — no policy route matched. |
 | `4` | `executor_unavailable` — the command could not be started. |
@@ -109,8 +112,8 @@ them:
 | `7` | `executor_failed` — the command started and exited non-zero. |
 | `8` | `triage_unavailable` — `--ask-vendor` could not obtain a tier. |
 
-Code `1` is not weightclass's; it means the interpreter died on an unhandled
-exception, which is a bug worth reporting.
+Outside the documented `select` cancellation path, code `1` indicates an
+unhandled interpreter exception and is a bug worth reporting.
 
 ## Discover installed agents and generate a policy
 
@@ -131,7 +134,13 @@ wclass discover --agent grok
 
 The JSON result distinguishes an executable detected on the local path from a
 usable subscription or model. `executable_detected` means only that a regular
-executable file was found. Subscription, pricing, and quota remain `unknown`.
+executable file was found. A package-managed final-component symlink is resolved,
+and discovery emits and later policy generation binds its canonical regular-file
+target rather than the mutable link name. Subscription, pricing, and quota remain
+`unknown`. The schema-1 `network_used: false` field is retained for compatibility
+and means that weightclass opens no network client; `network_probe_performed:
+false` states the narrower discovery guarantee. Neither field claims that a
+caller-supplied remote filesystem performs no external I/O.
 The package-owned effort catalog describes the command shapes weightclass can
 build; it is not a probe of the installed CLI version. The model catalog
 contains only `default`, meaning that no model override is emitted, and reports

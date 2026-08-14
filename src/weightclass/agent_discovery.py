@@ -48,10 +48,11 @@ def _reviewable_path(value: str) -> bool:
 
 
 def _find_executable(name: str, entries: tuple[str, ...]) -> str | None:
-    """Find a regular executable without following its final path component.
+    """Find a regular executable and bind a final symlink to its real target.
 
-    Parent-directory symlinks retain ordinary PATH behavior. A final-component
-    symlink is intentionally not reviewable and is reported as absent.
+    Parent-directory symlinks retain ordinary PATH behavior. Package-managed
+    final-component symlinks are resolved before their regular-file identity
+    and executable mode bits are checked.
     """
     for directory in entries:
         candidate = os.path.join(directory, name)
@@ -59,8 +60,13 @@ def _find_executable(name: str, entries: tuple[str, ...]) -> str | None:
             continue
         try:
             metadata = os.stat(candidate, follow_symlinks=False)
-            if stat.S_ISREG(metadata.st_mode) and os.access(candidate, os.X_OK):
-                return candidate
+            resolved = os.path.realpath(candidate) if stat.S_ISLNK(metadata.st_mode) else candidate
+            if not _reviewable_path(resolved):
+                continue
+            metadata = os.stat(resolved, follow_symlinks=False)
+            executable_bit = bool(metadata.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+            if stat.S_ISREG(metadata.st_mode) and executable_bit:
+                return resolved
         except OSError:
             continue
     return None
@@ -105,6 +111,7 @@ def render_agent_discovery(
     return {
         "schema_version": 1,
         "discovery_mode": "local_path_only",
+        "network_used": False,
         "network_probe_performed": False,
         "vendor_processes_started": False,
         "agents": agents,

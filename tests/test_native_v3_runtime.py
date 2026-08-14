@@ -54,6 +54,48 @@ def observation(path: str, *, inode: int = 2) -> ExecutableObservation:
 
 
 class NativeV3RuntimeTests(unittest.TestCase):
+    def test_materializes_before_the_final_observation_and_then_spawns(self) -> None:
+        """Breaks if task validation widens the final observation-to-spawn window."""
+        runtime = importlib.import_module("weightclass.native_v3_runtime")
+        selected = compile_static_native_policy_v3(
+            parse_native_policy_v3(policy("codex")),
+            source_vendor="codex",
+            source_profile_id="source",
+            tier="low",
+            purpose="native_route",
+        )
+        first = observation("/opt/codex")
+        events: list[str] = []
+        materialize = runtime._materialize
+
+        def record_materialize(*args: Any) -> Any:
+            events.append("materialize")
+            return materialize(*args)
+
+        def record_observation(path: str) -> ExecutableObservation:
+            self.assertEqual(path, "/opt/codex")
+            events.append("observe")
+            return first
+
+        def record_spawn(invocation: Any) -> int:
+            del invocation
+            events.append("spawn")
+            return 0
+
+        with (
+            patch.object(runtime, "_materialize", side_effect=record_materialize),
+            patch.object(runtime, "observe_executable", side_effect=record_observation),
+            patch.object(runtime, "run_owned_foreground_redacted", side_effect=record_spawn),
+        ):
+            status = runtime.run_native_v3(
+                selected,
+                read_validated_task_v2(io.BytesIO(b"PRIVATE TASK")),
+                first,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(events, ["materialize", "observe", "spawn"])
+
     def test_four_builders_deliver_exact_task_only_at_the_final_spawn_seam(self) -> None:
         """Breaks if a builder changes stdin/argv delivery or exact task bytes."""
         self.assertIsNotNone(importlib.util.find_spec("weightclass.native_v3_runtime"))
@@ -151,7 +193,7 @@ class NativeV3RuntimeTests(unittest.TestCase):
                 self.assertEqual(invocation._arguments, wanted[0])
                 self.assertEqual(invocation._input_bytes, wanted[1])
 
-    def test_final_executable_drift_stops_before_materialization_and_spawn(self) -> None:
+    def test_final_executable_drift_stops_before_spawn(self) -> None:
         """Breaks if a changed lstat identity can reach the child boundary."""
         runtime = importlib.import_module("weightclass.native_v3_runtime")
         selected = compile_static_native_policy_v3(

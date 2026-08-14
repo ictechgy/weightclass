@@ -66,8 +66,8 @@ class AgentDiscoveryCliTests(unittest.TestCase):
             ],
         )
 
-    def test_final_component_executable_symlink_is_not_discovered_or_profiled(self) -> None:
-        """Breaks if PATH discovery follows an unreviewable executable symlink."""
+    def test_final_component_executable_symlink_binds_its_canonical_target(self) -> None:
+        """Breaks if package-managed CLI links disappear or remain mutable aliases."""
         with tempfile.TemporaryDirectory() as directory:
             bin_directory = Path(directory) / "bin"
             bin_directory.mkdir()
@@ -77,41 +77,36 @@ class AgentDiscoveryCliTests(unittest.TestCase):
             (bin_directory / "codex").symlink_to(target)
 
             inventory = render_agent_discovery(str(bin_directory), agent="codex")
-            with self.assertRaises(LookupError):
-                generate_selected_policy(
-                    agent="codex",
-                    tier="low",
-                    model="default",
-                    effort="low",
-                    allow_cross_vendor=False,
-                    path_value=str(bin_directory),
-                )
+            generated = generate_selected_policy(
+                agent="codex",
+                tier="low",
+                model="default",
+                effort="low",
+                allow_cross_vendor=False,
+                path_value=str(bin_directory),
+            )
 
-        self.assertEqual(
-            inventory["agents"],
-            [
-                {
-                    "agent": "codex",
-                    "executable": None,
-                    "executable_detected": False,
-                    "task_delivery": "stdin",
-                    "model_catalog": {
-                        "source": "package_default_only",
-                        "values": ["default"],
-                        "accepts_opaque_override": True,
-                        "availability_verified": False,
-                    },
-                    "effort_catalog": {
-                        "source": "package_catalog",
-                        "values": ["low", "medium", "high"],
-                        "availability_verified": False,
-                    },
-                    "subscription": "unknown",
-                    "pricing": "unknown",
-                    "quota": "unknown",
-                }
-            ],
-        )
+        agent = cast(list[dict[str, object]], inventory["agents"])[0]
+        self.assertTrue(agent["executable_detected"])
+        self.assertEqual(agent["executable"], os.path.realpath(target))
+        routes = cast(list[dict[str, object]], generated["routes"])
+        self.assertEqual(cast(list[str], routes[0]["command"])[0], os.path.realpath(target))
+
+    def test_discovery_uses_no_follow_metadata_for_executable_permission(self) -> None:
+        """Breaks if a second path-following permission check reopens a symlink race."""
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "codex"
+            executable.write_text("#!/bin/sh\nexit 95\n", encoding="utf-8")
+            executable.chmod(0o755)
+            with mock.patch.object(
+                os,
+                "access",
+                side_effect=AssertionError("path-following check"),
+            ):
+                inventory = render_agent_discovery(directory, agent="codex")
+
+        agent = cast(list[dict[str, object]], inventory["agents"])[0]
+        self.assertTrue(agent["executable_detected"])
 
     def test_discovers_known_executables_without_starting_them(self) -> None:
         """Breaks if local discovery executes a vendor or overstates availability."""
@@ -148,12 +143,14 @@ class AgentDiscoveryCliTests(unittest.TestCase):
             {
                 "schema_version": payload["schema_version"],
                 "discovery_mode": payload["discovery_mode"],
+                "network_used": payload["network_used"],
                 "network_probe_performed": payload["network_probe_performed"],
                 "vendor_processes_started": payload["vendor_processes_started"],
             },
             {
                 "schema_version": 1,
                 "discovery_mode": "local_path_only",
+                "network_used": False,
                 "network_probe_performed": False,
                 "vendor_processes_started": False,
             },
