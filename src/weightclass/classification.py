@@ -7,15 +7,17 @@ from typing import Final, Literal
 
 Tier = Literal["low", "standard", "high"]
 ReasonCode = Literal[
-    "high.length_floor",
     "high.risk_floor",
     "high.complexity_signal",
     "high.harmful_outcome",
     "high.cautious_ambiguity",
     "low.mechanical",
+    "low.mechanical_pair",
+    "low.substitution",
+    "standard.length_floor",
     "standard.not_clearly_mechanical",
 ]
-CLASSIFICATION_POLICY_VERSION: Final = "2"
+CLASSIFICATION_POLICY_VERSION: Final = "3"
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,7 @@ class ClassificationDecision:
 HIGH_SIGNALS: Final = frozenset(
     {
         "architecture",
+        "auth",
         "authentication",
         "authorization",
         "concurrency",
@@ -87,6 +90,7 @@ HIGH_RISK_FLOOR_SIGNALS: Final = frozenset(
 # 결정했다"는 뜻이며, 이유는 아래 HIGH_SIGNAL_NO_INFLECTION_RATIONALE 에 적는다.
 HIGH_SIGNAL_INFLECTIONS: Final = {
     "architecture": ("architectural",),
+    "auth": (),
     "authentication": ("authenticate", "authenticating"),
     "authorization": ("authorize", "authorizing", "authorise", "authorising", "authorisation"),
     "concurrency": ("concurrent", "concurrently"),
@@ -107,6 +111,10 @@ HIGH_SIGNAL_INFLECTIONS: Final = {
 
 # 빈 튜플로 둔 이유. 없으면 나중에 누군가 "빠졌네" 하고 오탐을 만들어 넣는다.
 HIGH_SIGNAL_NO_INFLECTION_RATIONALE: Final = {
+    "auth": (
+        "authentication/authorization 의 축약형이며 그 두 시그널이 각자의 어형을 이미 "
+        "가지고 있다. auth 자체에서 유도할 별도 어형이 없다."
+    ),
     "credential": "credentials 는 접미사 규칙으로 유도된다.",
     "data loss": "data-loss 는 구분자 규칙이 처리한다. 'lose data' 는 너무 느슨하다.",
     "database": "databases 는 접미사 규칙으로 유도된다.",
@@ -124,6 +132,9 @@ LOW_SIGNALS: Final = frozenset(
         "format",
         "formats",
         "formatting",
+        "indentation",
+        "lint",
+        "linting",
         "punctuation",
         "reformat",
         "reformatting",
@@ -131,21 +142,89 @@ LOW_SIGNALS: Final = frozenset(
         "renames",
         "renaming",
         "spelling",
+        "trailing newline",
+        "trailing whitespace",
         "typo",
         "typos",
         "whitespace",
         "whitespaces",
         "오타",
+        "오탈자",
         "이름 변경",
         "이름변경",
         "리네임",
         "문장부호",
         "포맷",
         "포매팅",
+        "들여쓰기",
         "띄어쓰기",
+        "줄바꿈",
     }
 )
+
+# 단독으로는 난이도를 말해주지 않는 동사와, 그 동사가 걸렸을 때만 기계적 작업으로
+# 확정되는 좁은 목적어. 화이트리스트 한 장으로 어휘를 계속 늘리는 대신, 둘의
+# 동시 출현을 요구해 오탐을 목적어 쪽에서 막는다.
+#
+# 이 규칙은 상위 시그널·위험 바닥·유해 결과 검사를 모두 통과한 뒤에만 도달한다.
+# 따라서 "결제 금액 계산을 수정해줘" 처럼 상위 시그널을 품은 문장은 여기까지 오지
+# 않는다. 동사를 넓게 두어도 안전한 이유가 그것이다.
+LOW_MECHANICAL_ACTIONS: Final = frozenset(
+    {
+        "add",
+        "bump",
+        "delete",
+        "drop",
+        "insert",
+        "remove",
+        "reorder",
+        "replace",
+        "sort",
+        "update",
+        "정렬",
+        "제거",
+        "삭제",
+        "추가",
+        "바꾸",
+        "바꿔",
+        "변경",
+        "수정",
+        "올려",
+        "지워",
+    }
+)
+LOW_MECHANICAL_OBJECTS: Final = frozenset(
+    {
+        "changelog",
+        "comment",
+        "comments",
+        "docstring",
+        "docstrings",
+        "import",
+        "imports",
+        "license header",
+        "log message",
+        "newline",
+        "semicolon",
+        "semicolons",
+        "unused import",
+        "version",
+        "주석",
+        "임포트",
+        "세미콜론",
+        "로그 메시지",
+        "버전",
+        "이름",
+    }
+)
+
 MAX_TASK_CHARACTERS: Final = 20_000
+# 길이 상한. 난이도 판정이 아니라 되추적 비용의 상한으로만 쓴다. 아래
+# classify_task_with_reason 의 설명을 참조할 것.
+PATTERN_SCAN_CHARACTERS: Final = 1_200
+# 이 길이를 넘으면 low 자격만 잃는다. 길이는 "기계적이지 않다"의 증거는 되지만
+# "위험하다"의 증거는 아니다. 예전 정책은 이 값을 high 바닥으로 썼고, 그래서 파일
+# 목록을 붙여넣은 단순 작업이 최고 비용 경로로 갔다.
 HIGH_TASK_CHARACTERS: Final = 1_200
 LOW_TASK_CHARACTERS: Final = 240
 # UTF-8 한 문자는 최대 4바이트이므로, 이 상한은 문자 상한을 통과할 수 있는 모든
@@ -212,6 +291,29 @@ _HIGH_RISK_FLOOR_ASCII_PATTERN: Final = _compile_ascii_signals(HIGH_RISK_FLOOR_S
 _HIGH_RISK_FLOOR_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(HIGH_RISK_FLOOR_SIGNALS)
 _LOW_ASCII_PATTERN: Final = _compile_ascii_signals(LOW_SIGNALS)
 _LOW_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_SIGNALS)
+# 어휘가 아니라 문장 구조로 잡는 기계적 작업. "A 를 B 로 바꿔라" 는 목표 상태가
+# 이미 주어졌다는 뜻이고, 그런 작업은 판단할 것이 남아 있지 않다. 화이트리스트를
+# 계속 늘리는 대신 이 구조를 본다.
+#
+# 세 가지가 이 규칙의 오탐을 막는다: 상위 시그널·위험 바닥·유해 결과가 먼저
+# 검사되고, 길이 상한이 걸리며, 치환 대상과 값이 각각 40자 이내로 닫혀 있다.
+# 되추적 관점에서도 모든 수량자가 유계이고 중첩되지 않는다.
+# 치환될 값이 리터럴 토큰일 것을 요구한다. 이 조건이 없으면 "무한 스크롤로 바꿔줘"
+# 처럼 목표가 기능 서술인 요청까지 치환으로 읽혀 구현 작업이 최저 비용 경로로
+# 떨어진다. 리터럴은 ASCII 식별자·경로·숫자 형태로 좁힌다.
+_LOW_LITERAL: Final = r"[a-z0-9._/*<>=-]{1,40}"
+_LOW_SUBSTITUTION_PATTERNS: Final = (
+    re.compile(rf"\bfrom\s+{_LOW_LITERAL}\s+to\s+{_LOW_LITERAL}"),
+    re.compile(r"\brename\s+\S{1,40}\s+to\s+\S{1,40}"),
+    re.compile(r"\bsort\w{0,3}\b[^\n]{0,60}\balphabetically\b"),
+    re.compile(rf"{_LOW_LITERAL}\s*에서\s*{_LOW_LITERAL}\s*(?:으로|로)"),
+    re.compile(rf"{_LOW_LITERAL}\s*(?:으로|로)\s*(?:바꾸|바꿔|변경|통일|교체)"),
+)
+
+_LOW_ACTION_ASCII_PATTERN: Final = _compile_ascii_signals(LOW_MECHANICAL_ACTIONS)
+_LOW_ACTION_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_MECHANICAL_ACTIONS)
+_LOW_OBJECT_ASCII_PATTERN: Final = _compile_ascii_signals(LOW_MECHANICAL_OBJECTS)
+_LOW_OBJECT_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_MECHANICAL_OBJECTS)
 
 # 기술 명사가 아니라 이미 발생한 고비용 결과를 말하는 좁은 표현들이다. 단어 하나
 # (예: "negative", "job")만으로는 올리지 않아, 단순한 UI 표시나 의도적인 테스트
@@ -280,20 +382,25 @@ def classify_task(task: str) -> Tier:
 def classify_task_with_reason(task: str) -> ClassificationDecision:
     """Return a versioned decision containing no task-derived content.
 
-    검사 순서는 취향이 아니라 계약이다. 길이 바닥이 반드시 첫 번째여야 한다.
+    검사 순서는 취향이 아니라 계약이다. 상위 시그널과 위험 바닥이 반드시 low 판정
+    앞에 와야 한다. 그래야 기계적 동사를 넓게 두어도 위험한 작업이 싼 경로로
+    떨어지지 않는다.
 
-    아래 시그널/결과 패턴들은 `[\\s\\S]{0,80}` 처럼 경계 있는 와일드카드를 여러 겹
-    중첩한다. 매칭 실패 시 되추적 비용이 입력 길이에 대해 준-2차로 늘어나므로,
+    되추적 상한은 이제 길이 바닥이 아니라 입력 슬라이스가 맡는다. 아래 결과
+    패턴들은 `[\\s\\S]{0,80}` 처럼 경계 있는 와일드카드를 여러 겹 중첩하므로,
     상한(20,000자)까지 통과시키면 적대적 입력 하나로 수 밀리초를 태울 수 있다.
-    길이 바닥이 먼저 걸리면 정규식이 보는 최대 길이는 HIGH_TASK_CHARACTERS - 1 로
-    닫힌다. 즉 이 반환문은 분류 규칙이면서 동시에 되추적 상한이다.
+    그래서 그 패턴들에만 PATTERN_SCAN_CHARACTERS 로 자른 입력을 넘긴다.
 
-    이 순서를 바꾸거나 HIGH_TASK_CHARACTERS 를 올리려면 먼저 그 비용을 측정할 것.
-    tests/test_classification.py 의 되추적 상한 회귀 테스트가 이 계약을 고정한다.
+    시그널 검사는 자르지 않은 전체 입력을 본다. 단일 교대 패턴이라 길이에 선형이고,
+    잘라서 넘기면 긴 작업의 후반부에 있는 상위 시그널을 통째로 놓쳐 위험한 작업이
+    standard 로 내려간다. 예전 정책은 길이 바닥이 그 구멍을 가려주었지만, 지금은
+    길이가 티어를 올리지 않으므로 시그널이 전체를 봐야 한다.
+
+    이 계약을 바꾸려면 먼저 비용을 측정할 것. tests/test_classification.py 의
+    되추적 상한 회귀 테스트가 이 계약을 고정한다.
     """
     normalized_task = validate_task(task)
-    if len(normalized_task) >= HIGH_TASK_CHARACTERS:
-        return ClassificationDecision("high", "high.length_floor")
+    scanned_task = normalized_task[:PATTERN_SCAN_CHARACTERS]
     if _has_signal(
         normalized_task,
         _HIGH_RISK_FLOOR_ASCII_PATTERN,
@@ -302,12 +409,18 @@ def classify_task_with_reason(task: str) -> ClassificationDecision:
         return ClassificationDecision("high", "high.risk_floor")
     if _has_signal(normalized_task, _HIGH_ASCII_PATTERN, _HIGH_NON_ASCII_SIGNALS):
         return ClassificationDecision("high", "high.complexity_signal")
-    if _has_high_risk_outcome(normalized_task):
+    if _has_high_risk_outcome(scanned_task):
         return ClassificationDecision("high", "high.harmful_outcome")
-    if len(normalized_task) <= LOW_TASK_CHARACTERS and _has_signal(
-        normalized_task, _LOW_ASCII_PATTERN, _LOW_NON_ASCII_SIGNALS
-    ):
-        return ClassificationDecision("low", "low.mechanical")
+    if len(normalized_task) <= LOW_TASK_CHARACTERS:
+        if _has_signal(normalized_task, _LOW_ASCII_PATTERN, _LOW_NON_ASCII_SIGNALS):
+            return ClassificationDecision("low", "low.mechanical")
+        if _has_mechanical_pair(normalized_task):
+            return ClassificationDecision("low", "low.mechanical_pair")
+        if _has_low_substitution(normalized_task):
+            return ClassificationDecision("low", "low.substitution")
+    elif len(normalized_task) >= HIGH_TASK_CHARACTERS:
+        # 길이는 low 자격만 박탈한다. 티어를 올리지 않는다.
+        return ClassificationDecision("standard", "standard.length_floor")
     return ClassificationDecision("standard", "standard.not_clearly_mechanical")
 
 
@@ -327,6 +440,23 @@ def _has_signal(
     if ascii_pattern.search(task):
         return True
     return any(signal in task for signal in non_ascii_signals)
+
+
+def _has_mechanical_pair(task: str) -> bool:
+    """Report whether a mechanical action and a narrow mechanical object co-occur.
+
+    동사와 목적어의 위치 관계는 보지 않는다. 한국어는 어순이 자유롭고, 위치까지
+    검사하려면 태스크 본문을 잘라 들고 있어야 해서 전송 계약과 충돌한다. 대신
+    길이 상한과 상위 시그널 우선순위가 오탐의 범위를 닫는다.
+    """
+    return _has_signal(
+        task, _LOW_ACTION_ASCII_PATTERN, _LOW_ACTION_NON_ASCII_SIGNALS
+    ) and _has_signal(task, _LOW_OBJECT_ASCII_PATTERN, _LOW_OBJECT_NON_ASCII_SIGNALS)
+
+
+def _has_low_substitution(task: str) -> bool:
+    """Report whether the task states a concrete target state to substitute in."""
+    return any(pattern.search(task) for pattern in _LOW_SUBSTITUTION_PATTERNS)
 
 
 def _has_high_risk_outcome(task: str) -> bool:

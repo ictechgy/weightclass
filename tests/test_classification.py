@@ -22,7 +22,7 @@ class ClassificationPolicyContractTests(unittest.TestCase):
         classify_with_reason = getattr(classification, "classify_task_with_reason", None)
 
         self.assertTrue(callable(classify_with_reason))
-        self.assertEqual(getattr(classification, "CLASSIFICATION_POLICY_VERSION", None), "2")
+        self.assertEqual(getattr(classification, "CLASSIFICATION_POLICY_VERSION", None), "3")
         self.assertIsInstance(classification.classify_task("Fix the typo."), str)
 
     def test_high_signals_have_distinct_static_english_and_korean_reason_codes(self) -> None:
@@ -37,7 +37,6 @@ class ClassificationPolicyContractTests(unittest.TestCase):
             ("비밀번호 재설정 흐름의 계정 열거를 막아줘.", "high.risk_floor"),
             ("An account is charged twice after checkout.", "high.harmful_outcome"),
             ("같은 작업이 재시작 뒤에 두 번 실행돼.", "high.harmful_outcome"),
-            ("x" * HIGH_TASK_CHARACTERS, "high.length_floor"),
         )
 
         for task, expected_reason in cases:
@@ -91,7 +90,7 @@ class ClassificationPolicyContractTests(unittest.TestCase):
             {
                 "tier": "low",
                 "reason_code": "low.mechanical",
-                "policy_version": "2",
+                "policy_version": "3",
             },
         )
 
@@ -201,17 +200,45 @@ class ThresholdTests(unittest.TestCase):
         self.assertEqual(classify_task(at_limit), "low")
         self.assertEqual(classify_task(past_limit), "standard")
 
-    def test_length_alone_escalates_a_signal_free_task_to_high(self) -> None:
+    def test_length_alone_never_escalates_a_signal_free_task(self) -> None:
+        """Breaks if length goes back to being read as difficulty.
+
+        긴 설명은 "기계적이지 않다"의 증거일 뿐 "위험하다"의 증거가 아니다. 예전
+        정책은 이 둘을 같은 것으로 취급해서, 파일 목록을 붙여넣은 단순 작업을 최고
+        비용 경로로 보냈다. 자세히 쓸수록 비싸지는 인센티브 역전이 회귀하면 여기서
+        깨진다.
+        """
         below_limit = "x" * (HIGH_TASK_CHARACTERS - 1)
         at_limit = "x" * HIGH_TASK_CHARACTERS
 
         self.assertEqual(classify_task(below_limit), "standard")
-        self.assertEqual(classify_task(at_limit), "high")
+        self.assertEqual(
+            classification.classify_task_with_reason(at_limit),
+            classification.ClassificationDecision("standard", "standard.length_floor"),
+        )
+
+    def test_length_still_disqualifies_the_cheap_tier(self) -> None:
+        """Breaks if a long task can reach low just because it carries a LOW signal."""
+        long_mechanical = "fix the typo. " + "x " * HIGH_TASK_CHARACTERS
+
+        self.assertEqual(classify_task(long_mechanical), "standard")
 
     def test_rejects_a_task_past_the_maximum_character_limit(self) -> None:
-        self.assertEqual(classify_task("x" * MAX_TASK_CHARACTERS), "high")
+        self.assertEqual(classify_task("x" * MAX_TASK_CHARACTERS), "standard")
         with self.assertRaises(InvalidTaskError):
             classify_task("x" * (MAX_TASK_CHARACTERS + 1))
+
+    def test_high_signals_are_found_past_the_pattern_scan_bound(self) -> None:
+        """Breaks if the backtracking slice starts hiding risk vocabulary.
+
+        되추적 상한을 길이 바닥에서 슬라이스로 옮기면서 생긴 구멍이다. 시그널까지
+        잘라서 검사하면 긴 작업 후반부의 "security" 가 통째로 사라지고, 예전에는
+        길이 바닥이 가려주던 그 구멍이 이제는 그대로 비용 오분류가 된다.
+        """
+        buried = "x " * classification.PATTERN_SCAN_CHARACTERS + "review the security boundary."
+
+        self.assertGreater(len(buried), classification.PATTERN_SCAN_CHARACTERS)
+        self.assertEqual(classify_task(buried), "high")
 
 
 class ClassificationRegressionTests(unittest.TestCase):
@@ -312,7 +339,7 @@ class ClassificationRegressionTests(unittest.TestCase):
         """Breaks if HIGH signals go back to matching without word boundaries."""
         cases = {
             "Write reproduction steps for this crash.": "standard",
-            "Update the reproduction script comment.": "standard",
+            "Update the reproduction script comment.": "low",
             "Add a focused unit test for this formatter.": "standard",
         }
 
@@ -372,21 +399,86 @@ _BACKTRACKING_BAIT: tuple[str, ...] = (
 )
 
 
+class CheapTierRecallTests(unittest.TestCase):
+    """저비용 경로가 실제로 열려야 라우팅이 비용을 낮춘다.
+
+    화이트리스트에 없는 어휘라는 이유만으로 기계적 작업이 standard 로 가면, 절감
+    레버는 사실상 닫힌 채로 상위 오분류만 남는다. 여기 있는 사례들은 전부 그
+    실패 모드에서 나왔다.
+    """
+
+    def test_mechanical_action_and_object_pairs_reach_the_cheap_tier(self) -> None:
+        """Breaks if the action/object co-occurrence rule stops firing."""
+        cases = (
+            "sort the imports in main.py",
+            "remove the unused import in main.py",
+            "add a docstring to the parse_config function",
+            "changelog 에 한 줄 추가해줘",
+            "이 로그 메시지 문구만 바꿔줘",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                decision = classification.classify_task_with_reason(task)
+                self.assertEqual(
+                    (decision.tier, decision.reason_code), ("low", "low.mechanical_pair")
+                )
+
+    def test_literal_substitution_requests_reach_the_cheap_tier(self) -> None:
+        """Breaks if stated target states stop counting as mechanical work."""
+        cases = (
+            "change the default page size on get /orders from 20 to 50",
+            "sort the deps and devdeps in package.json alphabetically",
+            "config/logging.yaml에서 기본 로그 레벨 debug에서 info로 내려줘.",
+            "readme 설치 섹션의 npm 명령어들 전부 pnpm으로 바꿔줘.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                decision = classification.classify_task_with_reason(task)
+                self.assertEqual((decision.tier, decision.reason_code), ("low", "low.substitution"))
+
+    def test_substitution_requires_a_literal_and_not_a_described_feature(self) -> None:
+        """Breaks if 'X 로 바꿔' matches a feature description.
+
+        치환 대상이 리터럴이 아니면 그것은 구현 요청이다. 이 구분이 사라지면 기능
+        구현이 최저 비용 경로로 떨어진다.
+        """
+        task = "상품 목록 페이지를 무한 스크롤로 바꿔줘. 지금은 하단 페이지네이션 버튼이야."
+
+        self.assertEqual(classification.classify_task(task), "standard")
+
+    def test_risk_vocabulary_still_wins_over_every_cheap_rule(self) -> None:
+        """Breaks if a cheap rule is ever consulted before the high-tier checks."""
+        cases = (
+            "rename the auth token comment from a to b",
+            "결제 로그 메시지를 info로 바꿔줘",
+            "remove the unused import in the migration script",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classification.classify_task(task), "high")
+
+
 class BacktrackingBoundTests(unittest.TestCase):
-    def test_length_floor_runs_before_any_pattern_sees_a_full_length_task(self) -> None:
-        """Breaks if reordering exposes the nested bounded wildcards to 20,000 characters."""
+    def test_nested_wildcard_patterns_never_see_more_than_the_scan_bound(self) -> None:
+        """Breaks if the bounded-wildcard patterns are exposed to 20,000 characters.
 
-        def explode(*arguments: object, **keywords: object) -> bool:
-            raise AssertionError("a risk pattern ran on input above the length floor")
+        되추적 상한을 길이 바닥이 아니라 입력 슬라이스가 맡는다. 길이 바닥은 이제
+        티어를 올리지 않으므로, 이 계약이 깨지면 적대적 입력 하나가 20,000자에 대해
+        준-2차 되추적을 태울 수 있다.
+        """
+        seen: list[int] = []
 
-        with (
-            mock.patch.object(classification, "_has_signal", side_effect=explode),
-            mock.patch.object(classification, "_has_high_risk_outcome", side_effect=explode),
-        ):
-            decision = classification.classify_task_with_reason("x" * MAX_TASK_CHARACTERS)
+        def record(task: str) -> bool:
+            seen.append(len(task))
+            return False
 
-        self.assertEqual(decision.tier, "high")
-        self.assertEqual(decision.reason_code, "high.length_floor")
+        with mock.patch.object(classification, "_has_high_risk_outcome", side_effect=record):
+            classification.classify_task_with_reason("x" * MAX_TASK_CHARACTERS)
+
+        self.assertEqual(seen, [classification.PATTERN_SCAN_CHARACTERS])
 
     def test_patterns_stay_cheap_at_the_longest_input_they_can_reach(self) -> None:
         """Breaks if backtracking becomes superlinear just below the length floor."""

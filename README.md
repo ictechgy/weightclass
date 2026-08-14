@@ -326,7 +326,7 @@ reason code:
 
 ```sh
 printf '%s' 'Fix a spelling typo.' | wclass classify --explain
-# {"tier": "low", "reason_code": "low.mechanical", "policy_version": "2"}
+# {"tier": "low", "reason_code": "low.mechanical", "policy_version": "3"}
 ```
 
 The explanation contains policy metadata only: it never includes task text,
@@ -366,7 +366,13 @@ without over-rating. The vendor result still under-rated 7 of the 15 genuinely
 hard tasks, so it was better, not solved. Models change, and those recorded
 tiers are not a current provider claim. The current offline command
 `PYTHONPATH=src python3 tests/eval/score.py` re-derives only the local public
-regression result, now 17/40. A supported vendor comparison requires a fresh
+regression result, now 22/40 under classification policy 3. Read that number
+as a direction check, not an accuracy claim: the fixture is visible, so a score
+against it measures the tuner as much as the classifier. What policy 3 changed
+is documented below and in `src/weightclass/classification.py`; its stated aim
+was to stop over-routing mechanical work, and on this fixture over-routing fell
+from 32.5% to 17.5% while high-tier recall stayed at 5/15. A supported vendor
+comparison requires a fresh
 evaluator-supplied corpus and `--compare-triage`, as documented in
 [`tests/eval/README.md`](tests/eval/README.md).
 
@@ -451,15 +457,23 @@ eliminate this. The strict parser accepts only one complete lowercase `low`,
 three tier routes your own policy already declares, but the vendor call itself
 is still an additional opt-in boundary.
 
-Three rules make the outcome predictable:
+Four rules make the outcome predictable:
 
 - Signals are matched on whole words, so `reproduction` does not count as
   `production`. Korean has no word boundaries, so Korean signals are matched by
   containment and a compound word that embeds a signal may over-escalate.
 - When both a `high` and a `low` signal are present, `high` wins. Under-rating a
   task is the more expensive mistake.
-- A task of 1,200 characters or more is treated as `high` on length alone, so
-  pasting a large context escalates the tier regardless of wording.
+- Length never raises a tier. A task of 1,200 characters or more only loses its
+  eligibility for `low` and reports `standard.length_floor`. Length is evidence
+  that work is not mechanical; it is not evidence that work is risky, and
+  treating it as risk made pasting a file list the most expensive route.
+- Beyond the `low` vocabulary, a short task also reaches `low` when a mechanical
+  action meets a narrow mechanical object (`sort` … `imports`), or when it
+  states a literal target to substitute in (`from 20 to 50`, `debug에서 info로`).
+  The substituted value must look like a literal, so `무한 스크롤로 바꿔줘`
+  stays `standard`: a described feature is an implementation request, not a
+  substitution.
 
 ## Override the routes
 
