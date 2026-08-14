@@ -59,9 +59,10 @@ class UsageAggregationTests(unittest.TestCase):
             payload,
             {
                 "aggregate_only": True,
+                "baseline": {"counted_tasks": 0, "relative_cost_micros_total": 0, "tasks": 0},
                 "buckets": [],
                 "coverage": "native_schema_3",
-                "schema_version": 1,
+                "schema_version": 2,
                 "weights": [],
             },
         )
@@ -160,44 +161,52 @@ class UsageAggregationTests(unittest.TestCase):
                         "lower_weight_ratio": "1.000000",
                         "lower_weight_runs": 2,
                         "model": "grok-mini",
-                        "relative_cost_baseline_units": "2.000000",
-                        "relative_cost_savings_ratio": "0.750000",
-                        "relative_cost_savings_units": "1.500000",
                         "relative_cost_units": "0.500000",
                         "rework_ratio": "0.500000",
                         "reworks": 1,
                         "runs": 2,
+                        "runs_per_task": "2.000000",
                         "status_counts": {"exit:0": 1, "exit:3": 1},
                         "succeeded": 1,
+                        "tasks": 1,
                         "tier": "low",
                         "unweighted_runs": 0,
                         "weighted_runs": 2,
                     }
                 ],
                 "claims": {
+                    "baseline_is_counterfactual": True,
+                    "first_attempts_self_reported": True,
                     "pricing_verified": False,
                     "relative_cost_only": True,
-                    "rework_self_reported": True,
                     "task_content_recorded": False,
                     "weights_apply_prospectively": True,
                 },
                 "coverage": "native_schema_3",
-                "schema_version": 1,
+                "schema_version": 2,
                 "totals": {
+                    "baseline_effort": "medium",
+                    "baseline_tasks": 0,
                     "escalation_ratio": "0.500000",
                     "escalations": 1,
                     "failed": 1,
                     "lower_weight_ratio": "1.000000",
                     "lower_weight_runs": 2,
-                    "relative_cost_baseline_units": "2.000000",
-                    "relative_cost_savings_ratio": "0.750000",
-                    "relative_cost_savings_units": "1.500000",
+                    # 재작업 한 번이 곧 태스크 하나의 두 번째 실행이다. 스키마 1 은
+                    # 이 상황을 75% 절감으로 보고했다. 기준선이 실행 수를 따라
+                    # 부풀었기 때문이다. 이제는 기준선 가중치가 없으면 기권한다.
+                    "relative_cost_baseline_units": None,
+                    "relative_cost_savings_ratio": None,
+                    "relative_cost_savings_units": None,
                     "relative_cost_units": "0.500000",
                     "rework_ratio": "0.500000",
                     "reworks": 1,
                     "runs": 2,
+                    "runs_per_task": "2.000000",
+                    "savings_reason_code": "missing_baseline_weight",
                     "status_counts": {"exit:0": 1, "exit:3": 1},
                     "succeeded": 1,
+                    "tasks": 1,
                     "unweighted_runs": 0,
                     "weighted_runs": 2,
                 },
@@ -251,7 +260,7 @@ class UsageAggregationTests(unittest.TestCase):
             (
                 0,
                 '{"aggregate_only": true, "coverage": "native_schema_3", '
-                '"enabled": true, "schema_version": 1}\n',
+                '"enabled": true, "schema_version": 2}\n',
                 "",
             ),
         )
@@ -260,7 +269,7 @@ class UsageAggregationTests(unittest.TestCase):
             (
                 0,
                 '{"agent": "grok", "effort": "low", "model": "grok-mini", '
-                '"relative_cost": "0.250000", "schema_version": 1}\n',
+                '"relative_cost": "0.250000", "schema_version": 2}\n',
                 "",
             ),
         )
@@ -394,7 +403,7 @@ class UsageAggregationTests(unittest.TestCase):
                 "effort": "low",
                 "model": None,
                 "relative_cost": "0.250000",
-                "schema_version": 1,
+                "schema_version": 2,
             },
         )
 
@@ -621,21 +630,24 @@ class UsageAggregationTests(unittest.TestCase):
                     "lower_weight_ratio": "1.000000",
                     "lower_weight_runs": 1,
                     "model": None,
-                    "relative_cost_baseline_units": "1.000000",
-                    "relative_cost_savings_ratio": "0.750000",
-                    "relative_cost_savings_units": "0.750000",
                     "relative_cost_units": "0.250000",
                     "rework_ratio": "1.000000",
                     "reworks": 1,
                     "runs": 1,
+                    # 재작업만 있고 첫 시도가 없으면 이 저장소가 아는 태스크는 없다.
+                    "runs_per_task": None,
                     "status_counts": {"exit:19": 1},
                     "succeeded": 0,
+                    "tasks": 0,
                     "tier": "low",
                     "unweighted_runs": 0,
                     "weighted_runs": 1,
                 }
             ],
         )
+        # 실패한 재작업 한 건이다. 스키마 1 은 이것을 75% 절감으로 보고했다.
+        self.assertEqual(report["totals"]["savings_reason_code"], "no_tasks")
+        self.assertIsNone(report["totals"]["relative_cost_savings_ratio"])
 
     def test_accounting_write_failure_reports_that_the_child_already_completed(self) -> None:
         """Breaks if an accounting error makes callers retry an already executed task."""
@@ -762,6 +774,218 @@ class UsageAggregationTests(unittest.TestCase):
 
         self.assertEqual(report["totals"]["runs"], 1)
         self.assertEqual(report["buckets"][0]["agent"], "grok")
+
+
+class RetryHintTests(unittest.TestCase):
+    """재시도를 재작업으로 기록하게 만들지 못하면 기준선이 다시 부풀어 오른다."""
+
+    def run_failing_child(self, *extra_arguments: str) -> str:
+        usage = importlib.import_module("weightclass.usage_aggregation")
+        first = observation("/opt/grok")
+        selected = compile_static_native_policy_v3(
+            parse_native_policy_v3(valid_policy()),
+            source_vendor="codex",
+            source_profile_id="source",
+            tier="low",
+            purpose="native_route",
+        )
+        reviewed = bind_native_observation_v3(selected, first)
+        fingerprint = reviewed["route_fingerprint"]
+        assert isinstance(fingerprint, str)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = root / "policy.json"
+            policy.write_text(json.dumps(valid_policy()), encoding="utf-8")
+            store = root / "usage-v1.json"
+            usage.ensure_usage_store(store)
+            errors = io.StringIO()
+            with (
+                patch.object(sys, "stdin", HostileOneReadStream(b"task")),
+                patch.object(sys, "stderr", errors),
+                patch("weightclass.cli.validate_runtime_process_context"),
+                patch("weightclass.cli.observe_executable", return_value=first),
+                patch("weightclass.native_v3_runtime.observe_executable", return_value=first),
+                patch(
+                    "weightclass.native_v3_runtime.run_owned_foreground_redacted",
+                    return_value=19,
+                ),
+            ):
+                cli.main(
+                    [
+                        "run",
+                        "--policy",
+                        str(policy),
+                        "--source-vendor",
+                        "codex",
+                        "--source-profile",
+                        "source",
+                        "--tier",
+                        "low",
+                        "--confirm-endpoint-transition",
+                        "--ack-route-fingerprint",
+                        fingerprint,
+                        "--usage-store",
+                        str(store),
+                        *extra_arguments,
+                    ]
+                )
+        return errors.getvalue()
+
+    def test_a_failed_first_attempt_asks_for_the_retry_to_be_marked(self) -> None:
+        """Breaks if a failed first attempt stops warning about the next invocation."""
+        self.assertIn('{"usage_hint": "record_retry_with_usage_rework"}', self.run_failing_child())
+
+    def test_a_failed_rework_does_not_repeat_the_hint(self) -> None:
+        """Breaks if the hint fires when the caller already recorded the retry."""
+        self.assertNotIn("usage_hint", self.run_failing_child("--usage-rework"))
+
+
+class CounterfactualBaselineTests(unittest.TestCase):
+    """절감은 "라우팅을 안 했다면" 과 비교해야 한다.
+
+    스키마 1 은 기준선을 "실행 1건당 1.0" 으로 두었다. 그래서 절감률이 사용자가
+    입력한 가중치의 항등식이었고, 재작업이 기준선까지 부풀려 실패한 저비용
+    라우팅이 절감으로 보였다. 여기 있는 사례들이 그 두 결함을 고정한다.
+    """
+
+    def setUp(self) -> None:
+        self.usage = importlib.import_module("weightclass.usage_aggregation")
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.store = Path(self.directory.name) / "usage-v1.json"
+        self.usage.ensure_usage_store(self.store)
+
+    def weigh(self, effort: str, relative_cost: str) -> None:
+        self.usage.set_relative_cost_weight(self.store, "grok", None, effort, relative_cost)
+
+    def record(self, effort: str, tier: str, *, returncode: int = 0, rework: bool = False) -> None:
+        self.usage.record_usage(
+            self.store,
+            self.usage.UsageDimensions("grok", None, effort, tier),
+            child_returncode=returncode,
+            rework=rework,
+            escalation=False,
+        )
+
+    def totals(self) -> dict[str, object]:
+        totals = self.usage.render_usage_report(self.store)["totals"]
+        assert isinstance(totals, dict)
+        return totals
+
+    def test_rework_is_an_overrun_and_not_a_saving(self) -> None:
+        """Breaks if retry cost is absorbed into the baseline again.
+
+        10개 태스크를 low(0.3) 로 보내 5개가 실패하고 high(2.0) 로 다시 돌면 실제
+        지출은 13.0 단위다. 기본 경로는 10.0 단위이므로 30% 초과다. 스키마 1 은
+        같은 이력을 13.3% 절감으로 보고했다.
+        """
+        self.weigh("low", "0.3")
+        self.weigh("medium", "1.0")
+        self.weigh("high", "2.0")
+        for index in range(10):
+            self.record("low", "low", returncode=1 if index < 5 else 0)
+        for _ in range(5):
+            self.record("high", "high", rework=True)
+
+        totals = self.totals()
+
+        self.assertEqual(totals["runs"], 15)
+        self.assertEqual(totals["tasks"], 10)
+        self.assertEqual(totals["relative_cost_units"], "13.000000")
+        self.assertEqual(totals["relative_cost_baseline_units"], "10.000000")
+        self.assertEqual(totals["relative_cost_savings_ratio"], "-0.300000")
+        self.assertEqual(totals["savings_reason_code"], "computed")
+
+    def test_running_the_baseline_route_saves_nothing(self) -> None:
+        """Breaks if the fixed route can report a saving against itself."""
+        self.weigh("medium", "1.0")
+        for _ in range(10):
+            self.record("medium", "standard")
+
+        totals = self.totals()
+
+        self.assertEqual(totals["relative_cost_savings_ratio"], "0.000000")
+        self.assertEqual(totals["relative_cost_savings_units"], "0.000000")
+
+    def test_abstains_when_the_baseline_weight_is_missing(self) -> None:
+        """Breaks if a saving is claimed without a stated alternative to compare against."""
+        self.weigh("low", "0.3")
+        self.record("low", "low")
+
+        totals = self.totals()
+
+        self.assertEqual(totals["savings_reason_code"], "missing_baseline_weight")
+        self.assertIsNone(totals["relative_cost_savings_ratio"])
+        self.assertIsNone(totals["relative_cost_baseline_units"])
+
+    def test_abstains_when_any_run_carries_no_weight(self) -> None:
+        """Breaks if partial cost evidence is presented as a complete comparison."""
+        self.weigh("medium", "1.0")
+        self.record("medium", "standard")
+        self.record("high", "high")
+
+        totals = self.totals()
+
+        self.assertEqual(totals["savings_reason_code"], "unweighted_runs")
+        self.assertIsNone(totals["relative_cost_savings_ratio"])
+
+    def test_an_empty_store_abstains_rather_than_reporting_zero(self) -> None:
+        """Breaks if no evidence starts looking like a measured result."""
+        self.assertEqual(self.totals()["savings_reason_code"], "no_tasks")
+
+    def test_a_schema_one_store_is_promoted_without_inventing_baseline_evidence(self) -> None:
+        """Breaks if migration fabricates a counterfactual the old schema never recorded.
+
+        스키마 1 은 기준선을 기록하지 않았다. 태스크 수만 되살리고 기준선 증거는
+        비운다. 그래야 승격된 저장소가 절감을 계산하지 않고 기권한다.
+        """
+        legacy = {
+            "aggregate_only": True,
+            "buckets": [
+                {
+                    "agent": "grok",
+                    "effort": "low",
+                    "escalations": 0,
+                    "failed": 0,
+                    "lower_weight_runs": 0,
+                    "model": None,
+                    "relative_cost_micros_total": 0,
+                    "reworks": 1,
+                    "runs": 3,
+                    "status_counts": {"exit:0": 3},
+                    "succeeded": 3,
+                    "tier": "low",
+                    "unweighted_runs": 3,
+                    "weighted_runs": 0,
+                }
+            ],
+            "coverage": "native_schema_3",
+            "schema_version": 1,
+            "weights": [],
+        }
+        self.store.write_text(json.dumps(legacy), encoding="ascii")
+        self.store.chmod(0o600)
+
+        report = self.usage.render_usage_report(self.store)
+        totals = report["totals"]
+        assert isinstance(totals, dict)
+
+        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(totals["runs"], 3)
+        self.assertEqual(totals["tasks"], 2)
+        self.assertEqual(totals["savings_reason_code"], "unweighted_runs")
+
+    def test_a_promoted_store_is_written_back_in_the_current_schema(self) -> None:
+        """Breaks if a promoted store keeps reporting under the superseded schema."""
+        self.record("low", "low")
+        payload = json.loads(self.store.read_text(encoding="ascii"))
+
+        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(
+            payload["baseline"],
+            {"counted_tasks": 0, "relative_cost_micros_total": 0, "tasks": 1},
+        )
 
 
 if __name__ == "__main__":

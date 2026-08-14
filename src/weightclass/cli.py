@@ -120,6 +120,7 @@ from .router import (
 from .task_v2 import ValidatedTaskV2, read_validated_task_v2
 from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
 from .usage_aggregation import (
+    STORE_SCHEMA_VERSION,
     UsageAggregationError,
     UsageDimensions,
     default_usage_store_path,
@@ -1962,6 +1963,12 @@ def _execute_native_v3(
                 file=sys.stderr,
             )
             return USAGE_UNAVAILABLE_EXIT_CODE
+        if return_code != 0 and not usage_rework:
+            # 실패한 첫 시도는 이미 태스크 하나로 세어졌다. 같은 태스크를 다시
+            # 돌리면서 이 플래그를 빠뜨리면 재시도가 새 태스크로 세어져 기준선까지
+            # 함께 늘고, 실패한 저비용 라우팅이 다시 절감처럼 보인다. 그 실수를
+            # 되돌릴 방법이 집계에는 없으므로 실행 직후에 알린다.
+            print(json.dumps({"usage_hint": "record_retry_with_usage_rework"}), file=sys.stderr)
     return _report_executor_result(subprocess.CompletedProcess(("<redacted>",), return_code))
 
 
@@ -2160,7 +2167,7 @@ def main(
                     "aggregate_only": True,
                     "coverage": "native_schema_3",
                     "enabled": True,
-                    "schema_version": 1,
+                    "schema_version": STORE_SCHEMA_VERSION,
                 }
             elif arguments.usage_command == "weight":
                 usage_receipt = set_relative_cost_weight(

@@ -18,14 +18,28 @@ from typing import Final
 
 from .adapter_registry import BUILT_IN_AGENT_IDS
 
-STORE_SCHEMA_VERSION: Final = 1
+STORE_SCHEMA_VERSION: Final = 2
 MAX_STORE_BYTES: Final = 262_144
 MAX_WEIGHTS: Final = 1_024
 MAX_BUCKETS: Final = 4_096
 MAX_COUNTER: Final = (1 << 63) - 1
 WEIGHT_SCALE: Final = 1_000_000
 MAX_WEIGHT_MICROS: Final = 1_000 * WEIGHT_SCALE
-_STORE_KEYS: Final = {"aggregate_only", "buckets", "coverage", "schema_version", "weights"}
+
+# 라우팅을 하지 않았다면 태스크가 갔을 고정 경로의 노력 수준. 내장 standard
+# 라우트가 쓰는 값과 같다.
+#
+# 스키마 1 은 반사실 없이 "실행 1건당 1.0" 을 기준선으로 삼았다. 그 값은 사용자가
+# 입력한 가중치의 항등식이어서, 같은 실행 이력에 가중치만 바꾸면 절감률이 10% 도
+# 90% 도 되었고 반증할 수 없었다. 더 나쁜 것은 재작업이 기준선까지 함께 부풀린
+# 점이다. low(0.3) 10건 중 5건이 실패해 high(2.0) 로 다시 돈 경우 실제 지출은
+# 13.0 단위, 기본 경로는 10.0 단위로 30% 초과인데 리포트는 13.3% 절감을 냈다.
+# 실패한 저비용 라우팅이 절감으로 보이는 방향의 오류였다.
+BASELINE_EFFORT: Final = "medium"
+
+_STORE_KEYS_V1: Final = {"aggregate_only", "buckets", "coverage", "schema_version", "weights"}
+_STORE_KEYS: Final = _STORE_KEYS_V1 | {"baseline"}
+_BASELINE_KEYS: Final = {"counted_tasks", "relative_cost_micros_total", "tasks"}
 _WEIGHT_KEYS: Final = {"agent", "model", "effort", "relative_cost_micros"}
 _BUCKET_KEYS: Final = {
     "agent",
@@ -221,15 +235,47 @@ def _bucket_key(value: Mapping[str, object]) -> tuple[str, str, str, str]:
     return (*_weight_key(value), str(value["tier"]))
 
 
-def _validate_store(value: object) -> dict[str, object]:
-    if not isinstance(value, dict) or set(value) != _STORE_KEYS:
+def _recorded_tasks(buckets: list[dict[str, object]]) -> int:
+    """Return how many first attempts the buckets account for.
+
+    재작업은 새 태스크가 아니다. 태스크 수를 실행 수와 구분해야 재작업 비용이
+    기준선까지 부풀리는 일이 없다.
+    """
+    tasks = 0
+    for bucket in buckets:
+        tasks = _increment(tasks, _counter(bucket["runs"]) - _counter(bucket["reworks"]))
+    return tasks
+
+
+def _validate_baseline(value: object, tasks: int) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != _BASELINE_KEYS:
         raise UsageAggregationError()
+    recorded_tasks = _counter(value["tasks"])
+    counted_tasks = _counter(value["counted_tasks"])
+    total = _counter(value["relative_cost_micros_total"])
     if (
-        value["aggregate_only"] is not True
-        or value["coverage"] != "native_schema_3"
-        or value["schema_version"] != STORE_SCHEMA_VERSION
-        or isinstance(value["schema_version"], bool)
+        recorded_tasks != tasks
+        or counted_tasks > recorded_tasks
+        or (counted_tasks == 0) != (total == 0)
     ):
+        raise UsageAggregationError()
+    return {
+        "counted_tasks": counted_tasks,
+        "relative_cost_micros_total": total,
+        "tasks": recorded_tasks,
+    }
+
+
+def _validate_store(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise UsageAggregationError()
+    version = value.get("schema_version")
+    if isinstance(version, bool) or version not in (1, STORE_SCHEMA_VERSION):
+        raise UsageAggregationError()
+    expected_keys = _STORE_KEYS_V1 if version == 1 else _STORE_KEYS
+    if set(value) != expected_keys:
+        raise UsageAggregationError()
+    if value["aggregate_only"] is not True or value["coverage"] != "native_schema_3":
         raise UsageAggregationError()
     raw_weights = value["weights"]
     raw_buckets = value["buckets"]
@@ -248,8 +294,18 @@ def _validate_store(value: object) -> dict[str, object]:
         raise UsageAggregationError()
     weights.sort(key=_weight_key)
     buckets.sort(key=_bucket_key)
+    tasks = _recorded_tasks(buckets)
+    # 스키마 1 은 기준선을 기록하지 않았다. 승격된 저장소는 태스크 수만 되살리고
+    # 기준선 증거는 0 으로 둔다. 없는 증거를 만들어 내지 않기 위해서이며, 그러면
+    # 리포트가 missing_baseline_weight 로 절감 계산을 스스로 기권한다.
+    baseline = (
+        {"counted_tasks": 0, "relative_cost_micros_total": 0, "tasks": tasks}
+        if version == 1
+        else _validate_baseline(value["baseline"], tasks)
+    )
     return {
         "aggregate_only": True,
+        "baseline": baseline,
         "buckets": buckets,
         "coverage": "native_schema_3",
         "schema_version": STORE_SCHEMA_VERSION,
@@ -260,6 +316,7 @@ def _validate_store(value: object) -> dict[str, object]:
 def _empty_store() -> dict[str, object]:
     return {
         "aggregate_only": True,
+        "baseline": {"counted_tasks": 0, "relative_cost_micros_total": 0, "tasks": 0},
         "buckets": [],
         "coverage": "native_schema_3",
         "schema_version": STORE_SCHEMA_VERSION,
@@ -457,6 +514,19 @@ def set_relative_cost_weight(
     }
 
 
+def _weight_micros(
+    weights: list[dict[str, object]],
+    dimensions: Mapping[str, object],
+    effort: str,
+) -> int | None:
+    """Return the configured relative cost for one agent/model at one effort."""
+    key = (str(dimensions["agent"]), str(dimensions["model"] or ""), effort)
+    return next(
+        (_counter(item["relative_cost_micros"]) for item in weights if _weight_key(item) == key),
+        None,
+    )
+
+
 def record_usage(
     path: Path,
     dimensions: UsageDimensions,
@@ -465,6 +535,12 @@ def record_usage(
     rework: bool,
     escalation: bool,
 ) -> None:
+    """Record one finished child.
+
+    ``rework`` 는 이 실행이 이미 센 태스크의 재시도라는 뜻이다. 참이면 실행 수만
+    늘고 태스크 수와 기준선은 늘지 않는다. 그래서 저비용 라우팅이 실패해 다시
+    도는 비용이 기준선에 흡수되지 않고 초과 지출로 남는다.
+    """
     if not isinstance(rework, bool) or not isinstance(escalation, bool):
         raise UsageAggregationError()
     normalized: dict[str, object] = {
@@ -478,16 +554,11 @@ def record_usage(
     def update(value: dict[str, object]) -> None:
         weights = value["weights"]
         buckets = value["buckets"]
+        baseline = value["baseline"]
         assert isinstance(weights, list)
         assert isinstance(buckets, list)
-        weight = next(
-            (
-                _counter(item["relative_cost_micros"])
-                for item in weights
-                if _weight_key(item) == _weight_key(normalized)
-            ),
-            None,
-        )
+        assert isinstance(baseline, dict)
+        weight = _weight_micros(weights, normalized, str(normalized["effort"]))
         key = _bucket_key(normalized)
         bucket = next((item for item in buckets if _bucket_key(item) == key), None)
         if bucket is None:
@@ -524,6 +595,18 @@ def record_usage(
             )
             if weight < WEIGHT_SCALE:
                 bucket["lower_weight_runs"] = _increment(int(bucket["lower_weight_runs"]))
+        if rework:
+            return
+        # 첫 시도만 태스크로 센다. 이 태스크가 라우팅 없이 갔을 고정 경로의 비용을
+        # 그 자리에서 확정해 둔다. 나중에 가중치가 바뀌어도 이미 쌓인 기준선은
+        # 다시 쓰이지 않는다. 실제 비용과 같은 규칙이다.
+        baseline["tasks"] = _increment(int(baseline["tasks"]))
+        baseline_weight = _weight_micros(weights, normalized, BASELINE_EFFORT)
+        if baseline_weight is not None:
+            baseline["counted_tasks"] = _increment(int(baseline["counted_tasks"]))
+            baseline["relative_cost_micros_total"] = _increment(
+                int(baseline["relative_cost_micros_total"]), baseline_weight
+            )
 
     _update_store(path, update)
 
@@ -566,19 +649,22 @@ def render_usage_report(path: Path) -> dict[str, object]:
         assert isinstance(bucket_statuses, dict)
         for status, count in bucket_statuses.items():
             total_statuses[status] = _increment(int(total_statuses.get(status, 0)), int(count))
+    baseline = value["baseline"]
+    assert isinstance(baseline, dict)
     return {
         "aggregate_only": True,
         "buckets": [_render_metrics(bucket) | _dimensions(bucket) for bucket in buckets],
         "claims": {
+            "baseline_is_counterfactual": True,
+            "first_attempts_self_reported": True,
             "pricing_verified": False,
             "relative_cost_only": True,
-            "rework_self_reported": True,
             "task_content_recorded": False,
             "weights_apply_prospectively": True,
         },
         "coverage": "native_schema_3",
         "schema_version": STORE_SCHEMA_VERSION,
-        "totals": _render_metrics(totals),
+        "totals": _render_metrics(totals) | _render_savings(totals, baseline),
         "weights": [_render_weight(weight) for weight in weights],
     }
 
@@ -636,44 +722,79 @@ def _cost_units(value: int, weighted_runs: int) -> str | None:
     return f"{Decimal(value) / Decimal(WEIGHT_SCALE):.6f}"
 
 
-def _relative_cost_comparison(
-    value: int,
-    weighted_runs: int,
-) -> tuple[str | None, str | None, str | None]:
-    if weighted_runs == 0:
-        return None, None, None
-    baseline_micros = weighted_runs * WEIGHT_SCALE
-    savings_micros = baseline_micros - value
-    return (
-        f"{Decimal(baseline_micros) / Decimal(WEIGHT_SCALE):.6f}",
-        f"{Decimal(savings_micros) / Decimal(baseline_micros):.6f}",
-        f"{Decimal(savings_micros) / Decimal(WEIGHT_SCALE):.6f}",
+def _savings_reason_code(
+    tasks: int,
+    counted_tasks: int,
+    unweighted_runs: int,
+    baseline_micros: int,
+) -> str:
+    """Return why a savings ratio is or is not computable.
+
+    부분 증거로 절감을 계산하지 않는다. 가중치가 없는 실행이 하나라도 있으면 실제
+    비용이 과소 집계되고, 기준선 가중치가 없는 태스크가 있으면 반사실이 과소
+    집계된다. 어느 쪽이든 결과는 절감을 실제보다 좋아 보이게 만든다.
+    """
+    if tasks == 0:
+        return "no_tasks"
+    if unweighted_runs:
+        return "unweighted_runs"
+    if counted_tasks != tasks or baseline_micros == 0:
+        return "missing_baseline_weight"
+    return "computed"
+
+
+def _render_savings(
+    totals: Mapping[str, object],
+    baseline: Mapping[str, object],
+) -> dict[str, object]:
+    """Compare measured cost against the fixed route the tasks would have taken."""
+    tasks = _counter(baseline["tasks"])
+    counted_tasks = _counter(baseline["counted_tasks"])
+    baseline_micros = _counter(baseline["relative_cost_micros_total"])
+    measured_micros = _counter(totals["relative_cost_micros_total"])
+    reason_code = _savings_reason_code(
+        tasks,
+        counted_tasks,
+        _counter(totals["unweighted_runs"]),
+        baseline_micros,
     )
+    computed = reason_code == "computed"
+    savings_micros = baseline_micros - measured_micros
+    return {
+        "baseline_effort": BASELINE_EFFORT,
+        "baseline_tasks": counted_tasks,
+        "relative_cost_baseline_units": (
+            f"{Decimal(baseline_micros) / Decimal(WEIGHT_SCALE):.6f}" if computed else None
+        ),
+        "relative_cost_savings_ratio": (
+            f"{Decimal(savings_micros) / Decimal(baseline_micros):.6f}" if computed else None
+        ),
+        "relative_cost_savings_units": (
+            f"{Decimal(savings_micros) / Decimal(WEIGHT_SCALE):.6f}" if computed else None
+        ),
+        "savings_reason_code": reason_code,
+    }
 
 
 def _render_metrics(value: Mapping[str, object]) -> dict[str, object]:
     runs = _counter(value["runs"])
     weighted_runs = _counter(value["weighted_runs"])
     relative_cost_micros = _counter(value["relative_cost_micros_total"])
-    baseline_units, savings_ratio, savings_units = _relative_cost_comparison(
-        relative_cost_micros,
-        weighted_runs,
-    )
+    reworks = _counter(value["reworks"])
     return {
         "escalation_ratio": _ratio(_counter(value["escalations"]), runs),
         "escalations": value["escalations"],
         "failed": value["failed"],
         "lower_weight_ratio": _ratio(_counter(value["lower_weight_runs"]), weighted_runs),
         "lower_weight_runs": value["lower_weight_runs"],
-        "relative_cost_baseline_units": baseline_units,
-        "relative_cost_savings_ratio": savings_ratio,
-        "relative_cost_savings_units": savings_units,
         "relative_cost_units": _cost_units(relative_cost_micros, weighted_runs),
-        "rework_ratio": _ratio(_counter(value["reworks"]), runs),
-        "reworks": value["reworks"],
+        "rework_ratio": _ratio(reworks, runs),
+        "reworks": reworks,
         "runs": runs,
+        "runs_per_task": _ratio(runs, runs - reworks),
         "status_counts": value["status_counts"],
         "succeeded": value["succeeded"],
+        "tasks": runs - reworks,
         "unweighted_runs": value["unweighted_runs"],
         "weighted_runs": weighted_runs,
     }

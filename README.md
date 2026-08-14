@@ -124,12 +124,14 @@ Accounting is disabled until the user creates a private local store:
 
 ```sh
 wclass usage enable
-wclass usage weight \
-  --agent grok \
-  --effort low \
-  --relative-cost 0.25
+wclass usage weight --agent grok --effort medium --relative-cost 1.0
+wclass usage weight --agent grok --effort low --relative-cost 0.25
 wclass usage report
 ```
+
+The `medium` weight is not optional bookkeeping. It states what the same task
+would have cost on the fixed route it would have taken without routing, and the
+report refuses to compute a saving without it.
 
 On macOS the default store is
 `~/Library/Application Support/weightclass/usage-v1.json`. On other supported
@@ -142,17 +144,41 @@ Once the default store exists, normal installed `wclass` schema-3 executions
 record automatically after the selected direct child has completed. Attempts
 that fail before a child status is obtained are not counted. The store contains
 only cumulative agent/model/effort/tier buckets, success/failure and exit-status
-counts, and optional self-reported rework/escalation counts. It contains no task
-content or hash, per-run event, timestamp, policy/profile/account, executable
-path, or route fingerprint. The store and lock are regular files private to the
+counts, optional self-reported rework/escalation counts, and one cumulative
+baseline total. It contains no task content or hash, per-run event, timestamp,
+policy/profile/account, executable path, or route fingerprint. The store and lock are regular files private to the
 current user, updates are locked and atomic, and an unsafe or malformed enabled
 store fails closed before task access.
 
-Relative cost is also a caller assertion. A weight of `1.0` is the chosen
-baseline; `0.25` means one run counts as one quarter of that baseline. Reports
-show weighted coverage, relative units, and relative savings against `1.0`.
-Unconfigured buckets remain `unweighted`; weightclass never fills them from a
-price list and does not claim monetary, token, subscription, or quota savings.
+Relative cost is a caller assertion: `0.25` means one run of that
+agent/model/effort counts as one quarter of one unit. Unconfigured buckets
+remain `unweighted`; weightclass never fills them from a price list and does not
+claim monetary, token, subscription, or quota savings.
+
+Savings are reported against a counterfactual, not against a per-run constant.
+The baseline is *the same tasks on the fixed `medium` route*, so:
+
+- running the baseline route itself reports `0.000000`, not a saving;
+- a retry costs extra without also enlarging the baseline, because a retry is
+  not a new task. Ten tasks routed to a cheap effort that fail and are reworked
+  on an expensive one report the resulting **overrun**, not a saving;
+- `savings_reason_code` explains every abstention. The report declines to
+  compute a ratio when there are no tasks (`no_tasks`), when any run has no
+  configured weight (`unweighted_runs`), or when any task has no `medium`
+  baseline weight (`missing_baseline_weight`). Partial evidence always flatters
+  the router, so it is refused rather than shown.
+
+Distinguishing a task from a retry is the caller's declaration: pass
+`--usage-rework` when re-running work that was already counted. After a failed
+run against an enabled store, `wclass` prints
+`{"usage_hint": "record_retry_with_usage_rework"}` to standard error as a
+reminder. Omitting it on a retry inflates both the run count and the baseline,
+which is exactly how a failed cheap route comes to look like a saving. There is
+no per-run identifier to reconstruct this from, by design.
+
+Stores created by an earlier build are promoted on read. Schema 1 recorded no
+counterfactual, so a promoted store keeps its counts, recovers its task count as
+`runs - reworks`, and abstains from savings until new evidence accumulates.
 Omit `--model` to configure the native default; passing `--model default`
 configures an opaque model literally named `default`. Weights apply
 prospectively, so configure them before the runs being compared;
