@@ -2,14 +2,117 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
+from unittest import mock
+
+from weightclass.agent_discovery import generate_selected_policy, render_agent_discovery
 
 
 class AgentDiscoveryCliTests(unittest.TestCase):
+    def test_inventory_does_not_probe_processes_sockets_or_account_capabilities(self) -> None:
+        """Breaks if discovery probes a runtime or presents unknown account facts as known."""
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "claude"
+            executable.write_text("#!/bin/sh\nexit 96\n", encoding="utf-8")
+            executable.chmod(0o755)
+            with (
+                mock.patch.object(subprocess, "Popen", side_effect=AssertionError("process probe")),
+                mock.patch.object(socket, "socket", side_effect=AssertionError("socket probe")),
+            ):
+                inventory = render_agent_discovery(directory, agent="claude")
+
+        agents = cast(list[dict[str, object]], inventory["agents"])
+        agent = agents[0]
+        self.assertTrue(agent["executable_detected"])
+        self.assertEqual(agent["subscription"], "unknown")
+        self.assertEqual(agent["pricing"], "unknown")
+        self.assertEqual(agent["quota"], "unknown")
+        for unsupported_claim in (
+            "roles",
+            "authentication",
+            "authenticated",
+            "entitlement",
+            "model_availability",
+        ):
+            self.assertNotIn(unsupported_claim, agent)
+
+    def test_package_adapter_registry_has_stable_order_and_closed_facts(self) -> None:
+        """Breaks if built-in adapter facts drift or imply runtime capabilities."""
+        from weightclass.adapter_registry import BUILT_IN_ADAPTERS
+
+        self.assertEqual(
+            [
+                (
+                    adapter.agent,
+                    adapter.executable_name,
+                    adapter.task_delivery,
+                    adapter.accepts_opaque_model_override,
+                    adapter.models,
+                    adapter.efforts,
+                )
+                for adapter in BUILT_IN_ADAPTERS
+            ],
+            [
+                ("agy", "agy", "argv", False, ("default",), ("low", "medium", "high")),
+                ("claude", "claude", "stdin", True, ("default",), ("low", "medium", "high")),
+                ("codex", "codex", "stdin", True, ("default",), ("low", "medium", "high")),
+                ("grok", "grok", "argv", True, ("default",), ("low", "medium", "high")),
+            ],
+        )
+
+    def test_final_component_executable_symlink_is_not_discovered_or_profiled(self) -> None:
+        """Breaks if PATH discovery follows an unreviewable executable symlink."""
+        with tempfile.TemporaryDirectory() as directory:
+            bin_directory = Path(directory) / "bin"
+            bin_directory.mkdir()
+            target = Path(directory) / "real-codex"
+            target.write_text("#!/bin/sh\nexit 95\n", encoding="utf-8")
+            target.chmod(0o755)
+            (bin_directory / "codex").symlink_to(target)
+
+            inventory = render_agent_discovery(str(bin_directory), agent="codex")
+            with self.assertRaises(LookupError):
+                generate_selected_policy(
+                    agent="codex",
+                    tier="low",
+                    model="default",
+                    effort="low",
+                    allow_cross_vendor=False,
+                    path_value=str(bin_directory),
+                )
+
+        self.assertEqual(
+            inventory["agents"],
+            [
+                {
+                    "agent": "codex",
+                    "executable": None,
+                    "executable_detected": False,
+                    "task_delivery": "stdin",
+                    "model_catalog": {
+                        "source": "package_default_only",
+                        "values": ["default"],
+                        "accepts_opaque_override": True,
+                        "availability_verified": False,
+                    },
+                    "effort_catalog": {
+                        "source": "package_catalog",
+                        "values": ["low", "medium", "high"],
+                        "availability_verified": False,
+                    },
+                    "subscription": "unknown",
+                    "pricing": "unknown",
+                    "quota": "unknown",
+                }
+            ],
+        )
+
     def test_discovers_known_executables_without_starting_them(self) -> None:
         """Breaks if local discovery executes a vendor or overstates availability."""
         with tempfile.TemporaryDirectory() as directory:
@@ -45,13 +148,13 @@ class AgentDiscoveryCliTests(unittest.TestCase):
             {
                 "schema_version": payload["schema_version"],
                 "discovery_mode": payload["discovery_mode"],
-                "network_used": payload["network_used"],
+                "network_probe_performed": payload["network_probe_performed"],
                 "vendor_processes_started": payload["vendor_processes_started"],
             },
             {
                 "schema_version": 1,
                 "discovery_mode": "local_path_only",
-                "network_used": False,
+                "network_probe_performed": False,
                 "vendor_processes_started": False,
             },
         )

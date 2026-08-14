@@ -1,4 +1,5 @@
 import os
+import pickle
 import signal
 import subprocess
 import sys
@@ -8,7 +9,7 @@ from types import FrameType
 from typing import cast
 from unittest.mock import Mock, call, patch
 
-from weightclass import process_context
+from weightclass import foreground_process, process_context
 from weightclass.foreground_process import ForegroundProcessError, run_owned_foreground
 
 
@@ -28,6 +29,81 @@ def mock_process(arguments: tuple[str, ...]) -> Mock:
 
 
 class ForegroundProcessTests(unittest.TestCase):
+    def test_redacted_invocation_never_renders_serializes_or_compares_task_data(self) -> None:
+        """Breaks if task-bearing spawn inputs escape through object diagnostics."""
+        invocation_type = getattr(foreground_process, "RedactedSpawnInvocation", None)
+        self.assertIsNotNone(invocation_type)
+        assert invocation_type is not None
+        secret = "PRIVATE-ARGV-TASK"
+        invocation = invocation_type(
+            ("/owned/runtime", secret),
+            secret.encode(),
+            cleanup_grace_seconds=0,
+            terminate_grace_seconds=0,
+        )
+        same_contents = invocation_type(
+            ("/owned/runtime", secret),
+            secret.encode(),
+            cleanup_grace_seconds=0,
+            terminate_grace_seconds=0,
+        )
+        self.assertNotIn(secret, repr(invocation))
+        self.assertNotIn(secret, str(invocation))
+        self.assertNotEqual(invocation, same_contents)
+        with self.assertRaises(TypeError):
+            pickle.dumps(invocation)
+        with self.assertRaises(TypeError):
+            invocation.__getstate__()
+        with self.assertRaises(AttributeError):
+            invocation._arguments = ("changed",)
+
+    def test_redacted_spawn_seam_delivers_private_values_and_returns_only_status(self) -> None:
+        """Breaks if task-bearing CompletedProcess.args escapes the redacted adapter."""
+        run_redacted = getattr(foreground_process, "run_owned_foreground_redacted", None)
+        self.assertIsNotNone(run_redacted)
+        assert run_redacted is not None
+        arguments = ("/owned/runtime", "PRIVATE-ARGV-TASK")
+        process = mock_process(arguments)
+        delivered = bytearray()
+
+        def write(contents: bytes) -> int:
+            delivered.extend(contents)
+            return len(contents)
+
+        process.stdin.write.side_effect = write
+
+        def wait(owned_process: subprocess.Popen[bytes], timeout: float | None = None) -> int:
+            self.assertIs(owned_process, process)
+            self.assertIsNone(timeout)
+            process.returncode = 19
+            return 19
+
+        invocation = foreground_process.RedactedSpawnInvocation(
+            arguments,
+            b"PRIVATE-STDIN-TASK",
+            cleanup_grace_seconds=0,
+            terminate_grace_seconds=0,
+        )
+        with (
+            patch(
+                "weightclass.foreground_process.has_safe_child_status_context",
+                return_value=True,
+            ),
+            patch("weightclass.foreground_process.subprocess.Popen", return_value=process) as spawn,
+            patch("weightclass.foreground_process.wait_owned_child", side_effect=wait),
+        ):
+            status = run_redacted(invocation)
+
+        self.assertEqual(status, 19)
+        self.assertEqual(delivered, b"PRIVATE-STDIN-TASK")
+        spawn.assert_called_once_with(
+            arguments,
+            bufsize=0,
+            close_fds=True,
+            shell=False,
+            stdin=subprocess.PIPE,
+        )
+
     def test_exact_argv_and_partial_input_use_one_owned_child(self) -> None:
         arguments = ("/owned/runtime", "--flag")
         process = mock_process(arguments)

@@ -63,6 +63,11 @@ ownership labels remain opaque caller declarations. See the
 [protocol 2 security boundary](docs/protocol-v2-security.md) and
 [migration guide](docs/protocol-v2-migration.md).
 
+Native schema 3 adds observation-bound native review and an additive
+`wclass delegate native route|run` surface for exactly one bounded subtask and
+one foreground child. It is direct native execution, not an orchestration
+runtime. See [Native schema 3](docs/native-schema-3.md).
+
 ## Run locally
 
 `wclass --help` lists the whole surface:
@@ -99,7 +104,7 @@ them:
 | `2` | `invalid_task` or `invalid_input`. |
 | `3` | `unsupported_route` — no policy route matched. |
 | `4` | `executor_unavailable` — the command could not be started. |
-| `5` | `api_confirmation_required` or `delegation_confirmation_required`. |
+| `5` | A required API, runtime, endpoint-transition, or native-delegation confirmation is absent. |
 | `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
 | `7` | `executor_failed` — the command started and exited non-zero. |
 | `8` | `triage_unavailable` — `--ask-vendor` could not obtain a tier. |
@@ -109,10 +114,15 @@ exception, which is a bug worth reporting.
 
 ## Discover installed agents and generate a policy
 
-`discover` checks only absolute directories in the current `PATH` for the four
-package-supported executable names. It does not start a vendor process, read
-vendor configuration or authentication files, make a network request, or read
-task standard input:
+`discover` checks only for the four package-supported executable names in
+absolute directories from the current `PATH`. Discovery means executable
+presence only; it does not establish a usable profile, authenticated account,
+model entitlement, price, or remaining quota. weightclass does not
+intentionally start a provider or network request during discovery, but a
+caller-supplied `PATH` can name a remote or automounted filesystem whose normal
+metadata lookup has external I/O. Discovery does not start a vendor process,
+read vendor configuration or authentication files, or read task standard
+input:
 
 ```sh
 wclass discover
@@ -759,6 +769,64 @@ the vendor filter is applied before tier selection — including when
 `--source-vendor` is omitted, in which case the vendor of the first declared
 tier route is used.
 
+## One-child native delegation (schema 3)
+
+Schema 3 can review and run exactly one bounded subtask through one of the four
+closed native builders. First produce a task-free review descriptor:
+
+```sh
+wclass delegate native route \
+  --policy native-policy-v3.json \
+  --source-vendor codex \
+  --source-profile work \
+  --tier low
+```
+
+The canonical descriptor has `purpose: "native_delegation"`, includes the
+selected executable's `lstat` identity, lists its required confirmations, and
+binds all of that into `route_fingerprint`. It reads no subtask. An ordinary
+schema-3 `wclass route` descriptor has `purpose: "native_route"`; its
+fingerprint cannot authorize this delegation command.
+
+Run only after reviewing that exact output:
+
+```sh
+printf '%s' 'Implement the one reviewed subtask.' | \
+  wclass delegate native run \
+  --policy native-policy-v3.json \
+  --source-vendor codex \
+  --source-profile work \
+  --tier low \
+  --confirm-native-delegation \
+  --confirm-endpoint-transition \
+  --ack-route-fingerprint 'sha256:copied-from-delegate-native-route'
+```
+
+`--confirm-native-delegation` is always required. Add
+`--confirm-endpoint-transition` only when the reviewed artifact lists
+`endpoint_transition`; a route whose source and destination are the same
+profile/vendor does not require it. Review produces information, while these
+run flags provide execution consent; neither one substitutes for the other.
+
+After confirmations and an exact acknowledgement, run checks safe direct-child
+status ownership, observes and binds the executable, compares the fingerprint,
+reads stdin exactly once, observes the executable again, and starts one
+foreground child with inherited output. Codex and Claude receive the exact
+validated UTF-8 task bytes on stdin. The built-in `agy` and Grok command shapes
+replace one reviewed `{{task}}` argv slot and use empty child stdin, so the task
+is visible to local process inspection while the child runs. Argv delivery
+rejects NUL, more than 32,768 UTF-8 bytes, and a Grok task beginning with `-`.
+
+This command does not decompose the subtask, start a planner or reviewer,
+capture or interpret child output, persist artifacts, synthesize results,
+retry, fall back, supervise descendants, or account for provider usage. Profile,
+account, model, entitlement, pricing, subscription, and quota labels are opaque
+caller assertions. The executable observations detect ordinary replacement
+between review and run and immediately before spawn, but path-based execution
+still has a residual replacement race after the final observation. See
+[Native schema 3](docs/native-schema-3.md) for the exact boundary and exit
+mapping.
+
 ## Reviewed role delegation
 
 P0 adds a compatibility-isolated review command:
@@ -983,7 +1051,8 @@ credential management, background execution, or a bundled provider runtime.
   configuration.
 - Task text is read only from standard input, held in memory to classify and
   pass to the selected child process, then discarded. `delegate route` does not
-  read it; `delegate run` reads it only after its static execution gates.
+  read it; `delegate run` and `delegate native run` read it only after their
+  static execution gates.
   weightclass never logs, stores, echoes, hashes, or places it in diagnostics.
 - weightclass never reads credentials, subscription balances, pricing, cookies,
   or vendor configuration. It does not capture or process vendor output. V2
@@ -999,6 +1068,10 @@ credential management, background execution, or a bundled provider runtime.
   again immediately before spawn. This detects ordinary replacement between
   review and run, but cannot eliminate a replacement after the final check;
   execution remains path-based rather than inode-bound.
+- Schema-3 native route and delegation descriptors bind an `lstat` observation
+  and recheck it immediately before spawn. That narrows but cannot eliminate
+  executable replacement after the final check because execution is still by
+  path.
 - Route selection is deterministic. Unsupported, malformed, or unsafe input
   fails closed with a redacted JSON diagnostic.
 - weightclass does not infer source vendor, model availability, subscription

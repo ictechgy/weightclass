@@ -160,6 +160,10 @@ def dispatch_native_policy_schema(value: object) -> tuple[int, object]:
         return 1, legacy
     if version == 2:
         return 2, parse_native_policy_v2(value)
+    if version == 3:
+        from .native_v3_schema import parse_native_policy_v3
+
+        return 3, parse_native_policy_v3(value)
     raise V2ValidationError()
 
 
