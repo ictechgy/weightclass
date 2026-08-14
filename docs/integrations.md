@@ -15,6 +15,27 @@ the project directory after installing `weightclass`.
 3. Keep a Codex-originated task on Codex and a Claude-originated task on Claude
    unless a reviewed policy explicitly enables cross-vendor routing.
 
+## Local discovery and profile selection
+
+Use `wclass discover` to list package-supported agent executable names found in
+absolute `PATH` entries. It performs filesystem checks only: no agent is
+started, no task is read, and no vendor configuration, authentication file, or
+network service is accessed. The result does not prove subscription access,
+model entitlement, price, quota, or installed-CLI compatibility. Model and
+effort catalogs are package declarations with availability explicitly
+unverified.
+
+Use `wclass profile --agent <agent> --tier <tier> --model <label> --effort
+<effort>` to generate one schema-1 policy on standard output. `default` omits a
+model override; another accepted model label is opaque user configuration, not
+an availability claim. `agy` supports only `default` because it has no reviewed
+model-override builder. Add `--allow-cross-vendor` only for an intentional
+boundary change, then review the generated policy through the ordinary
+fingerprint-bound `route`/`run` workflow. The generated policy uses the
+detected absolute lexical executable path, starts nothing by itself, and is
+never persisted unless the caller explicitly writes its stdout to a selected
+file.
+
 Do not put credentials, tokens, or personal information on a command line, in
 a policy, or in vendor-global configuration. Task text is a deliberate
 exception to that rule, not an oversight: the built-in `agy` and `grok` routes,

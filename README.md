@@ -68,10 +68,11 @@ ownership labels remain opaque caller declarations. See the
 `wclass --help` lists the whole surface:
 
 ```text
-wclass [-h] [--version] {classify,example-policy,review-preset,review-cost-profile,recommend,route,run,render,delegate,v2} ...
+wclass [-h] [--version] {discover,profile,classify,example-policy,review-preset,review-cost-profile,recommend,route,run,render,delegate,v2} ...
 ```
 
-`classify`, `recommend`, `route`, and `run` read the task from standard input. `render`
+`classify`, `recommend`, `route`, and `run` read the task from standard input. `discover`
+and `profile` are task-free local selection commands. `render`
 prints the command of a policy route named by a workflow descriptor and never
 reads a task. `example-policy` emits packaged policy JSON; `review-preset`
 prints every command and fingerprint in one packaged policy.
@@ -105,6 +106,71 @@ them:
 
 Code `1` is not weightclass's; it means the interpreter died on an unhandled
 exception, which is a bug worth reporting.
+
+## Discover installed agents and generate a policy
+
+`discover` checks only absolute directories in the current `PATH` for the four
+package-supported executable names. It does not start a vendor process, read
+vendor configuration or authentication files, make a network request, or read
+task standard input:
+
+```sh
+wclass discover
+wclass discover --agent grok
+```
+
+The JSON result distinguishes an executable detected on the local path from a
+usable subscription or model. `executable_detected` means only that a regular
+executable file was found. Subscription, pricing, and quota remain `unknown`.
+The package-owned effort catalog describes the command shapes weightclass can
+build; it is not a probe of the installed CLI version. The model catalog
+contains only `default`, meaning that no model override is emitted, and reports
+`availability_verified: false`. Cloud model entitlement is not a locally
+installed property that weightclass can safely infer.
+
+`profile` turns an agent, model, effort, and tier selection into a complete
+schema-1 policy, so the user does not have to assemble vendor argv manually:
+
+```sh
+wclass profile \
+  --agent codex \
+  --tier low \
+  --model default \
+  --effort low > worker-policy.json
+```
+
+Codex, Claude, and Grok accept an opaque `--model` selection through their
+closed package builders. `agy` currently accepts only `--model default`
+because weightclass has no reviewed model-override shape for it. Every
+non-default model label remains caller-supplied opaque configuration;
+weightclass does not verify that the account can use it. The generated policy
+contains the detected absolute executable path and exactly one tier route.
+The command writes nothing unless the caller explicitly redirects its output
+to a chosen file.
+
+For an intentional cross-vendor worker, add `--allow-cross-vendor`. This emits
+the existing schema-1 `allow_mixed_vendors: true` opt-in; it is deliberately
+not a directional grant, so use the generated single-worker policy only at the
+reviewed integration boundary:
+
+```sh
+wclass profile \
+  --agent grok \
+  --tier low \
+  --model default \
+  --effort low \
+  --allow-cross-vendor > worker-policy.json
+
+printf '%s' 'Fix a spelling typo.' | \
+  wclass route --policy worker-policy.json --source-vendor codex --tier low
+```
+
+Review the emitted route and pass its fingerprint to the ordinary `run`
+command. Discovery and profile generation never execute the selected agent;
+`run` still starts exactly one foreground child with no retry or fallback.
+Generated `agy` and Grok policies retain `task_delivery: argv` and its local
+process-inspection exposure. Schema 1 binds the lexical executable path in the
+route fingerprint but does not provide schema-2 executable reobservation.
 
 Code `7` carries the real status in its diagnostic, as
 `{"error": "executor_failed", "executor_exit_code": N}` or, for a command killed

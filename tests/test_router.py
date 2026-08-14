@@ -1663,6 +1663,8 @@ class CommandSurfaceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         for subcommand in (
             "classify",
+            "discover",
+            "profile",
             "review-preset",
             "route",
             "run",
@@ -1856,6 +1858,16 @@ class TaskConfidentialityTests(unittest.TestCase):
             ]
 
             for arguments in (
+                ["discover"],
+                [
+                    "profile",
+                    "--agent",
+                    "codex",
+                    "--tier",
+                    "low",
+                    "--effort",
+                    "low",
+                ],
                 ["classify"],
                 ["route"],
                 ["route", "--source-vendor", "codex"],
