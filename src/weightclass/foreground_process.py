@@ -5,7 +5,7 @@ import signal
 import subprocess
 from collections.abc import Callable
 from types import FrameType
-from typing import Any, TypeVar
+from typing import Any, NoReturn, SupportsIndex, TypeVar
 
 from .process_context import (
     ChildStatusLostError,
@@ -16,6 +16,56 @@ from .process_context import (
 
 class ForegroundProcessError(OSError):
     """Raised without task or process details when foreground delivery fails."""
+
+
+class RedactedSpawnInvocation:
+    """Immutable task-bearing spawn request with value-free diagnostics."""
+
+    _arguments: tuple[str, ...]
+    _input_bytes: bytes
+    _cleanup_grace_seconds: float
+    _terminate_grace_seconds: float
+
+    __slots__ = (
+        "_arguments",
+        "_input_bytes",
+        "_cleanup_grace_seconds",
+        "_terminate_grace_seconds",
+    )
+
+    def __init__(
+        self,
+        arguments: tuple[str, ...],
+        input_bytes: bytes,
+        *,
+        cleanup_grace_seconds: float,
+        terminate_grace_seconds: float,
+    ) -> None:
+        object.__setattr__(self, "_arguments", arguments)
+        object.__setattr__(self, "_input_bytes", input_bytes)
+        object.__setattr__(self, "_cleanup_grace_seconds", cleanup_grace_seconds)
+        object.__setattr__(self, "_terminate_grace_seconds", terminate_grace_seconds)
+
+    def __setattr__(self, name: str, value: object) -> NoReturn:
+        del name, value
+        raise AttributeError
+
+    def __repr__(self) -> str:
+        return "RedactedSpawnInvocation(<redacted>)"
+
+    __str__ = __repr__
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    __hash__ = object.__hash__
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> NoReturn:
+        del protocol
+        raise TypeError
+
+    def __getstate__(self) -> NoReturn:
+        raise TypeError
 
 
 class _DeferredSigint:
@@ -269,3 +319,14 @@ def run_owned_foreground(
             raise cleanup_error from original_error
         raise original_error from None
     return subprocess.CompletedProcess(arguments, return_code)
+
+
+def run_owned_foreground_redacted(invocation: RedactedSpawnInvocation) -> int:
+    """Run one private invocation without returning task-bearing arguments."""
+    completed = run_owned_foreground(
+        invocation._arguments,
+        invocation._input_bytes,
+        cleanup_grace_seconds=invocation._cleanup_grace_seconds,
+        terminate_grace_seconds=invocation._terminate_grace_seconds,
+    )
+    return completed.returncode

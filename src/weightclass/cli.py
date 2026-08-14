@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import unicodedata
@@ -87,6 +88,18 @@ from .native_v2_schema import (
     validate_native_selector,
 )
 from .native_v2_types import CompiledExecutionV2
+from .native_v3_compile import (
+    PurposeV3,
+    bind_native_observation_v3,
+    compile_static_native_policy_v3,
+)
+from .native_v3_runtime import (
+    NativeV3ExecutorUnavailableError,
+    NativeV3FingerprintMismatchError,
+    run_native_v3,
+)
+from .native_v3_schema import NativePolicyV3, validate_native_selector_v3
+from .native_v3_selector import InteractiveSelectorError, run_interactive_selector
 from .process_context import ChildStatusLostError
 from .router import (
     DEFAULT_ROUTES,
@@ -587,6 +600,16 @@ def _add_delegation_route_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_native_v3_delegation_arguments(parser: argparse.ArgumentParser) -> None:
+    """Declare the exact schema-3 selector shared by nested native delegation."""
+    parser.add_argument("--policy", required=True, type=Path)
+    parser.add_argument(
+        "--source-vendor", required=True, choices=("agy", "claude", "codex", "grok")
+    )
+    parser.add_argument("--source-profile", required=True)
+    parser.add_argument("--tier", required=True, choices=("low", "standard", "high"))
+
+
 def _add_preset_override_arguments(parser: argparse.ArgumentParser) -> None:
     for tier in ("low", "standard", "high"):
         parser.add_argument(
@@ -642,6 +665,13 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument("--model", default="default")
     profile.add_argument("--effort", required=True, choices=("low", "medium", "high"))
     profile.add_argument("--allow-cross-vendor", action="store_true")
+    subcommands.add_parser(
+        "select",
+        allow_abbrev=False,
+        description=(
+            "Interactively select and confirm a schema-3 policy on the controlling console."
+        ),
+    )
 
     classify = subcommands.add_parser(
         "classify",
@@ -718,6 +748,7 @@ def build_parser() -> argparse.ArgumentParser:
         native.add_argument("--tier", choices=("low", "standard", "high"))
         if name == "run":
             native.add_argument("--ack-route-fingerprint")
+            native.add_argument("--confirm-endpoint-transition", action="store_true")
 
     render = subcommands.add_parser(
         "render",
@@ -755,6 +786,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     qualification_candidate.add_argument("--evidence", required=True, type=Path)
     qualification_candidate.add_argument("--delegation-runtime", required=True, type=Path)
+    native_delegation = delegate_subcommands.add_parser(
+        "native",
+        allow_abbrev=False,
+        description="Delegate one bounded subtask to one reviewed native child.",
+    )
+    native_delegation_subcommands = native_delegation.add_subparsers(
+        dest="native_delegation_command", required=True
+    )
+    _add_native_v3_delegation_arguments(
+        native_delegation_subcommands.add_parser(
+            "route",
+            allow_abbrev=False,
+            description="Review one observation-bound schema-3 native delegation.",
+        )
+    )
+    native_delegation_run = native_delegation_subcommands.add_parser(
+        "run",
+        allow_abbrev=False,
+        description="Run one reviewed schema-3 native delegation.",
+    )
+    _add_native_v3_delegation_arguments(native_delegation_run)
+    native_delegation_run.add_argument("--confirm-native-delegation", action="store_true")
+    native_delegation_run.add_argument("--confirm-endpoint-transition", action="store_true")
+    native_delegation_run.add_argument("--ack-route-fingerprint")
 
     api = subcommands.add_parser(
         "v2",
@@ -1415,6 +1470,33 @@ def route_from_standard_input(
             return 2
         if version == 2:
             return _native_v2_route(dispatched, source_vendor, source_profile, explicit_tier)
+        if version == 3:
+            if source_vendor is None or source_profile is None or explicit_tier is None:
+                print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+                return 2
+            assert isinstance(dispatched, NativePolicyV3)
+            try:
+                validated_vendor, validated_profile, validated_tier = validate_native_selector_v3(
+                    source_vendor, source_profile, explicit_tier
+                )
+            except (V2ValidationError, ValueError):
+                print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+                return 2
+            try:
+                selected = compile_static_native_policy_v3(
+                    dispatched,
+                    source_vendor=validated_vendor,
+                    source_profile_id=validated_profile,
+                    tier=validated_tier,
+                    purpose="native_route",
+                )
+                observed = observe_executable(selected.executable)
+                review = bind_native_observation_v3(selected, observed)
+            except (OSError, V2ValidationError, ValueError):
+                print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+                return 3
+            print(canonical_json_bytes(review).decode("ascii"))
+            return 0
     else:
         dispatched = None
     if source_profile is not None:
@@ -1481,6 +1563,7 @@ def run_from_standard_input(
     model: str | None = None,
     preset: str | None = None,
     overrides: PresetOverrides | None = None,
+    confirm_endpoint_transition: bool = False,
 ) -> int:
     """Run a selected native command without a shell or output capture."""
     overrides = overrides or PresetOverrides()
@@ -1506,6 +1589,9 @@ def run_from_standard_input(
         except (InvalidInputError, V2ValidationError):
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
+        if confirm_endpoint_transition and version != 3:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
         if version == 2:
             return _native_v2_run(
                 dispatched,
@@ -1514,8 +1600,20 @@ def run_from_standard_input(
                 acknowledged_fingerprint,
                 explicit_tier,
             )
+        if version == 3:
+            return _native_v3_run(
+                dispatched,
+                source_vendor,
+                source_profile,
+                acknowledged_fingerprint,
+                explicit_tier,
+                confirm_endpoint_transition,
+            )
     else:
         dispatched = None
+    if confirm_endpoint_transition:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
     if source_profile is not None:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
@@ -1694,6 +1792,185 @@ def _native_v2_run(
     return _report_executor_result(completed)
 
 
+def _execute_native_v3(
+    policy: object,
+    source_vendor: str | None,
+    source_profile: str | None,
+    acknowledged_fingerprint: str | None,
+    explicit_tier: Tier | None,
+    confirm_endpoint_transition: bool,
+    *,
+    purpose: PurposeV3,
+    confirm_native_delegation: bool,
+) -> int:
+    """Apply schema-3 execution gates without reading task input early."""
+    if (
+        source_vendor is None
+        or source_profile is None
+        or explicit_tier is None
+        or not isinstance(policy, NativePolicyV3)
+    ):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    try:
+        validated_vendor, validated_profile, validated_tier = validate_native_selector_v3(
+            source_vendor, source_profile, explicit_tier
+        )
+    except V2ValidationError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    try:
+        selected = compile_static_native_policy_v3(
+            policy,
+            source_vendor=validated_vendor,
+            source_profile_id=validated_profile,
+            tier=validated_tier,
+            purpose=purpose,
+        )
+    except V2ValidationError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+    if "native_delegation" in selected.required_confirmations and not confirm_native_delegation:
+        print(json.dumps({"error": "confirmation_required"}), file=sys.stderr)
+        return 5
+    if "endpoint_transition" in selected.required_confirmations and not confirm_endpoint_transition:
+        print(json.dumps({"error": "confirmation_required"}), file=sys.stderr)
+        return 5
+    if not acknowledged_fingerprint:
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
+    try:
+        validate_runtime_process_context()
+    except DelegationRuntimeUnavailableError:
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    try:
+        first_observation = observe_executable(selected.executable)
+        review = bind_native_observation_v3(selected, first_observation)
+    except (OSError, V2ValidationError, ValueError):
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    if acknowledged_fingerprint != review["route_fingerprint"]:
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
+    try:
+        task = read_validated_task_v2(getattr(sys.stdin, "buffer", sys.stdin))
+    except V2ValidationError:
+        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
+        return 2
+    try:
+        return_code = run_native_v3(selected, task, first_observation)
+    except NativeV3ExecutorUnavailableError:
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    except NativeV3FingerprintMismatchError:
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
+    except V2ValidationError:
+        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
+        return 2
+    except (OSError, ValueError):
+        print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
+        return EXECUTOR_FAILED_EXIT_CODE
+    return _report_executor_result(subprocess.CompletedProcess(("<redacted>",), return_code))
+
+
+def _native_v3_run(
+    policy: object,
+    source_vendor: str | None,
+    source_profile: str | None,
+    acknowledged_fingerprint: str | None,
+    explicit_tier: Tier | None,
+    confirm_endpoint_transition: bool,
+) -> int:
+    """Preserve the ordinary schema-3 run contract and purpose binding."""
+    return _execute_native_v3(
+        policy,
+        source_vendor,
+        source_profile,
+        acknowledged_fingerprint,
+        explicit_tier,
+        confirm_endpoint_transition,
+        purpose="native_route",
+        confirm_native_delegation=False,
+    )
+
+
+def native_v3_delegation_route(
+    policy_path: Path,
+    source_vendor: str,
+    source_profile: str,
+    tier: Tier,
+) -> int:
+    """Print one task-free, observation-bound native-delegation descriptor."""
+    try:
+        raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
+        version, dispatched = dispatch_native_policy_schema(raw_policy)
+    except (InvalidInputError, V2ValidationError):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    if version != 3 or not isinstance(dispatched, NativePolicyV3):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    try:
+        validated_vendor, validated_profile, validated_tier = validate_native_selector_v3(
+            source_vendor, source_profile, tier
+        )
+    except V2ValidationError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    try:
+        selected = compile_static_native_policy_v3(
+            dispatched,
+            source_vendor=validated_vendor,
+            source_profile_id=validated_profile,
+            tier=validated_tier,
+            purpose="native_delegation",
+        )
+    except V2ValidationError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+    try:
+        observed = observe_executable(selected.executable)
+        review = bind_native_observation_v3(selected, observed)
+    except (OSError, V2ValidationError, ValueError):
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
+    print(canonical_json_bytes(review).decode("ascii"))
+    return 0
+
+
+def native_v3_delegation_run_from_standard_input(
+    policy_path: Path,
+    source_vendor: str,
+    source_profile: str,
+    tier: Tier,
+    confirm_native_delegation: bool,
+    confirm_endpoint_transition: bool,
+    acknowledged_fingerprint: str | None,
+) -> int:
+    """Run one reviewed bounded subtask through the schema-3 native adapter."""
+    try:
+        raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
+        version, dispatched = dispatch_native_policy_schema(raw_policy)
+    except (InvalidInputError, V2ValidationError):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    if version != 3 or not isinstance(dispatched, NativePolicyV3):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    return _execute_native_v3(
+        dispatched,
+        source_vendor,
+        source_profile,
+        acknowledged_fingerprint,
+        tier,
+        confirm_endpoint_transition,
+        purpose="native_delegation",
+        confirm_native_delegation=confirm_native_delegation,
+    )
+
+
 def render_workflow_route(policy_path: Path, descriptor_path: Path) -> int:
     """Render the command of the policy route named by a workflow descriptor."""
     try:
@@ -1753,6 +2030,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 3
         print(json.dumps(policy))
         return 0
+    if arguments.command == "select":
+        try:
+            with open(os.ctermid(), "r+", encoding="utf-8", buffering=1) as console:
+                return run_interactive_selector(
+                    console,
+                    console,
+                    sys.stdout,
+                    path_value=os.environ.get("PATH", ""),
+                )
+        except (InteractiveSelectorError, OSError, UnicodeError):
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
 
     # 라벨이 열려 있으므로 argparse 가 오타를 잡아주지 못한다. 형식만이라도
     # 여기서 닫아, 잘못된 라벨이 라우트 선택까지 내려가지 않게 한다.
@@ -1818,6 +2107,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.model,
             arguments.preset,
             _preset_overrides_from_arguments(arguments),
+            arguments.confirm_endpoint_transition,
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
@@ -1847,6 +2137,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         return delegation_qualification_candidate(
             arguments.evidence,
             arguments.delegation_runtime,
+        )
+    if (
+        arguments.command == "delegate"
+        and arguments.delegate_command == "native"
+        and arguments.native_delegation_command == "route"
+    ):
+        return native_v3_delegation_route(
+            arguments.policy,
+            arguments.source_vendor,
+            arguments.source_profile,
+            arguments.tier,
+        )
+    if (
+        arguments.command == "delegate"
+        and arguments.delegate_command == "native"
+        and arguments.native_delegation_command == "run"
+    ):
+        return native_v3_delegation_run_from_standard_input(
+            arguments.policy,
+            arguments.source_vendor,
+            arguments.source_profile,
+            arguments.tier,
+            arguments.confirm_native_delegation,
+            arguments.confirm_endpoint_transition,
+            arguments.ack_route_fingerprint,
         )
     if arguments.command == "v2" and arguments.api_command == "route":
         return v2_route_from_standard_input(

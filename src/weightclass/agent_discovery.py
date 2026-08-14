@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import os
+import stat
 import unicodedata
-from dataclasses import dataclass
-from typing import Literal
 
+from .adapter_registry import BUILT_IN_ADAPTERS, BUILT_IN_AGENT_IDS, BuiltInAdapter
 from .router import CLAUDE_COMMAND_PREFIX, agy_command, codex_command, grok_command
-
-DiscoveryTaskDelivery = Literal["stdin", "argv"]
 
 MAX_PATH_BYTES = 32_768
 MAX_PATH_ENTRIES = 256
@@ -23,21 +21,8 @@ class AgentUnavailableError(LookupError):
     """Raised when a selected package-supported executable is not detected."""
 
 
-@dataclass(frozen=True, slots=True)
-class AgentAdapter:
-    agent: str
-    executable_name: str
-    task_delivery: DiscoveryTaskDelivery
-    accepts_opaque_model_override: bool
-
-
-AGENT_ADAPTERS = (
-    AgentAdapter("agy", "agy", "argv", False),
-    AgentAdapter("claude", "claude", "stdin", True),
-    AgentAdapter("codex", "codex", "stdin", True),
-    AgentAdapter("grok", "grok", "argv", True),
-)
-AGENT_IDS = tuple(adapter.agent for adapter in AGENT_ADAPTERS)
+AGENT_ADAPTERS = BUILT_IN_ADAPTERS
+AGENT_IDS = BUILT_IN_AGENT_IDS
 TIERS = ("low", "standard", "high")
 EFFORTS = ("low", "medium", "high")
 MAX_MODEL_LABEL_BYTES = 240
@@ -63,13 +48,25 @@ def _reviewable_path(value: str) -> bool:
 
 
 def _find_executable(name: str, entries: tuple[str, ...]) -> str | None:
+    """Find a regular executable and bind a final symlink to its real target.
+
+    Parent-directory symlinks retain ordinary PATH behavior. Package-managed
+    final-component symlinks are resolved before their regular-file identity
+    and executable mode bits are checked.
+    """
     for directory in entries:
         candidate = os.path.join(directory, name)
         if not _reviewable_path(candidate):
             continue
         try:
-            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                return candidate
+            metadata = os.stat(candidate, follow_symlinks=False)
+            resolved = os.path.realpath(candidate) if stat.S_ISLNK(metadata.st_mode) else candidate
+            if not _reviewable_path(resolved):
+                continue
+            metadata = os.stat(resolved, follow_symlinks=False)
+            executable_bit = bool(metadata.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+            if stat.S_ISREG(metadata.st_mode) and executable_bit:
+                return resolved
         except OSError:
             continue
     return None
@@ -97,13 +94,13 @@ def render_agent_discovery(
                 "task_delivery": adapter.task_delivery,
                 "model_catalog": {
                     "source": "package_default_only",
-                    "values": ["default"],
+                    "values": list(adapter.models),
                     "accepts_opaque_override": adapter.accepts_opaque_model_override,
                     "availability_verified": False,
                 },
                 "effort_catalog": {
                     "source": "package_catalog",
-                    "values": ["low", "medium", "high"],
+                    "values": list(adapter.efforts),
                     "availability_verified": False,
                 },
                 "subscription": "unknown",
@@ -115,6 +112,7 @@ def render_agent_discovery(
         "schema_version": 1,
         "discovery_mode": "local_path_only",
         "network_used": False,
+        "network_probe_performed": False,
         "vendor_processes_started": False,
         "agents": agents,
     }
@@ -137,7 +135,7 @@ def _model_label(value: object) -> str:
 
 
 def _selected_command(
-    adapter: AgentAdapter,
+    adapter: BuiltInAdapter,
     executable: str,
     model: str,
     effort: str,

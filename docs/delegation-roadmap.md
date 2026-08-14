@@ -34,6 +34,7 @@ The public surface is isolated from native routing and V2 API routing:
 wclass delegate route  -> offline descriptor compiler
 wclass delegate run    -> one trusted external runtime (P0.5, not P0)
 wclass delegate qualification-candidate -> untrusted P1 record candidate
+wclass delegate native route|run -> one schema-3 native child, no orchestration runtime
 python -m weightclass.delegation_conformance -> maintainer evidence runner
 ```
 
@@ -41,6 +42,15 @@ The external runtime, not weightclass, owns role-process creation, provider
 authentication, network and billing behavior, action enforcement, artifacts,
 review, integration, output, and descendant cleanup. Existing native and V2
 commands retain their validation order, fingerprints, argv, and error mapping.
+
+The additive `delegate native` branch is intentionally not a new role
+protocol. It binds purpose `native_delegation` into a schema-3 native artifact
+and runs exactly one bounded subtask in one inherited-output foreground child.
+It has no planner/worker/reviewer graph, artifact exchange, result synthesis,
+retry, descendant supervision, or usage accounting. Its always-required
+native-delegation consent and exact fingerprint acknowledgement are separate
+from the legacy trusted-runtime confirmation. See
+[Native schema 3](native-schema-3.md).
 
 ## Protocol 1 role contract
 
@@ -358,7 +368,7 @@ weightclass still does not verify the actual recipient or billing account.
 - automatic retry, fallback, recovery, backgrounding, or descendant supervision;
 - orchestrator-retained implementation or prompt-only `must_delegate`;
 - optional protocol-1 assignments or dummy work;
-- nested delegation;
+- nested or recursive role orchestration beyond one-child schema-3 native delegation;
 - bundled runtime distribution;
 - vendor/model/entitlement/cost discovery;
 - task journals, task hashes, or adaptive routing state;
