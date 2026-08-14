@@ -15,7 +15,7 @@
 - No runtime dependencies. `pyproject.toml` declares `dependencies = []`; keep it empty.
 - Python floor is 3.10. Do not use syntax newer than 3.10.
 - Code comments in Korean. Documentation prose in English, matching existing `docs/`.
-- Diagnostics never contain caller-supplied values. Errors are the fixed set already in `cli.py`: `invalid_input`, `invalid_task`, `unsupported_route`, `executor_unavailable`, `route_fingerprint_mismatch`, `executor_failed`, `triage_unavailable`.
+- Diagnostics never contain caller-supplied values. Errors are the fixed set already in `cli.py`: `invalid_input`, `invalid_task`, `unsupported_route`, `executor_unavailable`, `route_fingerprint_mismatch`, `executor_failed`, `triage_unavailable`, `usage_unavailable`.
 - Task content is never logged, persisted, hashed, or placed in review output or diagnostics.
 - Tests never invoke a real vendor CLI. Use fake executables, as existing native tests do.
 - `ruff check`, `ruff format --check`, and `mypy --strict src/weightclass tests` must pass at every commit.

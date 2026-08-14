@@ -14,6 +14,7 @@ from .executable_observation import ExecutableObservation
 from .native_v3_schema import (
     MAX_NATIVE_POLICY_BYTES,
     BuilderKindV3,
+    EffortV3,
     NativePolicyV3,
     ProfileV3,
     RouteV3,
@@ -40,6 +41,9 @@ class StaticNativeSelectionV3:
 
     executable: str
     vendor: VendorV3
+    model: str | None
+    effort: EffortV3
+    tier: TierV3
     argv_template: tuple[str, ...]
     task_delivery: Literal["stdin", "argv"]
     required_confirmations: tuple[str, ...]
@@ -269,6 +273,9 @@ def compile_static_native_policy_v3(
     return StaticNativeSelectionV3(
         executable=target.executable,
         vendor=target.vendor,
+        model=route.model,
+        effort=route.effort,
+        tier=route.tier,
         argv_template=argv_template,
         task_delivery="argv" if argv_exposure else "stdin",
         required_confirmations=tuple(required_confirmations),

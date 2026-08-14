@@ -15,6 +15,8 @@ router and can outweigh a cheaper first attempt.
 Raw tokens and estimated provider cost must be evaluated separately. The
 offline evaluation tools can score externally normalized aggregate evidence,
 but they never fetch prices or claim to reproduce a subscription bill.
+An optional local usage store can count completed schema-3 runs and compare
+user-supplied relative cost weights without reading provider usage or prices.
 
 By default, a request stays with its explicit source vendor. Cross-vendor
 routing is available only through a reviewed policy opt-in. An optional V2
@@ -73,11 +75,11 @@ runtime. See [Native schema 3](docs/native-schema-3.md).
 `wclass --help` lists the whole surface:
 
 ```text
-wclass [-h] [--version] {discover,profile,select,classify,example-policy,review-preset,review-cost-profile,recommend,route,run,render,delegate,v2} ...
+wclass [-h] [--version] {discover,profile,select,usage,classify,example-policy,review-preset,review-cost-profile,recommend,route,run,render,delegate,v2} ...
 ```
 
 `classify`, `recommend`, `route`, and `run` read the task from standard input. `discover`,
-`profile`, and `select` are task-free local selection commands. `select` reads
+`profile`, `select`, and `usage` are task-free local commands. `select` reads
 numeric choices and confirmations from the controlling terminal and writes only
 the confirmed canonical policy to standard output. `render`
 prints the command of a policy route named by a workflow descriptor and never
@@ -111,9 +113,59 @@ them:
 | `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
 | `7` | `executor_failed` — the command started and exited non-zero. |
 | `8` | `triage_unavailable` — `--ask-vendor` could not obtain a tier. |
+| `9` | `usage_unavailable` — enabled schema-3 accounting could not be validated or updated. |
 
 Outside the documented `select` cancellation path, code `1` indicates an
 unhandled interpreter exception and is a bug worth reporting.
+
+## Local aggregate usage accounting
+
+Accounting is disabled until the user creates a private local store:
+
+```sh
+wclass usage enable
+wclass usage weight \
+  --agent grok \
+  --effort low \
+  --relative-cost 0.25
+wclass usage report
+```
+
+On macOS the default store is
+`~/Library/Application Support/weightclass/usage-v1.json`. On other supported
+systems it is under `$XDG_STATE_HOME/weightclass`, or `~/.local/state` when
+`XDG_STATE_HOME` is absent or relative. `--store /absolute/path` selects a
+different private store for any `usage` command; schema-3 `run` and
+`delegate native run` accept the same path as `--usage-store`.
+
+Once the default store exists, normal installed `wclass` schema-3 executions
+record automatically after the selected direct child has completed. Attempts
+that fail before a child status is obtained are not counted. The store contains
+only cumulative agent/model/effort/tier buckets, success/failure and exit-status
+counts, and optional self-reported rework/escalation counts. It contains no task
+content or hash, per-run event, timestamp, policy/profile/account, executable
+path, or route fingerprint. The store and lock are regular files private to the
+current user, updates are locked and atomic, and an unsafe or malformed enabled
+store fails closed before task access.
+
+Relative cost is also a caller assertion. A weight of `1.0` is the chosen
+baseline; `0.25` means one run counts as one quarter of that baseline. Reports
+show weighted coverage, relative units, and relative savings against `1.0`.
+Unconfigured buckets remain `unweighted`; weightclass never fills them from a
+price list and does not claim monetary, token, subscription, or quota savings.
+Omit `--model` to configure the native default; passing `--model default`
+configures an opaque model literally named `default`. Weights apply
+prospectively, so configure them before the runs being compared;
+changing a weight does not rewrite already aggregated units. The report lists
+the current configured weights alongside the cumulative metrics.
+Use `--usage-rework` or `--usage-escalation` on the schema-3 run that should
+increment those counters; weightclass cannot infer either without storing task
+identity, so both are explicitly self-reported.
+
+If validation fails before execution, code `9` emits
+`{"error": "usage_unavailable"}` and starts no child. If the child completed but
+the atomic aggregate update failed, code `9` additionally emits
+`"child_completed": true`; callers must not automatically retry that task.
 
 ## Discover installed agents and generate a policy
 
@@ -827,10 +879,12 @@ is visible to local process inspection while the child runs. Argv delivery
 rejects NUL, more than 32,768 UTF-8 bytes, and a Grok task beginning with `-`.
 
 This command does not decompose the subtask, start a planner or reviewer,
-capture or interpret child output, persist artifacts, synthesize results,
-retry, fall back, supervise descendants, or account for provider usage. Profile,
-account, model, entitlement, pricing, subscription, and quota labels are opaque
-caller assertions. The executable observations detect ordinary replacement
+capture or interpret child output, persist task artifacts, synthesize results,
+retry, fall back, supervise descendants, or read provider usage. When the
+optional local aggregate store is enabled, it records only the selected
+schema-3 dimensions and direct-child status described above. Profile, account,
+model, entitlement, pricing, subscription, and quota labels are opaque caller
+assertions. The executable observations detect ordinary replacement
 between review and run and immediately before spawn, but path-based execution
 still has a residual replacement race after the final observation. See
 [Native schema 3](docs/native-schema-3.md) for the exact boundary and exit
