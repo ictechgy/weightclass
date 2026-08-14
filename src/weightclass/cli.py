@@ -12,6 +12,13 @@ from pathlib import Path
 from typing import Any, Final, NoReturn, cast
 
 from . import __version__
+from .agent_discovery import (
+    AGENT_IDS,
+    AgentDiscoveryError,
+    AgentUnavailableError,
+    generate_selected_policy,
+    render_agent_discovery,
+)
 from .classification import (
     InvalidTaskError,
     Tier,
@@ -618,6 +625,23 @@ def build_parser() -> argparse.ArgumentParser:
     # `wclass --version --bogus` 가 0으로 성공한다. 파싱을 끝낸 뒤 직접 처리한다.
     parser.add_argument("--version", action="store_true")
     subcommands = parser.add_subparsers(dest="command")
+
+    discover = subcommands.add_parser(
+        "discover",
+        allow_abbrev=False,
+        description="List locally detected supported agent CLIs without starting them.",
+    )
+    discover.add_argument("--agent", choices=AGENT_IDS)
+    profile = subcommands.add_parser(
+        "profile",
+        allow_abbrev=False,
+        description="Generate a schema-1 policy from an installed agent selection.",
+    )
+    profile.add_argument("--agent", required=True, choices=AGENT_IDS)
+    profile.add_argument("--tier", required=True, choices=("low", "standard", "high"))
+    profile.add_argument("--model", default="default")
+    profile.add_argument("--effort", required=True, choices=("low", "medium", "high"))
+    profile.add_argument("--allow-cross-vendor", action="store_true")
 
     classify = subcommands.add_parser(
         "classify",
@@ -1703,6 +1727,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command is None:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
+
+    if arguments.command == "discover":
+        try:
+            receipt = render_agent_discovery(agent=arguments.agent)
+        except AgentDiscoveryError:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        print(json.dumps(receipt))
+        return 0
+    if arguments.command == "profile":
+        try:
+            policy = generate_selected_policy(
+                agent=arguments.agent,
+                tier=arguments.tier,
+                model=arguments.model,
+                effort=arguments.effort,
+                allow_cross_vendor=arguments.allow_cross_vendor,
+            )
+        except AgentDiscoveryError:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        except AgentUnavailableError:
+            print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+            return 3
+        print(json.dumps(policy))
+        return 0
 
     # 라벨이 열려 있으므로 argparse 가 오타를 잡아주지 못한다. 형식만이라도
     # 여기서 닫아, 잘못된 라벨이 라우트 선택까지 내려가지 않게 한다.

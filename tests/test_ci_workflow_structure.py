@@ -6,6 +6,7 @@ from pathlib import Path
 
 MACOS_BOUNDARY_MODULES = (
     "tests.test_router",
+    "tests.test_agent_discovery",
     "tests.test_native_v2_runtime",
     "tests.test_executable_observation",
     "tests.test_foreground_process",
