@@ -1563,17 +1563,41 @@ class CommandSurfaceTests(unittest.TestCase):
             ["--model", "claude-standard-model", "--effort", "low"],
         )
 
-    def test_preset_overrides_require_a_packaged_policy_selector(self) -> None:
-        """Breaks if overrides can silently mutate built-in or file-backed routes."""
-        task = "private selector-free override task"
-        result = _weightclass(
-            "route",
-            "--source-vendor",
-            "codex",
-            "--low-model",
-            "codex-low-model",
-            task=task,
-        )
+    def test_tier_overrides_never_mutate_a_file_backed_policy(self) -> None:
+        """Breaks if a label can silently rewrite an explicitly reviewed policy file.
+
+        내장 라우트에 라벨을 붙이는 것은 허용된다. 사용자가 검토해 파일로 고정한
+        정책을 명령줄 라벨이 뒤에서 바꾸는 것은 다른 문제다. 그 경우 검토한 정책
+        파일과 실행되는 명령이 달라진다.
+        """
+        task = "private file-backed override task"
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "codex-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": ["codex", "exec"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = _weightclass(
+                "route",
+                "--policy",
+                str(policy_path),
+                "--source-vendor",
+                "codex",
+                "--low-model",
+                "codex-low-model",
+                task=task,
+            )
 
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stdout, "")
@@ -3569,6 +3593,106 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
         self.assertNotIn("must-not-be-echoed", result.stderr)
+
+
+class BuiltInModelRoutingTests(unittest.TestCase):
+    """모델 등급은 비용 차이의 가장 큰 변수다.
+
+    지금까지는 cost-focused 프리셋을 구체화해야만 티어별 모델을 지정할 수 있어서,
+    모델 라우팅이 실험용 곁길에 머물렀다. 내장 라우트에 직접 붙일 수 있어야
+    라우터가 그 변수를 실제로 다룬다.
+    """
+
+    def route(self, *arguments: str) -> "subprocess.CompletedProcess[str]":
+        return subprocess.run(
+            [sys.executable, "-m", "weightclass", "route", "--tier", "low", *arguments],
+            capture_output=True,
+            check=False,
+            input="fix the typo",
+            text=True,
+        )
+
+    def test_a_tier_model_label_binds_to_the_built_in_route_of_each_vendor(self) -> None:
+        """Breaks if tier model routing again requires materializing a preset policy."""
+        expected = {
+            "codex": ["--model", "cheap-model", "-c", "model_reasoning_effort=low"],
+            "claude": ["--model", "cheap-model", "--effort", "low"],
+            "grok": ["--model", "cheap-model", "--reasoning-effort", "low"],
+        }
+
+        for vendor, tail in expected.items():
+            with self.subTest(vendor=vendor):
+                result = self.route("--source-vendor", vendor, "--low-model", "cheap-model")
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                rendered = json.loads(result.stdout)
+                command = rendered["command"]
+                self.assertIsInstance(command, list)
+                # 라벨은 그 벤더 명령이 실제로 읽는 자리에 들어가야 한다. 위치가
+                # 어긋나면 라벨이 붙었는데도 조용히 무시되거나 다른 옵션의 값이
+                # 되어, 검토한 명령과 실행된 명령이 달라진다.
+                self.assertIn(
+                    tail,
+                    [command[start : start + len(tail)] for start in range(len(command))],
+                )
+                self.assertEqual(rendered["vendor"], vendor)
+                self.assertEqual(rendered["configuration_status"], "unqualified_custom")
+
+    def test_only_the_named_tier_changes(self) -> None:
+        """Breaks if one tier's label leaks into the routes that were not overridden."""
+        overridden = self.route("--source-vendor", "codex", "--low-model", "cheap-model")
+        untouched = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "route",
+                "--tier",
+                "high",
+                "--source-vendor",
+                "codex",
+                "--low-model",
+                "cheap-model",
+            ],
+            capture_output=True,
+            check=False,
+            input="fix the typo",
+            text=True,
+        )
+
+        self.assertEqual(untouched.returncode, 0, untouched.stderr)
+        self.assertIn("cheap-model", json.loads(overridden.stdout)["command"])
+        self.assertNotIn("cheap-model", json.loads(untouched.stdout)["command"])
+
+    def test_a_bound_label_changes_the_reviewed_route_fingerprint(self) -> None:
+        """Breaks if a run could be acknowledged with the unlabelled route's fingerprint."""
+        plain = self.route("--source-vendor", "codex")
+        labelled = self.route("--source-vendor", "codex", "--low-model", "cheap-model")
+
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertNotEqual(
+            json.loads(plain.stdout)["route_fingerprint"],
+            json.loads(labelled.stdout)["route_fingerprint"],
+        )
+
+    def test_an_unsupported_vendor_or_dimension_fails_closed(self) -> None:
+        """Breaks if a label is bound to a command shape that has no place for it.
+
+        agy 는 모델 플래그가 없고, grok 의 노력 오버라이드는 측정되지 않았다.
+        벤더를 밝히지 않으면 어느 내장 라우트에 붙는지가 결정적이지 않다.
+        """
+        cases = (
+            ("--source-vendor", "agy", "--low-model", "cheap-model"),
+            ("--source-vendor", "grok", "--low-effort", "minimal"),
+            ("--low-model", "cheap-model"),
+        )
+
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                result = self.route(*arguments)
+
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
 
 
 if __name__ == "__main__":

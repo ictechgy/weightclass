@@ -7,7 +7,7 @@ import subprocess
 import sys
 import unicodedata
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Final, NoReturn, cast
@@ -225,21 +225,61 @@ def _replace_or_insert_option(
     command[insertion_points[0] : insertion_points[0]] = [option, value]
 
 
+_MODEL_INSERTION_POINTS: Final = {
+    "claude": "--effort",
+    "codex": "-c",
+    "grok": "--reasoning-effort",
+}
+
+
+def _apply_route_overrides(
+    command: list[object],
+    vendor: str,
+    tier: str,
+    overrides: PresetOverrides,
+) -> None:
+    """Bind one tier's opaque model/effort label into one reviewed command shape.
+
+    이 함수만이 "어떤 벤더 명령의 어디에 모델과 노력 라벨이 들어가는가" 를 안다.
+    프리셋 경로와 내장 라우트 경로가 같은 규칙을 쓰게 하려면 한 곳에 있어야 한다.
+    벤더별로 지원 여부가 다르며, 지원하지 않는 조합은 실패로 닫는다. agy 는
+    모델 플래그가 없고, grok 의 노력 오버라이드는 아직 측정되지 않았다.
+    """
+    model = overrides.model_for(tier)
+    effort = overrides.effort_for(tier)
+    if model is None and effort is None:
+        return
+    if vendor not in _MODEL_INSERTION_POINTS:
+        raise InvalidInputError()
+    if model is not None:
+        _replace_or_insert_option(
+            command,
+            "--model",
+            _validate_preset_override_label(model),
+            insert_before=_MODEL_INSERTION_POINTS[vendor],
+        )
+    if effort is None:
+        return
+    reviewed_effort = _validate_preset_override_label(effort)
+    if vendor == "claude":
+        _replace_or_insert_option(command, "--effort", reviewed_effort, insert_before="--effort")
+        return
+    if vendor != "codex":
+        raise InvalidInputError()
+    config_indices = [
+        index
+        for index, token in enumerate(command)
+        if isinstance(token, str) and token.startswith("model_reasoning_effort=")
+    ]
+    if len(config_indices) != 1:
+        raise InvalidInputError()
+    command[config_indices[0]] = f"model_reasoning_effort={reviewed_effort}"
+
+
 def _apply_preset_overrides(policy: dict[str, Any], name: str, overrides: PresetOverrides) -> None:
     if overrides.is_empty():
         return
     vendor = name.removesuffix("-cost-focused")
-    if vendor not in {"claude", "codex", "grok"}:
-        raise InvalidInputError()
-    if vendor == "grok" and any(
-        (overrides.low_effort, overrides.standard_effort, overrides.high_effort)
-    ):
-        raise InvalidInputError()
-    model_insertion_point = {
-        "claude": "--effort",
-        "codex": "-c",
-        "grok": "--reasoning-effort",
-    }[vendor]
     routes = policy.get("routes")
     if not isinstance(routes, list):
         raise InvalidInputError()
@@ -252,38 +292,40 @@ def _apply_preset_overrides(policy: dict[str, Any], name: str, overrides: Preset
         if tier not in {"low", "standard", "high"} or not isinstance(command, list):
             raise InvalidInputError()
         seen_tiers.add(tier)
-        model = overrides.model_for(tier)
-        effort = overrides.effort_for(tier)
-        if model is not None:
-            reviewed_model = _validate_preset_override_label(model)
-            _replace_or_insert_option(
-                command,
-                "--model",
-                reviewed_model,
-                insert_before=model_insertion_point,
-            )
-        if effort is not None:
-            reviewed_effort = _validate_preset_override_label(effort)
-            if vendor == "claude":
-                _replace_or_insert_option(
-                    command,
-                    "--effort",
-                    reviewed_effort,
-                    insert_before="--effort",
-                )
-            elif vendor == "codex":
-                config_indices = [
-                    index
-                    for index, token in enumerate(command)
-                    if isinstance(token, str) and token.startswith("model_reasoning_effort=")
-                ]
-                if len(config_indices) != 1:
-                    raise InvalidInputError()
-                command[config_indices[0]] = f"model_reasoning_effort={reviewed_effort}"
-            else:
-                raise InvalidInputError()
+        _apply_route_overrides(command, vendor, tier, overrides)
     if seen_tiers != {"low", "standard", "high"}:
         raise InvalidInputError()
+
+
+def _built_in_override_policy(
+    policy_path: Path | None,
+    source_vendor: str | None,
+    source_profile: str | None,
+    overrides: PresetOverrides,
+) -> RoutingPolicy:
+    """Bind tier-specific model/effort labels to the built-in routes of one vendor.
+
+    모델 등급은 비용 차이의 가장 큰 변수인데, 지금까지는 cost-focused 프리셋을
+    구체화해야만 티어별 모델을 지정할 수 있었다. 그래서 모델 라우팅이 실험용
+    곁길에 남아 있었다. 내장 라우트에 직접 붙일 수 있게 하되, 모델 라벨은 그대로
+    불투명하게 둔다. 가용성이나 가격을 추론하지 않는다.
+
+    벤더를 반드시 밝혀야 한다. 밝히지 않으면 어느 벤더의 내장 라우트에 라벨을
+    붙이는지가 정책 나열 순서에 따라 달라진다. 명령이 바뀌므로 라우트 지문도
+    바뀌고, 검토한 것과 다른 명령이 실행되는 일은 그대로 막힌다.
+    """
+    if policy_path is not None or source_vendor is None or source_profile is not None:
+        raise InvalidInputError()
+    routes: list[Route] = []
+    for route in DEFAULT_ROUTES:
+        if route.vendor != source_vendor or route.tier is None:
+            continue
+        command: list[object] = list(route.command)
+        _apply_route_overrides(command, source_vendor, route.tier, overrides)
+        routes.append(replace(route, command=tuple(cast(list[str], command))))
+    if not routes:
+        raise InvalidInputError()
+    return RoutingPolicy(tuple(routes))
 
 
 def _render_example_policy(
@@ -347,9 +389,11 @@ def _automatic_cost_policy(
     """Resolve one packaged opt-in without writing router state or policy files."""
     overrides = overrides or PresetOverrides()
     if not enabled:
-        if model is not None or not overrides.is_empty():
+        if model is not None:
             raise InvalidInputError()
-        return None
+        if overrides.is_empty():
+            return None
+        return _built_in_override_policy(policy_path, source_vendor, source_profile, overrides)
     if policy_path is not None or source_vendor is None or source_profile is not None:
         raise InvalidInputError()
     try:
@@ -1351,8 +1395,17 @@ def select_task_route(
     return tier, reason_code, route, policy
 
 
-def _packaged_configuration_status(name: str, model: str | None, overrides: PresetOverrides) -> str:
-    if model is not None or not overrides.is_empty():
+def _packaged_configuration_status(
+    name: str | None,
+    model: str | None,
+    overrides: PresetOverrides,
+) -> str:
+    """Say how much evidence stands behind the selected configuration.
+
+    ``name`` 이 None 이면 패키지 프리셋이 아니라 내장 라우트에 라벨을 붙인
+    것이다. 어느 쪽이든 라벨을 붙인 순간 측정된 구성이 아니게 된다.
+    """
+    if name is None or model is not None or not overrides.is_empty():
         return "unqualified_custom"
     if name == "claude-cost-focused":
         return "measured_low_route_only"
@@ -1592,7 +1645,9 @@ def route_from_standard_input(
     if automatic_policy is not None:
         assert effective_source_vendor is not None
         response["configuration_status"] = _packaged_configuration_status(
-            f"{effective_source_vendor}-cost-focused", model, overrides
+            f"{effective_source_vendor}-cost-focused" if automatic_enabled else None,
+            model,
+            overrides,
         )
     # argv 전달은 태스크를 명령줄에 싣는다. 같은 머신의 다른 사용자가 ps 로 볼 수
     # 있으므로, 검토하는 사람이 이 사실을 모르고 지나치지 않게 명시한다.

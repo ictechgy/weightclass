@@ -501,6 +501,31 @@ Four rules make the outcome predictable:
   stays `standard`: a described feature is an implementation request, not a
   substitution.
 
+### Bind a model to a tier of the built-in routes
+
+Effort is only one of the two levers, and model grade is usually the larger one.
+Tier-specific labels therefore attach to the built-in routes directly, without
+materializing a preset policy first:
+
+```sh
+printf '%s' "$task" | wclass route \
+  --source-vendor codex \
+  --low-model your-reviewed-cheap-model \
+  --high-model your-reviewed-capable-model
+```
+
+`--source-vendor` is required: without it, which vendor's built-in routes receive
+the label would depend on declaration order. Only the named tiers change; the
+others keep their built-in command exactly. The label is opaque — weightclass
+never checks that the model exists, is available to the account, or costs less.
+Because the command changes, the route fingerprint changes too, so a `run`
+acknowledged with the unlabelled fingerprint still refuses to start.
+
+Vendors differ in what they can accept, and an unsupported combination fails
+closed rather than being silently dropped: `agy` has no model flag, and the
+`grok` effort override is not yet measured. `configuration_status` reports
+`unqualified_custom` for any bound label.
+
 ## Override the routes
 
 Use `wclass route --policy policy.json` to review a local policy, then
