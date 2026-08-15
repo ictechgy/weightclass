@@ -34,7 +34,13 @@ aggregate metrics. It includes a confusion matrix, high-tier recall,
 over-routing, Wilson 95% confidence intervals, and available language and
 category slices.
 
-The current checkout scores the local classifier at 22/40 on that fixture.
+The current checkout scores the local classifier at 21/40 on that fixture. That
+is one lower than the 22/40 an intermediate change reached, and the drop is
+deliberate: requiring a mechanical action and its object to sit near each other
+loses two `low` items here whose action and object are 58-66 characters apart,
+and in exchange stops a unanimously-`high` task from being routed to the
+cheapest tier. Under-routing costs more than over-routing, so the trade was
+taken knowingly rather than tuned away.
 The historical 15/40 and 17/40 local figures and the 33/40 recorded-vendor
 figure predate classification policy 3. The default command does not re-run or reproduce a
 vendor result.

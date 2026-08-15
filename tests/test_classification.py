@@ -464,6 +464,86 @@ class CheapTierRecallTests(unittest.TestCase):
             with self.subTest(task=task):
                 self.assertEqual(classification.classify_task(task), "standard")
 
+    def test_an_ordinary_two_sentence_request_is_not_multiple_instructions(self) -> None:
+        """Breaks if the guard goes back to treating a full stop as a second request.
+
+        요청 프롬프트는 거의 전부 "무엇이 문제다. 이렇게 고쳐라" 형태다. 마침표를
+        지시 경계로 읽으면 저비용 규칙 전체가 사실상 꺼진다. blind 평가 36개
+        세트에서 예전 패턴이 34개에 걸렸고 대부분이 평범한 마침표였다.
+        """
+        cases = (
+            "with_retry retries immediately with no pause. Change the default delay to 0.05.",
+            "Worker count is unbounded. Add a version constant to config.py.",
+            "로그에 시각이 없어 언제인지 알 수가 없어. 로그 메시지 앞을 바꿔줘.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                normalized = classification.validate_task(task)
+                self.assertFalse(classification._has_multiple_instructions(normalized))
+
+    def test_a_korean_auxiliary_verb_is_not_a_second_instruction(self) -> None:
+        """Breaks if `~고` matches a continuation instead of a conjunction.
+
+        어간이 alternation 에 실제로 있는 사례를 써야 한다. "노출되고 있어" 처럼
+        어간이 목록 밖인 문장만 검사하면 배제 lookahead 를 통째로 지워도 이
+        테스트가 통과해, 지키겠다고 선언한 것을 실제로는 지키지 않는다.
+
+        공백이 둘 이상인 사례도 함께 검사한다. 배제 lookahead 만 두면 탐욕적인
+        공백 수량자가 되감기면서 무력화되어 보조 용언이 명령 두 개로 읽힌다.
+        """
+        auxiliary = (
+            "필드를 추가하고 싶은데",
+            "필드를 추가하고  싶은데",
+            "이름을 바꾸고 있어",
+            "코드를 정렬하고   계신가요",
+            "이메일이 그대로 노출되고 있어",
+            # 격식체. 둘째 음절이 클래스 밖이면 배제가 실패해 평범한 서술이
+            # 명령 둘로 읽히고 저비용 규칙이 닫힌다.
+            "필드를 추가하고 싶습니다",
+            "이름을 바꾸고 있습니다",
+            "코드를 정렬하고 계실까요",
+            # 제외를 뜻하는 "빼고" 는 접속형과 구분되지 않아 어간에 넣지 않는다.
+            "테스트 빼고 다 고쳐줘",
+        )
+        for task in auxiliary:
+            with self.subTest(task=task):
+                normalized = classification.validate_task(task)
+                self.assertFalse(classification._has_multiple_instructions(normalized))
+
+        # 배제어를 한 음절로 두면 계산·계정·계획 같은 평범한 명사까지 걸려
+        # 지시가 둘인 요청이 단일로 읽힌다. 저비용 규칙이 열리는 방향이라
+        # 이 파일이 스스로 더 비싸다고 적어 둔 오류가 된다.
+        conjunctions = (
+            "이 주석 지우고 로직도 고쳐줘",
+            "필드를 추가하고 테스트도 써줘",
+            "이 주석 지우고 계산 로직도 고쳐줘",
+            "이름 바꾸고 계정 검증도 추가해줘",
+            # "넣" 은 보조 용언을 만들지 않는 평범한 접속형이라 어간에 남는다.
+            "이 값 넣고 테스트도 써줘",
+        )
+        for task in conjunctions:
+            with self.subTest(task=task):
+                normalized = classification.validate_task(task)
+                self.assertTrue(classification._has_multiple_instructions(normalized))
+
+    def test_a_mechanical_pair_must_apply_to_the_same_request(self) -> None:
+        """Breaks if the action and object can be matched anywhere in the text.
+
+        만장일치 high 였던 요청이 "파일 이름의 stem"(목적어)과 멀리 떨어진 "전부
+        지워져"(동사)로 low 가 되었다. 어느 쪽도 요청의 일부가 아니라 문제 서술
+        이었다.
+        """
+        distant = (
+            "keep 에는 보존할 issue id 를 넣는데 purge 는 그걸 파일 이름의 stem 과 그대로 "
+            "비교해. 그래서 i1.backup.txt 나 i1.draft.md 처럼 보존 대상 issue 에서 파생된 "
+            "파일은 stem 이 달라서 전부 지워져. 실제로 이렇게 백업본을 잃은 적이 있어. "
+            "keep 에 있는 issue 에 속한 파일은 파생 파일까지 남도록 고쳐줘."
+        )
+
+        self.assertEqual(classification.classify_task(distant), "standard")
+        self.assertEqual(classification.classify_task("이 로그 메시지 문구만 바꿔줘"), "low")
+
     def test_substituting_a_component_is_not_substituting_a_value(self) -> None:
         """Breaks if `from X to Y` alone can downgrade a component swap.
 
