@@ -897,6 +897,34 @@ class CounterfactualBaselineTests(unittest.TestCase):
         self.assertEqual(totals["relative_cost_savings_ratio"], "-0.300000")
         self.assertEqual(totals["savings_reason_code"], "computed")
 
+    def test_a_model_routed_task_is_priced_against_the_model_free_baseline(self) -> None:
+        """Breaks if the counterfactual reuses the routed model instead of the default.
+
+        내장 standard 라우트는 모델을 고정하지 않는다. 라우팅된 모델을 기준선에도
+        쓰면 모델 라우팅이 개입한 바로 그 경우에 존재한 적 없는 반사실의 가격을
+        매기게 된다. 싼 모델로 보냈다면 기준선까지 같이 싸져 절감이 사라진다.
+        """
+        self.weigh("medium", "1.0")
+        self.usage.set_relative_cost_weight(self.store, "grok", "cheap-model", "low", "0.25")
+        # 같은 라벨에 medium 가중치도 있어야 예전 조회가 성공한다. 그래야 이 테스트가
+        # "기준선 미설정" 이 아니라 "잘못된 기준선" 을 잡는다.
+        self.usage.set_relative_cost_weight(self.store, "grok", "cheap-model", "medium", "0.4")
+        self.usage.record_usage(
+            self.store,
+            self.usage.UsageDimensions("grok", "cheap-model", "low", "low"),
+            child_returncode=0,
+            rework=False,
+            escalation=False,
+        )
+
+        totals = self.totals()
+
+        self.assertEqual(totals["savings_reason_code"], "computed")
+        self.assertEqual(totals["relative_cost_units"], "0.250000")
+        # 라우팅된 모델의 medium(0.4) 이 아니라 벤더 기본 경로(1.0) 와 비교해야 한다.
+        self.assertEqual(totals["relative_cost_baseline_units"], "1.000000")
+        self.assertEqual(totals["relative_cost_savings_ratio"], "0.750000")
+
     def test_running_the_baseline_route_saves_nothing(self) -> None:
         """Breaks if the fixed route can report a saving against itself."""
         self.weigh("medium", "1.0")

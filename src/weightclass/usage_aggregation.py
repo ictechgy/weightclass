@@ -523,15 +523,35 @@ def set_relative_cost_weight(
 
 def _weight_micros(
     weights: list[dict[str, object]],
-    dimensions: Mapping[str, object],
+    agent: str,
+    model: str | None,
     effort: str,
 ) -> int | None:
     """Return the configured relative cost for one agent/model at one effort."""
-    key = (str(dimensions["agent"]), str(dimensions["model"] or ""), effort)
+    key = (agent, model or "", effort)
     return next(
         (_counter(item["relative_cost_micros"]) for item in weights if _weight_key(item) == key),
         None,
     )
+
+
+def _baseline_micros(
+    weights: list[dict[str, object]],
+    dimensions: Mapping[str, object],
+) -> int | None:
+    """Return what one task would have cost on the fixed route it skipped.
+
+    모델은 일부러 빼고 조회한다. 반사실은 "라우팅하지 않았다면" 이고, 라우팅하지
+    않았을 때 가는 내장 standard 라우트는 모델을 고정하지 않는다(벤더 기본 모델).
+    라우팅된 모델을 그대로 기준선에 쓰면 모델 라우팅이 개입한 바로 그 경우에
+    존재한 적 없는 반사실의 가격을 매기게 된다. 싼 모델로 보냈다면 기준선까지
+    같이 싸져 절감이 사라지고, 비싼 모델로 보냈다면 초과 지출이 가려진다.
+
+    에이전트는 그대로 쓴다. 기본 라우팅은 소스 벤더를 고정하므로 같은 에이전트의
+    기본 경로가 그 태스크의 반사실이다. 크로스 벤더 옵트인으로 에이전트가 바뀐
+    경우에는 저장소가 소스 벤더를 알지 못해 이 값이 정확하지 않다.
+    """
+    return _weight_micros(weights, str(dimensions["agent"]), None, BASELINE_EFFORT)
 
 
 def record_usage(
@@ -565,7 +585,12 @@ def record_usage(
         assert isinstance(weights, list)
         assert isinstance(buckets, list)
         assert isinstance(baseline, dict)
-        weight = _weight_micros(weights, normalized, str(normalized["effort"]))
+        weight = _weight_micros(
+            weights,
+            str(normalized["agent"]),
+            normalized["model"] if isinstance(normalized["model"], str) else None,
+            str(normalized["effort"]),
+        )
         key = _bucket_key(normalized)
         bucket = next((item for item in buckets if _bucket_key(item) == key), None)
         if bucket is None:
@@ -608,7 +633,7 @@ def record_usage(
         # 그 자리에서 확정해 둔다. 나중에 가중치가 바뀌어도 이미 쌓인 기준선은
         # 다시 쓰이지 않는다. 실제 비용과 같은 규칙이다.
         baseline["tasks"] = _increment(int(baseline["tasks"]))
-        baseline_weight = _weight_micros(weights, normalized, BASELINE_EFFORT)
+        baseline_weight = _baseline_micros(weights, normalized)
         if baseline_weight is not None:
             baseline["counted_tasks"] = _increment(int(baseline["counted_tasks"]))
             baseline["relative_cost_micros_total"] = _increment(

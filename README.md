@@ -156,7 +156,19 @@ remain `unweighted`; weightclass never fills them from a price list and does not
 claim monetary, token, subscription, or quota savings.
 
 Savings are reported against a counterfactual, not against a per-run constant.
-The baseline is *the same tasks on the fixed `medium` route*, so:
+The baseline is *the same tasks on the fixed `medium` route* — the built-in
+standard route, which pins no model. The baseline weight is therefore looked up
+without a model (`--agent <agent> --effort medium`, no `--model`) even when the
+run itself used a model override, because the route a task would have taken
+without routing is the vendor's own default model. Pricing a model-routed task
+against that same routed model would compare it to a counterfactual that never
+existed, and would cancel out exactly the saving model routing was meant to
+produce. One limitation follows from the aggregate-only contract: the store does
+not record a source vendor, so if a reviewed cross-vendor opt-in changed the
+agent, the baseline is that *destination* agent's default route, not the
+vendor you would otherwise have used.
+
+Given that baseline:
 
 - running the baseline route itself reports `0.000000`, not a saving;
 - a retry costs extra without also enlarging the baseline, because a retry is
