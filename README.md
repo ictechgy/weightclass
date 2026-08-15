@@ -12,6 +12,24 @@ provider usage data, infer pricing, or know whether an effort label reduces
 the total tokens needed to finish a task. Retries and rework happen outside the
 router and can outweigh a cheaper first attempt.
 
+That is now a measured statement, not only a cautious one. A pre-registered
+study ([`docs/paired-token-study.md`](docs/paired-token-study.md)) built a
+synthetic fixture, 36 blind-rated tasks, and a paired harness, then ran a pilot
+and a difficulty calibration against real vendors. **It found no case where the
+routed tier changed whether the task got done.** A pinned mid effort beat
+routing on both vendors in the pilot; in calibration, 0 of 18 candidates were
+tier-sensitive, and the two tasks routed to `high` also passed one tier down.
+On work of that shape — small, well-specified maintenance tasks — effort moved
+cost and nothing else, so routing up had no quality risk to justify its price.
+The study was stopped at its own pre-registered floor rather than continuing.
+
+Read that as a bound on the evidence, not a proof about all work: one fixture,
+one vendor for calibration, and tasks small enough that low effort could finish
+almost any of them. It does not show effort never matters. It does show that
+nobody, including this router, should assert a saving without measuring it on
+their own workload — which is why every savings surface here abstains by
+default.
+
 Raw tokens and estimated provider cost must be evaluated separately. The
 offline evaluation tools can score externally normalized aggregate evidence,
 but they never fetch prices or claim to reproduce a subscription bill.

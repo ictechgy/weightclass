@@ -10,9 +10,18 @@ function of user-supplied relative weights. Fixing the counterfactual baseline m
 that number honest, not grounded. Until one paired collection exists, any further
 routing work is optimization on top of an unmeasured assumption.
 
-**Status:** revision 2. The Phase 1 pilot has run — 36 real invocations across
-two vendors — and its result changed this design. Revision 1 is preserved in git
-history; what follows supersedes it.
+**Status: closed at Phase 1b. Phase 2 never ran.** Calibration found **0 of 18
+tasks tier-sensitive** against a pre-registered floor of 9, which is the
+stopping condition this document set for itself. The answer to the goal question,
+within the stated scope, is that this task shape cannot value tier routing at
+all: effort moved cost and never changed whether the work got done. See
+[Calibration result](#calibration-result-the-stopping-condition-fired). The plan
+below is kept as the pre-registration it was — reading it as live work would be
+a mistake.
+
+Revision 2. The Phase 1 pilot ran — 36 real invocations across two vendors — and
+its result changed this design. Revision 1 is preserved in git history; what
+follows supersedes it.
 
 ## What the scorer forces
 
@@ -324,15 +333,64 @@ like: the obvious implementation silently breaks a pre-existing invariant the
 acceptance test also checks; the requirement spans modules that must stay
 consistent; or the prompt describes a symptom and the cause has to be found.
 
+### Calibration result: the stopping condition fired
+
+Calibration ran on 18 candidates — the 9 rated `high` by the blind raters plus 9
+rated `standard` — using 23 invocations and 981,613 tokens.
+
+| verdict | count |
+| --- | ---: |
+| tier-insensitive: passed at the routed tier | 15 |
+| drop-unrecoverable: failed at the routed tier *and* one step up | 3 |
+| **tier sensitive** | **0** |
+
+Zero against a floor of nine. Per the rule above, the study stops here rather
+than lowering the floor, and **Phase 2 was never started.**
+
+The three failures are not hidden tier sensitivity: they failed at *both* tiers,
+so they were never candidates. Two were investigated and the cause was a defect
+in the study's own acceptance tests, which over-specify the interface for tasks
+that ask for a new API. In `p27` the agent caught per-job exceptions under a
+lock, kept the pool running, and re-raised the first failure from `drain()`; the
+test wrapped `drain()` so that a raise skipped its completion signal and was
+misreported as a hang. In `p13` the agent exposed the retry count as a callback
+while the test looked only for a tuple return or a function attribute. Had those
+tests been correct, the tasks would most likely have passed at the routed tier —
+tier-*insensitive*, not sensitive. The count stays 0.
+
+Two tasks were routed to `high`, and the mandatory extra `medium` run covers
+exactly that case: **both also passed at `standard`.** The two runs where the
+router spent the most are the two where the cheaper tier is confirmed sufficient.
+Six further tasks the blind raters judged `high` were routed `standard` and
+passed, so even human-rated difficulty did not predict a need for effort.
+
+Combined with the pilot, where a pinned `medium` beat routing on both vendors,
+the finding is that on work of this shape effort moves cost and nothing else. If
+no tier fails, the cheapest tier is always correct and every step above it is
+pure loss — which is *why* the pilot came out the way it did.
+
+State the scope honestly: one vendor, one synthetic fixture, and small
+well-specified maintenance tasks. This does not show that effort never matters.
+It shows that this shape of work cannot be used to value tier routing, and that
+the fixture is probably too small to host work hard enough to try — almost
+anything expressible against nine short modules is within reach of low effort.
+
+Full evidence, including the per-task verdict table, lives in the separate study
+repository alongside the fixture and harness; it is deliberately not vendored
+here.
+
 ## Phases
 
 | Phase | Work | Vendor invocations | Approval |
 | --- | --- | ---: | --- |
 | **0** | fixture, 36 tasks, blind ratings, harness, evidence builder | 0 | done |
 | **1** | pilot: 6 tasks × 3 arms × 2 vendors | 36 | done |
-| **1b** | difficulty calibration on ~18 candidates, one vendor, two efforts | ~36 | required |
-| **2** | comparison P plus control, on the calibrated set | see below | required |
-| **3** | comparisons 3 and 4 | deferred | optional |
+| **1b** | difficulty calibration on 18 candidates, one vendor, two efforts | 23 | done — 0 tier-sensitive |
+| **2** | comparison P plus control, on the calibrated set | 0 | **not started; blocked by 1b** |
+| **3** | comparisons 3 and 4 | deferred | dropped with the study |
+
+Phase 2's sizing below is retained as a record of the decision that was prepared,
+not as a plan that is still live.
 
 Phase 2's size is now a real decision rather than a default, because the pilot
 measured what each run costs. Codex averaged roughly 35k tokens per invocation
