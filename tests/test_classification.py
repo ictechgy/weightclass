@@ -484,12 +484,28 @@ class CheapTierRecallTests(unittest.TestCase):
     def test_a_korean_auxiliary_verb_is_not_a_second_instruction(self) -> None:
         """Breaks if `~고` matches a continuation instead of a conjunction.
 
-        "노출되고 있어" 와 "확인하고 싶은데" 는 명령 두 개가 아니라 보조 용언이다.
+        어간이 alternation 에 실제로 있는 사례를 써야 한다. "노출되고 있어" 처럼
+        어간이 목록 밖인 문장만 검사하면 배제 lookahead 를 통째로 지워도 이
+        테스트가 통과해, 지키겠다고 선언한 것을 실제로는 지키지 않는다.
+
+        공백이 둘 이상인 사례도 함께 검사한다. 배제 lookahead 만 두면 탐욕적인
+        공백 수량자가 되감기면서 무력화되어 보조 용언이 명령 두 개로 읽힌다.
         """
-        for task in ("이메일이 그대로 노출되고 있어", "무엇이 있는지 확인하고 싶은데"):
+        auxiliary = (
+            "필드를 추가하고 싶은데",
+            "필드를 추가하고  싶은데",
+            "이름을 바꾸고 있어",
+            "코드를 정렬하고   계신가요",
+            "이메일이 그대로 노출되고 있어",
+        )
+        for task in auxiliary:
             with self.subTest(task=task):
                 self.assertFalse(classification._has_multiple_instructions(task))
-        self.assertTrue(classification._has_multiple_instructions("이 주석 지우고 로직도 고쳐줘"))
+
+        conjunctions = ("이 주석 지우고 로직도 고쳐줘", "필드를 추가하고 테스트도 써줘")
+        for task in conjunctions:
+            with self.subTest(task=task):
+                self.assertTrue(classification._has_multiple_instructions(task))
 
     def test_a_mechanical_pair_must_apply_to_the_same_request(self) -> None:
         """Breaks if the action and object can be matched anywhere in the text.
