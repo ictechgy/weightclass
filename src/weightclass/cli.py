@@ -458,21 +458,24 @@ def _print_escalation_suggestion(
     태스크가 애초에 불가능하거나 환경이 망가졌을 수도 있으며, 라우터는 자식의
     출력을 읽지 않으므로 구분할 방법이 없다. 그 사실을 출력에 명시한다.
     """
+    # 사다리를 한 칸만 올라가면 정책에 그 티어가 없을 때 제안이 사라진다. low 와
+    # high 만 정의한 정책에서 low 가 실패하면 high 라우트가 멀쩡히 있는데도
+    # 아무것도 알려주지 못했다. 실제로 있는 다음 티어까지 올라간다.
     higher = next_tier(tier)
-    if higher is None:
-        print(
-            json.dumps({"escalation": None, "reason": "already_highest_tier"}),
-            file=sys.stderr,
-        )
+    route = None
+    while higher is not None:
+        try:
+            route = select_tier_route(
+                policy.routes, higher, source_vendor, policy.allow_mixed_vendors
+            )
+            break
+        except RouteSelectionError:
+            higher = next_tier(higher)
+    if route is None:
+        reason = "already_highest_tier" if next_tier(tier) is None else "no_route_for_higher_tier"
+        print(json.dumps({"escalation": None, "reason": reason}), file=sys.stderr)
         return
-    try:
-        route = select_tier_route(policy.routes, higher, source_vendor, policy.allow_mixed_vendors)
-    except RouteSelectionError:
-        print(
-            json.dumps({"escalation": None, "reason": "no_route_for_higher_tier"}),
-            file=sys.stderr,
-        )
-        return
+    assert higher is not None
     suggestion: dict[str, object] = {
         "from_tier": tier,
         "to_tier": higher,

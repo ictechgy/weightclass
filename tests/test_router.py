@@ -3842,6 +3842,65 @@ class EscalationSuggestionTests(unittest.TestCase):
             json.loads(rendered.stdout)["route_fingerprint"],
         )
 
+    def test_the_ladder_skips_a_tier_the_policy_does_not_define(self) -> None:
+        """Breaks if a gap in the policy silently swallows the suggestion.
+
+        한 칸만 올라가면 low 와 high 만 정의한 정책에서 low 가 실패했을 때 high
+        라우트가 멀쩡히 있는데도 아무것도 알려주지 못한다.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / "gap.json"
+            policy.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "g-low",
+                                "vendor": "fake",
+                                "tier": "low",
+                                "command": ["/usr/bin/false"],
+                            },
+                            {
+                                "id": "g-high",
+                                "vendor": "fake",
+                                "tier": "high",
+                                "command": ["/usr/bin/false", "--high"],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            lines = self._stderr_objects(self._run(policy, "low", "--suggest-escalation"))
+
+        escalation = lines[1]["escalation"]
+        self.assertEqual(escalation["to_tier"], "high")
+        self.assertEqual(escalation["route"], "g-high")
+
+    def test_a_policy_with_one_tier_suggests_nothing(self) -> None:
+        """Breaks if a single-tier policy starts naming a route that cannot exist."""
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / "single.json"
+            policy.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "s-low",
+                                "vendor": "fake",
+                                "tier": "low",
+                                "command": ["/usr/bin/false"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            lines = self._stderr_objects(self._run(policy, "low", "--suggest-escalation"))
+
+        self.assertIsNone(lines[1]["escalation"])
+        self.assertEqual(lines[1]["reason"], "no_route_for_higher_tier")
+
     def test_the_highest_tier_has_nowhere_to_escalate(self) -> None:
         """Breaks if the top of the ladder starts suggesting a route that cannot exist."""
         with tempfile.TemporaryDirectory() as directory:

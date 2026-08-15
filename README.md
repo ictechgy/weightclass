@@ -125,8 +125,9 @@ recover. `run --suggest-escalation` makes that recovery a step you can take
 rather than one you have to reconstruct:
 
 ```sh
+# $fingerprint comes from the matching `wclass route --tier low` call.
 printf '%s' "$task" | wclass run --source-vendor codex --tier low \
-  --ack-route-fingerprint <fingerprint> --suggest-escalation
+  --ack-route-fingerprint "$fingerprint" --suggest-escalation
 # {"error": "executor_failed", "executor_exit_code": 1}
 # {"escalation": {"from_tier": "low", "to_tier": "standard", "route": "codex-standard",
 #                 "vendor": "codex", "command": [...],
