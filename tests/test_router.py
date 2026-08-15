@@ -3735,6 +3735,18 @@ class EscalationSuggestionTests(unittest.TestCase):
         )
         return path
 
+    def _stderr_objects(self, result: "subprocess.CompletedProcess[str]") -> list[dict[str, Any]]:
+        """Parse stderr into JSON objects, failing loudly if a line is missing.
+
+        위치 인덱스로 바로 집으면 승급 줄이 아예 없을 때 IndexError 로 죽어서
+        무엇을 검사하려던 것인지가 사라진다.
+        """
+        objects = [json.loads(line) for line in result.stderr.splitlines() if line.strip()]
+        self.assertGreaterEqual(
+            len(objects), 2, f"expected a diagnostic and an escalation line, got {objects}"
+        )
+        return objects
+
     def _run(self, policy: Path, tier: str, *extra: str) -> "subprocess.CompletedProcess[str]":
         route = subprocess.run(
             [
@@ -3782,14 +3794,16 @@ class EscalationSuggestionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             policy = self._policy(directory)
             result = self._run(policy, "low", "--suggest-escalation")
-
-            lines = [json.loads(line) for line in result.stderr.splitlines() if line.strip()]
+            lines = self._stderr_objects(result)
 
         self.assertEqual(result.returncode, 7)
         self.assertEqual(lines[0]["error"], "executor_failed")
         escalation = lines[1]["escalation"]
         self.assertEqual(escalation["from_tier"], "low")
         self.assertEqual(escalation["to_tier"], "standard")
+        # README 가 문서화한 필드다. 테스트가 없으면 조용히 사라질 수 있다.
+        self.assertEqual(escalation["route"], "f-standard")
+        self.assertEqual(escalation["vendor"], "fake")
         self.assertEqual(escalation["command"], ["/usr/bin/false", "--medium"])
         self.assertTrue(escalation["route_fingerprint"].startswith("sha256:"))
         # 승급 실행은 이미 센 태스크의 재시도다. 이 플래그를 빠뜨리면 기준선이
@@ -3803,8 +3817,7 @@ class EscalationSuggestionTests(unittest.TestCase):
         """Breaks if the suggestion cannot be acknowledged as-is on the next run."""
         with tempfile.TemporaryDirectory() as directory:
             policy = self._policy(directory)
-            stderr = self._run(policy, "low", "--suggest-escalation").stderr
-            suggested = [json.loads(line) for line in stderr.splitlines() if line.strip()][1]
+            suggested = self._stderr_objects(self._run(policy, "low", "--suggest-escalation"))[1]
             rendered = subprocess.run(
                 [
                     sys.executable,
@@ -3833,7 +3846,7 @@ class EscalationSuggestionTests(unittest.TestCase):
         """Breaks if the top of the ladder starts suggesting a route that cannot exist."""
         with tempfile.TemporaryDirectory() as directory:
             result = self._run(self._policy(directory), "high", "--suggest-escalation")
-            lines = [json.loads(line) for line in result.stderr.splitlines() if line.strip()]
+            lines = self._stderr_objects(result)
 
         self.assertIsNone(lines[1]["escalation"])
         self.assertEqual(lines[1]["reason"], "already_highest_tier")
@@ -3852,18 +3865,18 @@ class EscalationSuggestionTests(unittest.TestCase):
         """Breaks if escalation is offered when no child ever ran.
 
         자식이 돌지도 않았는데 다음 티어를 권하면, 티어와 무관한 실패에 돈을
-        쓰게 만든다.
+        쓰게 만든다. 실행 이전에 닫히는 경로가 여럿이므로 하나만 검사하면
+        나머지로 제안이 새어 나가는 것을 놓친다.
         """
         with tempfile.TemporaryDirectory() as directory:
-            policy = self._policy(directory)
-            result = subprocess.run(
+            mismatch = subprocess.run(
                 [
                     sys.executable,
                     "-m",
                     "weightclass",
                     "run",
                     "--policy",
-                    str(policy),
+                    str(self._policy(directory)),
                     "--source-vendor",
                     "fake",
                     "--tier",
@@ -3878,8 +3891,75 @@ class EscalationSuggestionTests(unittest.TestCase):
                 text=True,
             )
 
-        self.assertEqual(result.returncode, 6)
-        self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+            missing = Path(directory) / "no-such-executable"
+            absent = Path(directory) / "absent-policy.json"
+            absent.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "a-low",
+                                "vendor": "fake",
+                                "tier": "low",
+                                "command": [str(missing)],
+                            },
+                            {
+                                "id": "a-standard",
+                                "vendor": "fake",
+                                "tier": "standard",
+                                "command": [str(missing), "--m"],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            route = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--policy",
+                    str(absent),
+                    "--source-vendor",
+                    "fake",
+                    "--tier",
+                    "low",
+                ],
+                capture_output=True,
+                check=True,
+                input="fix the typo",
+                text=True,
+            )
+            unavailable = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "run",
+                    "--policy",
+                    str(absent),
+                    "--source-vendor",
+                    "fake",
+                    "--tier",
+                    "low",
+                    "--ack-route-fingerprint",
+                    json.loads(route.stdout)["route_fingerprint"],
+                    "--suggest-escalation",
+                ],
+                capture_output=True,
+                check=False,
+                input="fix the typo",
+                text=True,
+            )
+
+        self.assertEqual(mismatch.returncode, 6)
+        self.assertEqual(json.loads(mismatch.stderr), {"error": "route_fingerprint_mismatch"})
+        self.assertNotIn("escalation", mismatch.stderr)
+        self.assertEqual(unavailable.returncode, 4)
+        self.assertEqual(json.loads(unavailable.stderr), {"error": "executor_unavailable"})
+        self.assertNotIn("escalation", unavailable.stderr)
 
 
 if __name__ == "__main__":

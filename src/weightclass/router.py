@@ -3,7 +3,7 @@
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Final, Literal, cast
+from typing import Final, Literal
 
 from .classification import Tier
 
@@ -304,13 +304,14 @@ def native_route_fingerprint(
 
 
 # 승급 사다리. 라우터는 스스로 올라가지 않는다. 어디로 올라갈 수 있는지만 안다.
-_TIER_LADDER: Final = {"low": "standard", "standard": "high"}
+# 타입을 명시해야 mypy 가 키와 값이 실제로 Tier 리터럴인지 검사한다. bare Final
+# 로 두면 dict[str, str] 로 추론되어 오타가 그대로 통과한다.
+_TIER_LADDER: Final[dict[Tier, Tier]] = {"low": "standard", "standard": "high"}
 
 
 def next_tier(tier: Tier) -> Tier | None:
     """Return the tier one step above, or None at the top."""
-    higher = _TIER_LADDER.get(tier)
-    return cast(Tier, higher) if higher is not None else None
+    return _TIER_LADDER.get(tier)
 
 
 def select_route(routes: tuple[Route, ...], request: RouteRequest) -> Route:
