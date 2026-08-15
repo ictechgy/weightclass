@@ -48,8 +48,9 @@ credentials or a usage-payload parser.
 
 A concrete study design for this gate — task set, fixture repository, terminal
 rule, arms, provenance procedures, phases, and the approvals collection needs —
-is in [`docs/paired-token-study.md`](../../docs/paired-token-study.md). No
-collection has been authorized or performed yet.
+is in [`docs/paired-token-study.md`](../../docs/paired-token-study.md). A Phase 1
+pilot has run — 36 real invocations across two vendors, reported in that
+document. The full Phase 2 collection has not been authorized or performed.
 
 ```sh
 PYTHONPATH=src python3 tests/eval/token_benchmark.py \

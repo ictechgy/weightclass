@@ -82,16 +82,50 @@ not retry, recover, or supervise, so **the harness performs the rework, and the
 harness rule becomes part of what is measured.** A harness that escalates cleverly
 flatters whichever arm routes cheaply first.
 
-The terminal rule is therefore deliberately unintelligent and identical for both
-arms:
+### The terminal rule, and why it is asymmetric
 
-> Run the arm's command once. Run the task's acceptance test. If it fails, re-run
-> the **exact same command** once more against the same reset fixture. If it still
-> fails, the arm is `completed: false` for that pair. Neither arm may change tier,
-> model, or effort on the second attempt. Every invocation's tokens are summed.
+Revision 1 used one symmetric rule: run the command, and on failure run the
+**same** command once more. Revision 2 cannot, and the reason is a contradiction
+the review caught.
 
-This measures whether routing lowers the failure rate that drives rework, without
-letting harness cleverness leak into the result.
+`completion_passes = both_completed == len(pairs)` — the gate requires **both
+arms to complete every pair**. Phase 1b exists to find tasks where low effort
+fails and high effort succeeds. Put such a task in the set under a symmetric
+retry rule and the routed arm fails twice, reports `completed: false`, and the
+completion gate fails the entire study. The tasks that make routing measurable
+would be the tasks that make the study unpassable.
+
+The rule is therefore per-arm, and each arm gets the recovery its own strategy
+actually offers:
+
+> Run the arm's command once and run the task's acceptance test. On failure,
+> reset the fixture and take **one** second invocation:
+>
+> - `A0` and `A1` re-run the identical command. A fixed setting has no ladder;
+>   retrying is what its user would do.
+> - `A2` runs the escalation route weightclass names on failure — the tier one
+>   step up, at the fingerprint `run --suggest-escalation` prints.
+>
+> Either way the arm gets exactly two invocations and every token is summed. If
+> the second attempt also fails, the arm is `completed: false`.
+
+The asymmetry is the point, not a flaw. `A1` is "pin one flag and retry" and
+`A2` is "route, and escalate when the cheap attempt fails". Those are the two
+strategies a user actually chooses between, and the pilot showed the first one
+currently wins. Giving both arms the same two-invocation budget keeps the
+comparison fair on cost while letting each spend it the way its strategy would.
+
+What this does **not** do is let the harness be clever. The escalation route is
+not chosen by the harness: it is the route weightclass itself names, at the
+fingerprint it prints, one step up and no further. The harness never picks a
+tier, never retries a third time, and never decides that a failure was caused by
+the tier. That last judgement is explicitly disclaimed in the router's own
+output (`failure_cause_diagnosed: false`).
+
+This makes the study depend on the escalation surface, which did not exist when
+revision 1 was written. If that surface is not merged, this study cannot include
+tier-sensitive tasks and falls back to measuring effort pricing only — which is
+what the Phase 1 pilot already did.
 
 ## Fixture repository
 
@@ -109,9 +143,13 @@ A single frozen snapshot, held outside this repository.
 
 ## Task set
 
-36 sealed tasks, four per category, 18 `en` / 18 `ko`. Tier coverage follows the
-category mix naturally (`routine` skews `low`, `destructive-work` and `security`
-skew `high`).
+36 sealed tasks, four per category, 18 `en` / 18 `ko`.
+
+Tier coverage is a hard gate requirement, so it is measured rather than assumed.
+The rated set comes out at **13 `low` / 12 `standard` / 11 `high`**, with all
+three tiers and both languages present after consensus filtering. Re-measure
+whenever a task is added or replaced; a set that loses its only `low` task fails
+the coverage gate no matter how good the token result is.
 
 Each task ships four things:
 
@@ -245,9 +283,17 @@ low effort, and pinned to high — and classify the result:
 Cost is 2 invocations per candidate on one vendor. Calibrating 18 candidates is
 36 invocations, the same size as the whole Phase 1 pilot.
 
-The Phase 2 task set should hold a declared, non-zero share of tier-sensitive
-tasks, and the share must be recorded in the report. A study over 36
-tier-insensitive tasks would produce a confident number that answers nothing.
+Phase 2 must not start with fewer than **9 tier-sensitive tasks out of 36**, and
+the confirmed count must be recorded in the report. "A declared, non-zero share"
+was the first wording and it is unfalsifiable — one such task out of 36 would
+satisfy it while leaving the study exactly as uninformative as the pilot. A
+quarter of the set is a floor chosen so the stratified analysis has enough
+tier-sensitive pairs to say anything; it is not a claim that a quarter is the
+right proportion in real work.
+
+If calibration cannot find 9, that is itself the finding: on work of this shape,
+the tier does not change the outcome often enough for routing to have a value to
+measure. Report it and stop, rather than lowering the floor to proceed.
 
 Writing tasks that fail at low effort and pass at high is its own problem. The
 existing 36 are mostly "add function X with behavior Y", which is fully
