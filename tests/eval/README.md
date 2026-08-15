@@ -50,7 +50,13 @@ vendor result.
 Routing to an effort label is not evidence of lower total token use. Measure a
 frozen candidate against a frozen baseline on the same fresh sealed tasks,
 then score evaluator-supplied evidence without giving this repository provider
-credentials or a usage-payload parser:
+credentials or a usage-payload parser.
+
+A concrete study design for this gate — task set, fixture repository, terminal
+rule, arms, provenance procedures, phases, and the approvals collection needs —
+is in [`docs/paired-token-study.md`](../../docs/paired-token-study.md). A Phase 1
+pilot has run — 36 real invocations across two vendors, reported in that
+document. The full Phase 2 collection has not been authorized or performed.
 
 ```sh
 PYTHONPATH=src python3 tests/eval/token_benchmark.py \
