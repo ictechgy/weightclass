@@ -293,8 +293,17 @@ before any vendor is invoked:
 | fail | fail | drop; one escalation step cannot recover it, so it would fail the completion gate |
 | pass | fail | noise; re-run once, then drop |
 
-Cost is 2 invocations per candidate on one vendor. Calibrating 18 candidates is
-36 invocations, the same size as the whole Phase 1 pilot.
+`A1` has to be covered too, and it usually is for free. `A1` is pinned to
+`medium`, which is the same tier as `standard`. When `T` is `low` the pair
+already includes `standard`; when `T` is `standard` the pair starts there. Only
+`T` = `high` leaves `A1` untested, and that case needs a third invocation at
+`medium`. Skipping it would let a task through where the routed arm completes
+and the fixed arm does not, which fails the completion gate for the whole study
+just as surely.
+
+Cost is 2 invocations per candidate, or 3 for the `T` = `high` case. Calibrating
+18 candidates is roughly 36-40 invocations, about the size of the whole Phase 1
+pilot.
 
 Phase 2 must not start with fewer than **9 tier-sensitive tasks out of 36**, and
 the confirmed count must be recorded in the report. "A declared, non-zero share"
