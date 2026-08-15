@@ -118,6 +118,53 @@ them:
 Outside the documented `select` cancellation path, code `1` indicates an
 unhandled interpreter exception and is a bug worth reporting.
 
+## Escalating after a failed run
+
+Routing a task to a cheap tier is only sensible if a failure is cheap to
+recover. `run --suggest-escalation` makes that recovery a step you can take
+rather than one you have to reconstruct:
+
+```sh
+# $fingerprint comes from the matching `wclass route --tier low` call.
+printf '%s' "$task" | wclass run --source-vendor codex --tier low \
+  --ack-route-fingerprint "$fingerprint" --suggest-escalation
+# {"error": "executor_failed", "executor_exit_code": 1}
+# {"escalation": {"from_tier": "low", "to_tier": "standard", "route": "codex-standard",
+#                 "vendor": "codex", "route_fingerprint": "sha256:...",
+#                 "record_as_rework": true, "failure_cause_diagnosed": false}}
+```
+
+The fingerprint is the one `wclass route --tier standard` renders, so it can be
+passed straight to the next `run` without re-reviewing by hand.
+
+The command itself is deliberately absent. A tier and a fingerprint are all that
+running the escalation needs, and inspecting a route is what `wclass route` is
+for — a command you invoke on purpose. Printing argv here would mean a caller who
+only ever routes `low`, and has never reviewed the tier above it, first sees that
+command in a failure log; if the policy carries an inline credential, that is one
+more path for it to reach a log file.
+
+**Nothing is retried, started, or supervised.** V1 runs exactly one foreground
+child and this does not change that; the router names a route and exits. Running
+it is your decision.
+
+Two fields exist to stop the output being read as more than it is:
+
+- `failure_cause_diagnosed` is always `false`. The router does not read the
+  child's output and cannot tell a task that needed more effort from one that was
+  impossible, misconfigured, or broken for unrelated reasons. A non-zero exit is
+  not evidence that the tier was wrong.
+- `record_as_rework` is `true` because the escalated run is a second attempt at a
+  task already counted. Pass `--usage-rework` to it. Omitting that inflates both
+  the run count and the counterfactual baseline, which is exactly how a failed
+  cheap route comes to look like a saving.
+
+Nothing is suggested when the router itself refused — invalid input, an
+unsupported route, a fingerprint mismatch, or an executor that never started.
+Those failures have nothing to do with the tier, and pointing at a more
+expensive route would only spend money on them. `high` reports
+`{"escalation": null, "reason": "already_highest_tier"}`.
+
 ## Local aggregate usage accounting
 
 Accounting is disabled until the user creates a private local store:
