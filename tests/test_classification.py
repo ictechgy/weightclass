@@ -479,7 +479,8 @@ class CheapTierRecallTests(unittest.TestCase):
 
         for task in cases:
             with self.subTest(task=task):
-                self.assertFalse(classification._has_multiple_instructions(task.casefold()))
+                normalized = classification.validate_task(task)
+                self.assertFalse(classification._has_multiple_instructions(normalized))
 
     def test_a_korean_auxiliary_verb_is_not_a_second_instruction(self) -> None:
         """Breaks if `~고` matches a continuation instead of a conjunction.
@@ -500,12 +501,22 @@ class CheapTierRecallTests(unittest.TestCase):
         )
         for task in auxiliary:
             with self.subTest(task=task):
-                self.assertFalse(classification._has_multiple_instructions(task))
+                normalized = classification.validate_task(task)
+                self.assertFalse(classification._has_multiple_instructions(normalized))
 
-        conjunctions = ("이 주석 지우고 로직도 고쳐줘", "필드를 추가하고 테스트도 써줘")
+        # 배제어를 한 음절로 두면 계산·계정·계획 같은 평범한 명사까지 걸려
+        # 지시가 둘인 요청이 단일로 읽힌다. 저비용 규칙이 열리는 방향이라
+        # 이 파일이 스스로 더 비싸다고 적어 둔 오류가 된다.
+        conjunctions = (
+            "이 주석 지우고 로직도 고쳐줘",
+            "필드를 추가하고 테스트도 써줘",
+            "이 주석 지우고 계산 로직도 고쳐줘",
+            "이름 바꾸고 계정 검증도 추가해줘",
+        )
         for task in conjunctions:
             with self.subTest(task=task):
-                self.assertTrue(classification._has_multiple_instructions(task))
+                normalized = classification.validate_task(task)
+                self.assertTrue(classification._has_multiple_instructions(normalized))
 
     def test_a_mechanical_pair_must_apply_to_the_same_request(self) -> None:
         """Breaks if the action and object can be matched anywhere in the text.

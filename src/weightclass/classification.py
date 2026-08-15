@@ -341,7 +341,8 @@ _MULTI_INSTRUCTION_PATTERN: Final = re.compile(
     r",\s*(?:then|and|also)\b"
     r"|\band\s+(?:make|add|remove|delete|update|fix|rewrite|refactor|move|check)\b"
     r"|;"
-    r"|(?:지우|바꾸|고치|만들|옮기|없애|추가하|제거하|정렬하)고\s+(?!\s)(?!싶|있|계|나서)"
+    r"|(?:지우|바꾸|고치|만들|옮기|없애|추가하|제거하|정렬하)고\s+"
+    r"(?!\s)(?!싶[다은어었으])(?!있[다어었으는])(?!계[시신셔세])(?!나서)"
     r"|그리고|그다음|그 다음"
 )
 # 여기서 뺀 두 가지를 다시 넣지 말 것.
@@ -359,6 +360,17 @@ _MULTI_INSTRUCTION_PATTERN: Final = re.compile(
 # 이상일 때 되감기로 무력화된다. "추가하고  싶은데" 는 `\s+` 가 공백 하나만
 # 소비하도록 되감으면 다음 문자가 공백이라 배제가 통과하고, 보조 용언인데도
 # 명령 두 개로 읽힌다. 앞의 lookahead 가 공백을 끝까지 먹도록 강제한다.
+#
+# 배제어를 한 음절로 두지 말 것. "계" 하나로 두면 계산·계정·계획 같은 평범한
+# 명사까지 배제되어 "이 주석 지우고 계산 로직도 고쳐줘" 가 단일 지시로 읽힌다.
+# 그러면 저비용 규칙이 열려 실제로는 두 가지 일인 요청이 low 로 떨어진다. 이는
+# 이 파일이 스스로 더 비싸다고 적어 둔 방향이다. 그래서 보조 용언이 실제로
+# 취하는 어미까지 붙여 좁힌다.
+#
+# "~고 있는" 은 좁히지 못한다. "주석 지우고 있는 로직" 은 진행형("주석을 지우고
+# 있는")으로도, 지시 둘("주석을 지우고, 있는 로직을")로도 읽힌다. 형태소 분석
+# 없이 가를 수 없어 더 흔한 진행형 쪽으로 둔다. 이 파일이 이미 여러 곳에서
+# 감수한 것과 같은 한계다.
 
 _LOW_ACTION_ASCII_PATTERN: Final = _compile_ascii_signals(LOW_MECHANICAL_ACTIONS)
 _LOW_ACTION_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_MECHANICAL_ACTIONS)
