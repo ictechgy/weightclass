@@ -130,13 +130,19 @@ printf '%s' "$task" | wclass run --source-vendor codex --tier low \
   --ack-route-fingerprint "$fingerprint" --suggest-escalation
 # {"error": "executor_failed", "executor_exit_code": 1}
 # {"escalation": {"from_tier": "low", "to_tier": "standard", "route": "codex-standard",
-#                 "vendor": "codex", "command": [...],
-#                 "route_fingerprint": "sha256:...",
+#                 "vendor": "codex", "route_fingerprint": "sha256:...",
 #                 "record_as_rework": true, "failure_cause_diagnosed": false}}
 ```
 
 The fingerprint is the one `wclass route --tier standard` renders, so it can be
 passed straight to the next `run` without re-reviewing by hand.
+
+The command itself is deliberately absent. A tier and a fingerprint are all that
+running the escalation needs, and inspecting a route is what `wclass route` is
+for — a command you invoke on purpose. Printing argv here would mean a caller who
+only ever routes `low`, and has never reviewed the tier above it, first sees that
+command in a failure log; if the policy carries an inline credential, that is one
+more path for it to reach a log file.
 
 **Nothing is retried, started, or supervised.** V1 runs exactly one foreground
 child and this does not change that; the router names a route and exits. Running

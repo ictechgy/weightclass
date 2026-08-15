@@ -476,12 +476,20 @@ def _print_escalation_suggestion(
         print(json.dumps({"escalation": None, "reason": reason}), file=sys.stderr)
         return
     assert higher is not None
+    # 명령 자체는 싣지 않는다. 사용자가 승급을 실행하는 데 필요한 것은 티어와
+    # 지문이지 argv 가 아니다.
+    #
+    # 라우트 검토는 wclass route 가 하는 일이고, 그것은 사용자가 일부러 부르는
+    # 명령이다. 여기서 argv 를 함께 내면, low 로만 돌리고 상위 라우트를 한 번도
+    # 검토한 적 없는 사용자가 실패 로그를 통해 그 명령을 처음 보게 된다. 정책
+    # 명령에 자격증명이 인라인으로 들어 있으면 그것이 로그로 나가는 경로가
+    # 하나 늘어나는 셈이다. 명령을 보고 싶으면 wclass route --tier <위> 로
+    # 명시적으로 검토하면 된다.
     suggestion: dict[str, object] = {
         "from_tier": tier,
         "to_tier": higher,
         "route": route.route_id,
         "vendor": route.vendor,
-        "command": list(route.command),
         "route_fingerprint": native_route_fingerprint(
             route, policy.allow_mixed_vendors, policy.posture
         ),

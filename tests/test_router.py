@@ -3804,7 +3804,6 @@ class EscalationSuggestionTests(unittest.TestCase):
         # README 가 문서화한 필드다. 테스트가 없으면 조용히 사라질 수 있다.
         self.assertEqual(escalation["route"], "f-standard")
         self.assertEqual(escalation["vendor"], "fake")
-        self.assertEqual(escalation["command"], ["/usr/bin/false", "--medium"])
         self.assertTrue(escalation["route_fingerprint"].startswith("sha256:"))
         # 승급 실행은 이미 센 태스크의 재시도다. 이 플래그를 빠뜨리면 기준선이
         # 부풀어 실패한 저비용 라우팅이 절감처럼 보인다.
@@ -3812,6 +3811,51 @@ class EscalationSuggestionTests(unittest.TestCase):
         # 티어가 실패의 원인이라고 주장하지 않는다. 라우터는 자식 출력을 읽지
         # 않으므로 원인을 알 방법이 없다.
         self.assertIs(escalation["failure_cause_diagnosed"], False)
+
+    def test_the_suggestion_never_carries_the_command_itself(self) -> None:
+        """Breaks if a route a caller never reviewed leaks its argv into failure logs.
+
+        승급을 실행하는 데 필요한 것은 티어와 지문이다. argv 를 함께 내면, low 로만
+        돌리고 상위 라우트를 검토한 적 없는 사용자가 실패 로그로 그 명령을 처음
+        보게 되고, 정책에 인라인 자격증명이 있으면 그것이 로그로 나간다.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / "secret.json"
+            policy.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "s-low",
+                                "vendor": "fake",
+                                "tier": "low",
+                                "command": ["/usr/bin/false", "--api-key", "sk-not-a-real-secret"],
+                            },
+                            {
+                                "id": "s-standard",
+                                "vendor": "fake",
+                                "tier": "standard",
+                                "command": [
+                                    "/usr/bin/false",
+                                    "--api-key",
+                                    "sk-not-a-real-secret",
+                                    "--m",
+                                ],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = self._run(policy, "low", "--suggest-escalation")
+            lines = self._stderr_objects(result)
+
+        escalation = lines[1]["escalation"]
+        self.assertNotIn("command", escalation)
+        self.assertNotIn("sk-not-a-real-secret", result.stderr)
+        # 티어와 지문만으로 승급을 실행할 수 있어야 기능이 유지된다.
+        self.assertEqual(escalation["to_tier"], "standard")
+        self.assertTrue(escalation["route_fingerprint"].startswith("sha256:"))
 
     def test_the_suggested_fingerprint_is_the_one_that_route_renders(self) -> None:
         """Breaks if the suggestion cannot be acknowledged as-is on the next run."""
