@@ -124,12 +124,14 @@ Accounting is disabled until the user creates a private local store:
 
 ```sh
 wclass usage enable
-wclass usage weight \
-  --agent grok \
-  --effort low \
-  --relative-cost 0.25
+wclass usage weight --agent grok --effort medium --relative-cost 1.0
+wclass usage weight --agent grok --effort low --relative-cost 0.25
 wclass usage report
 ```
+
+The `medium` weight is not optional bookkeeping. It states what the same task
+would have cost on the fixed route it would have taken without routing, and the
+report refuses to compute a saving without it.
 
 On macOS the default store is
 `~/Library/Application Support/weightclass/usage-v1.json`. On other supported
@@ -142,17 +144,53 @@ Once the default store exists, normal installed `wclass` schema-3 executions
 record automatically after the selected direct child has completed. Attempts
 that fail before a child status is obtained are not counted. The store contains
 only cumulative agent/model/effort/tier buckets, success/failure and exit-status
-counts, and optional self-reported rework/escalation counts. It contains no task
-content or hash, per-run event, timestamp, policy/profile/account, executable
-path, or route fingerprint. The store and lock are regular files private to the
+counts, optional self-reported rework/escalation counts, and one cumulative
+baseline total. It contains no task content or hash, per-run event, timestamp,
+policy/profile/account, executable path, or route fingerprint. The store and lock are regular files private to the
 current user, updates are locked and atomic, and an unsafe or malformed enabled
 store fails closed before task access.
 
-Relative cost is also a caller assertion. A weight of `1.0` is the chosen
-baseline; `0.25` means one run counts as one quarter of that baseline. Reports
-show weighted coverage, relative units, and relative savings against `1.0`.
-Unconfigured buckets remain `unweighted`; weightclass never fills them from a
-price list and does not claim monetary, token, subscription, or quota savings.
+Relative cost is a caller assertion: `0.25` means one run of that
+agent/model/effort counts as one quarter of one unit. Unconfigured buckets
+remain `unweighted`; weightclass never fills them from a price list and does not
+claim monetary, token, subscription, or quota savings.
+
+Savings are reported against a counterfactual, not against a per-run constant.
+The baseline is *the same tasks on the fixed `medium` route* — the built-in
+standard route, which pins no model. The baseline weight is therefore looked up
+without a model (`--agent <agent> --effort medium`, no `--model`) even when the
+run itself used a model override, because the route a task would have taken
+without routing is the vendor's own default model. Pricing a model-routed task
+against that same routed model would compare it to a counterfactual that never
+existed, and would cancel out exactly the saving model routing was meant to
+produce. One limitation follows from the aggregate-only contract: the store does
+not record a source vendor, so if a reviewed cross-vendor opt-in changed the
+agent, the baseline is that *destination* agent's default route, not the
+vendor you would otherwise have used.
+
+Given that baseline:
+
+- running the baseline route itself reports `0.000000`, not a saving;
+- a retry costs extra without also enlarging the baseline, because a retry is
+  not a new task. Ten tasks routed to a cheap effort that fail and are reworked
+  on an expensive one report the resulting **overrun**, not a saving;
+- `savings_reason_code` explains every abstention. The report declines to
+  compute a ratio when there are no tasks (`no_tasks`), when any run has no
+  configured weight (`unweighted_runs`), or when any task has no `medium`
+  baseline weight (`missing_baseline_weight`). Partial evidence always flatters
+  the router, so it is refused rather than shown.
+
+Distinguishing a task from a retry is the caller's declaration: pass
+`--usage-rework` when re-running work that was already counted. After a failed
+run against an enabled store, `wclass` prints
+`{"usage_hint": "record_retry_with_usage_rework"}` to standard error as a
+reminder. Omitting it on a retry inflates both the run count and the baseline,
+which is exactly how a failed cheap route comes to look like a saving. There is
+no per-run identifier to reconstruct this from, by design.
+
+Stores created by an earlier build are promoted on read. Schema 1 recorded no
+counterfactual, so a promoted store keeps its counts, recovers its task count as
+`runs - reworks`, and abstains from savings until new evidence accumulates.
 Omit `--model` to configure the native default; passing `--model default`
 configures an opaque model literally named `default`. Weights apply
 prospectively, so configure them before the runs being compared;
@@ -326,7 +364,7 @@ reason code:
 
 ```sh
 printf '%s' 'Fix a spelling typo.' | wclass classify --explain
-# {"tier": "low", "reason_code": "low.mechanical", "policy_version": "2"}
+# {"tier": "low", "reason_code": "low.mechanical", "policy_version": "3"}
 ```
 
 The explanation contains policy metadata only: it never includes task text,
@@ -366,7 +404,13 @@ without over-rating. The vendor result still under-rated 7 of the 15 genuinely
 hard tasks, so it was better, not solved. Models change, and those recorded
 tiers are not a current provider claim. The current offline command
 `PYTHONPATH=src python3 tests/eval/score.py` re-derives only the local public
-regression result, now 17/40. A supported vendor comparison requires a fresh
+regression result, now 22/40 under classification policy 3. Read that number
+as a direction check, not an accuracy claim: the fixture is visible, so a score
+against it measures the tuner as much as the classifier. What policy 3 changed
+is documented below and in `src/weightclass/classification.py`; its stated aim
+was to stop over-routing mechanical work, and on this fixture over-routing fell
+from 32.5% to 17.5% while high-tier recall stayed at 5/15. A supported vendor
+comparison requires a fresh
 evaluator-supplied corpus and `--compare-triage`, as documented in
 [`tests/eval/README.md`](tests/eval/README.md).
 
@@ -451,15 +495,48 @@ eliminate this. The strict parser accepts only one complete lowercase `low`,
 three tier routes your own policy already declares, but the vendor call itself
 is still an additional opt-in boundary.
 
-Three rules make the outcome predictable:
+Four rules make the outcome predictable:
 
 - Signals are matched on whole words, so `reproduction` does not count as
   `production`. Korean has no word boundaries, so Korean signals are matched by
   containment and a compound word that embeds a signal may over-escalate.
 - When both a `high` and a `low` signal are present, `high` wins. Under-rating a
   task is the more expensive mistake.
-- A task of 1,200 characters or more is treated as `high` on length alone, so
-  pasting a large context escalates the tier regardless of wording.
+- Length never raises a tier. A task of 1,200 characters or more only loses its
+  eligibility for `low` and reports `standard.length_floor`. Length is evidence
+  that work is not mechanical; it is not evidence that work is risky, and
+  treating it as risk made pasting a file list the most expensive route.
+- Beyond the `low` vocabulary, a short task also reaches `low` when a mechanical
+  action meets a narrow mechanical object (`sort` … `imports`), or when it
+  states a literal target to substitute in (`from 20 to 50`, `debug에서 info로`).
+  The substituted value must look like a literal, so `무한 스크롤로 바꿔줘`
+  stays `standard`: a described feature is an implementation request, not a
+  substitution.
+
+### Bind a model to a tier of the built-in routes
+
+Effort is only one of the two levers, and model grade is usually the larger one.
+Tier-specific labels therefore attach to the built-in routes directly, without
+materializing a preset policy first:
+
+```sh
+printf '%s' "$task" | wclass route \
+  --source-vendor codex \
+  --low-model your-reviewed-cheap-model \
+  --high-model your-reviewed-capable-model
+```
+
+`--source-vendor` is required: without it, which vendor's built-in routes receive
+the label would depend on declaration order. Only the named tiers change; the
+others keep their built-in command exactly. The label is opaque — weightclass
+never checks that the model exists, is available to the account, or costs less.
+Because the command changes, the route fingerprint changes too, so a `run`
+acknowledged with the unlabelled fingerprint still refuses to start.
+
+Vendors differ in what they can accept, and an unsupported combination fails
+closed rather than being silently dropped: `agy` has no model flag, and the
+`grok` effort override is not yet measured. `configuration_status` reports
+`unqualified_custom` for any bound label.
 
 ## Override the routes
 

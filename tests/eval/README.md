@@ -34,9 +34,9 @@ aggregate metrics. It includes a confusion matrix, high-tier recall,
 over-routing, Wilson 95% confidence intervals, and available language and
 category slices.
 
-The current checkout scores the local classifier at 17/40 on that fixture.
-The historical 15/40 local and 33/40 recorded-vendor figures predate the later
-outcome-pattern refinement. The default command does not re-run or reproduce a
+The current checkout scores the local classifier at 22/40 on that fixture.
+The historical 15/40 and 17/40 local figures and the 33/40 recorded-vendor
+figure predate classification policy 3. The default command does not re-run or reproduce a
 vendor result.
 
 ## Offline paired net-token gate
@@ -574,8 +574,9 @@ it.
   Treat a few points of difference as noise; treat 15/40 versus 33/40 as real.
 - **It is no longer sealed.** The figures were measured before the corpus was
   committed, but anyone tuning the classifier can now read it. The original
-  local score was 15/40; a later outcome-pattern refinement re-runs at 17/40.
-  Neither figure is valid evidence of general accuracy for later changes. A
+  local score was 15/40; an outcome-pattern refinement re-ran at 17/40, and
+  classification policy 3 re-runs at 22/40. No figure here is valid evidence of
+  general accuracy for later changes. A
   tuned score against this file measures the tuner, not the classifier. Build
   and blind-rate a fresh corpus before making a new accuracy claim.
 - **Recorded vendor tiers are a snapshot.** Models change. `recorded_vendor_tier`
