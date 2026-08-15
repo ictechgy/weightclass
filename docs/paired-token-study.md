@@ -10,7 +10,9 @@ function of user-supplied relative weights. Fixing the counterfactual baseline m
 that number honest, not grounded. Until one paired collection exists, any further
 routing work is optimization on top of an unmeasured assumption.
 
-**Status:** planning. No collection has been authorized or performed.
+**Status:** revision 2. The Phase 1 pilot has run — 36 real invocations across
+two vendors — and its result changed this design. Revision 1 is preserved in git
+history; what follows supersedes it.
 
 ## What the scorer forces
 
@@ -37,13 +39,40 @@ The nine categories are `security`, `privacy`, `data-integrity`,
 `routine`. Full category coverage at 30 pairs is tight, so this plan uses **36
 tasks (9 × 4)** for margin.
 
+## What the pilot changed
+
+Six sealed tasks, three arms, two vendors, all completing on the first attempt.
+Full numbers are in the study directory's `PILOT-REPORT.md`. Three results
+forced this revision.
+
+**1. The originally pre-registered main comparison answers the wrong question.**
+Pinning effort to medium (`A1`) saved more than weightclass routing (`A2`) on
+both vendors — +24.7% vs +20.8% on Claude, +4.8% vs +1.2% on Codex — with less
+variance in both cases. Head to head, routing was 5.1% worse than the fixed flag
+on Claude and 5.5% worse on Codex. Measuring routing against the *vendor
+default* at scale would report a saving that a single flag already captures.
+The question that matters is whether routing beats that flag.
+
+**2. The mechanism this study exists to price never fired.** Zero rework in 36
+runs. The case for cheap routing is that a cheap attempt usually succeeds and
+the occasional failure is recovered for less than the expensive attempt would
+have cost. On these tasks nothing failed at any effort, so effort moved cost and
+nothing else. A task set with no tier-sensitive tasks cannot measure the value
+of choosing a tier — only the price of one.
+
+**3. The ratio is compressed by a constant neither arm controls.** Claude totals
+ran 5–20× Codex totals for identical tasks, almost entirely
+`cache_read_input_tokens` accumulating per turn. Both arms pay it, so the paired
+comparison stays valid, but a large shared constant pushes any ratio toward
+zero and makes the gate's 15% bar reflect context size as much as routing.
+
 ## Decisions taken
 
 | Decision | Choice | Note |
 | --- | --- | --- |
 | Vendor | **Codex and Claude, as two independent studies** | one `measurement_contract_id` per vendor; evidence files never mixed |
 | Fixture repository | **purpose-built synthetic Python project** | lets all nine categories exist by construction and resets cleanly |
-| Phase 2 comparisons | **control + main only** | comparisons 3 and 4 are pre-registered but deferred |
+| Primary comparison | **`A1` baseline vs `A2` candidate** | added in revision 2; declared before any Phase 2 collection |
 
 ## The central validity risk
 
@@ -119,48 +148,145 @@ recorded once and reused for every pair.
 | `A1` provider-direct fixed medium | same, with reasoning effort pinned to medium |
 | `A2` weightclass balanced route | `wclass classify` then `wclass run` with the built-in balanced policy |
 
-- **Comparison 1 (control):** `A0` baseline vs `A1` candidate. Answers whether the
-  measurement apparatus is sound and what pinning effort alone costs. Without this,
-  comparison 2 is uninterpretable.
-- **Comparison 2 (main):** `A0` baseline vs `A2` candidate. Answers the actual
-  question.
+- **Comparison P (primary, new in revision 2):** `A1` baseline vs `A2` candidate.
+  Does routing beat the trivial alternative of pinning one flag? This is a
+  promotion question, and the gate is exactly the right shape for it: adopt
+  routing only if it saves at least 15% over the thing it would replace.
+- **Comparison 1 (control):** `A0` baseline vs `A1` candidate. Establishes that
+  the apparatus works and prices the vendor default.
+- **Comparison 2:** `A0` baseline vs `A2` candidate. The originally primary
+  comparison, kept for the record and demoted.
 
-Pre-registered but deferred to a later phase: `A0` vs a schema-1 policy whose
-standard command omits the effort override, and `A0` vs `--ask-vendor` followed by
-`run` with both invocations counted.
+Comparison P was chosen after the pilot. That is legitimate — informing the
+design is what a pilot is for — but it is only legitimate under two conditions,
+both of which hold: it is declared here **before** any Phase 2 collection, and
+Phase 2 collects fresh runs rather than reusing the pilot's six pairs.
+
+Pre-registered but still deferred: `A0` vs a schema-1 policy whose standard
+command omits the effort override, and `A0` vs `--ask-vendor` followed by `run`
+with both invocations counted.
+
+### Pre-registered stratified analysis
+
+Report savings split by whether routing agreed with the rated tier:
+
+| Stratum | Meaning |
+| --- | --- |
+| matched | routed tier equals `expected_tier` |
+| over-routed | routed above the rated tier |
+| under-routed | routed below the rated tier |
+
+The pilot found agreement on 1 of 6 pairs, with over-routing costing money
+directly and under-routing paying off twice by chance. Whether that pattern
+holds at 36 pairs is the most useful thing this study can produce, because it
+separates "routing is a bad idea" from "this classifier is wrong". Declare the
+strata now so the split is not chosen after seeing the totals.
+
+### Reporting absolute differences
+
+Report the paired absolute token difference and its interval beside every ratio.
+A large constant present in both arms — `cache_read_input_tokens` on Claude is
+most of the total — drags every ratio toward zero without changing the
+difference. The gate is a ratio and stays a ratio; this is an addition to the
+study's own reporting, not a change to the gate.
 
 ## Token normalization contract
 
-The scorer accepts a single `net_tokens` integer per arm and deliberately refuses
-to infer how to sum provider fields. Phase 0 must pin down, per vendor, the exact
-field list and record it under the `measurement_contract_id`:
+Frozen in Phase 1 by probe, not by assumption.
 
-- **Codex.** `codex exec` reports cumulative token usage on stderr. Confirm it is
-  cumulative across turns within one invocation, then declare that single number.
-- **Claude.** `claude -p --output-format json` returns a usage object. Declare an
-  explicit field list; do not add fields that may overlap (cache-read and input
-  counts in particular). This is a raw-token comparison, not a price estimate.
+- **Codex.** The cumulative count `codex exec` writes to stderr as
+  `tokens used\n2,231`.
+- **Claude.** `usage.input_tokens + output_tokens +
+  cache_creation_input_tokens + cache_read_input_tokens`, and nothing else. The
+  same payload repeats those numbers under `cache_creation.*`, inside
+  `iterations[]`, and as `output_tokens_details.thinking_tokens`, which is a
+  subset of `output_tokens`; adding any of them double counts.
+  `total_cost_usd` is money rather than tokens and is not used.
 
-Freeze the contract before Phase 1 and never change it mid-study. If it must
-change, the study restarts.
+Claude totals ran 5–20× Codex totals for identical tasks. That is not a model
+comparison — it is `cache_read_input_tokens` accruing on every turn. The paired
+comparison is unaffected because it never crosses vendors, but `net_tokens` is
+dominated by context size times turn count, which is why revision 2 also reports
+absolute differences.
+
+The harness records the four Claude fields separately from Phase 1b onward.
+Phase 1 kept only the sums and cannot be decomposed after the fact.
+
+### Declared deviation
+
+The built-in Claude route prints no usage anywhere, so `A2` could not be
+measured at all. All three Claude arms therefore carry `--output-format json`,
+and `A2` uses a policy that is the built-in command with that one flag added.
+`wclass route` reports it as `unqualified_custom` and its fingerprint differs
+from the built-in. Both facts belong in the final report. Codex needs no
+deviation.
+
+## Phase 1b: difficulty calibration
+
+Added in revision 2, and the most important change here. Phase 1 recorded zero
+rework in 36 runs, which means not one task in the pilot set was **tier
+sensitive**: low effort finished it just as well as high. A task set like that
+can price effort but cannot value routing, because routing's whole claim is that
+picking the right tier matters.
+
+Phase 2 must not start until the task set contains tasks where the tier changes
+the outcome. Which tasks those are cannot be guessed; it has to be measured.
+
+For each candidate task, run **two invocations only** — the vendor CLI pinned to
+low effort, and pinned to high — and classify the result:
+
+| low | high | classification |
+| --- | --- | --- |
+| pass | pass | tier-insensitive; effort only moves cost |
+| fail | pass | **tier sensitive** — the tasks this study needs |
+| fail | fail | too hard for the fixture or badly specified; fix or drop |
+| pass | fail | noise; re-run once, then drop |
+
+Cost is 2 invocations per candidate on one vendor. Calibrating 18 candidates is
+36 invocations, the same size as the whole Phase 1 pilot.
+
+The Phase 2 task set should hold a declared, non-zero share of tier-sensitive
+tasks, and the share must be recorded in the report. A study over 36
+tier-insensitive tasks would produce a confident number that answers nothing.
+
+Writing tasks that fail at low effort and pass at high is its own problem. The
+existing 36 are mostly "add function X with behavior Y", which is fully
+specified and therefore easy at any tier. Tier-sensitive work tends to look
+like: the obvious implementation silently breaks a pre-existing invariant the
+acceptance test also checks; the requirement spans modules that must stay
+consistent; or the prompt describes a symptom and the cause has to be found.
 
 ## Phases
 
 | Phase | Work | Vendor invocations | Approval |
 | --- | --- | ---: | --- |
-| **0** | fixture repo, 36 tasks + acceptance tests, tier ratings, terminal/critical rules, collection harness, token contract, scorer smoke against synthetic evidence | **0** | not required |
-| **1** | pilot: 6 tasks × 3 arms × 2 vendors | **36** | required |
-| **2** | full: 36 tasks × 3 arms × 2 vendors | **216** | required |
-| **3** | comparisons 3 and 4 | +144 | optional, decided later |
+| **0** | fixture, 36 tasks, blind ratings, harness, evidence builder | 0 | done |
+| **1** | pilot: 6 tasks × 3 arms × 2 vendors | 36 | done |
+| **1b** | difficulty calibration on ~18 candidates, one vendor, two efforts | ~36 | required |
+| **2** | comparison P plus control, on the calibrated set | see below | required |
+| **3** | comparisons 3 and 4 | deferred | optional |
 
-Phase 1 **cannot pass the gate** — six pairs is below the floor of 30 — and is not
-meant to. Its purpose is to validate the token contract, prove the harness counts
-rework correctly, calibrate task difficulty, and produce the first real measurement
-of what Phase 2 will cost. Phase 2 must not start before Phase 1 has done that;
-there is currently no basis for estimating total token spend.
+Phase 2's size is now a real decision rather than a default, because the pilot
+measured what each run costs. Codex averaged roughly 35k tokens per invocation
+and Claude roughly 500k, so three arms over 36 tasks on two vendors is about
+216 invocations and on the order of 58M tokens, dominated by Claude.
 
-Terminal-rule reruns add invocations on top of the counts above, bounded at 2× in
-the worst case.
+Three options, in increasing cost:
+
+| Option | Arms | Runs | Answers |
+| --- | --- | ---: | --- |
+| **P-only** | `A1`, `A2` | 144 | comparison P on both vendors |
+| **P + control** | `A0`, `A1`, `A2` | 216 | P, plus comparisons 1 and 2 at full size |
+| **P, Claude only** | `A1`, `A2` | 72 | P where the pilot found signal; Codex stays descriptive |
+
+The pilot already answers comparisons 1 and 2 well enough to act on, and both
+pointed the same way on two vendors. Re-running them at 36 pairs buys precision
+on a question that is no longer in doubt. **P-only is the recommended option**,
+with the pilot cited for the control rather than repeated.
+
+Codex is worth keeping despite its flat result: its variance was 25–32%, so a
+null there is itself informative, and dropping the vendor where routing looked
+worst would bias the study.
 
 ## Provenance checklist
 
@@ -189,30 +315,41 @@ One evidence file per (vendor, comparison). The scorer never invokes `wclass`, a
 vendor CLI, or the network; collection is a separate, explicitly authorized step
 owned by the evaluator.
 
-## What needs approval before Phase 1
+## What needs approval
 
 Collection makes network, disclosure, quota, and billing changes, so it sits
-outside the offline scorer and outside this plan's authority.
+outside the offline scorer and outside this plan's authority. Phase 0 and the
+Phase 1 pilot are done; what follows still needs a decision.
 
-- Full task text is sent to the vendor. The tasks are synthetic and contain no
-  private content, but this is still outbound disclosure.
-- 36 (Phase 1) then 216 (Phase 2) agent invocations per the table above, against
-  whatever subscription or metered account the CLIs are logged into.
-- Agents write to the fixture repository. It must live outside this repository so
-  no run can touch weightclass source or the user's other work.
+- **Phase 1b**, roughly 36 invocations on one vendor, to find which tasks are
+  tier sensitive.
+- **Phase 2**, 144 invocations under the recommended P-only option, or 216 with
+  the control repeated at full size.
+- Task text is synthetic and carries no private content, but it still leaves the
+  machine. Agents write only to the fixture repository, which lives outside this
+  repository so no run can touch weightclass source.
 
 ## Known threats to validity
 
-- **Harness-performed rework.** Addressed by the deliberately dumb terminal rule,
-  but the rule is still an assumption about how a user would retry.
+- **Harness-performed rework.** weightclass never retries, so the harness does.
+  The rule is deliberately dumb and symmetric, but it is still an assumption
+  about how a user would retry. Phase 1 never exercised it at all.
+- **Tier-insensitive tasks.** The reason for Phase 1b. Until the set contains
+  tasks where the tier changes the outcome, this study measures the price of
+  effort and calls it the value of routing.
 - **Synthetic tasks.** A purpose-built fixture makes coverage achievable and
-  resets clean, at the cost of realism. The result generalizes to tasks like these,
-  not to arbitrary production work.
-- **One model per vendor.** Model behaviour changes; the result is a snapshot bound
-  to the recorded configuration fingerprints.
-- **Acceptance tests define "done".** A task whose test is too lenient rewards a
-  lazy arm; too strict punishes both equally. Tests are authored before collection
-  precisely so this bias cannot be tuned after seeing results.
-- **The 15% floor is a promotion bar, not the question.** A result of, say, 6%
-  savings fails the gate while still being a real finding. Report the point
-  estimate and interval regardless of pass or fail.
+  resets clean, at the cost of realism. Results generalize to tasks like these.
+- **One model per vendor.** Model behaviour changes; the result is a snapshot
+  bound to the recorded configuration fingerprints.
+- **Acceptance tests define "done".** Authored before collection so the bar
+  cannot be tuned after seeing results. Every one was verified to fail on the
+  pristine fixture, which caught two tasks asserting bugs that did not exist.
+- **A ratio bar against a large shared constant.** The 15% floor is a promotion
+  bar, not the question. Report the point estimate, the interval, and the
+  absolute difference whether the gate passes or fails.
+- **Raters can read the filesystem.** The first rating batch was discarded after
+  `codex exec --sandbox read-only` was confirmed able to print the study's own
+  `meta.json`. Raters now run in an empty directory outside the tree, but
+  read-only sandboxes still permit reads anywhere; isolation here means nothing
+  points at the study, not that reads are impossible. Check rater prose for
+  study vocabulary after every batch.
