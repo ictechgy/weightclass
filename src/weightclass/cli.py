@@ -119,6 +119,16 @@ from .router import (
 )
 from .task_v2 import ValidatedTaskV2, read_validated_task_v2
 from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
+from .usage_aggregation import (
+    UsageAggregationError,
+    UsageDimensions,
+    default_usage_store_path,
+    ensure_usage_store,
+    record_usage,
+    render_usage_report,
+    resolve_usage_store,
+    set_relative_cost_weight,
+)
 from .v2 import (
     API_SOURCE_VENDORS,
     V2InvalidInputError,
@@ -131,6 +141,7 @@ from .v2 import (
 from .v2_validation import V2ValidationError
 
 EXECUTOR_FAILED_EXIT_CODE: Final = 7
+USAGE_UNAVAILABLE_EXIT_CODE: Final = 9
 MAX_NATIVE_POLICY_BYTES: Final = 262_144
 MAX_NATIVE_DESCRIPTOR_BYTES: Final = 262_144
 MAX_PRESET_OVERRIDE_LABEL_BYTES: Final = 240
@@ -610,6 +621,13 @@ def _add_native_v3_delegation_arguments(parser: argparse.ArgumentParser) -> None
     parser.add_argument("--tier", required=True, choices=("low", "standard", "high"))
 
 
+def _add_usage_run_arguments(parser: argparse.ArgumentParser) -> None:
+    """Declare aggregate-only accounting flags for schema-3 execution."""
+    parser.add_argument("--usage-store", type=Path)
+    parser.add_argument("--usage-rework", action="store_true")
+    parser.add_argument("--usage-escalation", action="store_true")
+
+
 def _add_preset_override_arguments(parser: argparse.ArgumentParser) -> None:
     for tier in ("low", "standard", "high"):
         parser.add_argument(
@@ -672,6 +690,34 @@ def build_parser() -> argparse.ArgumentParser:
             "Interactively select and confirm a schema-3 policy on the controlling console."
         ),
     )
+    usage = subcommands.add_parser(
+        "usage",
+        allow_abbrev=False,
+        description="Manage opt-in aggregate-only native usage accounting.",
+    )
+    usage_subcommands = usage.add_subparsers(dest="usage_command", required=True)
+    usage_enable = usage_subcommands.add_parser(
+        "enable",
+        allow_abbrev=False,
+        description="Create or validate the private local aggregate store.",
+    )
+    usage_enable.add_argument("--store", type=Path, default=default_usage_store_path())
+    usage_weight = usage_subcommands.add_parser(
+        "weight",
+        allow_abbrev=False,
+        description="Set one user-asserted relative cost weight.",
+    )
+    usage_weight.add_argument("--store", type=Path, default=default_usage_store_path())
+    usage_weight.add_argument("--agent", required=True, choices=AGENT_IDS)
+    usage_weight.add_argument("--model")
+    usage_weight.add_argument("--effort", required=True, choices=("low", "medium", "high"))
+    usage_weight.add_argument("--relative-cost", required=True)
+    usage_report = usage_subcommands.add_parser(
+        "report",
+        allow_abbrev=False,
+        description="Print aggregate-only usage and relative-cost metrics.",
+    )
+    usage_report.add_argument("--store", type=Path, default=default_usage_store_path())
 
     classify = subcommands.add_parser(
         "classify",
@@ -749,6 +795,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "run":
             native.add_argument("--ack-route-fingerprint")
             native.add_argument("--confirm-endpoint-transition", action="store_true")
+            _add_usage_run_arguments(native)
 
     render = subcommands.add_parser(
         "render",
@@ -810,6 +857,7 @@ def build_parser() -> argparse.ArgumentParser:
     native_delegation_run.add_argument("--confirm-native-delegation", action="store_true")
     native_delegation_run.add_argument("--confirm-endpoint-transition", action="store_true")
     native_delegation_run.add_argument("--ack-route-fingerprint")
+    _add_usage_run_arguments(native_delegation_run)
 
     api = subcommands.add_parser(
         "v2",
@@ -1564,6 +1612,10 @@ def run_from_standard_input(
     preset: str | None = None,
     overrides: PresetOverrides | None = None,
     confirm_endpoint_transition: bool = False,
+    usage_store: Path | None = None,
+    usage_rework: bool = False,
+    usage_escalation: bool = False,
+    use_default_usage_store: bool = False,
 ) -> int:
     """Run a selected native command without a shell or output capture."""
     overrides = overrides or PresetOverrides()
@@ -1589,7 +1641,12 @@ def run_from_standard_input(
         except (InvalidInputError, V2ValidationError):
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
-        if confirm_endpoint_transition and version != 3:
+        if (
+            confirm_endpoint_transition
+            or usage_store is not None
+            or usage_rework
+            or usage_escalation
+        ) and version != 3:
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
         if version == 2:
@@ -1608,10 +1665,14 @@ def run_from_standard_input(
                 acknowledged_fingerprint,
                 explicit_tier,
                 confirm_endpoint_transition,
+                usage_store,
+                usage_rework,
+                usage_escalation,
+                use_default_usage_store,
             )
     else:
         dispatched = None
-    if confirm_endpoint_transition:
+    if confirm_endpoint_transition or usage_store is not None or usage_rework or usage_escalation:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
     if source_profile is not None:
@@ -1802,6 +1863,10 @@ def _execute_native_v3(
     *,
     purpose: PurposeV3,
     confirm_native_delegation: bool,
+    usage_store: Path | None,
+    usage_rework: bool,
+    usage_escalation: bool,
+    use_default_usage_store: bool,
 ) -> int:
     """Apply schema-3 execution gates without reading task input early."""
     if (
@@ -1840,6 +1905,16 @@ def _execute_native_v3(
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
     try:
+        active_usage_store = resolve_usage_store(
+            usage_store,
+            use_default=use_default_usage_store,
+            rework=usage_rework,
+            escalation=usage_escalation,
+        )
+    except (OSError, UsageAggregationError):
+        print(json.dumps({"error": "usage_unavailable"}), file=sys.stderr)
+        return USAGE_UNAVAILABLE_EXIT_CODE
+    try:
         validate_runtime_process_context()
     except DelegationRuntimeUnavailableError:
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
@@ -1872,6 +1947,21 @@ def _execute_native_v3(
     except (OSError, ValueError):
         print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
         return EXECUTOR_FAILED_EXIT_CODE
+    if active_usage_store is not None:
+        try:
+            record_usage(
+                active_usage_store,
+                UsageDimensions(selected.vendor, selected.model, selected.effort, selected.tier),
+                child_returncode=return_code,
+                rework=usage_rework,
+                escalation=usage_escalation,
+            )
+        except (OSError, UsageAggregationError):
+            print(
+                json.dumps({"child_completed": True, "error": "usage_unavailable"}),
+                file=sys.stderr,
+            )
+            return USAGE_UNAVAILABLE_EXIT_CODE
     return _report_executor_result(subprocess.CompletedProcess(("<redacted>",), return_code))
 
 
@@ -1882,6 +1972,10 @@ def _native_v3_run(
     acknowledged_fingerprint: str | None,
     explicit_tier: Tier | None,
     confirm_endpoint_transition: bool,
+    usage_store: Path | None,
+    usage_rework: bool,
+    usage_escalation: bool,
+    use_default_usage_store: bool,
 ) -> int:
     """Preserve the ordinary schema-3 run contract and purpose binding."""
     return _execute_native_v3(
@@ -1893,6 +1987,10 @@ def _native_v3_run(
         confirm_endpoint_transition,
         purpose="native_route",
         confirm_native_delegation=False,
+        usage_store=usage_store,
+        usage_rework=usage_rework,
+        usage_escalation=usage_escalation,
+        use_default_usage_store=use_default_usage_store,
     )
 
 
@@ -1948,6 +2046,10 @@ def native_v3_delegation_run_from_standard_input(
     confirm_native_delegation: bool,
     confirm_endpoint_transition: bool,
     acknowledged_fingerprint: str | None,
+    usage_store: Path | None = None,
+    usage_rework: bool = False,
+    usage_escalation: bool = False,
+    use_default_usage_store: bool = False,
 ) -> int:
     """Run one reviewed bounded subtask through the schema-3 native adapter."""
     try:
@@ -1968,6 +2070,10 @@ def native_v3_delegation_run_from_standard_input(
         confirm_endpoint_transition,
         purpose="native_delegation",
         confirm_native_delegation=confirm_native_delegation,
+        usage_store=usage_store,
+        usage_rework=usage_rework,
+        usage_escalation=usage_escalation,
+        use_default_usage_store=use_default_usage_store,
     )
 
 
@@ -1985,7 +2091,11 @@ def render_workflow_route(policy_path: Path, descriptor_path: Path) -> int:
     return 0
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    use_default_usage_store: bool = False,
+) -> int:
     """Classify, route, render, or run a native command from explicit input."""
     try:
         arguments = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
@@ -2042,6 +2152,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (InteractiveSelectorError, OSError, UnicodeError):
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
+    if arguments.command == "usage":
+        try:
+            if arguments.usage_command == "enable":
+                ensure_usage_store(arguments.store)
+                usage_receipt: dict[str, object] = {
+                    "aggregate_only": True,
+                    "coverage": "native_schema_3",
+                    "enabled": True,
+                    "schema_version": 1,
+                }
+            elif arguments.usage_command == "weight":
+                usage_receipt = set_relative_cost_weight(
+                    arguments.store,
+                    arguments.agent,
+                    arguments.model,
+                    arguments.effort,
+                    arguments.relative_cost,
+                )
+            elif arguments.usage_command == "report":
+                usage_receipt = render_usage_report(arguments.store)
+            else:
+                raise UsageAggregationError()
+        except (OSError, UsageAggregationError, UnicodeError):
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        print(json.dumps(usage_receipt))
+        return 0
 
     # 라벨이 열려 있으므로 argparse 가 오타를 잡아주지 못한다. 형식만이라도
     # 여기서 닫아, 잘못된 라벨이 라우트 선택까지 내려가지 않게 한다.
@@ -2108,6 +2245,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.preset,
             _preset_overrides_from_arguments(arguments),
             arguments.confirm_endpoint_transition,
+            arguments.usage_store,
+            arguments.usage_rework,
+            arguments.usage_escalation,
+            use_default_usage_store,
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
@@ -2162,6 +2303,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.confirm_native_delegation,
             arguments.confirm_endpoint_transition,
             arguments.ack_route_fingerprint,
+            arguments.usage_store,
+            arguments.usage_rework,
+            arguments.usage_escalation,
+            use_default_usage_store,
         )
     if arguments.command == "v2" and arguments.api_command == "route":
         return v2_route_from_standard_input(

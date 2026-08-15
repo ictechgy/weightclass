@@ -15,4 +15,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     from .cli import main as full_main
 
-    return full_main(arguments)
+    return full_main(arguments, use_default_usage_store=True)

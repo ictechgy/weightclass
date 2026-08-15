@@ -78,14 +78,16 @@ profile/vendor are unchanged. The run order is fixed:
 2. perform task-free static selection and derive required confirmations;
 3. require native-delegation and, when listed, endpoint-transition consent;
 4. require a nonempty exact fingerprint acknowledgement;
-5. validate safe direct-child process context;
-6. obtain the first executable observation and bind the review descriptor;
-7. compare the exact acknowledgement;
-8. read and validate stdin exactly once;
-9. materialize and validate the redacted invocation exactly once;
-10. observe the executable again, then immediately start exactly one foreground child.
+5. validate an explicitly selected or already enabled aggregate usage store;
+6. validate safe direct-child process context;
+7. obtain the first executable observation and bind the review descriptor;
+8. compare the exact acknowledgement;
+9. read and validate stdin exactly once;
+10. materialize and validate the redacted invocation exactly once;
+11. observe the executable again, then immediately start exactly one foreground child;
+12. after a real child status is available, atomically increment the aggregate store.
 
-Every failure before step 8 reads zero task bytes and starts zero children.
+Every failure before step 9 reads zero task bytes and starts zero children.
 There is no fallback, recovery, or retry path. Child stdout/stderr and the
 environment are inherited and uncaptured; weightclass does not parse,
 synthesize, redact, or persist child output. It observes only the direct
@@ -101,8 +103,13 @@ limit remains 80,000 UTF-8 bytes, subject to the narrower argv limit.
 
 The delegated unit is exactly one bounded subtask to one child. weightclass
 does not decompose it, create planner/worker/reviewer roles, inspect completion
-semantics, retain an artifact, integrate a result, calculate token or monetary
-usage, or verify which model/account/provider handled it. Use the separate
+semantics, retain a task artifact, integrate a result, calculate token or
+monetary usage, or verify which model/account/provider handled it. The optional
+local usage store records cumulative selected agent/model/effort/tier and
+direct-child status counters only. It has no task identifier, per-run record,
+timestamp, profile/account, path, fingerprint, provider usage, or inferred
+price. Relative weights apply prospectively, and weights plus rework/escalation
+flags are caller assertions. Use the separate
 `wclass delegate route|run` external-runtime protocol only when a reviewed
 orchestration runtime is actually intended; native delegation does not borrow
 that protocol's claims.
@@ -117,6 +124,7 @@ that protocol's claims.
 | `5` | `confirmation_required` | Required native-delegation or endpoint-transition consent is absent. |
 | `6` | `route_fingerprint_mismatch` | Missing, empty, wrong, ordinary-purpose, or drifted fingerprint/observation. |
 | `7` | `executor_failed` | Spawn/status failure or nonzero child status. |
+| `9` | `usage_unavailable` | Enabled aggregate state was unsafe/unavailable, or its post-child atomic update failed. |
 
 Diagnostics are redacted. weightclass never places task content or task hashes
 in policy, fingerprints, artifacts, router stdout/stderr, exceptions,
