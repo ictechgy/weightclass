@@ -307,12 +307,29 @@ _LOW_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_SIGNALS)
 # 처럼 목표가 기능 서술인 요청까지 치환으로 읽혀 구현 작업이 최저 비용 경로로
 # 떨어진다. 리터럴은 ASCII 식별자·경로·숫자 형태로 좁힌다.
 _LOW_LITERAL: Final = r"[a-z0-9._/*<>=-]{1,40}"
+# 영어 from/to 는 다른 규칙과 달리 기계적 동사를 요구하지 않아 가장 넓다. 그대로
+# 두면 "switch the cache from redis to memcached" 처럼 구성 요소를 통째로 바꾸는
+# 요청까지 치환으로 읽힌다. 두 리터럴 중 하나가 숫자를 품을 때(값 교체)만 이
+# 패턴 단독으로 low 를 인정하고, 그렇지 않으면 기계적 동사를 함께 요구한다.
+_LOW_NUMERIC_SUBSTITUTION: Final = re.compile(rf"\bfrom\s+{_LOW_LITERAL}\s+to\s+{_LOW_LITERAL}")
 _LOW_SUBSTITUTION_PATTERNS: Final = (
-    re.compile(rf"\bfrom\s+{_LOW_LITERAL}\s+to\s+{_LOW_LITERAL}"),
     re.compile(r"\brename\s+\S{1,40}\s+to\s+\S{1,40}"),
     re.compile(r"\bsort\w{0,3}\b[^\n]{0,60}\balphabetically\b"),
     re.compile(rf"{_LOW_LITERAL}\s*에서\s*{_LOW_LITERAL}\s*(?:으로|로)"),
     re.compile(rf"{_LOW_LITERAL}\s*(?:으로|로)\s*(?:바꾸|바꿔|변경|통일|교체)"),
+)
+
+# 여러 지시가 이어 붙은 요청. 기계적 증거가 그중 한 조각에만 걸려 있어도 규칙은
+# 전체를 low 로 내린다. 실제 작업은 나머지 절에 있을 수 있으므로, 지시가 하나가
+# 아니면 아래 두 규칙을 아예 적용하지 않는다. 명시적 LOW 어휘는 요청 전체의
+# 성격을 말해주므로 이 제약을 받지 않는다.
+_MULTI_INSTRUCTION_PATTERN: Final = re.compile(
+    r",\s*(?:then|and|also)\b"
+    r"|\band\s+(?:make|add|remove|delete|update|fix|rewrite|refactor|move|check)\b"
+    r"|;"
+    r"|\.\s+\S"
+    r"|(?:하|되|지우|바꾸|고치|만들|넣|빼|옮기|없애)고\s"
+    r"|그리고|그다음|그 다음"
 )
 
 _LOW_ACTION_ASCII_PATTERN: Final = _compile_ascii_signals(LOW_MECHANICAL_ACTIONS)
@@ -418,10 +435,11 @@ def classify_task_with_reason(task: str) -> ClassificationDecision:
     if len(normalized_task) <= LOW_TASK_CHARACTERS:
         if _has_signal(normalized_task, _LOW_ASCII_PATTERN, _LOW_NON_ASCII_SIGNALS):
             return ClassificationDecision("low", "low.mechanical")
-        if _has_mechanical_pair(normalized_task):
-            return ClassificationDecision("low", "low.mechanical_pair")
-        if _has_low_substitution(normalized_task):
-            return ClassificationDecision("low", "low.substitution")
+        if not _has_multiple_instructions(normalized_task):
+            if _has_mechanical_pair(normalized_task):
+                return ClassificationDecision("low", "low.mechanical_pair")
+            if _has_low_substitution(normalized_task):
+                return ClassificationDecision("low", "low.substitution")
     elif len(normalized_task) >= HIGH_TASK_CHARACTERS:
         # 길이는 low 자격만 박탈한다. 티어를 올리지 않는다.
         return ClassificationDecision("standard", "standard.length_floor")
@@ -458,9 +476,22 @@ def _has_mechanical_pair(task: str) -> bool:
     ) and _has_signal(task, _LOW_OBJECT_ASCII_PATTERN, _LOW_OBJECT_NON_ASCII_SIGNALS)
 
 
+def _has_multiple_instructions(task: str) -> bool:
+    """Report whether the task carries more than one instruction."""
+    return _MULTI_INSTRUCTION_PATTERN.search(task) is not None
+
+
 def _has_low_substitution(task: str) -> bool:
     """Report whether the task states a concrete target state to substitute in."""
-    return any(pattern.search(task) for pattern in _LOW_SUBSTITUTION_PATTERNS)
+    if any(pattern.search(task) for pattern in _LOW_SUBSTITUTION_PATTERNS):
+        return True
+    match = _LOW_NUMERIC_SUBSTITUTION.search(task)
+    if match is None:
+        return False
+    # 값 교체(숫자)면 그 자체로 기계적이다. 아니면 기계적 동사가 함께 있어야 한다.
+    return any(character.isdigit() for character in match.group(0)) or _has_signal(
+        task, _LOW_ACTION_ASCII_PATTERN, _LOW_ACTION_NON_ASCII_SIGNALS
+    )
 
 
 def _scan_windows(task: str) -> Iterator[str]:

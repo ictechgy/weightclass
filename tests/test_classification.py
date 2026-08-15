@@ -447,6 +447,43 @@ class CheapTierRecallTests(unittest.TestCase):
 
         self.assertEqual(classification.classify_task(task), "standard")
 
+    def test_a_mechanical_fragment_does_not_downgrade_a_larger_request(self) -> None:
+        """Breaks if low evidence in one clause decides a multi-instruction request.
+
+        기계적 증거가 요청의 한 조각에만 걸려 있어도 규칙은 전체를 low 로 내렸다.
+        실제 작업이 나머지 절에 있으면 어려운 일이 최저 비용 경로로 떨어진다.
+        """
+        cases = (
+            "remove the debug comment, then rewrite the retry backoff so it stops hammering",
+            "add a docstring to parse_config and make the parser reject unknown keys",
+            "sort the imports; then split this module into two",
+            "이 주석 지우고 재시도 간격 계산도 다시 짜줘",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classification.classify_task(task), "standard")
+
+    def test_substituting_a_component_is_not_substituting_a_value(self) -> None:
+        """Breaks if `from X to Y` alone can downgrade a component swap.
+
+        값 교체는 판단할 것이 남아 있지 않지만 구성 요소 교체는 그렇지 않다.
+        영어 from/to 패턴만 기계적 동사를 요구하지 않아 가장 넓었다.
+        """
+        self.assertEqual(
+            classification.classify_task("switch the cache from redis to memcached"), "standard"
+        )
+        self.assertEqual(
+            classification.classify_task(
+                "move the session store from local disk to the shared cluster"
+            ),
+            "standard",
+        )
+        value_swap = classification.classify_task_with_reason(
+            "change the default page size on get /orders from 20 to 50"
+        )
+        self.assertEqual((value_swap.tier, value_swap.reason_code), ("low", "low.substitution"))
+
     def test_risk_vocabulary_still_wins_over_every_cheap_rule(self) -> None:
         """Breaks if a cheap rule is ever consulted before the high-tier checks."""
         cases = (
