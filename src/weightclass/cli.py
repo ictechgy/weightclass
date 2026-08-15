@@ -111,6 +111,7 @@ from .router import (
     RouteSelectionError,
     RoutingPolicy,
     native_route_fingerprint,
+    next_tier,
     select_route,
     select_tier_route,
     substitute_task,
@@ -435,6 +436,60 @@ def _resolve_packaged_policy_selection(
     ):
         raise InvalidInputError()
     return True, preset.removesuffix("-cost-focused")
+
+
+def _print_escalation_suggestion(
+    policy: RoutingPolicy,
+    tier: Tier,
+    source_vendor: str | None,
+) -> None:
+    """Name the route one tier up after a child failed, without running anything.
+
+    V1 은 자식을 하나만 포그라운드로 돌리고 재시도하거나 감독하지 않는다. 그
+    경계는 그대로 둔다. 여기서 하는 일은 실행이 아니라 지목이다.
+
+    지목만으로도 의미가 있는 이유는 이렇다. 싼 티어로 먼저 보내는 전략이
+    성립하려면 실패했을 때 다음 경로가 즉시 손에 있어야 하는데, 지금은 사용자가
+    다음 라우트를 직접 찾아 지문을 다시 검토하고 --usage-rework 를 기억해서
+    붙여야 했다. 그 마찰 때문에 아무도 싼 티어를 쓰지 않고, 그래서 라우터가
+    안전하게 가려고 위로 올려 보내며 비용이 샌다.
+
+    이것은 진단이 아니다. 자식이 실패한 원인이 티어라는 주장을 하지 않는다.
+    태스크가 애초에 불가능하거나 환경이 망가졌을 수도 있으며, 라우터는 자식의
+    출력을 읽지 않으므로 구분할 방법이 없다. 그 사실을 출력에 명시한다.
+    """
+    higher = next_tier(tier)
+    if higher is None:
+        print(
+            json.dumps({"escalation": None, "reason": "already_highest_tier"}),
+            file=sys.stderr,
+        )
+        return
+    try:
+        route = select_tier_route(policy.routes, higher, source_vendor, policy.allow_mixed_vendors)
+    except RouteSelectionError:
+        print(
+            json.dumps({"escalation": None, "reason": "no_route_for_higher_tier"}),
+            file=sys.stderr,
+        )
+        return
+    suggestion: dict[str, object] = {
+        "from_tier": tier,
+        "to_tier": higher,
+        "route": route.route_id,
+        "vendor": route.vendor,
+        "command": list(route.command),
+        "route_fingerprint": native_route_fingerprint(
+            route, policy.allow_mixed_vendors, policy.posture
+        ),
+        # 승급 실행은 이미 센 태스크의 재시도다. 이 플래그를 빠뜨리면 기준선이
+        # 부풀어 실패한 저비용 라우팅이 절감처럼 보인다.
+        "record_as_rework": True,
+        "failure_cause_diagnosed": False,
+    }
+    if uses_argv_task_delivery(route.command):
+        suggestion["task_delivery"] = "argv"
+    print(json.dumps({"escalation": suggestion}), file=sys.stderr)
 
 
 def _report_executor_result(completed_process: subprocess.CompletedProcess[bytes]) -> int:
@@ -840,6 +895,14 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "run":
             native.add_argument("--ack-route-fingerprint")
             native.add_argument("--confirm-endpoint-transition", action="store_true")
+            native.add_argument(
+                "--suggest-escalation",
+                action="store_true",
+                help=(
+                    "After a child exits non-zero, print the route one tier up and "
+                    "its fingerprint. Nothing is retried or started."
+                ),
+            )
             _add_usage_run_arguments(native)
 
     render = subcommands.add_parser(
@@ -1672,6 +1735,7 @@ def run_from_standard_input(
     usage_rework: bool = False,
     usage_escalation: bool = False,
     use_default_usage_store: bool = False,
+    suggest_escalation: bool = False,
 ) -> int:
     """Run a selected native command without a shell or output capture."""
     overrides = overrides or PresetOverrides()
@@ -1764,7 +1828,7 @@ def run_from_standard_input(
             )
         )
         task = read_task_from_standard_input()
-        _, _, route, policy = select_task_route(
+        selected_tier, _, route, policy = select_task_route(
             task, policy, effective_source_vendor, explicit_tier
         )
         if acknowledged_fingerprint is not None and acknowledged_fingerprint != (
@@ -1809,7 +1873,12 @@ def run_from_standard_input(
         # 진단으로 닫히도록 두 번째 방어선을 둔다.
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
-    return _report_executor_result(completed_process)
+    status = _report_executor_result(completed_process)
+    # 라우터가 스스로 진단한 실패(2~6)에는 승급을 제안하지 않는다. 자식이 실제로
+    # 돌아서 비영으로 끝난 경우에만 다음 티어를 지목하는 것이 의미를 갖는다.
+    if status == EXECUTOR_FAILED_EXIT_CODE and suggest_escalation:
+        _print_escalation_suggestion(policy, selected_tier, effective_source_vendor)
+    return status
 
 
 def _v2_task_and_tier(explicit_tier: Tier | None) -> tuple[ValidatedTaskV2, Tier]:
@@ -2311,6 +2380,7 @@ def main(
             arguments.usage_rework,
             arguments.usage_escalation,
             use_default_usage_store,
+            arguments.suggest_escalation,
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)

@@ -3,7 +3,7 @@
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from .classification import Tier
 
@@ -301,6 +301,16 @@ def native_route_fingerprint(
         separators=(",", ":"),
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+# 승급 사다리. 라우터는 스스로 올라가지 않는다. 어디로 올라갈 수 있는지만 안다.
+_TIER_LADDER: Final = {"low": "standard", "standard": "high"}
+
+
+def next_tier(tier: Tier) -> Tier | None:
+    """Return the tier one step above, or None at the top."""
+    higher = _TIER_LADDER.get(tier)
+    return cast(Tier, higher) if higher is not None else None
 
 
 def select_route(routes: tuple[Route, ...], request: RouteRequest) -> Route:
