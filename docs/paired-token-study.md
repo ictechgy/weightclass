@@ -270,14 +270,27 @@ picking the right tier matters.
 Phase 2 must not start until the task set contains tasks where the tier changes
 the outcome. Which tasks those are cannot be guessed; it has to be measured.
 
-For each candidate task, run **two invocations only** — the vendor CLI pinned to
-low effort, and pinned to high — and classify the result:
+Tier sensitivity has to be defined over **the step the routed arm will actually
+take**, not over the ends of the ladder. `A2` escalates exactly one tier. A task
+where pinned `low` fails and pinned `high` passes looks tier sensitive on a
+two-point test, but if the middle tier also fails, the routed arm fails,
+escalates one step, fails again, and reports `completed: false` — putting the
+study straight back into the contradiction the terminal rule was rewritten to
+remove.
 
-| low | high | classification |
+Classification is local and costs nothing, so the pair to test is knowable
+before any vendor is invoked:
+
+1. Run `wclass classify` on the candidate. No vendor is involved. Call the
+   result `T`.
+2. Run the candidate pinned at `T`, then pinned at the tier `T` escalates to.
+3. Classify the outcome:
+
+| at `T` | at the escalation tier | classification |
 | --- | --- | --- |
-| pass | pass | tier-insensitive; effort only moves cost |
+| pass | not needed | tier-insensitive; usable, but exercises no recovery |
 | fail | pass | **tier sensitive** — the tasks this study needs |
-| fail | fail | too hard for the fixture or badly specified; fix or drop |
+| fail | fail | drop; one escalation step cannot recover it, so it would fail the completion gate |
 | pass | fail | noise; re-run once, then drop |
 
 Cost is 2 invocations per candidate on one vendor. Calibrating 18 candidates is
@@ -393,6 +406,15 @@ Phase 1 pilot are done; what follows still needs a decision.
 - **A ratio bar against a large shared constant.** The 15% floor is a promotion
   bar, not the question. Report the point estimate, the interval, and the
   absolute difference whether the gate passes or fails.
+- **Collection agents can read the filesystem too.** The arms run real coding
+  agents. `codex exec --sandbox workspace-write` confines *writes* to the working
+  directory but not reads, and the Claude arms run with `acceptEdits`. Nothing in
+  this design stops a collection run from reading host files and sending them to
+  the vendor. The fixture is synthetic and lives outside this repository, so what
+  is at risk is the host, not the study's own data. Treat that as the reason to
+  run collection under a dedicated account or container if anything sensitive
+  shares the machine; this plan does not provide that isolation and should not be
+  read as if it did.
 - **Raters can read the filesystem.** The first rating batch was discarded after
   `codex exec --sandbox read-only` was confirmed able to print the study's own
   `meta.json`. Raters now run in an empty directory outside the tree, but
