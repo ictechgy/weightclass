@@ -498,6 +498,13 @@ class CheapTierRecallTests(unittest.TestCase):
             "이름을 바꾸고 있어",
             "코드를 정렬하고   계신가요",
             "이메일이 그대로 노출되고 있어",
+            # 격식체. 둘째 음절이 클래스 밖이면 배제가 실패해 평범한 서술이
+            # 명령 둘로 읽히고 저비용 규칙이 닫힌다.
+            "필드를 추가하고 싶습니다",
+            "이름을 바꾸고 있습니다",
+            "코드를 정렬하고 계실까요",
+            # 제외를 뜻하는 "빼고" 는 접속형과 구분되지 않아 어간에 넣지 않는다.
+            "테스트 빼고 다 고쳐줘",
         )
         for task in auxiliary:
             with self.subTest(task=task):
@@ -512,6 +519,8 @@ class CheapTierRecallTests(unittest.TestCase):
             "필드를 추가하고 테스트도 써줘",
             "이 주석 지우고 계산 로직도 고쳐줘",
             "이름 바꾸고 계정 검증도 추가해줘",
+            # "넣" 은 보조 용언을 만들지 않는 평범한 접속형이라 어간에 남는다.
+            "이 값 넣고 테스트도 써줘",
         )
         for task in conjunctions:
             with self.subTest(task=task):
