@@ -464,6 +464,50 @@ class CheapTierRecallTests(unittest.TestCase):
             with self.subTest(task=task):
                 self.assertEqual(classification.classify_task(task), "standard")
 
+    def test_an_ordinary_two_sentence_request_is_not_multiple_instructions(self) -> None:
+        """Breaks if the guard goes back to treating a full stop as a second request.
+
+        요청 프롬프트는 거의 전부 "무엇이 문제다. 이렇게 고쳐라" 형태다. 마침표를
+        지시 경계로 읽으면 저비용 규칙 전체가 사실상 꺼진다. blind 평가 36개
+        세트에서 예전 패턴이 34개에 걸렸고 대부분이 평범한 마침표였다.
+        """
+        cases = (
+            "with_retry retries immediately with no pause. Change the default delay to 0.05.",
+            "Worker count is unbounded. Add a version constant to config.py.",
+            "로그에 시각이 없어 언제인지 알 수가 없어. 로그 메시지 앞을 바꿔줘.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertFalse(classification._has_multiple_instructions(task.casefold()))
+
+    def test_a_korean_auxiliary_verb_is_not_a_second_instruction(self) -> None:
+        """Breaks if `~고` matches a continuation instead of a conjunction.
+
+        "노출되고 있어" 와 "확인하고 싶은데" 는 명령 두 개가 아니라 보조 용언이다.
+        """
+        for task in ("이메일이 그대로 노출되고 있어", "무엇이 있는지 확인하고 싶은데"):
+            with self.subTest(task=task):
+                self.assertFalse(classification._has_multiple_instructions(task))
+        self.assertTrue(classification._has_multiple_instructions("이 주석 지우고 로직도 고쳐줘"))
+
+    def test_a_mechanical_pair_must_apply_to_the_same_request(self) -> None:
+        """Breaks if the action and object can be matched anywhere in the text.
+
+        만장일치 high 였던 요청이 "파일 이름의 stem"(목적어)과 멀리 떨어진 "전부
+        지워져"(동사)로 low 가 되었다. 어느 쪽도 요청의 일부가 아니라 문제 서술
+        이었다.
+        """
+        distant = (
+            "keep 에는 보존할 issue id 를 넣는데 purge 는 그걸 파일 이름의 stem 과 그대로 "
+            "비교해. 그래서 i1.backup.txt 나 i1.draft.md 처럼 보존 대상 issue 에서 파생된 "
+            "파일은 stem 이 달라서 전부 지워져. 실제로 이렇게 백업본을 잃은 적이 있어. "
+            "keep 에 있는 issue 에 속한 파일은 파생 파일까지 남도록 고쳐줘."
+        )
+
+        self.assertEqual(classification.classify_task(distant), "standard")
+        self.assertEqual(classification.classify_task("이 로그 메시지 문구만 바꿔줘"), "low")
+
     def test_substituting_a_component_is_not_substituting_a_value(self) -> None:
         """Breaks if `from X to Y` alone can downgrade a component swap.
 

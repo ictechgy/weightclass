@@ -34,7 +34,7 @@ aggregate metrics. It includes a confusion matrix, high-tier recall,
 over-routing, Wilson 95% confidence intervals, and available language and
 category slices.
 
-The current checkout scores the local classifier at 22/40 on that fixture.
+The current checkout scores the local classifier at 21/40 on that fixture.
 The historical 15/40 and 17/40 local figures and the 33/40 recorded-vendor
 figure predate classification policy 3. The default command does not re-run or reproduce a
 vendor result.

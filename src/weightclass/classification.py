@@ -232,6 +232,10 @@ PATTERN_SCAN_OVERLAP: Final = 400
 # 목록을 붙여넣은 단순 작업이 최고 비용 경로로 갔다.
 HIGH_TASK_CHARACTERS: Final = 1_200
 LOW_TASK_CHARACTERS: Final = 240
+# 기계적 동사와 목적어가 같은 요청에 속한다고 보는 최대 거리. 정당한 사례는
+# "sort the imports", "이 로그 메시지 문구만 바꿔줘" 처럼 대체로 10자 안쪽이다.
+# 이 값을 크게 올리면 요청이 아니라 문제 서술에 걸리기 시작한다.
+MECHANICAL_PAIR_DISTANCE: Final = 30
 # UTF-8 한 문자는 최대 4바이트이므로, 이 상한은 문자 상한을 통과할 수 있는 모든
 # 입력을 포함한다. 바이트 상한이 문자 상한보다 먼저 걸려 거부하는 일은 없다.
 MAX_TASK_BYTES: Final = MAX_TASK_CHARACTERS * 4
@@ -327,10 +331,19 @@ _MULTI_INSTRUCTION_PATTERN: Final = re.compile(
     r",\s*(?:then|and|also)\b"
     r"|\band\s+(?:make|add|remove|delete|update|fix|rewrite|refactor|move|check)\b"
     r"|;"
-    r"|\.\s+\S"
-    r"|(?:하|되|지우|바꾸|고치|만들|넣|빼|옮기|없애)고\s"
+    r"|(?:지우|바꾸|고치|만들|옮기|없애|추가하|제거하|정렬하)고\s+(?!싶|있|계|나서)"
     r"|그리고|그다음|그 다음"
 )
+# 여기서 뺀 두 가지를 다시 넣지 말 것.
+#
+# `\.\s+\S` 는 지시가 둘인 요청이 아니라 문장이 둘인 요청을 잡는다. 실제 태스크
+# 프롬프트는 거의 전부 "무엇이 문제다. 이렇게 고쳐라" 형태라, 이 대안 하나가
+# 저비용 규칙 전체를 사실상 꺼버렸다. blind 평가 36개 세트에서 이 패턴이 34개에
+# 걸렸고 그중 대부분이 평범한 마침표였다.
+#
+# 한국어 `~고 ` 도 조건 없이 두면 접속이 아니라 보조 용언에 걸린다. "노출되고
+# 있어", "확인하고 싶은데" 가 명령 두 개로 읽혔다. 그래서 어간을 명시적인
+# 동작 동사로 좁히고 뒤따르는 보조 용언을 배제한다.
 
 _LOW_ACTION_ASCII_PATTERN: Final = _compile_ascii_signals(LOW_MECHANICAL_ACTIONS)
 _LOW_ACTION_NON_ASCII_SIGNALS: Final = _select_non_ascii_signals(LOW_MECHANICAL_ACTIONS)
@@ -464,16 +477,41 @@ def _has_signal(
     return any(signal in task for signal in non_ascii_signals)
 
 
-def _has_mechanical_pair(task: str) -> bool:
-    """Report whether a mechanical action and a narrow mechanical object co-occur.
+def _signal_spans(
+    task: str,
+    ascii_pattern: re.Pattern[str],
+    non_ascii_signals: frozenset[str],
+) -> list[tuple[int, int]]:
+    """Return where each signal of one group occurs."""
+    spans = [match.span() for match in ascii_pattern.finditer(task)]
+    for signal in non_ascii_signals:
+        start = task.find(signal)
+        while start != -1:
+            spans.append((start, start + len(signal)))
+            start = task.find(signal, start + 1)
+    return spans
 
-    동사와 목적어의 위치 관계는 보지 않는다. 한국어는 어순이 자유롭고, 위치까지
-    검사하려면 태스크 본문을 잘라 들고 있어야 해서 전송 계약과 충돌한다. 대신
-    길이 상한과 상위 시그널 우선순위가 오탐의 범위를 닫는다.
+
+def _has_mechanical_pair(task: str) -> bool:
+    """Report whether a mechanical action actually applies to a mechanical object.
+
+    동사와 목적어가 함께 나오기만 하면 되는 것이 아니라 서로 가까워야 한다.
+    거리를 보지 않으면 요청이 아니라 문제 서술에 걸린다. 실제로 "purge 는 그걸
+    파일 이름의 stem 과 비교해서 ... 전부 지워져. 파생 파일까지 남도록 고쳐줘"
+    라는 만장일치 high 태스크가 "이름"(목적어)과 "지워"(동사)로 low 가 되었다.
+    둘은 70자 넘게 떨어져 있었고 어느 쪽도 요청의 일부가 아니었다.
+
+    한국어는 어순이 자유로워 동사가 앞뒤 어디에 오는지는 보지 않고 거리만 본다.
     """
-    return _has_signal(
-        task, _LOW_ACTION_ASCII_PATTERN, _LOW_ACTION_NON_ASCII_SIGNALS
-    ) and _has_signal(task, _LOW_OBJECT_ASCII_PATTERN, _LOW_OBJECT_NON_ASCII_SIGNALS)
+    actions = _signal_spans(task, _LOW_ACTION_ASCII_PATTERN, _LOW_ACTION_NON_ASCII_SIGNALS)
+    if not actions:
+        return False
+    objects = _signal_spans(task, _LOW_OBJECT_ASCII_PATTERN, _LOW_OBJECT_NON_ASCII_SIGNALS)
+    return any(
+        max(action[0], obj[0]) - min(action[1], obj[1]) <= MECHANICAL_PAIR_DISTANCE
+        for action in actions
+        for obj in objects
+    )
 
 
 def _has_multiple_instructions(task: str) -> bool:
