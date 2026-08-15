@@ -2,6 +2,7 @@
 
 import re
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Final, Literal
 
@@ -219,9 +220,13 @@ LOW_MECHANICAL_OBJECTS: Final = frozenset(
 )
 
 MAX_TASK_CHARACTERS: Final = 20_000
-# 길이 상한. 난이도 판정이 아니라 되추적 비용의 상한으로만 쓴다. 아래
-# classify_task_with_reason 의 설명을 참조할 것.
+# 결과 패턴에 한 번에 넘기는 최대 길이. 난이도 판정이 아니라 되추적 비용의
+# 상한으로만 쓴다. 아래 classify_task_with_reason 의 설명을 참조할 것.
 PATTERN_SCAN_CHARACTERS: Final = 1_200
+# 창을 겹치는 폭. 결과 패턴이 걸치는 최대 거리보다 넉넉해야 한다. 가장 긴 패턴이
+# 유계 와일드카드 80 + 32 자에 앞뒤 단어를 더한 정도이고, 중복 작업 규칙은 매치
+# 앞뒤로 160 자를 더 본다. 이 값이 그보다 작으면 창 경계에 걸친 서술이 사라진다.
+PATTERN_SCAN_OVERLAP: Final = 400
 # 이 길이를 넘으면 low 자격만 잃는다. 길이는 "기계적이지 않다"의 증거는 되지만
 # "위험하다"의 증거는 아니다. 예전 정책은 이 값을 high 바닥으로 썼고, 그래서 파일
 # 목록을 붙여넣은 단순 작업이 최고 비용 경로로 갔다.
@@ -400,7 +405,6 @@ def classify_task_with_reason(task: str) -> ClassificationDecision:
     되추적 상한 회귀 테스트가 이 계약을 고정한다.
     """
     normalized_task = validate_task(task)
-    scanned_task = normalized_task[:PATTERN_SCAN_CHARACTERS]
     if _has_signal(
         normalized_task,
         _HIGH_RISK_FLOOR_ASCII_PATTERN,
@@ -409,7 +413,7 @@ def classify_task_with_reason(task: str) -> ClassificationDecision:
         return ClassificationDecision("high", "high.risk_floor")
     if _has_signal(normalized_task, _HIGH_ASCII_PATTERN, _HIGH_NON_ASCII_SIGNALS):
         return ClassificationDecision("high", "high.complexity_signal")
-    if _has_high_risk_outcome(scanned_task):
+    if _has_high_risk_outcome(normalized_task):
         return ClassificationDecision("high", "high.harmful_outcome")
     if len(normalized_task) <= LOW_TASK_CHARACTERS:
         if _has_signal(normalized_task, _LOW_ASCII_PATTERN, _LOW_NON_ASCII_SIGNALS):
@@ -459,10 +463,28 @@ def _has_low_substitution(task: str) -> bool:
     return any(pattern.search(task) for pattern in _LOW_SUBSTITUTION_PATTERNS)
 
 
+def _scan_windows(task: str) -> Iterator[str]:
+    """Yield overlapping bounded windows covering the whole task.
+
+    결과 패턴은 유계 와일드카드를 중첩하므로 한 번에 넘기는 길이를 닫아야 한다.
+    그렇다고 앞부분만 보면 안 된다. 길이가 더 이상 티어를 올리지 않게 된 뒤로는,
+    앞을 채워 넣는 것만으로 뒤에 있는 유해 결과 서술을 확정적으로 숨길 수 있기
+    때문이다. 창을 겹쳐 전체를 훑으면 창당 비용이 유계이므로 총비용은 길이에
+    선형이고, 경계에 걸친 서술도 사라지지 않는다.
+    """
+    step = PATTERN_SCAN_CHARACTERS - PATTERN_SCAN_OVERLAP
+    for start in range(0, max(len(task), 1), step):
+        yield task[start : start + PATTERN_SCAN_CHARACTERS]
+        if start + PATTERN_SCAN_CHARACTERS >= len(task):
+            return
+
+
 def _has_high_risk_outcome(task: str) -> bool:
     """Report whether a narrowly defined costly outcome is described."""
-    return any(pattern.search(task) for pattern in _HIGH_RISK_OUTCOME_PATTERNS) or (
-        _has_duplicate_work_outcome(task)
+    return any(
+        any(pattern.search(window) for pattern in _HIGH_RISK_OUTCOME_PATTERNS)
+        or _has_duplicate_work_outcome(window)
+        for window in _scan_windows(task)
     )
 
 

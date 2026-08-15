@@ -1,7 +1,6 @@
 import time
 import unittest
 from dataclasses import asdict
-from unittest import mock
 
 import weightclass.classification as classification
 from weightclass.classification import (
@@ -463,22 +462,66 @@ class CheapTierRecallTests(unittest.TestCase):
 
 class BacktrackingBoundTests(unittest.TestCase):
     def test_nested_wildcard_patterns_never_see_more_than_the_scan_bound(self) -> None:
-        """Breaks if the bounded-wildcard patterns are exposed to 20,000 characters.
+        """Breaks if the bounded-wildcard patterns are exposed to 20,000 characters at once.
 
-        되추적 상한을 길이 바닥이 아니라 입력 슬라이스가 맡는다. 길이 바닥은 이제
-        티어를 올리지 않으므로, 이 계약이 깨지면 적대적 입력 하나가 20,000자에 대해
-        준-2차 되추적을 태울 수 있다.
+        되추적 상한을 길이 바닥이 아니라 창 크기가 맡는다. 길이 바닥은 이제 티어를
+        올리지 않으므로, 이 계약이 깨지면 적대적 입력 하나가 20,000자에 대해 준-2차
+        되추적을 태울 수 있다.
         """
-        seen: list[int] = []
+        windows = list(classification._scan_windows("x" * MAX_TASK_CHARACTERS))
 
-        def record(task: str) -> bool:
-            seen.append(len(task))
-            return False
+        self.assertTrue(windows)
+        self.assertLessEqual(
+            max(len(window) for window in windows),
+            classification.PATTERN_SCAN_CHARACTERS,
+        )
 
-        with mock.patch.object(classification, "_has_high_risk_outcome", side_effect=record):
-            classification.classify_task_with_reason("x" * MAX_TASK_CHARACTERS)
+    def test_scan_windows_cover_the_whole_task_with_overlap(self) -> None:
+        """Breaks if windowing leaves a gap a harmful outcome could hide in.
 
-        self.assertEqual(seen, [classification.PATTERN_SCAN_CHARACTERS])
+        창이 겹치지 않으면 경계에 걸친 서술이 어느 창에도 온전히 들어가지 않는다.
+        """
+        task = "".join(chr(ord("a") + index % 26) for index in range(MAX_TASK_CHARACTERS))
+        windows = list(classification._scan_windows(task))
+
+        self.assertEqual(windows[0], task[: classification.PATTERN_SCAN_CHARACTERS])
+        self.assertTrue(task.endswith(windows[-1]))
+        step = classification.PATTERN_SCAN_CHARACTERS - classification.PATTERN_SCAN_OVERLAP
+        self.assertGreater(classification.PATTERN_SCAN_OVERLAP, 0)
+        for earlier, later in zip(windows, windows[1:], strict=False):
+            self.assertGreaterEqual(len(earlier) - step, classification.PATTERN_SCAN_OVERLAP - 1)
+            self.assertTrue(earlier[step:] and later.startswith(earlier[step:][: len(later)]))
+
+    def test_padding_cannot_hide_a_harmful_outcome(self) -> None:
+        """Breaks if leading filler can deterministically downgrade a costly outcome.
+
+        길이 바닥이 티어를 올리던 동안에는 이 구멍이 가려져 있었다. 길이가 더 이상
+        올리지 않게 된 뒤로는, 앞을 채우는 것만으로 뒤에 있는 유해 결과 서술을
+        숨겨 최고 위험 작업을 standard 로 내릴 수 있다.
+        """
+        outcome = "an account is charged twice after checkout."
+        korean = "잔액이 가끔 음수로 내려가요."
+
+        for filler in (0, 1_300, MAX_TASK_CHARACTERS - len(outcome) - 1):
+            with self.subTest(filler=filler):
+                self.assertEqual(classify_task("x" * filler + " " + outcome), "high")
+        self.assertEqual(classify_task("가" * 3_000 + " " + korean), "high")
+
+    def test_patterns_stay_cheap_at_the_maximum_accepted_input(self) -> None:
+        """Breaks if windowing the whole task makes hostile input superlinear.
+
+        결과 패턴이 이제 앞부분이 아니라 전체를 훑는다. 창당 비용이 유계라는 주장이
+        실제 상한 길이에서 검증되지 않으면, 상한을 올리거나 창 크기를 키울 때 비용
+        폭발을 놓친다.
+        """
+        for bait in _BACKTRACKING_BAIT:
+            with self.subTest(bait=bait):
+                hostile = (bait * (MAX_TASK_CHARACTERS // len(bait) + 1))[:MAX_TASK_CHARACTERS]
+                started = time.perf_counter()
+                classify_task(hostile)
+                elapsed = time.perf_counter() - started
+
+                self.assertLess(elapsed, 5.0)
 
     def test_patterns_stay_cheap_at_the_longest_input_they_can_reach(self) -> None:
         """Breaks if backtracking becomes superlinear just below the length floor."""
