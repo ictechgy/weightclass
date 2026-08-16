@@ -337,8 +337,10 @@ consistent; or the prompt describes a symptom and the cause has to be found.
 
 ### Calibration result: the stopping condition fired
 
-Calibration ran on 18 candidates — the 9 rated `high` by the blind raters plus 9
-rated `standard` — using 23 invocations and 981,613 tokens. Unlike the other
+Calibration ran on 18 candidates, using 23 invocations and 981,613 tokens. The
+candidates were drawn from the 30 tasks not already used in the Phase 1 pilot and
+weighted to the hard end: 9 of the 11 tasks the blind raters rated `high` — the
+other two were pilot tasks — plus 9 rated `standard`. Unlike the other
 phases, that count is not a product: the second run is conditional. Thirteen
 tasks passed at the routed tier and stopped after one run; two routed to `high`
 took the mandatory extra run a tier down; three failed and took an escalation
@@ -384,8 +386,10 @@ passed a tier down as well.** (`A1` is pinned to the vendor effort `medium`,
 which is what the `standard` tier maps to; the tier name is used here for
 consistency.) The two tasks where the router spent the most are the two where the
 cheaper tier is confirmed sufficient.
-Of the nine tasks the blind raters judged `high`, seven were routed `standard`;
-five of those passed there and two are the concurrency failures discussed above.
+
+Of the nine calibrated tasks the blind raters judged `high`, seven were routed
+`standard`; five of those passed there and two are the concurrency failures
+discussed above.
 So even human-rated difficulty did not predict a need for effort.
 
 Combined with the pilot, where a pinned `medium` beat routing on both vendors,
@@ -425,8 +429,8 @@ here.
 Phase 2's sizing below is retained as a record of the decision that was prepared,
 not as a plan that is still live.
 
-Phase 2's size is now a real decision rather than a default, because the pilot
-measured what each run costs. Codex averaged roughly 35k tokens per invocation
+Phase 2's size was to have been a real decision rather than a default, because
+the pilot had measured what each run costs. Codex averaged roughly 35k tokens per invocation
 and Claude roughly 500k, so three arms over 36 tasks on two vendors is about
 216 invocations and on the order of 58M tokens, dominated by Claude.
 
@@ -438,14 +442,14 @@ Three options, in increasing cost:
 | **P + control** | `A0`, `A1`, `A2` | 216 | P, plus comparisons 1 and 2 at full size |
 | **P, Claude only** | `A1`, `A2` | 72 | P where the pilot found signal; Codex stays descriptive |
 
-The pilot already answers comparisons 1 and 2 well enough to act on, and both
-pointed the same way on two vendors. Re-running them at 36 pairs buys precision
-on a question that is no longer in doubt. **P-only is the recommended option**,
-with the pilot cited for the control rather than repeated.
+The pilot already answered comparisons 1 and 2 well enough to act on, and both
+pointed the same way on two vendors. Re-running them at 36 pairs would have
+bought precision on a question that was no longer in doubt, so **P-only was the
+recommended option**, with the pilot cited for the control rather than repeated.
 
-Codex is worth keeping despite its flat result: its variance was 25–32%, so a
-null there is itself informative, and dropping the vendor where routing looked
-worst would bias the study.
+Codex would have been kept despite its flat result: its variance was 25–32%, so
+a null there is itself informative, and dropping the vendor where routing looked
+worst would have biased the study.
 
 ## Provenance checklist
 
