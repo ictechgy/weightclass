@@ -93,12 +93,10 @@ def main() -> int:
     # 무관하다. p 에 섞으면 도구 고장이 "싼 모델이 나쁘다" 로 둔갑한다.
     # attempt 는 그런 경우 error 를 남기되 "made no change" 만은 진짜 결과다.
     def is_infrastructure_failure(record: dict[str, object]) -> bool:
-        # 어느 쪽 시도든 도구가 고장났으면 그 기록으로 p 를 세지 않는다.
-        # 승급이 클론 실패로 죽은 기록을 "둘 다 실패" 로 세면, 도구 고장이
-        # 싼 경로에 대한 판정으로 둔갑한다.
-        expensive = record.get("expensive")
-        if isinstance(expensive, dict) and expensive.get("failure_kind") == "infrastructure":
-            return True
+        # p 는 **싼 경로** 의 실패율이므로 싼 경로만 본다. 승급이 도구 고장
+        # 으로 죽었다고 해서 그 앞의 싼 경로 실패까지 버리면, 관측된 진짜
+        # 실패가 사라져 p 가 실제보다 낮게 나온다. 승급 쪽 고장은 아래
+        # "둘 다 실패" 집계에서만 제외한다.
         cheap = record["cheap"]
         if not isinstance(cheap, dict):
             # 여기 오면 안 되는 모양이다. 모양 검사를 통과한 기록만 오지만,
@@ -135,11 +133,21 @@ def main() -> int:
         return 1
     cheap_passed = sum(1 for r in usable if r["cheap"]["accepted"])
     failed = total - cheap_passed
-    both_failed = sum(
-        1
-        for r in usable
-        if not r["cheap"]["accepted"] and (r["expensive"] is None or not r["expensive"]["accepted"])
-    )
+
+    def both_routes_failed(record: dict[str, object]) -> bool:
+        cheap = record["cheap"]
+        if not isinstance(cheap, dict) or cheap["accepted"]:
+            return False
+        expensive = record["expensive"]
+        if not isinstance(expensive, dict):
+            # 승급이 아예 기록되지 않았다. 둘 다 실패했다고 셀 근거가 없다.
+            return False
+        if expensive.get("failure_kind") == "infrastructure":
+            # 승급이 도구 고장으로 죽은 것은 비싼 경로에 대한 판정이 아니다.
+            return False
+        return not expensive["accepted"]
+
+    both_failed = sum(1 for r in usable if both_routes_failed(r))
 
     p = failed / total
     lo, hi = wilson(failed, total)

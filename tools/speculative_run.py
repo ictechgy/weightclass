@@ -469,6 +469,10 @@ def tracked_files_unchanged(handover: Path) -> bool:
         capture_output=True,
         text=True,
         timeout=GIT_TIMEOUT,
+        # 다른 git 호출과 같은 환경을 쓴다. 이 트리에는 자식이 심어 온
+        # .gitattributes 가 있고, 전역 config 의 filter 와 짝을 이루면
+        # 여기서도 실행된다.
+        env=_GIT_ENV,
     )
     return result.returncode == 0
 
@@ -496,8 +500,11 @@ def make_patch(handover: Path) -> tuple[bytes, list[str]]:
     # 인계 트리를 만들 때 최상위 .git 만 남기므로, 중첩된 .git 은 자식이
     # 만든 것이고 스캐폴딩과 같은 취급으로 걷어낸다.
     for nested in sorted(handover.rglob(".git")):
-        if nested.parent != handover and not nested.is_symlink():
-            shutil.rmtree(nested) if nested.is_dir() else nested.unlink()
+        # 바깥쪽을 먼저 지우면 안쪽 경로가 이미 사라진다. rglob 이 미리
+        # 만들어 둔 목록이라 그 경로가 다시 검사되므로 존재를 확인한다.
+        if nested.parent == handover or nested.is_symlink() or not nested.exists():
+            continue
+        shutil.rmtree(nested) if nested.is_dir() else nested.unlink()
     run_git(["add", "-A"], handover)
     # `git clean -n` 은 "Would remove <path>" 라는 로케일 의존 문장을 낸다.
     # ls-files 는 경로만 NUL 로 구분해 주므로 파싱할 것이 없다.
