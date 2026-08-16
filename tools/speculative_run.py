@@ -77,6 +77,22 @@ class VerifyResult(TypedDict):
     seconds: float
 
 
+class Usage(TypedDict, total=False):
+    """What one invocation consumed, as far as the vendor will say.
+
+    `cost_usd` is the number that matters and the only one comparable across
+    vendors. Claude reports it directly. Codex reports none, so it has to be
+    computed from token counts and a price table the caller supplies — which is
+    why `--prices` exists. Token counts are **not** comparable between vendors:
+    each counts caching differently.
+    """
+
+    cost_usd: float
+    total_tokens: int
+    breakdown: dict[str, int]
+    source: str
+
+
 class Attempt(TypedDict, total=False):
     """One route's clone-run-verify cycle. `total=False` because a step that
     raises leaves the later keys unset, and the caller checks `verify` first."""
@@ -281,6 +297,7 @@ def run_child(
     task: str,
     rates: dict[str, float] | None = None,
     allowed_env: frozenset[str] | None = None,
+    home: Path | None = None,
 ) -> ChildResult:
     """One vendor invocation. The task goes in on stdin and never into the log.
 
@@ -295,6 +312,14 @@ def run_child(
     them see `AWS_SECRET_ACCESS_KEY`. A task is untrusted input, and an agent
     with shell access can read whatever its environment holds.
 
+    **It narrows variables, not the filesystem.** `HOME` survives, because the
+    CLI finds its own credentials under it — blank it and nothing authenticates.
+    So `~/.aws/credentials` and every other dotfile stay reachable no matter how
+    short the variable list is. `--child-home` points `HOME` somewhere else for
+    anyone willing to stage the vendor's auth directory there; short of that,
+    real isolation means a container, and this script does not pretend to
+    provide one.
+
     The verifier is a different trust level again and is always scrubbed. It
     runs code the *agent wrote*, which nobody chose and nobody reviewed.
     """
@@ -307,6 +332,9 @@ def run_child(
         if allowed_env is not None
         else None
     )
+    if home is not None:
+        environment = dict(environment if environment is not None else os.environ)
+        environment["HOME"] = str(home)
     try:
         with subprocess.Popen(
             command,
@@ -326,9 +354,10 @@ def run_child(
                 try:
                     # 손자가 setsid 로 그룹을 빠져나갔거나 kill 이 막히면
                     # 파이프를 계속 붙들 수 있다. 무한정 기다리지 않는다.
-                    child.communicate(timeout=30)
+                    stdout, stderr = child.communicate(timeout=30)
                 except subprocess.TimeoutExpired:
                     child.kill()
+                    stdout, stderr = "", ""
                 # 타임아웃 여부만 들고 나가 반환은 블록 밖에서 한다. 반환
                 # 지점을 한 곳에 모으기 위한 것이지 __exit__ 을 피하려는 것이
                 # 아니다 — with 안에서 return 해도 __exit__ 는 똑같이 실행된다.
@@ -339,12 +368,15 @@ def run_child(
     except OSError as error:
         raise RunFailure(f"could not start the route: {error}") from error
     if timed_out:
+        # 시간이 다 됐어도 토큰은 이미 쓰였다. 부분 출력에서 건질 수 있으면
+        # 건진다 — 비용에서 빼면 싼 경로가 실제보다 좋아 보인다.
+        partial = extract_usage(stdout, stderr)
         return {
             "exit_code": None,
             "timed_out": True,
             "seconds": CHILD_TIMEOUT,
-            "tokens": None,
-            "usage": None,
+            "tokens": partial.get("total_tokens") if partial else None,
+            "usage": dict(partial) if partial else None,
         }
     usage = extract_usage(stdout, stderr)
     if usage is not None and "cost_usd" not in usage and rates:
@@ -361,22 +393,6 @@ def run_child(
         "tokens": usage.get("total_tokens") if usage else None,
         "usage": dict(usage) if usage else None,
     }
-
-
-class Usage(TypedDict, total=False):
-    """What one invocation consumed, as far as the vendor will say.
-
-    `cost_usd` is the number that matters and the only one comparable across
-    vendors. Claude reports it directly. Codex reports none, so it has to be
-    computed from token counts and a price table the caller supplies — which is
-    why `--prices` exists. Token counts are **not** comparable between vendors:
-    each counts caching differently.
-    """
-
-    cost_usd: float
-    total_tokens: int
-    breakdown: dict[str, int]
-    source: str
 
 
 def _claude_usage(stdout: str) -> Usage | None:
@@ -848,6 +864,7 @@ def attempt(
     scaffolding: frozenset[str],
     rates: dict[str, float] | None,
     allowed_env: frozenset[str] | None,
+    child_home: Path | None,
 ) -> Attempt:
     """Clone, run one route, verify. The workspace survives only a pass."""
     # 작업공간은 산출물 디렉터리 바로 아래가 아니라 그 안의 .work 에 만든다.
@@ -875,7 +892,7 @@ def attempt(
     build_scaffolding: list[str] = []
     try:
         clone_at(repo, commit, workspace)
-        record["child"] = run_child(command, workspace, task, rates, allowed_env)
+        record["child"] = run_child(command, workspace, task, rates, allowed_env, child_home)
         # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
         # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
         # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
@@ -992,6 +1009,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--child-home",
+        type=Path,
+        help=(
+            "HOME for the vendor child. --child-env narrows variables but not the "
+            "filesystem, and the CLI reads its credentials from HOME, so dotfiles stay "
+            "reachable unless you point it elsewhere and stage the vendor's auth there."
+        ),
+    )
+    parser.add_argument(
         "--prices",
         type=Path,
         help=(
@@ -1090,8 +1116,16 @@ def main() -> int:
     # 하나라도 주어지면 그 목록 + PATH/HOME 만 남긴다. 아무것도 안 주면 기존대로
     # 전부 물려준다 — 설정 없이도 동작해야 하기 때문이다.
     allowed_env = frozenset({*arguments.child_env, "PATH", "HOME"}) if arguments.child_env else None
+    child_home = arguments.child_home.expanduser().resolve() if arguments.child_home else None
+    if child_home is not None and not child_home.is_dir():
+        parser.error(f"--child-home is not a directory: {child_home}")
     if allowed_env is not None:
         print(f"자식 환경 제한: {len(allowed_env)}개 변수만 전달")
+        if child_home is None:
+            print(
+                "  주의: HOME 은 그대로다. 변수만 좁혔을 뿐 ~/.aws/credentials 같은"
+                " 파일은 여전히 읽힌다. --child-home 이나 컨테이너가 필요하다."
+            )
 
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)
     cheap = attempt(
@@ -1106,6 +1140,7 @@ def main() -> int:
         scaffolding=frozenset(scaffolding),
         rates=rates.get("cheap"),
         allowed_env=allowed_env,
+        child_home=child_home,
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
@@ -1145,6 +1180,7 @@ def main() -> int:
             scaffolding=frozenset(scaffolding),
             rates=rates.get("expensive"),
             allowed_env=allowed_env,
+            child_home=child_home,
         )
         record["expensive"] = expensive
         reason = (

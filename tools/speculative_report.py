@@ -208,7 +208,7 @@ def main() -> int:
         value = usage.get("cost_usd")
         return float(value) if isinstance(value, (int, float)) else None
 
-    paired = []
+    paired: list[float] = []
     for r in usable:
         cheap_cost = cost_of(r["cheap"])
         expensive_cost = cost_of(r.get("expensive"))
@@ -221,6 +221,21 @@ def main() -> int:
     # 한 건으로 c 를 바꾸면 그 한 과제의 특성이 전체 결론을 정한다. 중앙값이
     # 의미를 가지려면 최소 세 건은 있어야 한다.
     MINIMUM_PAIRED = 3
+    multiturn = sum(
+        1
+        for r in usable
+        for arm in ("cheap", "expensive")
+        if isinstance(r.get(arm), dict)
+        and isinstance(r[arm].get("child"), dict)
+        and isinstance(r[arm]["child"].get("usage"), dict)
+        and "turn" in str(r[arm]["child"]["usage"].get("source", ""))
+    )
+    if multiturn:
+        print(
+            f"\n주의: 여러 턴을 돈 실행 {multiturn}건. turn.completed 가 턴별 증분인지"
+            " 누적인지 확인되지 않아 그 실행의 토큰은 과대 집계일 수 있다."
+        )
+
     if len(paired) >= MINIMUM_PAIRED:
         measured = statistics.median(paired)
         print(
