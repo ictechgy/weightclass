@@ -213,7 +213,18 @@ def clone_at(repo: Path, commit: str, destination: Path) -> None:
 
 
 def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
-    """One vendor invocation. The task goes in on stdin and never into the log."""
+    """One vendor invocation. The task goes in on stdin and never into the log.
+
+    Unlike `run_verify`, this inherits the full environment on purpose. The
+    child here **is** the agent CLI the user chose, and it needs its own
+    credentials — scrubbing `HOME` would leave it unable to authenticate and
+    the script unable to do anything at all. Running it exposes exactly what
+    running `codex exec` by hand already exposes; this script adds nothing.
+
+    The verifier is a different trust level and is treated differently. It runs
+    code the *agent wrote*, which nobody chose and nobody reviewed, so it gets a
+    scrubbed environment and an empty `HOME`.
+    """
     started = time.monotonic()
     # 자체 프로세스 그룹에서 돌린다. subprocess 의 타임아웃은 직계 자식만
     # 죽이므로, 벤더 CLI 가 띄운 손자들은 "타임아웃" 을 보고한 뒤에도 계속
@@ -407,7 +418,14 @@ def build_handover_tree(
         if entry.is_symlink() or entry.is_file():
             shutil.copy2(entry, target, follow_symlinks=False)
         elif entry.is_dir():
-            shutil.copytree(entry, target, symlinks=True)
+            # 하위 디렉터리 안의 스캐폴딩도 제외한다. 최상위만 보면
+            # services/api/.serena 같은 것이 통째로 실려 온다.
+            shutil.copytree(
+                entry,
+                target,
+                symlinks=True,
+                ignore=lambda _directory, names: [n for n in names if n in scaffolding],
+            )
     return excluded
 
 
@@ -748,7 +766,11 @@ def main() -> int:
         parser.error(f"required unless --prune: {', '.join(missing)}")
 
     for name, raw in (("--cheap", arguments.cheap), ("--expensive", arguments.expensive)):
-        if not shlex.split(raw):
+        try:
+            parsed = shlex.split(raw)
+        except ValueError as error:
+            parser.error(f"{name} is not a parseable command: {error}")
+        if not parsed:
             parser.error(f"{name} is empty; it must name an executable command")
 
     repo = arguments.repo.expanduser().resolve()

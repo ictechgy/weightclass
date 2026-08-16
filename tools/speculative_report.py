@@ -90,6 +90,12 @@ def main() -> int:
     # 무관하다. p 에 섞으면 도구 고장이 "싼 모델이 나쁘다" 로 둔갑한다.
     # attempt 는 그런 경우 error 를 남기되 "made no change" 만은 진짜 결과다.
     def is_infrastructure_failure(record: dict[str, object]) -> bool:
+        # 어느 쪽 시도든 도구가 고장났으면 그 기록으로 p 를 세지 않는다.
+        # 승급이 클론 실패로 죽은 기록을 "둘 다 실패" 로 세면, 도구 고장이
+        # 싼 경로에 대한 판정으로 둔갑한다.
+        expensive = record.get("expensive")
+        if isinstance(expensive, dict) and expensive.get("failure_kind") == "infrastructure":
+            return True
         cheap = record["cheap"]
         if not isinstance(cheap, dict):
             # assert 로 좁히면 python -O 에서 사라진다. 이 술어는 손상 줄

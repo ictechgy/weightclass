@@ -81,7 +81,7 @@ gets thrown away.
 2. run the cheap route's reviewed command there         (child 1)
 3. rebuild that work in a second clone the child never touched:
    copy its files, leave its .git behind, keep symlinks as links
-4. stage, emit the patch, delete whatever .gitignore kept out of it
+4. stage, drop whatever .gitignore kept out of the patch, then emit it
 5. run the reviewed verify command on that tree         (child 2, no tokens)
    pass -> hand over the patch + base commit, stop
    fail -> delete both trees
