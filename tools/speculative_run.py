@@ -531,8 +531,19 @@ def write_registry(registry: Path, entries: list[str]) -> None:
     """
     body = "".join(f"{path}\n" for path in entries)
     temporary = registry.with_suffix(f".{os.getpid()}.tmp")
-    temporary.write_text(body, encoding="utf-8")
+    # 내용과 디렉터리 엔트리를 모두 내려쓴다. replace 는 원자적이지만, 그
+    # 원자성은 캐시에 대한 것이라 전원이 끊기면 이름만 바뀌고 내용은 비어
+    # 있을 수 있다. 크래시를 견디는 것이 이 파일의 유일한 목적이다.
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(body)
+        handle.flush()
+        os.fsync(handle.fileno())
     temporary.replace(registry)
+    directory = os.open(registry.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def register(registry: Path, workspace: Path, add: bool) -> None:

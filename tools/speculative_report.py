@@ -65,7 +65,10 @@ def main() -> int:
 
     records = []
     damaged = 0
-    for line in log_path.read_text(encoding="utf-8").splitlines():
+    # 바이트로 읽어 줄 단위로 디코딩한다. 파일 전체를 엄격하게 디코딩하면
+    # 잘린 멀티바이트 한 곳 때문에 손상 줄을 견딘다는 약속이 무의미해진다.
+    for raw in log_path.read_bytes().splitlines():
+        line = raw.decode("utf-8", "replace")
         if not line.strip():
             continue
         try:
