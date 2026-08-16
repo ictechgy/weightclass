@@ -42,11 +42,29 @@ calibration round to rule out.
 
 Read that as a bound on the evidence, not a proof about all work: one fixture,
 one vendor (Codex) for calibration, and small, fully specified maintenance tasks.
-The comparison is also lopsided. Calibration recovers by escalating *upward*, so
-what it rules out is routing up paying for itself; the only downward runs were
-the `A1` coverage the design mandates for `high`-routed tasks, which is how those
-two came to be tried a tier lower. Nothing was ever run at `low`, so the cheap
-end is untested rather than vindicated.
+The study itself was lopsided: calibration recovers by escalating *upward*, so
+what it ruled out is routing up paying for itself.
+
+The cheap direction was measured separately afterwards, and it is the more
+useful result. The 15 tasks that had passed at their routed tier — 13 routed
+`standard`, 2 routed `high`, so every one of them above `low` — were re-run
+pinned at `low`. **All 15 passed.** None hit a critical failure either, meaning
+none deleted a source file, wrote a secret, or left the fixture's own test suite
+red. One task the router had sent to `high` for 77,170 tokens passed at `low` on
+31,727. For all 15 of these, then, the tier the classifier picked was higher
+than the acceptance test required — which is the strongest form the claim can
+take, since that test is the only definition of "enough" this measurement has.
+
+Token savings point the same way without being established. Across the same 15
+tasks `low` used 506,529 tokens against the routed tiers' 632,983, or 20.0%
+fewer. That aggregate is dominated by the largest tasks, though; the number
+that generalizes is the per-task mean saving of 14.1%, whose **95% interval,
+[−1.0%, +29.1%], includes zero.** Four of the 15 cost *more* at `low`.
+
+Do not read that as "route everything cheaply." Those 15 were selected for
+having already passed, and a pass/fail acceptance test cannot detect work that
+meets the contract while being worse. What it does show is where the slack is:
+in how the tier is chosen, not in the routing mechanism.
 
 It does not show effort never matters. It does show that nobody, including this
 router, should assert a saving without measuring it on their own workload —
