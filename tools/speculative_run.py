@@ -148,6 +148,9 @@ def clone_at(repo: Path, commit: str, destination: Path) -> None:
         timeout=GIT_TIMEOUT,
     )
     run_git(["checkout", "--quiet", "--detach", commit], destination)
+    # origin 이 사용자의 실제 저장소를 가리킨 채 남으면, 자식이 그리로 push
+    # 하거나 fetch 로 상태를 흔들 수 있다. 클론이 끝난 뒤 원격을 끊는다.
+    run_git(["remote", "remove", "origin"], destination)
 
 
 def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
@@ -237,9 +240,18 @@ def run_verify(verify: Path, workspace: Path) -> VerifyResult:
     started = time.monotonic()
     # 자식이 쓴 코드를 실행하므로, 그것이 띄운 손자까지 확실히 정리해야 한다.
     # 여기서도 프로세스 그룹째 죽인다.
+    # 자식이 쓴 코드가 실행되므로 러너의 환경을 통째로 물려주지 않는다. 벤더
+    # 토큰이나 자격증명이 환경에 있으면 그대로 읽힌다. 테스트를 돌리는 데
+    # 필요한 최소한만 남긴다.
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name in ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "SHELL", "USER")
+    }
     with subprocess.Popen(
         [str(verify)],
         cwd=workspace,
+        env=environment,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -286,8 +298,13 @@ def build_handover_tree(repo: Path, commit: str, workspace: Path, handover: Path
     *this* tree cannot drift from the patch, because the patch is taken from it.
     """
     clone_at(repo, commit, handover)
+    # 클론에 있는 최상위 이름이 곧 "이 저장소가 추적하는 것" 이다. 자식이 만든
+    # 점-디렉터리(.serena, .omc 같은 에이전트 스캐폴딩)만 걸러내야지, 저장소가
+    # 실제로 추적하는 .github 같은 것까지 버리면 그 변경이 조용히 사라진다.
+    tracked_top_level = {entry.name for entry in handover.iterdir()} - {".git"}
     keep = handover / ".git"
-    for entry in handover.iterdir():
+    # 순회 중 삭제하면 readdir 동작이 POSIX 상 미정의다. 먼저 목록을 뜬다.
+    for entry in list(handover.iterdir()):
         if entry == keep:
             continue
         # is_dir() 은 심링크를 따라가는데 rmtree 는 심링크 인자에 OSError 를
@@ -298,6 +315,9 @@ def build_handover_tree(repo: Path, commit: str, workspace: Path, handover: Path
             shutil.rmtree(entry)
     for entry in workspace.iterdir():
         if entry.name == ".git":
+            continue
+        if entry.name.startswith(".") and entry.is_dir() and entry.name not in tracked_top_level:
+            # 자식의 도구가 흘린 것. 패치에도 검증 트리에도 들어가지 않는다.
             continue
         target = handover / entry.name
         # 심링크는 **따라가지 않고 링크 자체로** 복사한다. 기본값은 따라가는
@@ -310,7 +330,7 @@ def build_handover_tree(repo: Path, commit: str, workspace: Path, handover: Path
             shutil.copytree(entry, target, symlinks=True)
 
 
-def write_patch(handover: Path, destination: Path) -> tuple[int, list[str]]:
+def make_patch(handover: Path) -> tuple[str, list[str]]:
     """Stage the handover tree, drop what the patch cannot carry, and emit the diff.
 
     `git add` honours `.gitignore`, so a file the child wrote under an ignored
@@ -321,23 +341,24 @@ def write_patch(handover: Path, destination: Path) -> tuple[int, list[str]]:
     So anything staging refused is deleted before the tree is verified, and the
     names are returned so the caller can record that it happened. After this the
     tree is exactly "clean checkout plus the patch".
+
+    The patch is **returned, not written**. Verification runs child-authored
+    code with write access to the output directory, so a patch file sitting
+    there beforehand can simply be overwritten — and the user would then apply
+    something the child wrote rather than what was verified. It reaches disk
+    only after the tree it came from has passed.
     """
-    run_git(["add", "-A", "--", ".", ":(exclude).*/"], handover)
-    dropped = [
-        line
-        for line in run_git(["clean", "-ndX", "--", ".", ":(exclude).*/"], handover).splitlines()
-        if line.strip()
-    ]
+    run_git(["add", "-A"], handover)
+    dropped = [line for line in run_git(["clean", "-ndX"], handover).splitlines() if line.strip()]
     if dropped:
-        run_git(["clean", "-fdX", "--", ".", ":(exclude).*/"], handover)
+        run_git(["clean", "-fdX"], handover)
     patch = run_git(
         # --binary 가 없으면 바이너리 변경이 "Binary files differ" 로만 남고,
         # 우리가 안내하는 git apply 가 그 패치를 거부한다.
         ["-c", "core.pager=cat", "diff", "--cached", "--binary", "--no-color", "--no-ext-diff"],
         handover,
     )
-    destination.write_text(patch, encoding="utf-8")
-    return patch.count("\n"), dropped
+    return patch, dropped
 
 
 def write_registry(registry: Path, entries: list[str]) -> None:
@@ -472,6 +493,7 @@ def attempt(
     # 동안 out_dir/cheap.patch 를 계속 덮어써 마지막 하나만 남고, 그 20개를
     # 재는 것이 이 스크립트의 목적이다.
     patch = out_dir / f"{handover.name}.patch"
+    patch_text = ""
     try:
         clone_at(repo, commit, workspace)
         record["child"] = run_child(command, workspace, task)
@@ -482,7 +504,8 @@ def attempt(
         # 패치는 검증 **전에** 뜬다. 검증은 테스트를 돌리므로 __pycache__,
         # 커버리지 파일, 빌드 산출물을 남기고, 나중에 뜨면 그것들이 패치에
         # 섞여 들어가 적용이 깨진다.
-        record["patch_lines"], dropped = write_patch(handover, patch)
+        patch_text, dropped = make_patch(handover)
+        record["patch_lines"] = patch_text.count("\n")
         record["dropped_ignored"] = dropped
         record["made_changes"] = record["patch_lines"] > 0
         record["verify"] = run_verify(verify, handover)
@@ -509,11 +532,12 @@ def attempt(
         record["error"] = "route made no change; not counted as a pass"
     record["accepted"] = bool(verdict and verdict["passed"] and record.get("made_changes"))
     if record["accepted"] and keep_on_pass:
+        # 검증을 통과한 뒤에야 디스크에 쓴다.
+        patch.write_text(patch_text, encoding="utf-8")
         record["patch"] = str(patch)
     else:
         discard(registry, handover, out_dir)
         record["workspace"] = None
-        patch.unlink(missing_ok=True)
     return record
 
 
@@ -638,7 +662,7 @@ def main() -> int:
 
     if winner:
         print(f"\n검증 통과. 패치: {winner['patch']}  ({winner['patch_lines']}줄)")
-        print(f"적용: git -C {repo} apply {winner['patch']}")
+        print(f"적용: git -C {shlex.quote(str(repo))} apply {shlex.quote(str(winner['patch']))}")
         print(f"작업공간: {winner['workspace']}")
         return 0
 

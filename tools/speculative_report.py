@@ -67,12 +67,29 @@ def main() -> int:
         print("기록 없음")
         return 1
 
-    total = len(records)
-    cheap_passed = sum(1 for r in records if r["cheap"]["accepted"])
+    # 인프라 실패(클론 불가, 복사 오류, 자식 기동 실패)는 싼 경로의 품질과
+    # 무관하다. p 에 섞으면 도구 고장이 "싼 모델이 나쁘다" 로 둔갑한다.
+    # attempt 는 그런 경우 error 를 남기되 "made no change" 만은 진짜 결과다.
+    broken = [
+        r
+        for r in records
+        if r["cheap"].get("error") and "made no change" not in str(r["cheap"].get("error"))
+    ]
+    usable = [r for r in records if r not in broken]
+    if broken:
+        print(f"경고: 인프라 실패 {len(broken)}건은 p 계산에서 제외한다")
+        for r in broken[:3]:
+            print(f"  - {r['cheap']['error']}")
+
+    total = len(usable)
+    if not total:
+        print("p 를 계산할 수 있는 기록이 없다")
+        return 1
+    cheap_passed = sum(1 for r in usable if r["cheap"]["accepted"])
     failed = total - cheap_passed
     both_failed = sum(
         1
-        for r in records
+        for r in usable
         if not r["cheap"]["accepted"] and (r["expensive"] is None or not r["expensive"]["accepted"])
     )
 
@@ -80,7 +97,7 @@ def main() -> int:
     lo, hi = wilson(failed, total)
     c = arguments.cost_ratio
 
-    print(f"과제 {total}개")
+    print(f"과제 {total}개 (기록 {len(records)}개)")
     print(f"  싼 경로 검증 통과: {cheap_passed}")
     print(f"  승급 필요        : {failed}")
     print(f"  둘 다 실패       : {both_failed}")
@@ -101,11 +118,11 @@ def main() -> int:
 
     # 토큰은 벤더 안에서만 의미가 있다. 합쳐서 비율을 내지 않는다.
     cheap_tokens = [
-        r["cheap"]["child"]["tokens"] for r in records if r["cheap"].get("child", {}).get("tokens")
+        r["cheap"]["child"]["tokens"] for r in usable if r["cheap"].get("child", {}).get("tokens")
     ]
     expensive_tokens = [
         r["expensive"]["child"]["tokens"]
-        for r in records
+        for r in usable
         if r["expensive"] and r["expensive"].get("child", {}).get("tokens")
     ]
     if cheap_tokens:
