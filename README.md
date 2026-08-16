@@ -56,10 +56,10 @@ than the acceptance test required — which is the strongest form the claim can
 take, since that test is the only definition of "enough" this measurement has.
 
 Token savings point the same way without being established. Across the same 15
-tasks `low` used 506,529 tokens against the routed tiers' 632,983 — **20.0%
-fewer** — but the per-task mean
-saving is 14.1% with a 95% interval of [−1.0%, +29.1%], so it is not separable
-from zero, and 4 of the 15 cost *more* at `low`.
+tasks `low` used 506,529 tokens against the routed tiers' 632,983, or 20.0%
+fewer. That aggregate is dominated by the largest tasks, though; the number
+that generalizes is the per-task mean saving of 14.1%, whose **95% interval,
+[−1.0%, +29.1%], includes zero.** Four of the 15 cost *more* at `low`.
 
 Do not read that as "route everything cheaply." Those 15 were selected for
 having already passed, and a pass/fail acceptance test cannot detect work that
