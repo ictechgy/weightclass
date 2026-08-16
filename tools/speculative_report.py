@@ -58,7 +58,9 @@ def main() -> int:
             # 손상된 줄만 견디고 필드 누락에는 죽는 것은 일관성이 없다. 이
             # 리포트가 읽는 모양을 갖췄는지 여기서 한 번에 본다.
             record["cheap"]["accepted"]
-            if record.get("expensive") is not None:
+            # 키가 아예 없는 줄은 .get() 으로는 통과하지만 아래에서
+            # r["expensive"] 로 역참조된다. 존재 자체를 확인한다.
+            if record["expensive"] is not None:
                 record["expensive"]["accepted"]
             records.append(record)
         except (ValueError, KeyError, TypeError):

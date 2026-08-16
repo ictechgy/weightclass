@@ -180,6 +180,9 @@ def clone_at(repo: Path, commit: str, destination: Path) -> None:
         capture_output=True,
         text=True,
         timeout=GIT_TIMEOUT,
+        # 여기에도 같은 환경을 쓴다. 전역 config 의 init.templateDir 은 클론이
+        # 만들어질 때 훅을 심을 수 있고, 그 훅은 이후 git 명령에서 실행된다.
+        env=_GIT_ENV,
     )
     run_git(["checkout", "--quiet", "--detach", commit], destination)
     # origin 이 사용자의 실제 저장소를 가리킨 채 남으면, 자식이 그리로 push
@@ -400,6 +403,13 @@ def make_patch(handover: Path) -> tuple[bytes, list[str]]:
     something the child wrote rather than what was verified. It reaches disk
     only after the tree it came from has passed.
     """
+    # 자식이 하위 디렉터리에서 git init 했다면 git 은 그것을 gitlink(모드
+    # 160000) 로 기록한다. 그런 패치는 적용해도 내용이 하나도 오지 않는다.
+    # 인계 트리를 만들 때 최상위 .git 만 남기므로, 중첩된 .git 은 자식이
+    # 만든 것이고 스캐폴딩과 같은 취급으로 걷어낸다.
+    for nested in sorted(handover.rglob(".git")):
+        if nested.parent != handover and not nested.is_symlink():
+            shutil.rmtree(nested) if nested.is_dir() else nested.unlink()
     run_git(["add", "-A"], handover)
     # `git clean -n` 은 "Would remove <path>" 라는 로케일 의존 문장을 낸다.
     # ls-files 는 경로만 NUL 로 구분해 주므로 파싱할 것이 없다.
@@ -559,9 +569,11 @@ def attempt(
     # 자체를 컨테이너나 jail 에 넣는 것뿐이고, 설계 문서가 그렇게 권한다.
     work_root = out_dir / ".work"
     work_root.mkdir(mode=0o700, exist_ok=True)
+    # 만드는 즉시 등록한다. 둘을 만들고 나서 등록하면 그 사이에 실패했을 때
+    # 첫 번째가 아무도 가리키지 않는 채 디스크에 남는다.
     workspace = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=work_root))
-    handover = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=work_root))
     register(registry, workspace, add=True)
+    handover = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=work_root))
     register(registry, handover, add=True)
     record: Attempt = {"route": name, "workspace": str(handover)}
     # 패치 이름에 무작위 접미사를 물려 준다. 고정 이름이면 과제를 20개 재는
@@ -705,13 +717,17 @@ def main() -> int:
     task = arguments.task_file.expanduser().read_text(encoding="utf-8")
     commit = head_commit(repo)
 
+    # 라우트 명령 전문은 찍지 않는다. argv 로 넘긴 자격증명이 CI 로그나
+    # 화면 캡처에 그대로 남는다. 어떤 실행 파일인지만 알리면 충분하다.
+    cheap_argv = shlex.split(arguments.cheap)
+    expensive_argv = shlex.split(arguments.expensive)
     print(f"기준 커밋 {commit[:12]}  저장소 {repo}")
-    print(f"싼 경로: {arguments.cheap}")
+    print(f"싼 경로: {cheap_argv[0]} (인자 {len(cheap_argv) - 1}개)")
 
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)
     cheap = attempt(
         "cheap",
-        shlex.split(arguments.cheap),
+        cheap_argv,
         repo,
         commit,
         task,
@@ -739,11 +755,11 @@ def main() -> int:
     }
 
     if not cheap["accepted"]:
-        print(f"승급: {arguments.expensive}")
+        print(f"승급: {expensive_argv[0]} (인자 {len(expensive_argv) - 1}개)")
         record["escalated"] = True
         expensive = attempt(
             "expensive",
-            shlex.split(arguments.expensive),
+            expensive_argv,
             repo,
             commit,
             task,
