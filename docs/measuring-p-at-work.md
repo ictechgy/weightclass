@@ -80,7 +80,8 @@ import os, pathlib, re, sys
 
 PATTERNS = re.compile(
     rb"sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
-    rb"|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|BEGIN [A-Z ]*PRIVATE KEY"
+    # AKIA 는 영구 키, ASIA 는 임시 자격증명(STS). 둘 다 잡는다.
+    rb"|A[KS]IA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|BEGIN [A-Z ]*PRIVATE KEY"
 )
 for path in pathlib.Path(".").rglob("*"):
     if ".git" in path.parts:
@@ -182,9 +183,17 @@ to pass everything as older versions did.
 
 That narrows variables, not the filesystem. The CLI finds its own credentials
 under `HOME`, so `~/.aws/credentials` stays readable however short the variable
-list is. `--child-home <dir>` moves `HOME` for anyone willing to stage the
-vendor's auth directory there. Short of that, real isolation is a container, and
-this runner does not pretend to be one.
+list is.
+
+`--child-home-stage .codex` closes most of that gap without any setup: the run
+builds a throwaway `HOME`, copies only the names you list into it, and points the
+child there. The CLI still finds its own auth; `~/.aws` and `~/.ssh` are simply
+not present. Copies, not symlinks — a link would let the child's writes flow back
+into your real home. Add `--child-home-stage .gitconfig` if the agent needs it.
+
+This is not a sandbox and the runner does not claim to be one. Nothing stops
+code from opening `/Users/you/.ssh/id_rsa` by absolute path. Against genuinely
+untrusted output, run the whole thing in a container.
 
 ### 5. Read the answer
 

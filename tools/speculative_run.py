@@ -156,9 +156,13 @@ CHILD_ENV_NAMES = frozenset(
         "SSL_CERT_DIR",
         "REQUESTS_CA_BUNDLE",
         "NODE_EXTRA_CA_CERTS",
+        # XDG_ 접두사 전체는 너무 넓다(XDG_RUNTIME_DIR 등). 설정 경로 셋만 둔다.
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
     }
 )
-CHILD_ENV_PREFIXES = ("ANTHROPIC_", "OPENAI_", "CLAUDE_", "CODEX_", "XDG_")
+CHILD_ENV_PREFIXES = ("ANTHROPIC_", "OPENAI_", "CLAUDE_", "CODEX_")
 
 
 def default_child_env() -> frozenset[str]:
@@ -1078,6 +1082,17 @@ def main() -> int:
         help="pass the entire environment to the vendor child, as older versions did",
     )
     parser.add_argument(
+        "--child-home-stage",
+        action="append",
+        default=[],
+        help=(
+            "name under your real HOME to copy into a throwaway HOME for the child "
+            "(repeatable, e.g. .codex or .gitconfig). Gives the CLI its credentials "
+            "without handing it ~/.aws or ~/.ssh. Still not a sandbox: the agent can "
+            "read absolute paths."
+        ),
+    )
+    parser.add_argument(
         "--child-home",
         type=Path,
         help=(
@@ -1205,9 +1220,27 @@ def main() -> int:
     allowed_env = (
         None if arguments.child_env_all else default_child_env() | frozenset(arguments.child_env)
     )
+    if arguments.child_home and arguments.child_home_stage:
+        parser.error("use either --child-home or --child-home-stage, not both")
     child_home = arguments.child_home.expanduser().resolve() if arguments.child_home else None
     if child_home is not None and not child_home.is_dir():
         parser.error(f"--child-home is not a directory: {child_home}")
+    if arguments.child_home_stage:
+        real_home = Path(os.path.expanduser("~"))
+        child_home = Path(tempfile.mkdtemp(prefix="spec-childhome-", dir=arguments.out_dir))
+        child_home.chmod(0o700)
+        for name in arguments.child_home_stage:
+            source = real_home / name
+            if not source.exists():
+                parser.error(f"--child-home-stage: no such entry under HOME: {name}")
+            # 링크가 아니라 복사다. 링크로 두면 자식의 쓰기가 실제 홈으로
+            # 그대로 흘러 들어가 격리의 의미가 없다.
+            target = child_home / name
+            if source.is_dir():
+                shutil.copytree(source, target, symlinks=True)
+            else:
+                shutil.copy2(source, target, follow_symlinks=False)
+        print(f"자식 HOME: 임시 디렉터리에 {len(arguments.child_home_stage)}개 항목 복사")
     if allowed_env is None:
         print("자식 환경: 전체 전달 (--child-env-all)")
     else:
