@@ -351,8 +351,20 @@ candidate would need its pair.
 | drop-unrecoverable: failed at the routed tier *and* one step up | 3 |
 | **tier sensitive** | **0** |
 
-Zero against a floor of nine. Per the rule above, the study stops here rather
-than lowering the floor, and **Phase 2 was never started.**
+`drop-unrecoverable` is a label about the *run*, not a judgement that the task
+was hard: it means only that one escalation step did not recover it. As the next
+paragraph shows, two of the three failed because of a defect in this study's
+acceptance tests rather than anything about difficulty or tier.
+
+Zero against a floor of nine. The floor is defined over all 36 tasks while only
+18 were calibrated, so strictly the other 18 might still hold the nine. They do
+not. The calibrated 18 were chosen as the *most likely* to be tier-sensitive: 9
+rated `high` and 9 rated `standard`. The untested remainder breaks down as 13
+`low`, 3 `standard`, and 2 `high` — and those two `high` tasks, `p05` and `p09`,
+are not unknowns either: both were in the Phase 1 pilot and both passed on the
+first attempt. Nine tier-sensitive tasks cannot be hiding in a `low`-rated tail
+after none were found among the hardest eighteen. Per the rule above the study
+stops here rather than lowering the floor, and **Phase 2 was never started.**
 
 The three failures are not hidden tier sensitivity: they failed at *both* tiers,
 so they were never candidates. Two were investigated and the cause was a defect
@@ -372,13 +384,23 @@ passed a tier down as well.** (`A1` is pinned to the vendor effort `medium`,
 which is what the `standard` tier maps to; the tier name is used here for
 consistency.) The two tasks where the router spent the most are the two where the
 cheaper tier is confirmed sufficient.
-Six further tasks the blind raters judged `high` were routed `standard` and
-passed, so even human-rated difficulty did not predict a need for effort.
+Of the nine tasks the blind raters judged `high`, seven were routed `standard`;
+five of those passed there and two are the concurrency failures discussed above.
+So even human-rated difficulty did not predict a need for effort.
 
 Combined with the pilot, where a pinned `medium` beat routing on both vendors,
-the finding is that on work of this shape effort moves cost and nothing else. If
-no tier fails, the cheapest tier is always correct and every step above it is
-pure loss — which is *why* the pilot came out the way it did.
+the finding is that on work of this shape **routing up bought nothing**: every
+step above the routed tier was spent without changing an outcome, which is *why*
+the pilot came out the way it did.
+
+Be careful not to stretch that into "the cheapest tier always suffices," which
+this design cannot support. Calibration runs at the routed tier and escalates
+*upward*; it never probes downward except for the two `high`-routed tasks, and
+**no task was ever run at `low`.** The thirteen tasks routed `standard` and
+passed might well have passed a tier down, but that was not measured. What is
+measured is that raising the tier never rescued anything — which makes routing
+up a cost with no demonstrated benefit here, and leaves the value of routing
+down an open question.
 
 State the scope honestly: one vendor, one synthetic fixture, and small
 well-specified maintenance tasks. This does not show that effort never matters.
