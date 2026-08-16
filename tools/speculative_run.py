@@ -123,6 +123,53 @@ class Attempt(TypedDict, total=False):
 # 보게 해서, 한쪽만 바뀌면 --prune 이 조용히 아무것도 못 지우는 일을 막는다.
 WORKSPACE_PREFIXES = ("spec-cheap-", "spec-expensive-", "spec-home-")
 
+# 벤더 자식이 기본으로 보는 환경. 허용 목록이지 차단 목록이 아니다 — 모르는
+# 비밀은 차단 목록으로 막을 수 없고, 이 머신에 어떤 제공자의 키가 있는지
+# 우리는 모른다.
+#
+# 에이전트 CLI 가 동작하는 데 필요한 것과, 그 CLI 자신의 자격증명만 남긴다.
+# Codex 실행이 ANTHROPIC_API_KEY 를 볼 이유는 없지만 둘을 구별할 방법이
+# 없으므로 양쪽 벤더의 접두사를 모두 통과시킨다. AWS, GitHub, 데이터베이스,
+# 사내 시스템의 자격증명은 어느 쪽도 필요로 하지 않으므로 떨군다.
+CHILD_ENV_NAMES = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TERM",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        # 사내 프록시와 사설 CA 뒤에서 돌아가는 경우가 흔하다. 이것들이 없으면
+        # 인증이 아니라 네트워크가 먼저 끊긴다.
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    }
+)
+CHILD_ENV_PREFIXES = ("ANTHROPIC_", "OPENAI_", "CLAUDE_", "CODEX_", "XDG_")
+
+
+def default_child_env() -> frozenset[str]:
+    """Names the vendor child keeps when no `--child-env` is given."""
+    return frozenset(
+        name
+        for name in os.environ
+        if name in CHILD_ENV_NAMES or name.startswith(CHILD_ENV_PREFIXES)
+    )
+
+
 # 에이전트 런타임이 작업 트리에 흘리는 디렉터리들. 이름으로 아는 수밖에 없다.
 # 자식이 만든 점-디렉터리를 전부 버리면 .github 나 .vscode 를 새로 추가하는
 # 정당한 변경이 조용히 사라지고, 아무것도 안 버리면 스캐폴딩 수백 줄이 패치와
@@ -306,16 +353,17 @@ def run_child(
 ) -> ChildResult:
     """One vendor invocation. The task goes in on stdin and never into the log.
 
-    By default this inherits the full environment, because the child **is** the
-    agent CLI the user chose and it needs its own credentials — scrubbing `HOME`
-    would leave it unable to authenticate at all. Running it exposes exactly
-    what running `codex exec` by hand already exposes.
+    The child **is** the agent CLI the user chose, so it keeps its own
+    credentials — take those away and it cannot authenticate at all. What it does
+    not keep, by default, is everything else: a task is untrusted input, and an
+    agent with shell access reads whatever its environment holds. There is no
+    reason a coding run should see `AWS_SECRET_ACCESS_KEY` or a database URL.
 
-    `--child-env` narrows that. The default is permissive so the tool works
-    without configuration, but on a machine holding several providers' keys
-    there is no reason a Codex run should see `ANTHROPIC_API_KEY`, or either of
-    them see `AWS_SECRET_ACCESS_KEY`. A task is untrusted input, and an agent
-    with shell access can read whatever its environment holds.
+    `CHILD_ENV_NAMES`/`CHILD_ENV_PREFIXES` is the default allowlist. `--child-env`
+    adds names to it; `--child-env-all` restores the old pass-everything
+    behaviour for anyone whose setup needs a variable the list does not know
+    about. The run prints how many names it dropped, so a CLI that suddenly
+    cannot authenticate points at its own cause.
 
     **It narrows variables, not the filesystem.** `HOME` survives, because the
     CLI finds its own credentials under it — blank it and nothing authenticates.
@@ -471,12 +519,17 @@ def _codex_usage(stdout: str) -> Usage | None:
         raw = event.get("usage")
         if not isinstance(raw, dict):
             continue
+        parsed_any = False
         for field in fields:
             value = raw.get(field)
             if isinstance(value, int) and not isinstance(value, bool):
                 totals[field] = totals.get(field, 0) + value
                 seen = True
-        turns += 1
+                parsed_any = True
+        # 알려진 필드를 하나도 못 읽은 이벤트는 세지 않는다. 벤더가 필드 이름을
+        # 바꾸면 턴 수만 늘어 다중 턴 경고가 잘못 뜬다.
+        if parsed_any:
+            turns += 1
     if not seen:
         return None
     # 이벤트가 여러 개면 델타인지 누적인지가 결과를 바꾼다. 프로브는 단일 턴만
@@ -1014,11 +1067,15 @@ def main() -> int:
         action="append",
         default=[],
         help=(
-            "environment variable the vendor child may see (repeatable). "
-            "Given at least once, everything else is dropped — PATH and HOME are "
-            "added automatically. Use it when the machine holds keys for providers "
-            "this route has no business reading."
+            "extra environment variable the vendor child may see (repeatable). "
+            "By default it gets PATH/HOME/locale/proxy plus ANTHROPIC_*, OPENAI_*, "
+            "CLAUDE_*, CODEX_* — everything else is dropped."
         ),
+    )
+    parser.add_argument(
+        "--child-env-all",
+        action="store_true",
+        help="pass the entire environment to the vendor child, as older versions did",
     )
     parser.add_argument(
         "--child-home",
@@ -1124,11 +1181,13 @@ def main() -> int:
             table = loaded.get(arm)
             if table is None:
                 continue
+            if not isinstance(table, dict):
+                parser.error(f"--prices['{arm}'] must be an object of token field rates")
             if not table:
                 # 빈 표는 all() 이 True 라 통과한 뒤 그 arm 을 조용히 무요금으로
                 # 만든다. 키를 적어 두고 값을 비운 것은 실수일 가능성이 높다.
                 parser.error(f"--prices['{arm}'] is empty; remove the key or fill it in")
-            if not isinstance(table, dict) or not all(
+            if not all(
                 # bool 은 int 의 하위형이고, json.loads 는 기본으로 NaN/Infinity 를
                 # 허용한다. 둘 다 그럴듯한 비용을 만들어 낸다.
                 not isinstance(v, bool)
@@ -1142,18 +1201,22 @@ def main() -> int:
                 )
             rates[arm] = {k: float(v) for k, v in table.items()}
 
-    # 하나라도 주어지면 그 목록 + PATH/HOME 만 남긴다. 아무것도 안 주면 기존대로
-    # 전부 물려준다 — 설정 없이도 동작해야 하기 때문이다.
-    allowed_env = frozenset({*arguments.child_env, "PATH", "HOME"}) if arguments.child_env else None
+    # 기본이 허용 목록이다. 모르는 비밀은 차단 목록으로 막을 수 없다.
+    allowed_env = (
+        None if arguments.child_env_all else default_child_env() | frozenset(arguments.child_env)
+    )
     child_home = arguments.child_home.expanduser().resolve() if arguments.child_home else None
     if child_home is not None and not child_home.is_dir():
         parser.error(f"--child-home is not a directory: {child_home}")
-    if allowed_env is not None:
-        print(f"자식 환경 제한: {len(allowed_env)}개 변수만 전달")
+    if allowed_env is None:
+        print("자식 환경: 전체 전달 (--child-env-all)")
+    else:
+        dropped = len(set(os.environ) - allowed_env)
+        print(f"자식 환경: {len(allowed_env & set(os.environ))}개 전달, {dropped}개 제외")
         if child_home is None:
             print(
-                "  주의: HOME 은 그대로다. 변수만 좁혔을 뿐 ~/.aws/credentials 같은"
-                " 파일은 여전히 읽힌다. --child-home 이나 컨테이너가 필요하다."
+                "  HOME 은 그대로다. 변수만 좁혔을 뿐 ~/.aws/credentials 같은 파일은"
+                " 여전히 읽힌다. --child-home 이나 컨테이너가 필요하다."
             )
 
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)

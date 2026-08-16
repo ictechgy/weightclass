@@ -169,10 +169,16 @@ tools/speculative_run.py \
 
 One task per invocation. Around twenty real tasks gives a usable interval.
 
-**On a machine holding several providers' keys**, narrow what the child sees.
-`--child-env OPENAI_API_KEY` drops every other variable (PATH and HOME are kept
-automatically), so a Codex run cannot read `ANTHROPIC_API_KEY` or an AWS secret
-out of its environment.
+**The child gets a narrowed environment by default.** It keeps PATH, HOME,
+locale, proxy and CA settings, and anything named `ANTHROPIC_*`, `OPENAI_*`,
+`CLAUDE_*`, or `CODEX_*` — the vendor CLIs need their own credentials. Everything
+else is dropped, so an AWS secret or a database URL sitting in your shell does
+not reach an agent processing an untrusted task. The run prints how many names it
+kept and dropped.
+
+If a CLI suddenly cannot authenticate, that count is the first place to look:
+add the missing name with `--child-env NAME`, or fall back to `--child-env-all`
+to pass everything as older versions did.
 
 That narrows variables, not the filesystem. The CLI finds its own credentials
 under `HOME`, so `~/.aws/credentials` stays readable however short the variable
