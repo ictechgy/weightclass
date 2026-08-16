@@ -168,7 +168,12 @@ def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
                 stdout, stderr = child.communicate(task, timeout=CHILD_TIMEOUT)
             except subprocess.TimeoutExpired:
                 _kill_group(child)
-                child.communicate()
+                try:
+                    # 손자가 setsid 로 그룹을 빠져나갔거나 kill 이 막히면
+                    # 파이프를 계속 붙들 수 있다. 무한정 기다리지 않는다.
+                    child.communicate(timeout=30)
+                except subprocess.TimeoutExpired:
+                    child.kill()
                 return {
                     "exit_code": None,
                     "timed_out": True,
@@ -247,49 +252,68 @@ def run_verify(verify: Path, workspace: Path) -> VerifyResult:
     }
 
 
-def write_patch(repo: Path, commit: str, workspace: Path, destination: Path) -> int:
-    """Emit the attempt's work as a patch, without running git over the child's `.git`.
+def build_handover_tree(repo: Path, commit: str, workspace: Path, handover: Path) -> None:
+    """Reconstruct the child's work in a clone it never had a handle on.
 
-    The child has write access to its workspace, and that includes
-    `.git/config` and `.gitattributes`. Git reads both when it stages and
-    diffs, and between them a `filter.<name>.clean` command can be made to run
-    on the host. That would turn "read what the agent wrote" into arbitrary
-    execution outside the sandbox the agent was given.
+    Two problems solved by the same move.
 
-    So the diff is taken somewhere the child never had a handle on: a second
-    clone of the *original* repository, into which the child's files are copied
-    with its `.git` left behind. A `.gitattributes` the child planted comes
-    along, but it is inert — the filter it names is defined in config, and this
-    config is ours.
+    **The child's `.git` is hostile input.** It can write `.git/config` and
+    `.gitattributes`, and between them a `filter.<name>.clean` runs on the host
+    the next time git stages or diffs that tree. So neither the diff nor the
+    verification happens in the workspace the child was given.
+
+    **What is verified must be what is handed over.** The patch is produced by
+    `git add`, which honours `.gitignore`, so a file the child created under an
+    ignored path would never reach the patch. Verifying the workspace would then
+    bless a tree the user cannot reproduce from what they were given. Verifying
+    *this* tree cannot drift from the patch, because the patch is taken from it.
     """
-    with tempfile.TemporaryDirectory(prefix="spec-patch-", dir=destination.parent) as scratch:
-        patchspace = Path(scratch) / "tree"
-        clone_at(repo, commit, patchspace)
-        keep = patchspace / ".git"
-        for entry in patchspace.iterdir():
-            if entry != keep:
-                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
-        for entry in workspace.iterdir():
-            if entry.name == ".git":
-                continue
-            target = patchspace / entry.name
-            # 심링크는 **따라가지 않고 링크 자체로** 복사한다. 기본값은 따라가는
-            # 것이라, 자식이 ~/.ssh/id_rsa 를 가리키는 링크를 심어두면 그 내용이
-            # 패치로 복사되어 나간다. 사용자가 적용하라고 받는 바로 그 패치다.
-            # 링크로 남기면 git 은 링크로 기록하고, 이상한 링크는 diff 에 보인다.
-            if entry.is_symlink():
-                shutil.copy2(entry, target, follow_symlinks=False)
-            elif entry.is_dir():
-                shutil.copytree(entry, target, symlinks=True)
-            else:
-                shutil.copy2(entry, target, follow_symlinks=False)
+    clone_at(repo, commit, handover)
+    keep = handover / ".git"
+    for entry in handover.iterdir():
+        if entry != keep:
+            shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+    for entry in workspace.iterdir():
+        if entry.name == ".git":
+            continue
+        target = handover / entry.name
+        # 심링크는 **따라가지 않고 링크 자체로** 복사한다. 기본값은 따라가는
+        # 것이라, 자식이 ~/.ssh/id_rsa 를 가리키는 링크를 심어두면 그 내용이
+        # 복사되어 패치에 실린다. 사용자가 적용하라고 받는 바로 그 패치다.
+        # 링크로 남기면 git 은 mode 120000 으로 기록하고 diff 에 그대로 보인다.
+        if entry.is_symlink() or entry.is_file():
+            shutil.copy2(entry, target, follow_symlinks=False)
+        elif entry.is_dir():
+            shutil.copytree(entry, target, symlinks=True)
 
-        run_git(["add", "-A", "--", ".", ":(exclude).*/"], patchspace)
-        patch = run_git(
-            ["-c", "core.pager=cat", "diff", "--cached", "--no-color", "--no-ext-diff"], patchspace
-        )
+
+def write_patch(handover: Path, destination: Path) -> int:
+    """Take the diff from the handover tree. Applying it stays a human action."""
+    run_git(["add", "-A", "--", ".", ":(exclude).*/"], handover)
+    patch = run_git(
+        # --binary 가 없으면 바이너리 변경이 "Binary files differ" 로만 남고,
+        # 우리가 안내하는 git apply 가 그 패치를 거부한다.
+        ["-c", "core.pager=cat", "diff", "--cached", "--binary", "--no-color", "--no-ext-diff"],
+        handover,
+    )
     destination.write_text(patch, encoding="utf-8")
     return patch.count("\n")
+
+
+def write_registry(registry: Path, entries: list[str]) -> None:
+    """Replace the registry atomically.
+
+    This file exists to survive a crash. Rewriting it in place would let a
+    crash mid-write leave a truncated list, which defeats the one job it has.
+
+    It is not safe against two runs sharing an `--out-dir` concurrently: the
+    read-modify-write can lose an entry, and that workspace then survives
+    `--prune`. Give concurrent measurements separate `--out-dir` values.
+    """
+    body = "".join(f"{path}\n" for path in entries)
+    temporary = registry.with_suffix(f".{os.getpid()}.tmp")
+    temporary.write_text(body, encoding="utf-8")
+    temporary.replace(registry)
 
 
 def register(registry: Path, workspace: Path, add: bool) -> None:
@@ -303,12 +327,7 @@ def register(registry: Path, workspace: Path, add: bool) -> None:
     if registry.exists():
         live = {line for line in registry.read_text(encoding="utf-8").splitlines() if line.strip()}
     live.add(str(workspace)) if add else live.discard(str(workspace))
-    # 원자적으로 바꾼다. 이 파일의 존재 이유가 크래시 대비인데, 전체를 다시
-    # 쓰는 도중 죽으면 잘린 레지스트리가 남아 정확히 그 목적을 무너뜨린다.
-    body = "".join(f"{path}\n" for path in sorted(live))
-    temporary = registry.with_suffix(f".{os.getpid()}.tmp")
-    temporary.write_text(body, encoding="utf-8")
-    temporary.replace(registry)
+    write_registry(registry, sorted(live))
 
 
 def discard(registry: Path, workspace: Path, out_dir: Path) -> None:
@@ -320,7 +339,9 @@ def discard(registry: Path, workspace: Path, out_dir: Path) -> None:
     """
     target = resolved_own_workspace(workspace, out_dir)
     if target is None:
-        register(registry, workspace, add=False)
+        # 지우지 않았으므로 등록에서도 빼지 않는다. 디렉터리는 남아 있는데
+        # 참조만 사라지는 것이 이 함수가 막으려는 바로 그 상태다.
+        print(f"작업공간을 확인할 수 없어 등록에 남긴다: {workspace}", file=sys.stderr)
         return
     try:
         shutil.rmtree(target)
@@ -363,23 +384,30 @@ def prune(registry: Path, out_dir: Path) -> int:
         return 0
     live = [line for line in registry.read_text(encoding="utf-8").splitlines() if line.strip()]
     removed = 0
+    kept: list[str] = []
     for line in live:
         candidate = Path(line)
         if not candidate.exists():
             continue
         target = resolved_own_workspace(candidate, out_dir)
         if target is None:
+            # 우리가 만든 것이 아니면 지우지도 않고 잊지도 않는다. 잊으면
+            # 사람이 확인할 마지막 단서가 사라진다.
             print(f"건너뜀(이 스크립트가 만든 작업공간이 아님): {line}")
+            kept.append(line)
             continue
         try:
             shutil.rmtree(target)
         except OSError as error:
-            print(f"삭제 실패, 그대로 둔다: {target} ({error})")
+            print(f"삭제 실패, 등록에 남긴다: {target} ({error})")
+            kept.append(line)
             continue
         removed += 1
         print(f"삭제: {target}")
-    registry.write_text("", encoding="utf-8")
-    print(f"{removed}개 정리 완료 (등록 {len(live)}개)")
+    # 지운 것만 등록에서 뺀다. 통째로 비우면 아직 디스크에 남아 있는 신뢰할 수
+    # 없는 트리를 가리키는 유일한 참조가 사라진다.
+    write_registry(registry, kept)
+    print(f"{removed}개 정리 완료 (등록 {len(live)}개, 남김 {len(kept)}개)")
     return 0
 
 
@@ -396,21 +424,27 @@ def attempt(
 ) -> Attempt:
     """Clone, run one route, verify. The workspace survives only a pass."""
     workspace = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=out_dir))
+    handover = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=out_dir))
     register(registry, workspace, add=True)
-    record: Attempt = {"route": name, "workspace": str(workspace)}
-    # 패치 이름에 작업공간의 무작위 접미사를 물려 준다. 고정 이름이면 과제를
-    # 20개 재는 동안 out_dir/cheap.patch 를 계속 덮어써서 마지막 하나만 남고,
-    # 그 20개를 재는 것이 이 스크립트의 목적이다.
-    patch = out_dir / f"{workspace.name}.patch"
+    register(registry, handover, add=True)
+    record: Attempt = {"route": name, "workspace": str(handover)}
+    # 패치 이름에 무작위 접미사를 물려 준다. 고정 이름이면 과제를 20개 재는
+    # 동안 out_dir/cheap.patch 를 계속 덮어써 마지막 하나만 남고, 그 20개를
+    # 재는 것이 이 스크립트의 목적이다.
+    patch = out_dir / f"{handover.name}.patch"
     try:
         clone_at(repo, commit, workspace)
         record["child"] = run_child(command, workspace, task)
+        # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
+        # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
+        # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
+        build_handover_tree(repo, commit, workspace, handover)
         # 패치는 검증 **전에** 뜬다. 검증은 테스트를 돌리므로 __pycache__,
         # 커버리지 파일, 빌드 산출물을 남기고, 나중에 뜨면 그것들이 패치에
-        # 섞여 들어가 적용이 깨진다. 에이전트의 작업은 이 시점에 이미 끝났다.
-        record["patch_lines"] = write_patch(repo, commit, workspace, patch)
+        # 섞여 들어가 적용이 깨진다.
+        record["patch_lines"] = write_patch(handover, patch)
         record["made_changes"] = record["patch_lines"] > 0
-        record["verify"] = run_verify(verify, workspace)
+        record["verify"] = run_verify(verify, handover)
     except (RunFailure, subprocess.SubprocessError, OSError) as error:
         # RunFailure 만 잡으면 clone_at 의 CalledProcessError 나 복사 중의
         # OSError 가 그대로 올라가, 등록된 채 지워지지 않은 작업공간이 남는다.
@@ -418,12 +452,16 @@ def attempt(
         record["error"] = f"{type(error).__name__}: {error}"
         record["verify"] = {"passed": False, "exit_code": None, "timed_out": False, "seconds": 0}
 
+    # 자식이 돌던 워크스페이스는 어느 쪽이든 항상 버린다. 넘길 것은 재구성한
+    # 트리이고, 자식의 .git 을 살려 둘 이유가 없다.
+    discard(registry, workspace, out_dir)
+
     verdict = record.get("verify")
     passed = bool(verdict and verdict["passed"])
     if passed and keep_on_pass:
         record["patch"] = str(patch)
     else:
-        discard(registry, workspace, out_dir)
+        discard(registry, handover, out_dir)
         record["workspace"] = None
         patch.unlink(missing_ok=True)
     return record

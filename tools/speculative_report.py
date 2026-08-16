@@ -46,11 +46,19 @@ def main() -> int:
     if not 0 < arguments.cost_ratio < 1:
         parser.error(f"--cost-ratio must be between 0 and 1, exclusive: {arguments.cost_ratio}")
 
-    records = [
-        json.loads(line)
-        for line in arguments.log.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    # 한 줄이 손상됐다고 이미 수집한 측정 전체를 버릴 이유는 없다. 러너는
+    # append 만 하고 잠금이 없어, 크래시나 동시 실행이 잘린 줄을 남길 수 있다.
+    records = []
+    damaged = 0
+    for line in arguments.log.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except ValueError:
+            damaged += 1
+    if damaged:
+        print(f"경고: 손상된 줄 {damaged}개를 건너뛴다")
     if not records:
         print("기록 없음")
         return 1
