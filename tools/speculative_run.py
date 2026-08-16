@@ -152,7 +152,9 @@ def _route_identity(argv: list[str]) -> dict[str, str]:
     a digest of the rest. Two runs of the same route match; a changed flag is
     visible as a changed digest without revealing what changed.
     """
-    rest = " ".join(argv[1:]).encode("utf-8")
+    # NUL 로 잇는다. 공백으로 이으면 ["-a b"] 와 ["-a", "b"] 가 같은 지문을
+    # 내고, 지문의 목적이 두 실행이 같은 라우트였는지 구별하는 것이다.
+    rest = "\0".join(argv[1:]).encode("utf-8")
     return {
         "executable": Path(argv[0]).name,
         "argv_digest": hashlib.sha256(rest).hexdigest()[:16],
@@ -237,15 +239,22 @@ def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
                     child.communicate(timeout=30)
                 except subprocess.TimeoutExpired:
                     child.kill()
-                return {
-                    "exit_code": None,
-                    "timed_out": True,
-                    "seconds": CHILD_TIMEOUT,
-                    "tokens": None,
-                }
+                # with 블록 안에서 반환하지 않는다. Popen.__exit__ 이 파이프를
+                # 닫고 wait() 를 부르는데, 손자가 파이프를 붙들고 있으면 거기서
+                # 무한정 막힌다. 죽었는지 확인만 하고 밖에서 반환한다.
+                timed_out = True
+            else:
+                timed_out = False
             code = child.returncode
     except OSError as error:
         raise RunFailure(f"could not start the route: {error}") from error
+    if timed_out:
+        return {
+            "exit_code": None,
+            "timed_out": True,
+            "seconds": CHILD_TIMEOUT,
+            "tokens": None,
+        }
     return {
         "exit_code": code,
         "timed_out": False,
@@ -584,7 +593,6 @@ def attempt(
     verify: Path,
     out_dir: Path,
     registry: Path,
-    keep_on_pass: bool,
     scaffolding: frozenset[str],
 ) -> Attempt:
     """Clone, run one route, verify. The workspace survives only a pass."""
@@ -668,11 +676,6 @@ def attempt(
         record["error"] = "route made no change; not counted as a pass"
         record["failure_kind"] = "route"
     record["accepted"] = bool(verdict and verdict["passed"] and record.get("made_changes"))
-    # keep_on_pass 는 통과한 시도의 산출물을 남길지를 정한다. 남기지 않으면
-    # patch 도 없으므로 accepted 로 표시해서는 안 된다. main 이 winner 의
-    # patch 를 읽기 때문이다.
-    if record["accepted"] and not keep_on_pass:
-        record["accepted"] = False
     if record["accepted"]:
         # 검증을 통과한 뒤에야 디스크에 쓴다. 여기서 실패해도 이 함수의 계약은
         # 지켜야 한다 — 무슨 일이 있어도 판정을 남기고 정상 반환한다.
@@ -780,7 +783,6 @@ def main() -> int:
         verify,
         arguments.out_dir,
         registry,
-        keep_on_pass=True,
         scaffolding=frozenset(scaffolding),
     )
     cheap_child = cheap.get("child")
@@ -818,7 +820,6 @@ def main() -> int:
             verify,
             arguments.out_dir,
             registry,
-            keep_on_pass=True,
             scaffolding=frozenset(scaffolding),
         )
         record["expensive"] = expensive

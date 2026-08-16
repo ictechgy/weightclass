@@ -20,6 +20,17 @@ import math
 from pathlib import Path
 
 
+def _safe(text: str, limit: int = 200) -> str:
+    """Strip control characters before printing anything read from the log.
+
+    The log is an ordinary file that a compromised or crafted run could have
+    written. Echoing it verbatim lets ANSI escapes rewrite the terminal, which
+    is a poor way to learn that a measurement went wrong.
+    """
+    cleaned = "".join(character for character in text if character.isprintable())
+    return cleaned[:limit] + ("…" if len(cleaned) > limit else "")
+
+
 def wilson(successes: int, total: int, z: float = 1.96) -> tuple[float, float]:
     if total == 0:
         return (0.0, 0.0)
@@ -80,7 +91,10 @@ def main() -> int:
     # attempt 는 그런 경우 error 를 남기되 "made no change" 만은 진짜 결과다.
     def is_infrastructure_failure(record: dict[str, object]) -> bool:
         cheap = record["cheap"]
-        assert isinstance(cheap, dict)
+        if not isinstance(cheap, dict):
+            # assert 로 좁히면 python -O 에서 사라진다. 이 술어는 손상 줄
+            # 분류를 통과한 기록에도 도므로 실제 검사가 필요하다.
+            return True
         # 러너가 failure_kind 로 알려준다. 예전에는 에러 문자열을 부분
         # 일치로 추측했는데, 러너에서 문구를 다듬으면 조용히 분류가 틀어졌다.
         kind = cheap.get("failure_kind")
@@ -100,7 +114,8 @@ def main() -> int:
     if broken:
         print(f"경고: 인프라 실패 {len(broken)}건은 p 계산에서 제외한다")
         for r in broken[:3]:
-            print(f"  - {r['cheap']['error']}")
+            # 로그는 신뢰 대상이 아니다. 제어 문자를 걷어내고 길이를 자른다.
+            print(f"  - {_safe(str(r['cheap'].get('error')))}")
 
     total = len(usable)
     if not total:
