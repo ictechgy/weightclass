@@ -272,11 +272,12 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
 
     That direction matters because vendor breakdowns overlap. Codex reports
     `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`,
-    `output_tokens`, and `reasoning_output_tokens`, and the probe could not
-    confirm whether the cached and reasoning figures are separate line items or
-    breakouts of the two totals. Summing all five would double-count. Naming the
-    disjoint subset is the caller's job because only they can check the answer
-    against a real invoice.
+    `output_tokens`, and `reasoning_output_tokens`. A probe observed
+    `cached_input_tokens` (93,952) sitting *below* `input_tokens` (100,507) on
+    the same run — which is what a breakout looks like, not a separate line
+    item — so pricing all five would double-count. That is evidence, not proof:
+    naming the disjoint subset stays the caller's job, because only they can
+    check the answer against a real invoice.
 
     A field the table prices but this run does not report counts as zero, not as
     an error: a run that touched no cache genuinely has no cached tokens, and
@@ -446,9 +447,14 @@ def _codex_usage(stdout: str) -> Usage | None:
         "output_tokens",
         "reasoning_output_tokens",
     )
-    # 한 실행이 여러 턴을 돌면 turn.completed 도 여러 번 나온다. 첫 번째에서
-    # 멈추면 나머지 턴의 소비가 통째로 빠지고, 비용이 실제보다 낮게 잡힌다.
-    # 전부 더한다.
+    # 실측: 여러 단계를 요구하는 과제(파일 생성 -> 읽기 -> 파생 파일 생성)로
+    # 돌려도 `codex exec` 는 turn.completed 를 **한 번만** 낸다. 한 호출이 곧
+    # 한 턴이고, 내부의 도구 호출 횟수와는 무관하다. 이 스크립트는 항상 태스크
+    # 하나를 stdin 으로 넘기므로 실제로는 언제나 단일 이벤트다.
+    #
+    # 그래도 합산해 둔다. 대화형 세션처럼 여러 턴이 나오는 형태로 벤더가
+    # 바뀌면 첫 이벤트만 읽는 쪽이 조용히 비용을 낮게 잡기 때문이다. 이벤트가
+    # 둘 이상이면 source 에 남겨 사람이 증분/누적을 확인할 수 있게 한다.
     totals: dict[str, int] = {}
     seen = False
     turns = 0
@@ -1118,6 +1124,10 @@ def main() -> int:
             table = loaded.get(arm)
             if table is None:
                 continue
+            if not table:
+                # 빈 표는 all() 이 True 라 통과한 뒤 그 arm 을 조용히 무요금으로
+                # 만든다. 키를 적어 두고 값을 비운 것은 실수일 가능성이 높다.
+                parser.error(f"--prices['{arm}'] is empty; remove the key or fill it in")
             if not isinstance(table, dict) or not all(
                 # bool 은 int 의 하위형이고, json.loads 는 기본으로 NaN/Infinity 를
                 # 허용한다. 둘 다 그럴듯한 비용을 만들어 낸다.

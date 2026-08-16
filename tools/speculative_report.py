@@ -217,19 +217,23 @@ def main() -> int:
     paired: list[float] = []
     cheap_total = 0.0
     expensive_total = 0.0
+    escalated_total = 0
     for r in usable:
         cheap_cost = cost_of(r["cheap"])
         expensive_cost = cost_of(r.get("expensive"))
         # 어느 쪽이든 0 이면 비율이 의미를 잃는다. 싼 쪽 0 은 c=0 으로
         # "공짜" 라는 결론을 만들고, 비싼 쪽 0 은 나눗셈 자체가 안 된다.
         # 요금표가 비었거나 벤더가 0 을 보고한 경우이므로 표본에서 뺀다.
+        if r.get("expensive") is not None:
+            escalated_total += 1
         if cheap_cost and expensive_cost:
             paired.append(cheap_cost / expensive_cost)
             cheap_total += cheap_cost
             expensive_total += expensive_cost
 
-    # 한 건으로 c 를 바꾸면 그 한 과제의 특성이 전체 결론을 정한다. 중앙값이
-    # 의미를 가지려면 최소 세 건은 있어야 한다.
+    # 한 건으로 c 를 바꾸면 그 한 과제의 특성이 전체 결론을 정한다. 채택하는
+    # 값은 비용 가중 비율이고 그것은 큰 과제 하나에 더 취약하므로, 중앙값보다
+    # 오히려 최소 표본이 더 필요하다.
     MINIMUM_PAIRED = 3
 
     def is_multiturn(attempt: object) -> bool:
@@ -259,9 +263,14 @@ def main() -> int:
         measured = cheap_total / expensive_total
         median_ratio = statistics.median(paired)
         print(
-            f"\n실측 비용비 c = {measured:.3f}  (승급이 일어난 {len(paired)}개 과제의"
-            " 비용 합계 비율. 기대 비용 식이 전제하는 가중치다)"
+            f"\n실측 비용비 c = {measured:.3f}  (승급 {escalated_total}건 중 양쪽 비용을"
+            f" 얻은 {len(paired)}건의 비용 합계 비율. 기대 비용 식이 전제하는 가중치다)"
         )
+        if len(paired) < escalated_total:
+            print(
+                f"  승급 {escalated_total - len(paired)}건은 비용이 없거나 0 이라 빠졌다."
+                " 표본이 승급 전체를 대표하지 않을 수 있다."
+            )
         print(f"  과제별 비율의 중앙값: {median_ratio:.3f}")
         if abs(median_ratio - measured) > 0.1:
             print(
@@ -278,7 +287,7 @@ def main() -> int:
     elif paired:
         print(
             f"\n비용비 c = {c:.2f} — **가정값**이다. 양쪽 비용을 얻은 승급 과제가"
-            f" {len(paired)}개뿐이라 중앙값을 쓰기에 부족하다(최소 {MINIMUM_PAIRED}개)."
+            f" {len(paired)}개뿐이라 실측값을 쓰기에 부족하다(최소 {MINIMUM_PAIRED}개)."
         )
     else:
         print(f"\n비용비 c = {c:.2f} — **가정값**이다. 승급 과제에서 양쪽 비용을 모두 얻지 못했다.")
