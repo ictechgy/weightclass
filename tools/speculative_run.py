@@ -83,7 +83,8 @@ class Attempt(TypedDict, total=False):
     child: ChildResult
     made_changes: bool
     patch_lines: int
-    dropped_ignored: list[str]
+    # 개수만 남긴다. 경로명은 에이전트가 짓는 문자열이므로 로그에 넣지 않는다.
+    dropped_ignored: int
     excluded_scaffolding: list[str]
     accepted: bool
     # "route" = 싼 경로 자체에 대한 판정, "infrastructure" = 도구가 고장난 것.
@@ -100,6 +101,10 @@ class Attempt(TypedDict, total=False):
 # 정당한 변경이 조용히 사라지고, 아무것도 안 버리면 스캐폴딩 수백 줄이 패치와
 # 검증 트리에 섞인다. 목록은 틀릴 수 있으므로 --exclude-dir 로 늘릴 수 있고,
 # 무엇을 뺐는지는 매번 기록에 남긴다.
+# 작업공간 이름의 접두사. mkdtemp 호출부와 삭제 허용 목록이 같은 상수를
+# 보게 해서, 한쪽만 바뀌면 --prune 이 조용히 아무것도 못 지우는 일을 막는다.
+WORKSPACE_PREFIXES = ("spec-cheap-", "spec-expensive-", "spec-home-")
+
 AGENT_SCAFFOLDING = frozenset(
     {".serena", ".omc", ".claude", ".codex", ".aider", ".cursor", ".windsurf", ".continue"}
 )
@@ -143,6 +148,17 @@ _GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_TERMINAL_PROMPT": "0",
 }
+
+
+def _safe(text: str, limit: int = 200) -> str:
+    """Strip control characters before printing text the agent could influence.
+
+    Exception messages carry pathnames, and the agent chooses those. A crafted
+    filename holding terminal escapes would otherwise repaint the terminal of
+    whoever is watching the run.
+    """
+    cleaned = "".join(character for character in text if character.isprintable())
+    return cleaned[:limit] + ("…" if len(cleaned) > limit else "")
 
 
 def _route_identity(argv: list[str]) -> dict[str, str]:
@@ -335,6 +351,8 @@ def run_verify(verify: Path, workspace: Path, home: Path) -> VerifyResult:
     # 검증 명령 자체를 컨테이너나 jail 에 넣는 것뿐이다.
     environment["HOME"] = str(home)
     environment["TMPDIR"] = str(home)
+    timed_out = False
+    code: int | None = None
     with subprocess.Popen(
         [str(verify)],
         cwd=workspace,
@@ -348,19 +366,26 @@ def run_verify(verify: Path, workspace: Path, home: Path) -> VerifyResult:
     ) as verifier:
         try:
             verifier.communicate(timeout=VERIFY_TIMEOUT)
+            code = verifier.returncode
         except subprocess.TimeoutExpired:
-            _kill_group(verifier)
+            timed_out = True
             try:
                 verifier.communicate(timeout=30)
             except subprocess.TimeoutExpired:
                 verifier.kill()
-            return {
-                "passed": False,
-                "exit_code": None,
-                "timed_out": True,
-                "seconds": VERIFY_TIMEOUT,
-            }
-        code = verifier.returncode
+        finally:
+            # 타임아웃이든 아니든 그룹을 정리한다. 검증기가 백그라운드
+            # 프로세스를 띄우고 파이프를 닫은 채 정상 종료하면, 그 손자는
+            # 곧 지워질 트리를 붙들고 계속 돈다. with 블록 안에서 반환하지
+            # 않는 것도 같은 이유다 — __exit__ 의 wait() 가 거기서 막힌다.
+            _kill_group(verifier)
+    if timed_out:
+        return {
+            "passed": False,
+            "exit_code": None,
+            "timed_out": True,
+            "seconds": VERIFY_TIMEOUT,
+        }
     return {
         "passed": code == 0,
         "exit_code": code,
@@ -561,7 +586,7 @@ def resolved_own_workspace(candidate: Path, out_dir: Path) -> Path | None:
     accepted = (
         # 작업공간은 out_dir/.work 아래에만 만들어진다.
         resolved.parent == root / ".work"
-        and resolved.name.startswith(("spec-cheap-", "spec-expensive-", "spec-home-"))
+        and resolved.name.startswith(WORKSPACE_PREFIXES)
         and resolved.is_dir()
     )
     # 검사한 경로를 그대로 돌려준다. 검사와 삭제가 서로 다른 경로를 보면
@@ -650,7 +675,10 @@ def attempt(
         record["excluded_scaffolding"] = build_scaffolding
         patch_bytes, dropped = make_patch(handover)
         record["patch_lines"] = patch_bytes.count(b"\n")
-        record["dropped_ignored"] = dropped
+        # 경로명 자체를 남기지 않는다. 파일 이름은 에이전트가 짓고, 거기에
+        # 태스크 내용이나 자격증명을 실을 수 있다. 이 스크립트가 내건 계약은
+        # 결과와 수치만 기록한다는 것이므로 개수만 남긴다.
+        record["dropped_ignored"] = len(dropped)
         record["made_changes"] = record["patch_lines"] > 0
         verify_home = Path(tempfile.mkdtemp(prefix="spec-home-", dir=work_root))
         register(registry, verify_home, add=True)
@@ -809,7 +837,7 @@ def main() -> int:
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
-    reason = f" — {cheap['error']}" if not cheap["accepted"] and cheap.get("error") else ""
+    reason = f" — {_safe(cheap['error'])}" if not cheap["accepted"] and cheap.get("error") else ""
     print(
         f"  싼 경로 {'통과' if cheap['accepted'] else '실패'}"
         f"  (자식 {child_seconds}s, 검증 {cheap['verify']['seconds']}s){reason}"
@@ -846,7 +874,7 @@ def main() -> int:
         )
         record["expensive"] = expensive
         reason = (
-            f" — {expensive['error']}"
+            f" — {_safe(expensive['error'])}"
             if not expensive["accepted"] and expensive.get("error")
             else ""
         )

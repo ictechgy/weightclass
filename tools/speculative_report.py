@@ -98,8 +98,9 @@ def main() -> int:
             return True
         cheap = record["cheap"]
         if not isinstance(cheap, dict):
-            # assert 로 좁히면 python -O 에서 사라진다. 이 술어는 손상 줄
-            # 분류를 통과한 기록에도 도므로 실제 검사가 필요하다.
+            # 여기 오면 안 되는 모양이다. 모양 검사를 통과한 기록만 오지만,
+            # assert 로 좁히면 python -O 에서 사라지므로 실제로 확인한다.
+            # 인프라 실패로 분류해 p 에서 빼는 것이 안전한 쪽이다.
             return True
         # 러너가 failure_kind 로 알려준다. 예전에는 에러 문자열을 부분
         # 일치로 추측했는데, 러너에서 문구를 다듬으면 조용히 분류가 틀어졌다.
