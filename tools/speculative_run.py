@@ -82,6 +82,8 @@ class Attempt(TypedDict, total=False):
     child: ChildResult
     made_changes: bool
     patch_lines: int
+    dropped_ignored: list[str]
+    accepted: bool
     patch: str
     verify: VerifyResult
     error: str
@@ -233,20 +235,35 @@ def run_verify(verify: Path, workspace: Path) -> VerifyResult:
     the host. `write_patch` takes its diff in a separate clone for this reason.
     """
     started = time.monotonic()
-    try:
-        result = subprocess.run(
-            [str(verify)],
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            timeout=VERIFY_TIMEOUT,
-            stdin=subprocess.DEVNULL,
-        )
-    except subprocess.TimeoutExpired:
-        return {"passed": False, "exit_code": None, "timed_out": True, "seconds": VERIFY_TIMEOUT}
+    # 자식이 쓴 코드를 실행하므로, 그것이 띄운 손자까지 확실히 정리해야 한다.
+    # 여기서도 프로세스 그룹째 죽인다.
+    with subprocess.Popen(
+        [str(verify)],
+        cwd=workspace,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    ) as verifier:
+        try:
+            verifier.communicate(timeout=VERIFY_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            _kill_group(verifier)
+            try:
+                verifier.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                verifier.kill()
+            return {
+                "passed": False,
+                "exit_code": None,
+                "timed_out": True,
+                "seconds": VERIFY_TIMEOUT,
+            }
+        code = verifier.returncode
     return {
-        "passed": result.returncode == 0,
-        "exit_code": result.returncode,
+        "passed": code == 0,
+        "exit_code": code,
         "timed_out": False,
         "seconds": round(time.monotonic() - started, 1),
     }
@@ -271,8 +288,14 @@ def build_handover_tree(repo: Path, commit: str, workspace: Path, handover: Path
     clone_at(repo, commit, handover)
     keep = handover / ".git"
     for entry in handover.iterdir():
-        if entry != keep:
-            shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+        if entry == keep:
+            continue
+        # is_dir() 은 심링크를 따라가는데 rmtree 는 심링크 인자에 OSError 를
+        # 낸다. 디렉터리를 가리키는 추적된 심링크가 있으면 여기서 죽는다.
+        if entry.is_symlink() or entry.is_file():
+            entry.unlink()
+        else:
+            shutil.rmtree(entry)
     for entry in workspace.iterdir():
         if entry.name == ".git":
             continue
@@ -287,9 +310,26 @@ def build_handover_tree(repo: Path, commit: str, workspace: Path, handover: Path
             shutil.copytree(entry, target, symlinks=True)
 
 
-def write_patch(handover: Path, destination: Path) -> int:
-    """Take the diff from the handover tree. Applying it stays a human action."""
+def write_patch(handover: Path, destination: Path) -> tuple[int, list[str]]:
+    """Stage the handover tree, drop what the patch cannot carry, and emit the diff.
+
+    `git add` honours `.gitignore`, so a file the child wrote under an ignored
+    path is never in the patch. Leaving it on disk would let verification pass
+    on a tree the user cannot rebuild from what they were handed — the cheap
+    route could satisfy the tests with a file that silently does not ship.
+
+    So anything staging refused is deleted before the tree is verified, and the
+    names are returned so the caller can record that it happened. After this the
+    tree is exactly "clean checkout plus the patch".
+    """
     run_git(["add", "-A", "--", ".", ":(exclude).*/"], handover)
+    dropped = [
+        line
+        for line in run_git(["clean", "-ndX", "--", ".", ":(exclude).*/"], handover).splitlines()
+        if line.strip()
+    ]
+    if dropped:
+        run_git(["clean", "-fdX", "--", ".", ":(exclude).*/"], handover)
     patch = run_git(
         # --binary 가 없으면 바이너리 변경이 "Binary files differ" 로만 남고,
         # 우리가 안내하는 git apply 가 그 패치를 거부한다.
@@ -297,7 +337,7 @@ def write_patch(handover: Path, destination: Path) -> int:
         handover,
     )
     destination.write_text(patch, encoding="utf-8")
-    return patch.count("\n")
+    return patch.count("\n"), dropped
 
 
 def write_registry(registry: Path, entries: list[str]) -> None:
@@ -442,7 +482,8 @@ def attempt(
         # 패치는 검증 **전에** 뜬다. 검증은 테스트를 돌리므로 __pycache__,
         # 커버리지 파일, 빌드 산출물을 남기고, 나중에 뜨면 그것들이 패치에
         # 섞여 들어가 적용이 깨진다.
-        record["patch_lines"] = write_patch(handover, patch)
+        record["patch_lines"], dropped = write_patch(handover, patch)
+        record["dropped_ignored"] = dropped
         record["made_changes"] = record["patch_lines"] > 0
         record["verify"] = run_verify(verify, handover)
     except (RunFailure, subprocess.SubprocessError, OSError) as error:
@@ -457,8 +498,17 @@ def attempt(
     discard(registry, workspace, out_dir)
 
     verdict = record.get("verify")
-    passed = bool(verdict and verdict["passed"])
-    if passed and keep_on_pass:
+    # 변경이 없으면 통과로 치지 않는다. 저장소의 기존 테스트는 이미 초록이므로,
+    # 아무것도 하지 않은 자식은 검증을 그냥 통과한다. 그것을 성공으로 세면 p 가
+    # 거짓으로 낮아지고, p 를 재는 것이 이 스크립트의 유일한 목적이다.
+    #
+    # `accepted` 가 이 시도의 유일한 판정이다. verify.passed 는 검증 명령이
+    # 무엇을 말했는지를 남길 뿐이고, 호출자는 accepted 만 본다. 둘을 따로 보면
+    # 서로 다른 답을 내는 곳이 생긴다.
+    if verdict and verdict["passed"] and not record.get("made_changes"):
+        record["error"] = "route made no change; not counted as a pass"
+    record["accepted"] = bool(verdict and verdict["passed"] and record.get("made_changes"))
+    if record["accepted"] and keep_on_pass:
         record["patch"] = str(patch)
     else:
         discard(registry, handover, out_dir)
@@ -538,12 +588,12 @@ def main() -> int:
         registry,
         keep_on_pass=True,
     )
-    cheap_verify = cheap["verify"]
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
+    reason = f" — {cheap['error']}" if not cheap["accepted"] and cheap.get("error") else ""
     print(
-        f"  싼 경로 검증 {'통과' if cheap_verify['passed'] else '실패'}"
-        f"  (자식 {child_seconds}s, 검증 {cheap_verify['seconds']}s)"
+        f"  싼 경로 {'통과' if cheap['accepted'] else '실패'}"
+        f"  (자식 {child_seconds}s, 검증 {cheap['verify']['seconds']}s){reason}"
     )
 
     expensive: Attempt | None = None
@@ -555,7 +605,7 @@ def main() -> int:
         "expensive": None,
     }
 
-    if not cheap_verify["passed"]:
+    if not cheap["accepted"]:
         print(f"승급: {arguments.expensive}")
         record["escalated"] = True
         expensive = attempt(
@@ -570,15 +620,20 @@ def main() -> int:
             keep_on_pass=True,
         )
         record["expensive"] = expensive
-        print(f"  승급 경로 검증 {'통과' if expensive['verify']['passed'] else '실패'}")
+        reason = (
+            f" — {expensive['error']}"
+            if not expensive["accepted"] and expensive.get("error")
+            else ""
+        )
+        print(f"  승급 경로 {'통과' if expensive['accepted'] else '실패'}{reason}")
 
     with log.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     winner: Attempt | None = None
-    if cheap_verify["passed"]:
+    if cheap["accepted"]:
         winner = cheap
-    elif expensive is not None and expensive["verify"]["passed"]:
+    elif expensive is not None and expensive["accepted"]:
         winner = expensive
 
     if winner:

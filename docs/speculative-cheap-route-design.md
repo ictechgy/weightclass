@@ -77,21 +77,30 @@ gets thrown away.
 ### Flow
 
 ```
-1. clone the repo at HEAD into a temp workspace       (no vendor, no tokens)
-2. run the cheap route's reviewed command there        (child 1)
-3. run the reviewed verify command there               (child 2, no tokens)
-   pass -> emit the diff + base commit, keep workspace, stop
-   fail -> delete the workspace entirely
-4. clone again into a fresh workspace
-5. run the escalation route the router names           (child 3)
-6. run the same verify command                         (child 4)
-7. emit the diff + base commit + both route fingerprints + the verdicts
+1. clone the repo at HEAD into a temp workspace        (no vendor, no tokens)
+2. run the cheap route's reviewed command there         (child 1)
+3. rebuild that work in a second clone the child never touched:
+   copy its files, leave its .git behind, keep symlinks as links
+4. stage, emit the patch, delete whatever .gitignore kept out of it
+5. run the reviewed verify command on that tree         (child 2, no tokens)
+   pass -> hand over the patch + base commit, stop
+   fail -> delete both trees
+6. repeat 1-5 with the escalation route the router names (children 3, 4)
+7. emit the patch, base commit, both route fingerprints, and the verdicts
 ```
 
-weightclass **never writes to the user's repository.** Step 3 and step 7 emit a
-patch and the commit it applies to; applying it stays a human action, exactly as
-reviewing the route is today. That preserves the property that makes the tool
-auditable.
+Steps 3 and 4 are the load-bearing ones, and each closes a hole the obvious
+version leaves open. **Verifying the child's own workspace** runs the verify
+script over a `.git` the child could write, where a planted
+`filter.<name>.clean` executes on the host. **Verifying before dropping ignored
+files** blesses a tree the patch cannot rebuild, so a cheap route could pass the
+tests using a file that never ships. Rebuilding, then pruning to exactly what the
+patch carries, means the thing verified and the thing handed over are the same
+thing.
+
+weightclass **never writes to the user's repository.** It emits a patch and the
+commit it applies to; applying it stays a human action, exactly as reviewing the
+route is today. That preserves the property that makes the tool auditable.
 
 ### The verify contract
 
@@ -110,12 +119,16 @@ python -m pytest -q
     --exclude-dir=.git .
 ```
 
-**Do not reach for `git` inside the verify script.** It runs inside the
-workspace the child just had write access to, which includes `.git/config` and
-`.gitattributes`; a `filter.<name>.clean` planted there executes on the host the
-next time git stages or diffs that tree. The runner takes its own diff in a
-separate clone for exactly this reason, and a verify script that runs `git diff`
-would walk straight back into it. Read files, not the repository.
+**Verification runs on the handover tree, not on the child's workspace.** The
+runner rebuilds the child's work inside a clone the child never had a handle on,
+takes the patch there, deletes anything `.gitignore` kept out of that patch, and
+verifies what is left. Two things follow. The `.git` under the verify script is
+ours, so a `filter.<name>.clean` the child planted has no config to name it. And
+what passes verification is exactly what the patch reconstructs — a cheap route
+cannot satisfy the tests using a file that will not ship.
+
+Reading files rather than the repository is still the better habit in a verify
+script, since the tree it runs on is assembled from untrusted output either way.
 
 **The secret scan is not optional.** A cheap run that writes a credential and
 then passes the test suite would otherwise have its diff promoted with the

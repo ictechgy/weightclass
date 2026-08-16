@@ -54,8 +54,12 @@ def main() -> int:
         if not line.strip():
             continue
         try:
-            records.append(json.loads(line))
-        except ValueError:
+            record = json.loads(line)
+            # 손상된 줄만 견디고 필드 누락에는 죽는 것은 일관성이 없다. 이
+            # 리포트가 읽는 모양을 갖췄는지 여기서 한 번에 본다.
+            record["cheap"]["accepted"]
+            records.append(record)
+        except (ValueError, KeyError, TypeError):
             damaged += 1
     if damaged:
         print(f"경고: 손상된 줄 {damaged}개를 건너뛴다")
@@ -64,13 +68,12 @@ def main() -> int:
         return 1
 
     total = len(records)
-    cheap_passed = sum(1 for r in records if r["cheap"]["verify"]["passed"])
+    cheap_passed = sum(1 for r in records if r["cheap"]["accepted"])
     failed = total - cheap_passed
     both_failed = sum(
         1
         for r in records
-        if not r["cheap"]["verify"]["passed"]
-        and (r["expensive"] is None or not r["expensive"]["verify"]["passed"])
+        if not r["cheap"]["accepted"] and (r["expensive"] is None or not r["expensive"]["accepted"])
     )
 
     p = failed / total
