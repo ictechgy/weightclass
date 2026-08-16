@@ -266,9 +266,9 @@ def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
                     child.communicate(timeout=30)
                 except subprocess.TimeoutExpired:
                     child.kill()
-                # with 블록 안에서 반환하지 않는다. Popen.__exit__ 이 파이프를
-                # 닫고 wait() 를 부르는데, 손자가 파이프를 붙들고 있으면 거기서
-                # 무한정 막힌다. 죽었는지 확인만 하고 밖에서 반환한다.
+                # 타임아웃 여부만 들고 나가 반환은 블록 밖에서 한다. 반환
+                # 지점을 한 곳에 모으기 위한 것이지 __exit__ 을 피하려는 것이
+                # 아니다 — with 안에서 return 해도 __exit__ 는 똑같이 실행된다.
                 timed_out = True
             else:
                 timed_out = False
@@ -369,16 +369,20 @@ def run_verify(verify: Path, workspace: Path, home: Path) -> VerifyResult:
             code = verifier.returncode
         except subprocess.TimeoutExpired:
             timed_out = True
+            # 여기서는 자식이 아직 회수되지 않았으므로 PID 가 유효하고, 그룹을
+            # 죽이는 것이 안전하다. 검증기는 자식이 쓴 코드를 실행하므로 손자
+            # 정리가 특히 중요하다.
+            _kill_group(verifier)
             try:
                 verifier.communicate(timeout=30)
             except subprocess.TimeoutExpired:
                 verifier.kill()
-        finally:
-            # 타임아웃이든 아니든 그룹을 정리한다. 검증기가 백그라운드
-            # 프로세스를 띄우고 파이프를 닫은 채 정상 종료하면, 그 손자는
-            # 곧 지워질 트리를 붙들고 계속 돈다. with 블록 안에서 반환하지
-            # 않는 것도 같은 이유다 — __exit__ 의 wait() 가 거기서 막힌다.
-            _kill_group(verifier)
+        # 정상 종료 경로에서는 그룹을 죽이지 **않는다.** communicate() 가
+        # 이미 wait() 로 자식을 회수했으므로 그 PID 는 OS 에 반납된 상태이고,
+        # os.getpgid(반납된 PID) 는 재사용된 다른 프로세스의 그룹을 가리킬 수
+        # 있다. 거기에 SIGKILL 을 보내면 사용자 머신의 무관한 프로세스를
+        # 죽인다. 검증기가 백그라운드 프로세스를 띄우고 정상 종료하면 그것은
+        # 살아남는다 — 남의 프로세스를 죽일 위험보다 그편이 낫다.
     if timed_out:
         return {
             "passed": False,
@@ -412,8 +416,11 @@ def build_handover_tree(
     bless a tree the user cannot reproduce from what they were given. Verifying
     *this* tree cannot drift from the patch, because the patch is taken from it.
 
-    Returns the scaffolding directories it left behind, so the caller can record
-    what was dropped rather than let it vanish silently.
+    Returns the **top-level** scaffolding directories it left behind. Copies of
+    subdirectories filter scaffolding out through `copytree`'s `ignore`, and
+    those nested drops are not listed — the count would be misleading either
+    way, and the top-level names are what a reader needs to recognise the
+    tooling in play.
     """
     excluded: list[str] = []
     clone_at(repo, commit, handover)

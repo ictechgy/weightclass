@@ -119,8 +119,14 @@ python3 -m pytest -q
 python3 - <<'SCAN'
 import os, pathlib, re, sys
 
+# 이 목록은 출발점이지 완결이 아니다. 쓰는 곳의 자격증명 형식을 넣어라.
 PATTERNS = re.compile(
-    rb"sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY"
+    rb"sk-[A-Za-z0-9_-]{16,}"           # OpenAI, 프로젝트 키의 -/_ 포함
+    rb"|gh[pousr]_[A-Za-z0-9]{20,}"     # GitHub 클래식 토큰 전 종류
+    rb"|github_pat_[A-Za-z0-9_]{20,}"   # GitHub fine-grained
+    rb"|AKIA[0-9A-Z]{16}"               # AWS 액세스 키
+    rb"|xox[baprs]-[A-Za-z0-9-]{10,}"   # Slack
+    rb"|BEGIN [A-Z ]*PRIVATE KEY"
 )
 for path in pathlib.Path(".").rglob("*"):
     if ".git" in path.parts:
