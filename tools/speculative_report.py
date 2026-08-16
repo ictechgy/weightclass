@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import statistics
 from pathlib import Path
 
 
@@ -192,7 +193,45 @@ def main() -> int:
     print(f"  둘 다 실패       : {both_failed}")
     print(f"\np = {p:.1%}   95% CI [{lo:.1%}, {hi:.1%}]")
 
-    print(f"\n모델 비용비 c = {c:.2f} 기준 (기대 비용 = c + p)")
+    # 승급이 일어난 과제에서는 같은 과제를 양쪽 모델로 돌린 셈이다. 거기서
+    # c 를 짝지어 실측할 수 있다 — 가정하거나 남의 벤치마크에서 빌려오는 것보다
+    # 훨씬 낫다. 같은 과제이므로 과제 난이도 차이가 상쇄된다.
+    def cost_of(attempt: object) -> float | None:
+        if not isinstance(attempt, dict):
+            return None
+        child = attempt.get("child")
+        if not isinstance(child, dict):
+            return None
+        usage = child.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        value = usage.get("cost_usd")
+        return float(value) if isinstance(value, (int, float)) else None
+
+    paired = []
+    for r in usable:
+        cheap_cost = cost_of(r["cheap"])
+        expensive_cost = cost_of(r.get("expensive"))
+        if cheap_cost is not None and expensive_cost not in (None, 0):
+            paired.append(cheap_cost / expensive_cost)
+
+    if paired:
+        measured = statistics.median(paired)
+        print(
+            f"\n실측 비용비 c = {measured:.3f}  (승급이 일어난 {len(paired)}개 과제에서"
+            " 같은 과제를 양쪽 모델로 돌린 값의 중앙값)"
+        )
+        if abs(measured - c) > 0.05:
+            print(f"  주의: --cost-ratio 로 준 {c:.2f} 와 다르다. 아래 계산은 실측값을 쓴다.")
+        c = measured
+    else:
+        print(f"\n비용비 c = {c:.2f} — **가정값**이다. 승급 과제에서 양쪽 비용을 모두 얻지 못했다.")
+        print(
+            "  Claude 는 --output-format json 이면 total_cost_usd 를 준다."
+            " Codex 는 USD 를 주지 않으므로 --prices 로 요금표를 넘겨야 한다."
+        )
+
+    print("\n기대 비용 = c + p")
     print(f"  기대 비용 {c + p:.2f}  ->  절감 {1 - (c + p):.1%}")
     print(f"  구간 하한 p={lo:.1%} 이면 절감 {1 - (c + lo):.1%}")
     print(f"  구간 상한 p={hi:.1%} 이면 절감 {1 - (c + hi):.1%}")

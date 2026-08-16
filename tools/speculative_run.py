@@ -65,6 +65,9 @@ class ChildResult(TypedDict):
     timed_out: bool
     seconds: float
     tokens: int | None
+    # 벤더가 말해 주는 만큼의 사용량. cost_usd 가 있으면 그것이 유일하게
+    # 벤더 간 비교 가능한 수치다.
+    usage: dict[str, object] | None
 
 
 class VerifyResult(TypedDict):
@@ -239,7 +242,33 @@ def clone_at(repo: Path, commit: str, destination: Path) -> None:
     run_git(["remote", "remove", "origin"], destination)
 
 
-def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
+def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
+    """Turn a token breakdown into dollars using caller-supplied rates.
+
+    Only needed for vendors that report no cost. Codex is one: its `--json`
+    output carries token counts and no USD anywhere, and the model id is not in
+    the events either — so the rates have to be named from the invocation side.
+
+    Rates are USD per million tokens, keyed by the token field they price.
+    A field with no rate contributes nothing rather than silently costing zero
+    by accident, so an incomplete table produces None instead of a wrong number
+    that looks authoritative.
+    """
+    breakdown = usage.get("breakdown") or {}
+    if not breakdown or not rates:
+        return None
+    priced = 0.0
+    for field, count in breakdown.items():
+        rate = rates.get(field)
+        if rate is None:
+            return None
+        priced += count * rate / 1_000_000
+    return priced
+
+
+def run_child(
+    command: list[str], workspace: Path, task: str, rates: dict[str, float] | None = None
+) -> ChildResult:
     """One vendor invocation. The task goes in on stdin and never into the log.
 
     Unlike `run_verify`, this inherits the full environment on purpose. The
@@ -292,23 +321,123 @@ def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
             "timed_out": True,
             "seconds": CHILD_TIMEOUT,
             "tokens": None,
+            "usage": None,
         }
+    usage = extract_usage(stdout, stderr)
+    if usage is not None and "cost_usd" not in usage and rates:
+        # 벤더가 비용을 안 알려주는 경우에만 요금표로 계산한다. 벤더가 준
+        # 숫자가 있으면 그것이 언제나 우선이다 — 우리 요금표는 낡을 수 있다.
+        computed = price_from_tokens(usage, rates)
+        if computed is not None:
+            usage["cost_usd"] = computed
+            usage["source"] = f"{usage.get('source', '?')}+price-table"
     return {
         "exit_code": code,
         "timed_out": False,
         "seconds": round(time.monotonic() - started, 1),
-        "tokens": extract_tokens(stdout, stderr),
+        "tokens": usage.get("total_tokens") if usage else None,
+        "usage": dict(usage) if usage else None,
     }
 
 
-def extract_tokens(stdout: str, stderr: str) -> int | None:
-    """Best-effort token count from whichever vendor produced the output.
+class Usage(TypedDict, total=False):
+    """What one invocation consumed, as far as the vendor will say.
 
-    Codex prints a cumulative `tokens used` on stderr. Claude, with
-    `--output-format json`, reports a usage object. These two numbers are **not
-    comparable to each other** — Claude's includes cache reads and Codex's is
-    opaque — so never divide one by the other. Within one vendor they are fine.
+    `cost_usd` is the number that matters and the only one comparable across
+    vendors. Claude reports it directly. Codex reports none, so it has to be
+    computed from token counts and a price table the caller supplies — which is
+    why `--prices` exists. Token counts are **not** comparable between vendors:
+    each counts caching differently.
     """
+
+    cost_usd: float
+    total_tokens: int
+    breakdown: dict[str, int]
+    source: str
+
+
+def _claude_usage(stdout: str) -> Usage | None:
+    """Claude with `--output-format json` writes one JSON object to stdout.
+
+    Verified against the CLI: `total_cost_usd` sits at the root and is real
+    dollars under API-key billing. There is a second copy under
+    `modelUsage.<model id>.costUSD`, but those keys are dynamic and contain
+    brackets (`claude-opus-5[1m]`), so the root field is the one to read.
+    """
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("usage")
+    usage_fields = raw if isinstance(raw, dict) else {}
+    breakdown: dict[str, int] = {}
+    for field in _CLAUDE_USAGE_FIELDS:
+        value = usage_fields.get(field)
+        if isinstance(value, int):
+            breakdown[field] = value
+    cost = payload.get("total_cost_usd")
+    usage: Usage = {"breakdown": breakdown, "source": "claude-json"}
+    if breakdown:
+        usage["total_tokens"] = sum(breakdown.values())
+    if isinstance(cost, (int, float)):
+        usage["cost_usd"] = float(cost)
+    return usage if breakdown or "cost_usd" in usage else None
+
+
+def _codex_usage(stdout: str) -> Usage | None:
+    """Codex with `--json` writes JSONL; the totals ride on `turn.completed`.
+
+    Verified against the CLI: no USD figure appears anywhere in that output, and
+    **stderr is empty in `--json` mode**, so the older `tokens used` scrape
+    finds nothing once the flag is on. Scan for the event type rather than
+    assuming it is the last line.
+    """
+    fields = (
+        "input_tokens",
+        "cached_input_tokens",
+        "cache_write_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+    )
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+            continue
+        raw = event.get("usage")
+        if not isinstance(raw, dict):
+            continue
+        breakdown = {f: raw[f] for f in fields if isinstance(raw.get(f), int)}
+        if not breakdown:
+            continue
+        # cached_input_tokens 와 reasoning_output_tokens 가 각각 input/output 의
+        # 내역인지 별도 항목인지는 프로브로 확인되지 않았다. 이중 계산을 피해
+        # 총계는 input + output 만으로 낸다.
+        total = breakdown.get("input_tokens", 0) + breakdown.get("output_tokens", 0)
+        return {"breakdown": breakdown, "total_tokens": total, "source": "codex-json"}
+    return None
+
+
+def extract_usage(stdout: str, stderr: str) -> Usage | None:
+    """Best-effort usage from whichever vendor produced the output."""
+    for reader in (_claude_usage, _codex_usage):
+        usage = reader(stdout)
+        if usage:
+            return usage
+    # 구형 경로: --json 없이 돌린 codex 는 stderr 에 누적 토큰만 찍는다.
+    total = extract_tokens(stdout, stderr)
+    return {"total_tokens": total, "breakdown": {}, "source": "stderr-scrape"} if total else None
+
+
+def extract_tokens(stdout: str, stderr: str) -> int | None:
+    """The old cumulative-token scrape, kept for runs made without `--json`."""
     matches = _CODEX_TOKENS.findall(stderr) or _CODEX_TOKENS.findall(stdout)
     if matches:
         return int(matches[-1].replace(",", ""))
@@ -673,6 +802,7 @@ def attempt(
     out_dir: Path,
     registry: Path,
     scaffolding: frozenset[str],
+    rates: dict[str, float] | None,
 ) -> Attempt:
     """Clone, run one route, verify. The workspace survives only a pass."""
     # 작업공간은 산출물 디렉터리 바로 아래가 아니라 그 안의 .work 에 만든다.
@@ -700,7 +830,7 @@ def attempt(
     build_scaffolding: list[str] = []
     try:
         clone_at(repo, commit, workspace)
-        record["child"] = run_child(command, workspace, task)
+        record["child"] = run_child(command, workspace, task, rates)
         # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
         # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
         # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
@@ -806,6 +936,14 @@ def main() -> int:
     parser.add_argument("--verify", type=Path, help="executable; exit code is the verdict")
     parser.add_argument("--label", default="", help="free-text tag recorded with the run")
     parser.add_argument(
+        "--prices",
+        type=Path,
+        help=(
+            "JSON file with USD-per-million-token rates, for vendors that report no cost "
+            '(Codex). Shape: {"cheap": {"input_tokens": 0.25, ...}, "expensive": {...}}'
+        ),
+    )
+    parser.add_argument(
         "--exclude-dir",
         action="append",
         default=[],
@@ -875,6 +1013,24 @@ def main() -> int:
     print(f"기준 커밋 {commit[:12]}  저장소 {repo}")
     print(f"싼 경로: {cheap_argv[0]} (인자 {len(cheap_argv) - 1}개)")
 
+    rates: dict[str, dict[str, float]] = {}
+    if arguments.prices:
+        try:
+            loaded = json.loads(arguments.prices.expanduser().read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            parser.error(f"--prices is not readable JSON: {error}")
+        if not isinstance(loaded, dict):
+            parser.error("--prices must be a JSON object keyed by 'cheap' and 'expensive'")
+        for arm in ("cheap", "expensive"):
+            table = loaded.get(arm)
+            if table is None:
+                continue
+            if not isinstance(table, dict) or not all(
+                isinstance(v, (int, float)) for v in table.values()
+            ):
+                parser.error(f"--prices['{arm}'] must map token field names to numbers")
+            rates[arm] = {k: float(v) for k, v in table.items()}
+
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)
     cheap = attempt(
         "cheap",
@@ -886,6 +1042,7 @@ def main() -> int:
         arguments.out_dir,
         registry,
         scaffolding=frozenset(scaffolding),
+        rates=rates.get("cheap"),
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
@@ -923,6 +1080,7 @@ def main() -> int:
             arguments.out_dir,
             registry,
             scaffolding=frozenset(scaffolding),
+            rates=rates.get("expensive"),
         )
         record["expensive"] = expensive
         reason = (

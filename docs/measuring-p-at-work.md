@@ -1,0 +1,180 @@
+# Measuring `p` on a real repository with API keys
+
+The design in [`speculative-cheap-route-design.md`](speculative-cheap-route-design.md)
+turns on one number: how often the cheap route fails verification. This is how
+to get that number from real work, and what changes when the vendors are billed
+by API key rather than by subscription.
+
+## What API-key billing changes
+
+Three things, all of them improvements.
+
+**The saving is money.** Under a flat subscription a token saved changes no
+invoice. Under an API key it comes straight off the bill.
+
+**Cost becomes measurable.** The earlier study had to model cost because
+subscription CLIs report none. Claude with `--output-format json` puts
+`total_cost_usd` at the root of its output — verified against the CLI, and real
+dollars under API-key billing.
+
+**Vendor comparison becomes meaningful.** Token counts are not comparable across
+vendors: Claude sums cache reads into its usage, Codex reports an opaque total.
+Dollars are the same unit everywhere. The vendor question that could not be
+answered on subscriptions can be answered here.
+
+## What each vendor will and will not tell you
+
+Probed directly against the installed CLIs:
+
+| | Claude Code | Codex |
+| --- | --- | --- |
+| USD cost | **`total_cost_usd`** at the root | **none, anywhere** |
+| tokens | `usage.*`, one JSON object | `turn.completed.usage.*`, JSONL |
+| flag | `--output-format json` | `--json` |
+| model id in output | dynamic keys under `modelUsage` | **absent** |
+
+Two traps found while probing:
+
+- **Codex's `--json` empties stderr.** The cumulative `tokens used` line the
+  older harness scraped is simply not there once the flag is on. `capture.py`
+  and `speculative_run.py` now read the JSONL event instead, and fall back to the
+  scrape only for runs made without the flag.
+- **Claude's `modelUsage` keys contain brackets** — the observed key was
+  literally `claude-opus-5[1m]`. Any dotted-path or `jq` access breaks on it.
+  Read the root `total_cost_usd` instead; it is the same number.
+
+Because Codex reports no cost, its dollars have to be computed from token counts
+and rates you supply. That is what `--prices` is for.
+
+## Setting it up
+
+### 1. Choose the pair
+
+The 90-pair study that produced the −69% figure compared `gpt-5.6-terra` against
+`gpt-5.6-luna`. **That is not your baseline.** The Codex config on this machine
+runs `gpt-5.6-sol`, so the ratio you care about is `sol` → something cheaper,
+and nobody has measured it. Expect to find your own number rather than to
+confirm that one.
+
+For Claude the aliases are `opus`, `sonnet`, `fable`; pick the pair you would
+actually consider switching between.
+
+### 2. Write `verify.sh`
+
+**Keep it short enough to audit by reading.** A generated 24 KB script that
+auto-detects every stack was tried for this document and an adversarial audit
+found fifteen distinct ways it wrongly returned "accept". A gate that never
+fires is worse than no gate, because it is believed. For one known repository
+the honest version is a dozen lines:
+
+```sh
+#!/bin/sh
+set -e
+
+# 이 저장소의 실제 테스트 명령. 자동 감지하지 않는다 — 감지에 실패하면
+# 아무것도 안 돌리고 통과해 버리는 것이 가장 나쁜 결과다.
+python3 -m pytest -q
+
+# 자격증명이 트리에 들어왔는지. 내용·경로명·심링크 타깃을 모두 본다.
+# grep 을 쓰지 않는 이유는 실측했다: \xff\xfe\x00sk-... 를 담은 파일에 대해
+# macOS 의 grep -a 도, strings|grep 도 못 찾고, tr -d '\0' 은 죽는다.
+python3 - <<'SCAN'
+import os, pathlib, re, sys
+PATTERNS = re.compile(
+    rb"sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
+    rb"|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|BEGIN [A-Z ]*PRIVATE KEY"
+)
+for path in pathlib.Path(".").rglob("*"):
+    if ".git" in path.parts:
+        continue
+    blobs = [os.fsencode(path)]
+    if path.is_symlink():
+        blobs.append(os.fsencode(os.readlink(path)))
+    elif path.is_file():
+        blobs.append(path.read_bytes())
+    if any(PATTERNS.search(b) for b in blobs):
+        print(f"credential-like string at {path}", file=sys.stderr)
+        sys.exit(1)
+SCAN
+```
+
+Replace the test line with whatever your repo actually runs. Do not use `git`
+inside it: the tree is assembled from untrusted agent output.
+
+### 3. Write the price table, if you are measuring Codex
+
+Rates are **USD per million tokens**, keyed by the token field they price.
+An unpriced field makes the whole calculation return nothing rather than
+quietly costing zero, so fill in every field the vendor reports.
+
+```json
+{
+  "cheap":     {"input_tokens": 0.25, "cached_input_tokens": 0.025,
+                "cache_write_input_tokens": 0.3, "output_tokens": 2.0,
+                "reasoning_output_tokens": 2.0},
+  "expensive": {"input_tokens": 1.25, "cached_input_tokens": 0.125,
+                "cache_write_input_tokens": 1.5, "output_tokens": 10.0,
+                "reasoning_output_tokens": 10.0}
+}
+```
+
+Claude needs none of this — it reports its own cost, and a vendor-reported
+number always wins over the table, which can go stale.
+
+### 4. Run it
+
+Commit your work first; uncommitted changes are not in the clone and the runner
+refuses to start rather than silently measure something else.
+
+```sh
+# Codex, needs the price table and --json for structured usage
+tools/speculative_run.py \
+  --repo ~/work/service --task-file task.txt \
+  --cheap    'codex exec --sandbox workspace-write --json -c model=<cheap> -' \
+  --expensive 'codex exec --sandbox workspace-write --json -c model=<expensive> -' \
+  --verify ./verify.sh --prices prices.json --out-dir ~/spec-runs
+
+# Claude, reports its own cost
+tools/speculative_run.py \
+  --repo ~/work/service --task-file task.txt \
+  --cheap    'claude --print --output-format json --model sonnet --permission-mode acceptEdits' \
+  --expensive 'claude --print --output-format json --model opus   --permission-mode acceptEdits' \
+  --verify ./verify.sh --out-dir ~/spec-runs
+```
+
+One task per invocation. Around twenty real tasks gives a usable interval.
+
+### 5. Read the answer
+
+```sh
+tools/speculative_report.py --log ~/spec-runs/runs.jsonl
+```
+
+When both arms recorded a cost, `c` is **measured from your own tasks** rather
+than assumed: on every escalated task the same task ran through both models, so
+the ratio is paired and task difficulty cancels out. The report says so
+explicitly, and warns when it had to fall back to the assumed value.
+
+The decision:
+
+| result | reading |
+| --- | --- |
+| interval entirely below break-even | cheap-first pays on this workload |
+| interval crosses break-even | not enough tasks yet |
+| interval entirely above | the idea is dead for this workload |
+
+Break-even is `1 - c`. At `c = 0.31` the cheap route can fail two times in three
+and still not lose money, which is why this is worth measuring rather than
+guessing.
+
+## What this still does not buy
+
+Verification catches catastrophes: a broken test suite, a deleted source file, a
+credential in the tree. It does not catch a cheaper model accepting `True` as a
+schema version, admitting a malformed identifier, or handing back a mutable
+internal list — all of which happened in the tier comparison and all of which
+passed their tests. See `QUALITY-RESULT.md` in the study repository.
+
+So this mode buys **safety**, not **quality**. On a codebase where a subtly
+worse implementation is expensive, that trade may not be the one you want, and
+no value of `p` changes that.
