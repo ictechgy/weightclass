@@ -21,17 +21,20 @@ the pilot a pinned mid effort came out ahead of routing on both vendors by point
 estimate — 5.5% on Codex, 5.1% on Claude — though only on Claude did the fixed
 arm's interval exclude zero; Codex's result is a wide null. In calibration, 0 of
 18 candidates were tier-sensitive, and the two tasks routed to `high` also passed
-one tier down. Five of the eighteen were run at two tiers — the rest passed at
-the routed tier and stopped, so no comparison exists for them.
+one tier down. Only five of the eighteen were run at two tiers at all — two that
+passed at both and three that failed at both — while the rest passed at the
+routed tier and stopped, so no comparison exists for them. The headline rests on
+those five.
 On work of that shape — small, well-specified maintenance tasks — effort moved
 cost and nothing else, so routing up had no quality risk to justify its price.
 The study was stopped at its own pre-registered floor rather than continuing.
 
 Read that as a bound on the evidence, not a proof about all work: one fixture,
-one vendor for calibration, and tasks small enough that low effort could finish
-almost any of them. The comparison is also one-directional — calibration
-escalates *upward* from the routed tier, so what it rules out is routing up
-paying for itself, not the possibility that an even cheaper tier would have done.
+one vendor (Codex) for calibration, and small, fully specified maintenance tasks.
+The comparison is also one-directional — calibration escalates *upward* from the
+routed tier, so what it rules out is routing up paying for itself, not the
+possibility that an even cheaper tier would have done. Nothing here was ever run
+at `low`, so the cheap end is untested rather than vindicated.
 It does not show effort never matters. It does show that nobody, including this
 router, should assert a saving without measuring it on their own workload —
 which is why every savings surface here abstains by default.

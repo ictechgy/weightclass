@@ -370,9 +370,9 @@ likely* to be tier-sensitive — 9 rated `high` and 9 rated `standard` — and t
 untested remainder is 13 `low`, 3 `standard`, and 2 `high`. Even those two
 `high` tasks, `p05` and `p09`, are not unknowns: both ran in the Phase 1 pilot
 and both passed on the first attempt. Finding nine tier-sensitive tasks in that
-tail, after none were found among the hardest eighteen, is not a bet worth 36
-more invocations to settle. Per the rule above the study stops here rather than
-lowering the floor, and **Phase 2 was never started.**
+tail, after none were found among the hardest eighteen, is not a bet worth
+another calibration round to settle. Per the rule above the study stops here
+rather than lowering the floor, and **Phase 2 was never started.**
 
 The three failures are not hidden tier sensitivity: they failed at *both* tiers,
 so they were never candidates. Two were investigated and the cause was a defect
@@ -384,6 +384,13 @@ misreported as a hang. In `p13` the agent exposed the retry count as a callback
 while the test looked only for a tuple return or a function attribute. Had those
 tests been correct, the tasks would most likely have passed at the routed tier —
 tier-*insensitive*, not sensitive. The count stays 0.
+
+That defect is in the shared acceptance tests, so its blast radius reaches the
+Phase 1 pilot, which scored quality the same way. It did not land there: all 36
+pilot runs recorded `completed: true`. The failure mode is one-directional — an
+over-specified test can only reject a correct implementation that chose a
+different interface, never accept a wrong one — so a phase with zero acceptance
+failures cannot have been corrupted by it. The pilot's numbers stand.
 
 Two tasks were routed to `high`. That is the one case where the calibration rule
 above mandates an extra run a tier down, to cover `A1`; since both passed at
@@ -400,9 +407,13 @@ So even human-rated difficulty did not predict a need for effort.
 
 Combined with the pilot, where a pinned `medium` came out ahead of routing on
 both vendors by point estimate (decisively only on Claude; Codex was a wide
-null), the finding is that on work of this shape **routing up bought nothing**:
-every step above the routed tier was spent without changing an outcome, which is
-*why* the pilot came out the way it did.
+null), the finding is that on work of this shape **routing up bought nothing.**
+Be precise about how thin that base is: only three runs in the whole calibration
+were above a routed tier — the three escalations — and all three still failed.
+Two more runs went a tier below, and both passed. Five observations, pointing one
+way, and none of them a case where more effort rescued anything. That is
+consistent with the pilot's outcome and is *why* it came out the way it did, but
+it is a consistent absence of evidence, not a large sample.
 
 Be careful not to stretch that into "the cheapest tier always suffices," which
 this design cannot support. Calibration runs at the routed tier and escalates
