@@ -176,6 +176,20 @@ VENDOR_ENV_PREFIXES = {
 # 우리가 끊어 버리는 것보다는 낫고, 그때도 AWS 나 GitHub 키는 여전히 빠진다.
 CHILD_ENV_PREFIXES = ("ANTHROPIC_", "OPENAI_", "CLAUDE_", "CODEX_")
 
+# HOME 을 바꿔도 이것들이 남아 있으면 CLI 가 실제 홈을 먼저 본다. 접미사로
+# 훑지 않는 이유는 JAVA_HOME 처럼 홈과 무관한 이름이 같은 모양이기 때문이다.
+HOME_REDIRECTING_ENV = (
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+    "CODEX_HOME",
+    "CLAUDE_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_CONFIG_DIR",
+    "OPENAI_CONFIG_DIR",
+)
+
 
 def default_child_env(executable: str | None = None) -> frozenset[str]:
     """Names the vendor child keeps when `--child-env-all` is not given.
@@ -417,10 +431,11 @@ def run_child(
         # HOME 하나만 바꾸면 격리가 반만 된다. XDG_CONFIG_HOME 이나 CODEX_HOME
         # 같은 변수가 여전히 실제 홈을 가리키면 CLI 는 그쪽을 먼저 본다.
         # 홈 위치를 다시 지목하는 변수는 전부 떨군다 — 남겨서 얻을 것이 없다.
-        for name in list(environment):
-            if name.endswith(("_HOME", "_CONFIG_DIR", "_CONFIG_HOME", "_DATA_HOME", "_CACHE_HOME")):
-                if name != "HOME":
-                    del environment[name]
+        # 접미사로 훑으면 JAVA_HOME, ANDROID_HOME 처럼 사용자 홈과 무관한
+        # 툴체인 경로까지 지워 빌드가 깨진다. 홈을 다시 지목하는 것으로 아는
+        # 이름만 명시한다.
+        for name in HOME_REDIRECTING_ENV:
+            environment.pop(name, None)
     try:
         with subprocess.Popen(
             command,
@@ -962,6 +977,32 @@ def prune(registry: Path, out_dir: Path) -> int:
     return 0
 
 
+def stage_home(names: list[str], work_root: Path, registry: Path) -> Path:
+    """Build a throwaway HOME holding copies of the named entries.
+
+    One per attempt, never shared. A staged HOME is writable by the child, so
+    reusing it across the cheap and expensive routes would let the first agent
+    poison the CLI config, hooks, or auth that the second one then runs under —
+    which is exactly the escalation this design is supposed to be immune to.
+
+    Links are followed, unlike the patch capture: leaving a link in place would
+    point out of the throwaway directory and let the child's writes land back in
+    the real home.
+    """
+    real_home = Path(os.path.expanduser("~"))
+    home = Path(tempfile.mkdtemp(prefix="spec-childhome-", dir=work_root))
+    home.chmod(0o700)
+    register(registry, home, add=True)
+    for name in names:
+        source = real_home / name
+        target = home / name
+        if source.is_dir():
+            shutil.copytree(source, target, symlinks=False)
+        else:
+            shutil.copy2(source, target, follow_symlinks=True)
+    return home
+
+
 def attempt(
     name: str,
     command: list[str],
@@ -975,6 +1016,7 @@ def attempt(
     rates: dict[str, float] | None,
     allowed_env: frozenset[str] | None,
     child_home: Path | None,
+    home_stage: list[str],
 ) -> Attempt:
     """Clone, run one route, verify. The workspace survives only a pass."""
     # 작업공간은 산출물 디렉터리 바로 아래가 아니라 그 안의 .work 에 만든다.
@@ -1002,7 +1044,13 @@ def attempt(
     build_scaffolding: list[str] = []
     try:
         clone_at(repo, commit, workspace)
-        record["child"] = run_child(command, workspace, task, rates, allowed_env, child_home)
+        # 스테이징한 HOME 은 시도마다 새로 만든다. 공유하면 싼 경로가 남긴
+        # 설정·훅·인증 상태를 비싼 경로가 물려받는다.
+        attempt_home = stage_home(home_stage, work_root, registry) if home_stage else child_home
+        record["child"] = run_child(command, workspace, task, rates, allowed_env, attempt_home)
+        if home_stage and attempt_home is not None:
+            # 자격증명 복사본이므로 자식이 끝나는 즉시 지운다.
+            discard(registry, attempt_home, out_dir)
         # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
         # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
         # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
@@ -1262,6 +1310,12 @@ def main() -> int:
     def env_for(argv: list[str]) -> frozenset[str] | None:
         if arguments.child_env_all:
             return None
+        name = Path(argv[0]).name.lower()
+        if not any(vendor in name for vendor in VENDOR_ENV_PREFIXES):
+            print(
+                f"  주의: '{Path(argv[0]).name}' 에서 벤더를 알아보지 못해 양쪽 벤더의"
+                " 키를 모두 전달한다. --child-env 로 좁힐 수 있다."
+            )
         return default_child_env(argv[0]) | frozenset(arguments.child_env)
 
     cheap_env = env_for(cheap_argv)
@@ -1274,30 +1328,26 @@ def main() -> int:
         parser.error(f"--child-home is not a directory: {child_home}")
     if arguments.child_home_stage:
         real_home = Path(os.path.expanduser("~"))
-        # 작업공간과 같은 .work 아래에 만들고 즉시 등록한다. 이 디렉터리는
-        # 사용자 자격증명의 **복사본**을 담으므로, 남겨 두면 실행이 끝난 뒤에도
-        # 비밀이 디스크에 흩어진다. 등록하지 않으면 --prune 으로도 회수되지
-        # 않는다.
-        work_root = arguments.out_dir / ".work"
-        work_root.mkdir(mode=0o700, exist_ok=True)
-        child_home = Path(tempfile.mkdtemp(prefix="spec-childhome-", dir=work_root))
-        child_home.chmod(0o700)
-        register(registry, child_home, add=True)
         for name in arguments.child_home_stage:
-            source = real_home / name
-            if not source.exists():
+            if not (real_home / name).exists():
                 parser.error(f"--child-home-stage: no such entry under HOME: {name}")
-            # 링크를 **따라가서** 내용을 복사한다. 여기서는 patch 수집 때와
-            # 반대다. 거기서는 링크를 링크로 남겨야 호스트 파일이 새어 나가지
-            # 않았지만, 여기서 링크를 남기면 임시 HOME 안의 그 링크가 실제
-            # 홈을 가리켜 자식의 쓰기가 그대로 되돌아간다. ~/.gitconfig 가
-            # ~/dotfiles/gitconfig 를 가리키는 구성은 흔하다.
-            target = child_home / name
-            if source.is_dir():
-                shutil.copytree(source, target, symlinks=False)
-            else:
-                shutil.copy2(source, target, follow_symlinks=True)
-        print(f"자식 HOME: 임시 디렉터리에 {len(arguments.child_home_stage)}개 항목 복사")
+        print(f"자식 HOME: 시도마다 임시 디렉터리에 {len(arguments.child_home_stage)}개 항목 복사")
+    # 프록시 URL 은 http://user:pass@host 형태가 흔하고 그 userinfo 는 그대로
+    # 자격증명이다. 자식에게 넘기지 않으면 네트워크가 끊기므로 넘기되, 그것이
+    # 비밀을 넘기는 일이라는 사실은 알린다.
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        value = os.environ.get(name, "")
+        if "@" in value and (allowed_env is None or name in allowed_env):
+            print(f"  주의: {name} 에 자격증명이 들어 있고 자식에게 전달된다")
+            break
+
     if allowed_env is None:
         print("자식 환경: 전체 전달 (--child-env-all)")
     else:
@@ -1323,6 +1373,7 @@ def main() -> int:
         rates=rates.get("cheap"),
         allowed_env=cheap_env,
         child_home=child_home,
+        home_stage=arguments.child_home_stage,
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
@@ -1363,6 +1414,7 @@ def main() -> int:
             rates=rates.get("expensive"),
             allowed_env=expensive_env,
             child_home=child_home,
+            home_stage=arguments.child_home_stage,
         )
         record["expensive"] = expensive
         reason = (
@@ -1371,10 +1423,6 @@ def main() -> int:
             else ""
         )
         print(f"  승급 경로 {'통과' if expensive['accepted'] else '실패'}{reason}")
-
-    # 자격증명 복사본을 담은 임시 HOME 은 반드시 지운다.
-    if arguments.child_home_stage and child_home is not None:
-        discard(registry, child_home, arguments.out_dir)
 
     with log.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
