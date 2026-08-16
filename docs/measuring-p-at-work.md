@@ -95,7 +95,9 @@ for path in pathlib.Path(".").rglob("*"):
     if any(PATTERNS.search(b) for b in blobs):
         # 경로명 자체가 시크릿일 수 있으므로 그대로 찍지 않는다. 어느
         # 디렉터리인지만 알리고 값은 로그로 옮기지 않는다.
-        print(f"credential-like string under {path.parent}/", file=sys.stderr)
+        # 경로도 에이전트가 짓는 문자열이다. 제어 문자를 걷어내고 자른다.
+        where = "".join(c for c in str(path.parent) if c.isprintable())[:120]
+        print(f"credential-like string under {where}/", file=sys.stderr)
         sys.exit(1)
 SCAN
 ```

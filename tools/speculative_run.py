@@ -276,28 +276,42 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
 
 
 def run_child(
-    command: list[str], workspace: Path, task: str, rates: dict[str, float] | None = None
+    command: list[str],
+    workspace: Path,
+    task: str,
+    rates: dict[str, float] | None = None,
+    allowed_env: frozenset[str] | None = None,
 ) -> ChildResult:
     """One vendor invocation. The task goes in on stdin and never into the log.
 
-    Unlike `run_verify`, this inherits the full environment on purpose. The
-    child here **is** the agent CLI the user chose, and it needs its own
-    credentials — scrubbing `HOME` would leave it unable to authenticate and
-    the script unable to do anything at all. Running it exposes exactly what
-    running `codex exec` by hand already exposes; this script adds nothing.
+    By default this inherits the full environment, because the child **is** the
+    agent CLI the user chose and it needs its own credentials — scrubbing `HOME`
+    would leave it unable to authenticate at all. Running it exposes exactly
+    what running `codex exec` by hand already exposes.
 
-    The verifier is a different trust level and is treated differently. It runs
-    code the *agent wrote*, which nobody chose and nobody reviewed, so it gets a
-    scrubbed environment and an empty `HOME`.
+    `--child-env` narrows that. The default is permissive so the tool works
+    without configuration, but on a machine holding several providers' keys
+    there is no reason a Codex run should see `ANTHROPIC_API_KEY`, or either of
+    them see `AWS_SECRET_ACCESS_KEY`. A task is untrusted input, and an agent
+    with shell access can read whatever its environment holds.
+
+    The verifier is a different trust level again and is always scrubbed. It
+    runs code the *agent wrote*, which nobody chose and nobody reviewed.
     """
     started = time.monotonic()
     # 자체 프로세스 그룹에서 돌린다. subprocess 의 타임아웃은 직계 자식만
     # 죽이므로, 벤더 CLI 가 띄운 손자들은 "타임아웃" 을 보고한 뒤에도 계속
     # 돌며 작업공간에 쓴다 — 곧 지울 디렉터리에.
+    environment = (
+        {name: value for name, value in os.environ.items() if name in allowed_env}
+        if allowed_env is not None
+        else None
+    )
     try:
         with subprocess.Popen(
             command,
             cwd=workspace,
+            env=environment,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -415,6 +429,7 @@ def _codex_usage(stdout: str) -> Usage | None:
     # 전부 더한다.
     totals: dict[str, int] = {}
     seen = False
+    turns = 0
     for line in stdout.splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -433,13 +448,25 @@ def _codex_usage(stdout: str) -> Usage | None:
             if isinstance(value, int):
                 totals[field] = totals.get(field, 0) + value
                 seen = True
+        turns += 1
     if not seen:
         return None
+    # 이벤트가 여러 개면 델타인지 누적인지가 결과를 바꾼다. 프로브는 단일 턴만
+    # 봐서 확인하지 못했고, 같은 벤더의 stderr 채널은 누적이었다. 개수를 남겨
+    # 1 을 넘으면 사람이 확인할 수 있게 한다. c 는 비율이므로 양쪽 arm 이 같은
+    # 방식으로 틀리면 대체로 상쇄된다.
+
     # cached_input_tokens 와 reasoning_output_tokens 가 각각 input/output 의
     # 내역인지 별도 항목인지는 프로브로 확인되지 않았다. 이중 계산을 피해
     # 총계는 input + output 만으로 낸다.
     total = totals.get("input_tokens", 0) + totals.get("output_tokens", 0)
-    return {"breakdown": totals, "total_tokens": total, "source": "codex-json"}
+    # 턴 수는 토큰이 아니므로 breakdown 밖에 둔다. 안에 두면 누가 breakdown 을
+    # 합산했을 때 턴 수가 토큰에 섞인다.
+    return {
+        "breakdown": totals,
+        "total_tokens": total,
+        "source": f"codex-json({turns}turn)" if turns > 1 else "codex-json",
+    }
 
 
 def extract_usage(stdout: str, stderr: str) -> Usage | None:
@@ -820,6 +847,7 @@ def attempt(
     registry: Path,
     scaffolding: frozenset[str],
     rates: dict[str, float] | None,
+    allowed_env: frozenset[str] | None,
 ) -> Attempt:
     """Clone, run one route, verify. The workspace survives only a pass."""
     # 작업공간은 산출물 디렉터리 바로 아래가 아니라 그 안의 .work 에 만든다.
@@ -847,7 +875,7 @@ def attempt(
     build_scaffolding: list[str] = []
     try:
         clone_at(repo, commit, workspace)
-        record["child"] = run_child(command, workspace, task, rates)
+        record["child"] = run_child(command, workspace, task, rates, allowed_env)
         # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
         # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
         # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
@@ -953,6 +981,17 @@ def main() -> int:
     parser.add_argument("--verify", type=Path, help="executable; exit code is the verdict")
     parser.add_argument("--label", default="", help="free-text tag recorded with the run")
     parser.add_argument(
+        "--child-env",
+        action="append",
+        default=[],
+        help=(
+            "environment variable the vendor child may see (repeatable). "
+            "Given at least once, everything else is dropped — PATH and HOME are "
+            "added automatically. Use it when the machine holds keys for providers "
+            "this route has no business reading."
+        ),
+    )
+    parser.add_argument(
         "--prices",
         type=Path,
         help=(
@@ -1048,6 +1087,12 @@ def main() -> int:
                 parser.error(f"--prices['{arm}'] must map token field names to numbers")
             rates[arm] = {k: float(v) for k, v in table.items()}
 
+    # 하나라도 주어지면 그 목록 + PATH/HOME 만 남긴다. 아무것도 안 주면 기존대로
+    # 전부 물려준다 — 설정 없이도 동작해야 하기 때문이다.
+    allowed_env = frozenset({*arguments.child_env, "PATH", "HOME"}) if arguments.child_env else None
+    if allowed_env is not None:
+        print(f"자식 환경 제한: {len(allowed_env)}개 변수만 전달")
+
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)
     cheap = attempt(
         "cheap",
@@ -1060,6 +1105,7 @@ def main() -> int:
         registry,
         scaffolding=frozenset(scaffolding),
         rates=rates.get("cheap"),
+        allowed_env=allowed_env,
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
@@ -1098,6 +1144,7 @@ def main() -> int:
             registry,
             scaffolding=frozenset(scaffolding),
             rates=rates.get("expensive"),
+            allowed_env=allowed_env,
         )
         record["expensive"] = expensive
         reason = (

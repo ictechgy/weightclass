@@ -212,7 +212,10 @@ def main() -> int:
     for r in usable:
         cheap_cost = cost_of(r["cheap"])
         expensive_cost = cost_of(r.get("expensive"))
-        if cheap_cost is not None and expensive_cost not in (None, 0):
+        # 어느 쪽이든 0 이면 비율이 의미를 잃는다. 싼 쪽 0 은 c=0 으로
+        # "공짜" 라는 결론을 만들고, 비싼 쪽 0 은 나눗셈 자체가 안 된다.
+        # 요금표가 비었거나 벤더가 0 을 보고한 경우이므로 표본에서 뺀다.
+        if cheap_cost and expensive_cost:
             paired.append(cheap_cost / expensive_cost)
 
     # 한 건으로 c 를 바꾸면 그 한 과제의 특성이 전체 결론을 정한다. 중앙값이
@@ -223,6 +226,10 @@ def main() -> int:
         print(
             f"\n실측 비용비 c = {measured:.3f}  (승급이 일어난 {len(paired)}개 과제에서"
             " 같은 과제를 양쪽 모델로 돌린 값의 중앙값)"
+        )
+        print(
+            "  이 c 는 승급이 일어난 과제, 즉 싼 경로가 실패한 부분집합에서만 나온다."
+            " 그 과제들이 더 길거나 어려웠다면 전체를 대표하지 않는다."
         )
         if abs(measured - c) > 0.05:
             print(f"  주의: --cost-ratio 로 준 {c:.2f} 와 다르다. 아래 계산은 실측값을 쓴다.")
