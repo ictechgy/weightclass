@@ -249,20 +249,29 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
     output carries token counts and no USD anywhere, and the model id is not in
     the events either — so the rates have to be named from the invocation side.
 
-    Rates are USD per million tokens, keyed by the token field they price.
-    A field with no rate contributes nothing rather than silently costing zero
-    by accident, so an incomplete table produces None instead of a wrong number
-    that looks authoritative.
+    Rates are USD per million tokens, keyed by the token field they price, and
+    **the table drives the sum** — a field the vendor reports but the table does
+    not name is deliberately skipped, not an error.
+
+    That direction matters because vendor breakdowns overlap. Codex reports
+    `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`,
+    `output_tokens`, and `reasoning_output_tokens`, and the probe could not
+    confirm whether the cached and reasoning figures are separate line items or
+    breakouts of the two totals. Summing all five would double-count. Naming the
+    disjoint subset is the caller's job because only they can check the answer
+    against a real invoice.
+
+    A rate naming a field the vendor did not report is a typo, not a deliberate
+    exclusion, so it returns None rather than quietly pricing part of the run.
     """
     breakdown = usage.get("breakdown") or {}
     if not breakdown or not rates:
         return None
     priced = 0.0
-    for field, count in breakdown.items():
-        rate = rates.get(field)
-        if rate is None:
+    for field, rate in rates.items():
+        if field not in breakdown:
             return None
-        priced += count * rate / 1_000_000
+        priced += breakdown[field] * rate / 1_000_000
     return priced
 
 
@@ -401,6 +410,11 @@ def _codex_usage(stdout: str) -> Usage | None:
         "output_tokens",
         "reasoning_output_tokens",
     )
+    # 한 실행이 여러 턴을 돌면 turn.completed 도 여러 번 나온다. 첫 번째에서
+    # 멈추면 나머지 턴의 소비가 통째로 빠지고, 비용이 실제보다 낮게 잡힌다.
+    # 전부 더한다.
+    totals: dict[str, int] = {}
+    seen = False
     for line in stdout.splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -414,15 +428,18 @@ def _codex_usage(stdout: str) -> Usage | None:
         raw = event.get("usage")
         if not isinstance(raw, dict):
             continue
-        breakdown = {f: raw[f] for f in fields if isinstance(raw.get(f), int)}
-        if not breakdown:
-            continue
-        # cached_input_tokens 와 reasoning_output_tokens 가 각각 input/output 의
-        # 내역인지 별도 항목인지는 프로브로 확인되지 않았다. 이중 계산을 피해
-        # 총계는 input + output 만으로 낸다.
-        total = breakdown.get("input_tokens", 0) + breakdown.get("output_tokens", 0)
-        return {"breakdown": breakdown, "total_tokens": total, "source": "codex-json"}
-    return None
+        for field in fields:
+            value = raw.get(field)
+            if isinstance(value, int):
+                totals[field] = totals.get(field, 0) + value
+                seen = True
+    if not seen:
+        return None
+    # cached_input_tokens 와 reasoning_output_tokens 가 각각 input/output 의
+    # 내역인지 별도 항목인지는 프로브로 확인되지 않았다. 이중 계산을 피해
+    # 총계는 input + output 만으로 낸다.
+    total = totals.get("input_tokens", 0) + totals.get("output_tokens", 0)
+    return {"breakdown": totals, "total_tokens": total, "source": "codex-json"}
 
 
 def extract_usage(stdout: str, stderr: str) -> Usage | None:

@@ -93,7 +93,9 @@ for path in pathlib.Path(".").rglob("*"):
     elif path.is_file():
         blobs.append(path.read_bytes())
     if any(PATTERNS.search(b) for b in blobs):
-        print(f"credential-like string at {path}", file=sys.stderr)
+        # 경로명 자체가 시크릿일 수 있으므로 그대로 찍지 않는다. 어느
+        # 디렉터리인지만 알리고 값은 로그로 옮기지 않는다.
+        print(f"credential-like string under {path.parent}/", file=sys.stderr)
         sys.exit(1)
 SCAN
 ```
@@ -103,20 +105,28 @@ inside it: the tree is assembled from untrusted agent output.
 
 ### 3. Write the price table, if you are measuring Codex
 
-Rates are **USD per million tokens**, keyed by the token field they price.
-An unpriced field makes the whole calculation return nothing rather than
-quietly costing zero, so fill in every field the vendor reports.
+Rates are **USD per million tokens**, keyed by the token field they price. The
+table drives the sum: a field the vendor reports but you do not name is skipped.
+
+**Name only fields that do not overlap.** Codex reports `input_tokens`,
+`cached_input_tokens`, `cache_write_input_tokens`, `output_tokens`, and
+`reasoning_output_tokens`, and the probe could not establish whether the cached
+and reasoning figures are separate line items or breakouts of the two totals.
+Pricing all five would double-count. The safe starting point is the two totals:
 
 ```json
 {
-  "cheap":     {"input_tokens": 0.25, "cached_input_tokens": 0.025,
-                "cache_write_input_tokens": 0.3, "output_tokens": 2.0,
-                "reasoning_output_tokens": 2.0},
-  "expensive": {"input_tokens": 1.25, "cached_input_tokens": 0.125,
-                "cache_write_input_tokens": 1.5, "output_tokens": 10.0,
-                "reasoning_output_tokens": 10.0}
+  "cheap":     {"input_tokens": 0.25, "output_tokens": 2.0},
+  "expensive": {"input_tokens": 1.25, "output_tokens": 10.0}
 }
 ```
+
+Then **check the result against one real invoice line** before trusting it. If
+your provider bills cached input at a discount, add `cached_input_tokens` and
+lower the `input_tokens` rate accordingly — but only once you have confirmed
+which figure contains which. Naming a field the vendor never reports is treated
+as a typo and produces no cost at all, rather than a partial number that looks
+authoritative.
 
 Claude needs none of this — it reports its own cost, and a vendor-reported
 number always wins over the table, which can go stale.

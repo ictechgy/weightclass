@@ -215,7 +215,10 @@ def main() -> int:
         if cheap_cost is not None and expensive_cost not in (None, 0):
             paired.append(cheap_cost / expensive_cost)
 
-    if paired:
+    # 한 건으로 c 를 바꾸면 그 한 과제의 특성이 전체 결론을 정한다. 중앙값이
+    # 의미를 가지려면 최소 세 건은 있어야 한다.
+    MINIMUM_PAIRED = 3
+    if len(paired) >= MINIMUM_PAIRED:
         measured = statistics.median(paired)
         print(
             f"\n실측 비용비 c = {measured:.3f}  (승급이 일어난 {len(paired)}개 과제에서"
@@ -224,6 +227,11 @@ def main() -> int:
         if abs(measured - c) > 0.05:
             print(f"  주의: --cost-ratio 로 준 {c:.2f} 와 다르다. 아래 계산은 실측값을 쓴다.")
         c = measured
+    elif paired:
+        print(
+            f"\n비용비 c = {c:.2f} — **가정값**이다. 양쪽 비용을 얻은 승급 과제가"
+            f" {len(paired)}개뿐이라 중앙값을 쓰기에 부족하다(최소 {MINIMUM_PAIRED}개)."
+        )
     else:
         print(f"\n비용비 c = {c:.2f} — **가정값**이다. 승급 과제에서 양쪽 비용을 모두 얻지 못했다.")
         print(
