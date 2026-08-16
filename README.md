@@ -52,10 +52,12 @@ pinned at `low`. **All 15 passed.** None hit a critical failure either, meaning
 none deleted a source file, wrote a secret, or left the fixture's own test suite
 red. One task the router had sent to `high` for 77,170 tokens passed at `low` on
 31,727. For all 15 of these, then, the tier the classifier picked was higher
-than the work turned out to need.
+than the acceptance test required — which is the strongest form the claim can
+take, since that test is the only definition of "enough" this measurement has.
 
-Token savings point the same way without being established. In aggregate `low`
-used 506,529 tokens against 632,983 — **20.0% fewer** — but the per-task mean
+Token savings point the same way without being established. Across the same 15
+tasks `low` used 506,529 tokens against the routed tiers' 632,983 — **20.0%
+fewer** — but the per-task mean
 saving is 14.1% with a 95% interval of [−1.0%, +29.1%], so it is not separable
 from zero, and 4 of the 15 cost *more* at `low`.
 
