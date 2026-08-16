@@ -128,13 +128,37 @@ def _kill_group(child: subprocess.Popen[str]) -> None:
         child.kill()
 
 
-def run_git(arguments: list[str], cwd: Path) -> str:
+# 인계 트리의 .git/config 는 우리 것이지만, git 은 사용자의 전역/시스템
+# config 도 읽는다. 거기 filter.<name>.clean 이 있으면 자식이 심어 온
+# .gitattributes 가 그것을 불러낼 수 있다. 이 스크립트가 돌리는 git 은
+# 저장소 config 만 보게 한다.
+_GIT_ENV = {
+    **os.environ,
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_TERMINAL_PROMPT": "0",
+}
+
+
+def run_git_bytes(arguments: list[str], cwd: Path) -> bytes:
+    """Run git and keep its output as bytes.
+
+    `git diff --binary` emits raw bytes, and a tracked file whose contents are
+    not valid UTF-8 makes a text-mode read raise. Decoding with replacement
+    would be worse than raising: it would silently corrupt the patch the user
+    is told to apply.
+    """
     result = subprocess.run(
-        ["git", *arguments], cwd=cwd, capture_output=True, text=True, timeout=GIT_TIMEOUT
+        ["git", *arguments], cwd=cwd, capture_output=True, timeout=GIT_TIMEOUT, env=_GIT_ENV
     )
     if result.returncode != 0:
-        raise RunFailure(f"git {' '.join(arguments)}: {result.stderr.strip()}")
+        detail = result.stderr.decode("utf-8", "replace").strip()
+        raise RunFailure(f"git {' '.join(arguments)}: {detail}")
     return result.stdout
+
+
+def run_git(arguments: list[str], cwd: Path) -> str:
+    return run_git_bytes(arguments, cwd).decode("utf-8", "replace")
 
 
 def head_commit(repo: Path) -> str:
@@ -267,6 +291,7 @@ def run_verify(verify: Path, workspace: Path) -> VerifyResult:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        errors="replace",
         start_new_session=True,
     ) as verifier:
         try:
@@ -357,7 +382,7 @@ def tracked_files_unchanged(handover: Path) -> bool:
     return result.returncode == 0
 
 
-def make_patch(handover: Path) -> tuple[str, list[str]]:
+def make_patch(handover: Path) -> tuple[bytes, list[str]]:
     """Stage the handover tree, drop what the patch cannot carry, and emit the diff.
 
     `git add` honours `.gitignore`, so a file the child wrote under an ignored
@@ -387,7 +412,7 @@ def make_patch(handover: Path) -> tuple[str, list[str]]:
     ]
     if dropped:
         run_git(["clean", "-fdX"], handover)
-    patch = run_git(
+    patch = run_git_bytes(
         # --binary 가 없으면 바이너리 변경이 "Binary files differ" 로만 남고,
         # 우리가 안내하는 git apply 가 그 패치를 거부한다.
         ["-c", "core.pager=cat", "diff", "--cached", "--binary", "--no-color", "--no-ext-diff"],
@@ -422,7 +447,10 @@ def register(registry: Path, workspace: Path, add: bool) -> None:
     live = set()
     if registry.exists():
         live = {line for line in registry.read_text(encoding="utf-8").splitlines() if line.strip()}
-    live.add(str(workspace)) if add else live.discard(str(workspace))
+    if add:
+        live.add(str(workspace))
+    else:
+        live.discard(str(workspace))
     write_registry(registry, sorted(live))
 
 
@@ -540,7 +568,7 @@ def attempt(
     # 동안 out_dir/cheap.patch 를 계속 덮어써 마지막 하나만 남고, 그 20개를
     # 재는 것이 이 스크립트의 목적이다.
     patch = out_dir / f"{handover.name}.patch"
-    patch_text = ""
+    patch_bytes = b""
     build_scaffolding: list[str] = []
     try:
         clone_at(repo, commit, workspace)
@@ -553,8 +581,8 @@ def attempt(
         # 커버리지 파일, 빌드 산출물을 남기고, 나중에 뜨면 그것들이 패치에
         # 섞여 들어가 적용이 깨진다.
         record["excluded_scaffolding"] = build_scaffolding
-        patch_text, dropped = make_patch(handover)
-        record["patch_lines"] = patch_text.count("\n")
+        patch_bytes, dropped = make_patch(handover)
+        record["patch_lines"] = patch_bytes.count(b"\n")
         record["dropped_ignored"] = dropped
         record["made_changes"] = record["patch_lines"] > 0
         record["verify"] = run_verify(verify, handover)
@@ -598,7 +626,7 @@ def attempt(
         record["accepted"] = False
     if record["accepted"]:
         # 검증을 통과한 뒤에야 디스크에 쓴다.
-        patch.write_text(patch_text, encoding="utf-8")
+        patch.write_bytes(patch_bytes)
         # 승인된 패치는 읽기 전용으로 둔다. 뒤 과제의 검증이 무심코 훑고 쓰는
         # 것은 막지만, 작정한 코드는 chmod 로 되돌릴 수 있다. 담장이 아니라
         # 실수에 대한 방어다.

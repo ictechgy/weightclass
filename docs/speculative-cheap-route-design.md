@@ -113,16 +113,37 @@ study's own gate:
 ```sh
 #!/bin/sh
 set -e
-python -m pytest -q
+python3 -m pytest -q
 
-# 자격증명이 작업 트리에 들어왔는지. git 이 아니라 파일을 직접 훑는다.
-# `! grep ...` 로 쓰지 말 것: grep 은 못 찾으면 1, 찾으면 0, **오류면 2** 를
-# 낸다. 부정 연산자는 2 까지 0 으로 뒤집으므로, 읽을 수 없는 경로나 잘못된
-# 패턴 때문에 스캔이 실패한 것이 "깨끗함" 으로 통과한다.
-grep -rIqE 'sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY' \
-    --exclude-dir=.git . && found=$? || found=$?
-[ "$found" -eq 1 ] || exit 1
+# 자격증명이 작업 트리에 들어왔는지. 바이트 단위로 훑는다.
+python3 - <<'SCAN'
+import pathlib, re, sys
+
+PATTERNS = re.compile(
+    rb"sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY"
+)
+for path in pathlib.Path(".").rglob("*"):
+    if ".git" in path.parts or not path.is_file() or path.is_symlink():
+        continue
+    if PATTERNS.search(path.read_bytes()):
+        print(f"credential-like string in {path}", file=sys.stderr)
+        sys.exit(1)
+SCAN
 ```
+
+**This deliberately does not use `grep`, and that was measured rather than
+assumed.** The runner emits binary additions (`git diff --binary`), so a
+credential can arrive inside a file that is not valid text. Against a file
+holding `\xff\xfe\x00sk-…\xff`, `grep -a` misses it on BSD/macOS, `strings |
+grep` misses it, and `tr -d '\0'` dies with "Illegal byte sequence". Only a
+byte-level scan finds it. A secret gate that silently never fires is worse than
+no gate, because it is believed.
+
+Two more traps worth naming. Writing the check as `! grep …` inverts grep's
+*error* status too — grep exits 1 when it finds nothing, 0 when it finds
+something, and **2 on failure**, so an unreadable path turns into "clean". And
+`grep -I` skips binary files by design, which is exactly the case that matters
+here.
 
 **Verification runs on the handover tree, not on the child's workspace.** The
 runner rebuilds the child's work inside a clone the child never had a handle on,
