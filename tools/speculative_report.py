@@ -142,9 +142,18 @@ def main() -> int:
         if not isinstance(expensive, dict):
             # 승급이 아예 기록되지 않았다. 둘 다 실패했다고 셀 근거가 없다.
             return False
-        if expensive.get("failure_kind") == "infrastructure":
-            # 승급이 도구 고장으로 죽은 것은 비싼 경로에 대한 판정이 아니다.
+        # 승급이 도구 고장으로 죽은 것은 비싼 경로에 대한 판정이 아니다.
+        # failure_kind 이전 기록과의 호환을 is_infrastructure_failure 와
+        # 같은 방식으로 맞춘다.
+        kind = expensive.get("failure_kind")
+        if kind == "infrastructure":
             return False
+        if kind is None and expensive.get("error"):
+            error = str(expensive["error"])
+            if not any(
+                marker in error for marker in ("made no change", "modified the patched files")
+            ):
+                return False
         return not expensive["accepted"]
 
     both_failed = sum(1 for r in usable if both_routes_failed(r))
@@ -173,14 +182,17 @@ def main() -> int:
         print("\n  -> 구간이 손익분기를 가로지른다. 아직 결론 낼 수 없다.")
 
     # 토큰은 벤더 안에서만 의미가 있다. 합쳐서 비율을 내지 않는다.
-    cheap_tokens = [
-        r["cheap"]["child"]["tokens"] for r in usable if r["cheap"].get("child", {}).get("tokens")
-    ]
-    expensive_tokens = [
-        r["expensive"]["child"]["tokens"]
-        for r in usable
-        if r["expensive"] and r["expensive"].get("child", {}).get("tokens")
-    ]
+    def child_tokens(attempt: object) -> int | None:
+        if not isinstance(attempt, dict):
+            return None
+        child = attempt.get("child")
+        if not isinstance(child, dict):
+            return None
+        tokens = child.get("tokens")
+        return tokens if isinstance(tokens, int) else None
+
+    cheap_tokens = [t for r in usable if (t := child_tokens(r["cheap"])) is not None]
+    expensive_tokens = [t for r in usable if (t := child_tokens(r["expensive"])) is not None]
     if cheap_tokens:
         print(
             f"\n토큰(참고, 벤더 간 비교 금지): 싼 경로 {sum(cheap_tokens):,} "

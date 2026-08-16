@@ -727,7 +727,10 @@ def attempt(
         # RunFailure 만 잡으면 clone_at 의 CalledProcessError 나 복사 중의
         # OSError 가 그대로 올라가, 등록된 채 지워지지 않은 작업공간이 남는다.
         # 이 함수의 계약은 "무슨 일이 있어도 검증 실패로 끝난다" 여야 한다.
-        record["error"] = f"{type(error).__name__}: {error}"
+        # 예외 문구에는 파일 경로가 들어가고 그 이름은 에이전트가 짓는다.
+        # 종류만 남긴다 — failure_kind 와 함께 무엇이 고장났는지 가리기에는
+        # 충분하고, 로그에 태스크 유래 문자열을 넣지 않는다는 계약을 지킨다.
+        record["error"] = type(error).__name__
         record["failure_kind"] = "infrastructure"
         record["verify"] = {"passed": False, "exit_code": None, "timed_out": False, "seconds": 0}
 
@@ -758,7 +761,7 @@ def attempt(
             patch.chmod(0o400)
         except OSError as error:
             record["accepted"] = False
-            record["error"] = f"could not write the patch: {error}"
+            record["error"] = f"could not write the patch: {type(error).__name__}"
             record["failure_kind"] = "infrastructure"
             discard(registry, handover, out_dir)
             record["workspace"] = None
@@ -830,8 +833,10 @@ def main() -> int:
     verify = arguments.verify.expanduser().resolve()
     if not (repo / ".git").exists():
         parser.error(f"not a git repository: {repo}")
-    if not os.access(verify, os.X_OK):
-        parser.error(f"--verify must be executable: {verify}")
+    # os.access(X_OK) 는 디렉터리의 탐색 비트에도 참이라, --verify 에
+    # 디렉터리를 줘도 통과한 뒤 실행 시점에 PermissionError 로 죽었다.
+    if not verify.is_file() or not os.access(verify, os.X_OK):
+        parser.error(f"--verify must be an executable file: {verify}")
 
     # 커밋되지 않은 변경은 클론에 들어가지 않는다. 조용히 다른 것을 재는 대신
     # 멈춘다.
