@@ -42,11 +42,22 @@ calibration round to rule out.
 
 Read that as a bound on the evidence, not a proof about all work: one fixture,
 one vendor (Codex) for calibration, and small, fully specified maintenance tasks.
-The comparison is also lopsided. Calibration recovers by escalating *upward*, so
-what it rules out is routing up paying for itself; the only downward runs were
-the `A1` coverage the design mandates for `high`-routed tasks, which is how those
-two came to be tried a tier lower. Nothing was ever run at `low`, so the cheap
-end is untested rather than vindicated.
+The study itself was lopsided: calibration recovers by escalating *upward*, so
+what it ruled out is routing up paying for itself.
+
+The cheap direction was measured separately afterwards, and it is the more
+useful result. The 15 tasks that had passed at their routed tier were re-run
+pinned at `low`: **all 15 passed, with no critical failures.** One task the
+router had sent to `high` for 77,170 tokens passed at `low` on 31,727. So on
+this workload the classifier routed above what the work required, every time.
+Token savings point the same way without being established — 632,983 → 506,529
+in aggregate (+20.0%), but the per-task mean is +14.1% with a 95% interval of
+[−1.0%, +29.1%], and 4 of the 15 cost *more* at `low`.
+
+Do not read that as "route everything cheaply." Those 15 were selected for
+having already passed, and a pass/fail acceptance test cannot detect work that
+meets the contract while being worse. What it does show is where the slack is:
+in how the tier is chosen, not in the routing mechanism.
 
 It does not show effort never matters. It does show that nobody, including this
 router, should assert a saving without measuring it on their own workload —
