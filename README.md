@@ -12,6 +12,46 @@ provider usage data, infer pricing, or know whether an effort label reduces
 the total tokens needed to finish a task. Retries and rework happen outside the
 router and can outweigh a cheaper first attempt.
 
+That is now a measured statement, not only a cautious one. A pre-registered
+study ([`docs/paired-token-study.md`](docs/paired-token-study.md)) built a
+synthetic fixture, 36 blind-rated tasks, and a paired harness, then ran a pilot
+and a difficulty calibration against real vendors. **Wherever it observed the
+same task at two tiers, the tier never changed whether the task got done.** In
+the pilot a pinned mid effort came out ahead of routing on both vendors by point
+estimate — 5.5% on Codex, 5.1% on Claude — though only on Claude did the fixed
+arm's interval exclude zero; Codex's result is a wide null. In calibration, 0 of
+18 candidates were tier-sensitive, and the two tasks routed to `high` also passed
+one tier down. Only five of the eighteen were run at two tiers at all — two that
+passed at both and three that failed at both — while the rest passed at the
+routed tier and stopped, so no comparison exists for them. Of those five, two of
+the three fail-at-both cases turned out to be defects in the study's own
+acceptance tests, which rejected correct work for choosing a different interface.
+The pilot adds two more clean two-effort observations — the tasks it routed to
+`high` also ran at `medium` as the fixed arm, and completed at both on both
+vendors. So the headline rests on a handful of observations, not on the full 36.
+
+On work of that shape — small, well-specified maintenance tasks — effort moved
+cost and nothing else, so routing up had no quality risk to justify its price.
+The study stopped there because it had pre-registered the condition: a floor of
+nine tier-sensitive tasks, and a written instruction to report a shortfall as
+the finding rather than lower the bar. That floor is stated over all 36 tasks
+while 18 were calibrated; the doc does not claim the untested tail is proven
+empty, only that finding nine tier-sensitive tasks in a mostly `low`-rated
+remainder, after none surfaced among the hardest eighteen, was not worth another
+calibration round to rule out.
+
+Read that as a bound on the evidence, not a proof about all work: one fixture,
+one vendor (Codex) for calibration, and small, fully specified maintenance tasks.
+The comparison is also lopsided. Calibration recovers by escalating *upward*, so
+what it rules out is routing up paying for itself; the only downward runs were
+the `A1` coverage the design mandates for `high`-routed tasks, which is how those
+two came to be tried a tier lower. Nothing was ever run at `low`, so the cheap
+end is untested rather than vindicated.
+
+It does not show effort never matters. It does show that nobody, including this
+router, should assert a saving without measuring it on their own workload —
+which is why every savings surface here abstains by default.
+
 Raw tokens and estimated provider cost must be evaluated separately. The
 offline evaluation tools can score externally normalized aggregate evidence,
 but they never fetch prices or claim to reproduce a subscription bill.

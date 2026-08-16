@@ -10,9 +10,23 @@ function of user-supplied relative weights. Fixing the counterfactual baseline m
 that number honest, not grounded. Until one paired collection exists, any further
 routing work is optimization on top of an unmeasured assumption.
 
-**Status:** revision 2. The Phase 1 pilot has run — 36 real invocations across
-two vendors — and its result changed this design. Revision 1 is preserved in git
-history; what follows supersedes it.
+**Status: closed at Phase 1b. Phase 2 never ran.** Calibration found **0 of 18
+tasks tier-sensitive** against a pre-registered floor of 9. The floor is written
+over all 36 tasks and 18 were calibrated — the likeliest to be sensitive among
+the tasks the Phase 1 pilot had not already used — which the result section
+addresses directly; the shortfall is not a near miss. Reporting it and stopping
+is the condition this document set for itself. The answer to the goal question,
+within the stated scope, is that this task shape cannot value tier routing at
+all: effort moved cost and never changed whether the work got done. See
+[Calibration result](#calibration-result-the-stopping-condition-fired). The plan
+below is kept as the pre-registration it was — reading it as live work would be
+a mistake.
+
+The design below is revision 2 and is now final; the closure above is its
+outcome, not a further revision of the plan. Revision 2 was written after the
+Phase 1 pilot ran — 36 real invocations across two vendors — because that result
+changed the design, most importantly by adding Phase 1b. Revision 1 is preserved
+in git history; what follows supersedes it.
 
 ## What the scorer forces
 
@@ -324,20 +338,126 @@ like: the obvious implementation silently breaks a pre-existing invariant the
 acceptance test also checks; the requirement spans modules that must stay
 consistent; or the prompt describes a symptom and the cause has to be found.
 
+### Calibration result: the stopping condition fired
+
+Calibration ran on 18 candidates, using 23 invocations and 981,613 tokens. The
+candidates were drawn from the 30 tasks not already used in the Phase 1 pilot and
+weighted to the hard end: 9 of the 11 tasks the blind raters rated `high` — the
+other two were pilot tasks — plus 9 rated `standard`. Unlike the other
+phases, that count is not a product: the second run is conditional. Thirteen
+tasks passed at the routed tier and stopped after one run; two routed to `high`
+took the mandatory extra run a tier down; three failed and took an escalation
+run. 13 + (2 × 2) + (3 × 2) = 23. The planned estimate of ~36 assumed every
+candidate would need its pair.
+
+| verdict | count |
+| --- | ---: |
+| tier-insensitive: passed at the routed tier | 15 |
+| drop-unrecoverable: failed at the routed tier *and* one step up | 3 |
+| **tier sensitive** | **0** |
+
+Both labels describe the *run*, not the task, and neither is as strong as it
+sounds. `tier-insensitive` covers 15 tasks but only 2 of them were actually
+observed at two tiers; the other 13 passed at the routed tier and stopped there,
+so for those the label records "no escalation was needed," not a demonstrated
+insensitivity. `drop-unrecoverable` means only that one escalation step did not
+recover the run — as the next paragraph shows, two of the three failed because
+of a defect in this study's acceptance tests rather than anything about
+difficulty or tier. What no label in this table can hide is the empty row: the
+comparison that would have justified routing was never observed once.
+
+Zero against a floor of nine. The floor is defined over all 36 tasks while only
+18 were calibrated, so strictly the other 18 might still hold the nine. Nothing
+here proves they do not. But the calibrated 18 were selected as the *most
+likely* to be tier-sensitive — 9 rated `high` and 9 rated `standard` — and the
+uncalibrated remainder is 13 `low`, 3 `standard`, and 2 `high`. Even those two
+`high` tasks, `p05` and `p09`, are not unknowns — nor are the other four pilot
+tasks sitting in that remainder: all six ran in Phase 1 and all six passed on
+the first attempt. Finding nine tier-sensitive tasks in that
+tail, after none were found among the hardest eighteen, is not a bet worth
+another calibration round to settle. Per the rule above the study stops here
+rather than lowering the floor, and **Phase 2 was never started.**
+
+The three failures are not hidden tier sensitivity: they failed at *both* tiers,
+so they were never candidates. Two were investigated and the cause was a defect
+in the study's own acceptance tests, which over-specify the interface for tasks
+that ask for a new API. In `p27` the agent caught per-job exceptions under a
+lock, kept the pool running, and re-raised the first failure from `drain()`; the
+test wrapped `drain()` so that a raise skipped its completion signal and was
+misreported as a hang. In `p13` the agent exposed the retry count as a callback
+while the test looked only for a tuple return or a function attribute. Had those
+tests been correct, the tasks would most likely have passed at the routed tier —
+tier-*insensitive*, not sensitive. The count stays 0.
+
+That defect is in the shared acceptance tests, so its blast radius reaches the
+Phase 1 pilot, which scored quality the same way. It did not land there: all 36
+pilot runs recorded `completed: true`. The failure mode is one-directional — an
+over-specified test can only reject a correct implementation that chose a
+different interface, never accept a wrong one — so a phase with zero acceptance
+failures cannot have been corrupted by it. The pilot's numbers stand.
+
+Two tasks were routed to `high`. That is the one case where the calibration rule
+above mandates an extra run a tier down, to cover `A1`; since both passed at
+`high`, no escalation run was needed and that extra run was their second. **Both
+passed a tier down as well.** (`A1` is pinned to the vendor effort `medium`,
+which is what the `standard` tier maps to; the tier name is used here for
+consistency.) The two tasks where the router spent the most are the two where the
+cheaper tier is confirmed sufficient.
+
+Of the nine calibrated tasks the blind raters judged `high`, seven were routed
+`standard`; five of those passed there and the other two are `p26` and `p27`,
+both `concurrency` tasks, whose failures are covered above — `p27` in detail,
+`p26` uninvestigated.
+So even human-rated difficulty did not predict a need for effort.
+
+Combined with the pilot, where a pinned `medium` came out ahead of routing on
+both vendors by point estimate (decisively only on Claude; Codex was a wide
+null), the finding is that on work of this shape **routing up bought nothing.**
+Be precise about how thin that base is: only three runs in the whole calibration
+were above a routed tier — the three escalations — and all three still failed.
+Two more runs went a tier below, and both passed. Five observations, pointing one
+way, and none of them a case where more effort rescued anything. That is
+consistent with the pilot's outcome and is *why* it came out the way it did, but
+it is a consistent absence of evidence, not a large sample.
+
+Be careful not to stretch that into "the cheapest tier always suffices," which
+this design cannot support. Calibration runs at the routed tier and escalates
+*upward*; it never probes downward except for the two `high`-routed tasks, and
+**no task was ever run at `low`.** The thirteen tasks routed `standard` and
+passed might well have passed a tier down, but that was not measured. What is
+measured is that raising the tier never rescued anything — which makes routing
+up a cost with no demonstrated benefit here, and leaves the value of routing
+down an open question.
+
+State the scope honestly: one vendor for calibration (Codex, chosen because its
+runs cost roughly a fifteenth of Claude's), one synthetic fixture, and small
+well-specified maintenance tasks. This does not show that effort never matters.
+It shows that this shape of work cannot be used to value tier routing, and that
+the fixture is probably too small to host work hard enough to try — almost
+anything expressible against nine short modules is within reach of low effort.
+
+Full evidence, including the per-task verdict table, lives in the separate study
+repository alongside the fixture and harness; it is deliberately not vendored
+here.
+
 ## Phases
 
 | Phase | Work | Vendor invocations | Approval |
 | --- | --- | ---: | --- |
 | **0** | fixture, 36 tasks, blind ratings, harness, evidence builder | 0 | done |
 | **1** | pilot: 6 tasks × 3 arms × 2 vendors | 36 | done |
-| **1b** | difficulty calibration on ~18 candidates, one vendor, two efforts | ~36 | required |
-| **2** | comparison P plus control, on the calibrated set | see below | required |
-| **3** | comparisons 3 and 4 | deferred | optional |
+| **1b** | difficulty calibration on 18 candidates, one vendor | 23 | done — 0 tier-sensitive |
+| **2** | comparison P plus control, on the calibrated set | 0 | **not started; blocked by 1b** |
+| **3** | comparisons 3 and 4 | 0 | dropped with the study |
 
-Phase 2's size is now a real decision rather than a default, because the pilot
-measured what each run costs. Codex averaged roughly 35k tokens per invocation
-and Claude roughly 500k, so three arms over 36 tasks on two vendors is about
-216 invocations and on the order of 58M tokens, dominated by Claude.
+Phase 2's sizing below is retained as a record of the decision that was prepared,
+not as a plan that is still live.
+
+Phase 2's size was to have been a real decision rather than a default, because
+the pilot had measured what each run costs. Codex averaged roughly 35k tokens
+per invocation and Claude roughly 500k, so three arms over 36 tasks on two
+vendors is about 216 invocations and on the order of 58M tokens, dominated by
+Claude.
 
 Three options, in increasing cost:
 
@@ -347,14 +467,14 @@ Three options, in increasing cost:
 | **P + control** | `A0`, `A1`, `A2` | 216 | P, plus comparisons 1 and 2 at full size |
 | **P, Claude only** | `A1`, `A2` | 72 | P where the pilot found signal; Codex stays descriptive |
 
-The pilot already answers comparisons 1 and 2 well enough to act on, and both
-pointed the same way on two vendors. Re-running them at 36 pairs buys precision
-on a question that is no longer in doubt. **P-only is the recommended option**,
-with the pilot cited for the control rather than repeated.
+The pilot already answered comparisons 1 and 2 well enough to act on, and both
+pointed the same way on two vendors. Re-running them at 36 pairs would have
+bought precision on a question that was no longer in doubt, so **P-only was the
+recommended option**, with the pilot cited for the control rather than repeated.
 
-Codex is worth keeping despite its flat result: its variance was 25–32%, so a
-null there is itself informative, and dropping the vendor where routing looked
-worst would bias the study.
+Codex would have been kept despite its flat result: its variance was 25–32%, so
+a null there is itself informative, and dropping the vendor where routing looked
+worst would have biased the study.
 
 ## Provenance checklist
 
