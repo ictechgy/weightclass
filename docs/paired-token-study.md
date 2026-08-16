@@ -19,9 +19,11 @@ all: effort moved cost and never changed whether the work got done. See
 below is kept as the pre-registration it was — reading it as live work would be
 a mistake.
 
-Revision 2. The Phase 1 pilot ran — 36 real invocations across two vendors — and
-its result changed this design. Revision 1 is preserved in git history; what
-follows supersedes it.
+The design below is revision 2 and is now final; the closure above is its
+outcome, not a further revision of the plan. Revision 2 was written after the
+Phase 1 pilot ran — 36 real invocations across two vendors — because that result
+changed the design, most importantly by adding Phase 1b. Revision 1 is preserved
+in git history; what follows supersedes it.
 
 ## What the scorer forces
 
@@ -358,9 +360,12 @@ while the test looked only for a tuple return or a function attribute. Had those
 tests been correct, the tasks would most likely have passed at the routed tier —
 tier-*insensitive*, not sensitive. The count stays 0.
 
-Two tasks were routed to `high`, and the mandatory extra `medium` run covers
-exactly that case: **both also passed at `standard`.** The two runs where the
-router spent the most are the two where the cheaper tier is confirmed sufficient.
+Two tasks were routed to `high`. That is exactly the case where the calibration
+rule above mandates a third run one tier down, to cover `A1`, and **both tasks
+passed there too.** (`A1` is pinned to the vendor effort `medium`, which is what
+the `standard` tier maps to; the tier name is used here for consistency.) The two
+runs where the router spent the most are the two where the cheaper tier is
+confirmed sufficient.
 Six further tasks the blind raters judged `high` were routed `standard` and
 passed, so even human-rated difficulty did not predict a need for effort.
 
