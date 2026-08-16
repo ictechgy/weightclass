@@ -122,7 +122,9 @@ def main() -> int:
         print(f"경고: 인프라 실패 {len(broken)}건은 p 계산에서 제외한다")
         for r in broken[:3]:
             # 로그는 신뢰 대상이 아니다. 제어 문자를 걷어내고 길이를 자른다.
-            print(f"  - {_safe(str(r['cheap'].get('error')))}")
+            cheap = r["cheap"]
+            detail = cheap.get("error") if isinstance(cheap, dict) else "malformed record"
+            print(f"  - {_safe(str(detail))}")
 
     total = len(usable)
     if not total:

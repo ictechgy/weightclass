@@ -96,15 +96,15 @@ class Attempt(TypedDict, total=False):
     error: str
 
 
+# 작업공간 이름의 접두사. mkdtemp 호출부와 삭제 허용 목록이 같은 상수를
+# 보게 해서, 한쪽만 바뀌면 --prune 이 조용히 아무것도 못 지우는 일을 막는다.
+WORKSPACE_PREFIXES = ("spec-cheap-", "spec-expensive-", "spec-home-")
+
 # 에이전트 런타임이 작업 트리에 흘리는 디렉터리들. 이름으로 아는 수밖에 없다.
 # 자식이 만든 점-디렉터리를 전부 버리면 .github 나 .vscode 를 새로 추가하는
 # 정당한 변경이 조용히 사라지고, 아무것도 안 버리면 스캐폴딩 수백 줄이 패치와
 # 검증 트리에 섞인다. 목록은 틀릴 수 있으므로 --exclude-dir 로 늘릴 수 있고,
 # 무엇을 뺐는지는 매번 기록에 남긴다.
-# 작업공간 이름의 접두사. mkdtemp 호출부와 삭제 허용 목록이 같은 상수를
-# 보게 해서, 한쪽만 바뀌면 --prune 이 조용히 아무것도 못 지우는 일을 막는다.
-WORKSPACE_PREFIXES = ("spec-cheap-", "spec-expensive-", "spec-home-")
-
 AGENT_SCAFFOLDING = frozenset(
     {".serena", ".omc", ".claude", ".codex", ".aider", ".cursor", ".windsurf", ".continue"}
 )
@@ -813,7 +813,11 @@ def main() -> int:
     if run_git(["status", "--porcelain"], repo).strip():
         parser.error(f"repository has uncommitted changes; commit or stash first: {repo}")
 
-    task = arguments.task_file.expanduser().read_text(encoding="utf-8")
+    task_file = arguments.task_file.expanduser()
+    try:
+        task = task_file.read_text(encoding="utf-8")
+    except OSError as error:
+        parser.error(f"--task-file is not readable: {error}")
     commit = head_commit(repo)
 
     # 라우트 명령 전문은 찍지 않는다. argv 로 넘긴 자격증명이 CI 로그나

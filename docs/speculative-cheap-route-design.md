@@ -117,16 +117,23 @@ python3 -m pytest -q
 
 # 자격증명이 작업 트리에 들어왔는지. 바이트 단위로 훑는다.
 python3 - <<'SCAN'
-import pathlib, re, sys
+import os, pathlib, re, sys
 
 PATTERNS = re.compile(
     rb"sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY"
 )
 for path in pathlib.Path(".").rglob("*"):
-    if ".git" in path.parts or not path.is_file() or path.is_symlink():
+    if ".git" in path.parts:
         continue
-    if PATTERNS.search(path.read_bytes()):
-        print(f"credential-like string in {path}", file=sys.stderr)
+    # 경로명 자체도 검사한다. 패치는 파일 이름과 심링크 대상을 그대로
+    # 실어 나르므로, 자격증명이 내용이 아니라 이름에 들어올 수 있다.
+    haystacks = [os.fsencode(path)]
+    if path.is_symlink():
+        haystacks.append(os.fsencode(os.readlink(path)))
+    elif path.is_file():
+        haystacks.append(path.read_bytes())
+    if any(PATTERNS.search(blob) for blob in haystacks):
+        print(f"credential-like string at {path}", file=sys.stderr)
         sys.exit(1)
 SCAN
 ```
