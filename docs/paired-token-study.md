@@ -11,8 +11,10 @@ that number honest, not grounded. Until one paired collection exists, any furthe
 routing work is optimization on top of an unmeasured assumption.
 
 **Status: closed at Phase 1b. Phase 2 never ran.** Calibration found **0 of 18
-tasks tier-sensitive** against a pre-registered floor of 9, which is the
-stopping condition this document set for itself. The answer to the goal question,
+tasks tier-sensitive** against a pre-registered floor of 9. The floor is written
+over all 36 tasks and 18 were calibrated — the 18 likeliest to be sensitive —
+which the result section addresses directly; the shortfall is not a near miss.
+Reporting it and stopping is the condition this document set for itself. The answer to the goal question,
 within the stated scope, is that this task shape cannot value tier routing at
 all: effort moved cost and never changed whether the work got done. See
 [Calibration result](#calibration-result-the-stopping-condition-fired). The plan
@@ -401,8 +403,9 @@ consistency.) The two tasks where the router spent the most are the two where th
 cheaper tier is confirmed sufficient.
 
 Of the nine calibrated tasks the blind raters judged `high`, seven were routed
-`standard`; five of those passed there and two are the concurrency failures
-discussed above.
+`standard`; five of those passed there and the other two are `p26` and `p27`,
+both `concurrency` tasks, whose failures are covered above — `p27` in detail,
+`p26` uninvestigated.
 So even human-rated difficulty did not predict a need for effort.
 
 Combined with the pilot, where a pinned `medium` came out ahead of routing on

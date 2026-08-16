@@ -24,7 +24,9 @@ arm's interval exclude zero; Codex's result is a wide null. In calibration, 0 of
 one tier down. Only five of the eighteen were run at two tiers at all — two that
 passed at both and three that failed at both — while the rest passed at the
 routed tier and stopped, so no comparison exists for them. The headline rests on
-those five.
+those five, and really on three: two of the three fail-at-both cases turned out
+to be defects in the study's own acceptance tests, which rejected correct work
+for choosing a different interface.
 
 On work of that shape — small, well-specified maintenance tasks — effort moved
 cost and nothing else, so routing up had no quality risk to justify its price.
@@ -41,6 +43,7 @@ what it rules out is routing up paying for itself; the only downward runs were
 the `A1` coverage the design mandates for `high`-routed tasks, which is how those
 two came to be tried a tier lower. Nothing was ever run at `low`, so the cheap
 end is untested rather than vindicated.
+
 It does not show effort never matters. It does show that nobody, including this
 router, should assert a saving without measuring it on their own workload —
 which is why every savings surface here abstains by default.
