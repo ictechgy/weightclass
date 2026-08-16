@@ -83,11 +83,21 @@ class Attempt(TypedDict, total=False):
     made_changes: bool
     patch_lines: int
     dropped_ignored: list[str]
+    excluded_scaffolding: list[str]
     accepted: bool
     patch: str
     verify: VerifyResult
     error: str
 
+
+# 에이전트 런타임이 작업 트리에 흘리는 디렉터리들. 이름으로 아는 수밖에 없다.
+# 자식이 만든 점-디렉터리를 전부 버리면 .github 나 .vscode 를 새로 추가하는
+# 정당한 변경이 조용히 사라지고, 아무것도 안 버리면 스캐폴딩 수백 줄이 패치와
+# 검증 트리에 섞인다. 목록은 틀릴 수 있으므로 --exclude-dir 로 늘릴 수 있고,
+# 무엇을 뺐는지는 매번 기록에 남긴다.
+AGENT_SCAFFOLDING = frozenset(
+    {".serena", ".omc", ".claude", ".codex", ".aider", ".cursor", ".windsurf", ".continue"}
+)
 
 # 자식 하나가 걸려도 스크립트가 영원히 매달리지 않게 한다. 벤더 CLI 는 스스로
 # 끝나지 않는 경우가 있다.
@@ -167,6 +177,7 @@ def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
             start_new_session=True,
         ) as child:
             try:
@@ -281,7 +292,9 @@ def run_verify(verify: Path, workspace: Path) -> VerifyResult:
     }
 
 
-def build_handover_tree(repo: Path, commit: str, workspace: Path, handover: Path) -> None:
+def build_handover_tree(
+    repo: Path, commit: str, workspace: Path, handover: Path, scaffolding: frozenset[str]
+) -> list[str]:
     """Reconstruct the child's work in a clone it never had a handle on.
 
     Two problems solved by the same move.
@@ -296,12 +309,12 @@ def build_handover_tree(repo: Path, commit: str, workspace: Path, handover: Path
     ignored path would never reach the patch. Verifying the workspace would then
     bless a tree the user cannot reproduce from what they were given. Verifying
     *this* tree cannot drift from the patch, because the patch is taken from it.
+
+    Returns the scaffolding directories it left behind, so the caller can record
+    what was dropped rather than let it vanish silently.
     """
+    excluded: list[str] = []
     clone_at(repo, commit, handover)
-    # 클론에 있는 최상위 이름이 곧 "이 저장소가 추적하는 것" 이다. 자식이 만든
-    # 점-디렉터리(.serena, .omc 같은 에이전트 스캐폴딩)만 걸러내야지, 저장소가
-    # 실제로 추적하는 .github 같은 것까지 버리면 그 변경이 조용히 사라진다.
-    tracked_top_level = {entry.name for entry in handover.iterdir()} - {".git"}
     keep = handover / ".git"
     # 순회 중 삭제하면 readdir 동작이 POSIX 상 미정의다. 먼저 목록을 뜬다.
     for entry in list(handover.iterdir()):
@@ -316,8 +329,9 @@ def build_handover_tree(repo: Path, commit: str, workspace: Path, handover: Path
     for entry in workspace.iterdir():
         if entry.name == ".git":
             continue
-        if entry.name.startswith(".") and entry.is_dir() and entry.name not in tracked_top_level:
+        if entry.name in scaffolding and entry.is_dir():
             # 자식의 도구가 흘린 것. 패치에도 검증 트리에도 들어가지 않는다.
+            excluded.append(entry.name)
             continue
         target = handover / entry.name
         # 심링크는 **따라가지 않고 링크 자체로** 복사한다. 기본값은 따라가는
@@ -328,6 +342,19 @@ def build_handover_tree(repo: Path, commit: str, workspace: Path, handover: Path
             shutil.copy2(entry, target, follow_symlinks=False)
         elif entry.is_dir():
             shutil.copytree(entry, target, symlinks=True)
+    return excluded
+
+
+def tracked_files_unchanged(handover: Path) -> bool:
+    """Whether every staged path still holds what it held when it was staged."""
+    result = subprocess.run(
+        ["git", "diff", "--quiet"],
+        cwd=handover,
+        capture_output=True,
+        text=True,
+        timeout=GIT_TIMEOUT,
+    )
+    return result.returncode == 0
 
 
 def make_patch(handover: Path) -> tuple[str, list[str]]:
@@ -430,7 +457,8 @@ def resolved_own_workspace(candidate: Path, out_dir: Path) -> Path | None:
     except OSError:
         return None
     accepted = (
-        resolved.parent == root
+        # 작업공간은 out_dir/.work 아래에만 만들어진다.
+        resolved.parent == root / ".work"
         and resolved.name.startswith(("spec-cheap-", "spec-expensive-"))
         and resolved.is_dir()
     )
@@ -482,10 +510,21 @@ def attempt(
     out_dir: Path,
     registry: Path,
     keep_on_pass: bool,
+    scaffolding: frozenset[str],
 ) -> Attempt:
     """Clone, run one route, verify. The workspace survives only a pass."""
-    workspace = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=out_dir))
-    handover = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=out_dir))
+    # 작업공간은 산출물 디렉터리 바로 아래가 아니라 그 안의 .work 에 만든다.
+    # 검증 스크립트의 cwd 가 인계 트리이므로 `..` 가 곧 산출물 디렉터리가 되면,
+    # 한 과제의 악의적 검증이 앞선 과제들의 이미 승인된 패치를 덮어쓴다. 20개를
+    # 한 디렉터리에 모아 재는 것이 이 스크립트의 의도된 사용법이다.
+    #
+    # 이것은 문턱을 올릴 뿐 담장이 아니다. 검증은 사용자 권한으로 도는 자식의
+    # 코드이므로 사용자가 닿는 곳이면 어디든 닿는다. 진짜 격리는 검증 명령
+    # 자체를 컨테이너나 jail 에 넣는 것뿐이고, 설계 문서가 그렇게 권한다.
+    work_root = out_dir / ".work"
+    work_root.mkdir(mode=0o700, exist_ok=True)
+    workspace = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=work_root))
+    handover = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=work_root))
     register(registry, workspace, add=True)
     register(registry, handover, add=True)
     record: Attempt = {"route": name, "workspace": str(handover)}
@@ -494,21 +533,34 @@ def attempt(
     # 재는 것이 이 스크립트의 목적이다.
     patch = out_dir / f"{handover.name}.patch"
     patch_text = ""
+    build_scaffolding: list[str] = []
     try:
         clone_at(repo, commit, workspace)
         record["child"] = run_child(command, workspace, task)
         # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
         # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
         # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
-        build_handover_tree(repo, commit, workspace, handover)
+        build_scaffolding = build_handover_tree(repo, commit, workspace, handover, scaffolding)
         # 패치는 검증 **전에** 뜬다. 검증은 테스트를 돌리므로 __pycache__,
         # 커버리지 파일, 빌드 산출물을 남기고, 나중에 뜨면 그것들이 패치에
         # 섞여 들어가 적용이 깨진다.
+        record["excluded_scaffolding"] = build_scaffolding
         patch_text, dropped = make_patch(handover)
         record["patch_lines"] = patch_text.count("\n")
         record["dropped_ignored"] = dropped
         record["made_changes"] = record["patch_lines"] > 0
         record["verify"] = run_verify(verify, handover)
+        # 검증은 자식이 쓴 코드를 실행하므로 인계 트리를 바꿀 수 있다. 바뀌면
+        # 통과한 트리와 우리가 건네는 패치가 더 이상 같은 것이 아니다.
+        #
+        # 물어야 할 것은 "검증이 **패치에 담긴 것**을 바꿨나" 이지 "검증이
+        # 흔적을 남겼나" 가 아니다. 테스트를 돌리면 __pycache__ 는 당연히
+        # 생기고 그것은 패치에 없다. 인덱스에는 방금 스테이징한 에이전트의
+        # 작업이 들어 있으므로, 작업 트리와 인덱스를 비교하면 정확히 그
+        # 질문에 답한다. 새로 생긴 미추적 파일은 여기 잡히지 않는다.
+        if not tracked_files_unchanged(handover):
+            record["verify"]["passed"] = False
+            record["error"] = "verification modified the patched files; patch no longer matches"
     except (RunFailure, subprocess.SubprocessError, OSError) as error:
         # RunFailure 만 잡으면 clone_at 의 CalledProcessError 나 복사 중의
         # OSError 가 그대로 올라가, 등록된 채 지워지지 않은 작업공간이 남는다.
@@ -534,6 +586,10 @@ def attempt(
     if record["accepted"] and keep_on_pass:
         # 검증을 통과한 뒤에야 디스크에 쓴다.
         patch.write_text(patch_text, encoding="utf-8")
+        # 승인된 패치는 읽기 전용으로 둔다. 뒤 과제의 검증이 무심코 훑고 쓰는
+        # 것은 막지만, 작정한 코드는 chmod 로 되돌릴 수 있다. 담장이 아니라
+        # 실수에 대한 방어다.
+        patch.chmod(0o400)
         record["patch"] = str(patch)
     else:
         discard(registry, handover, out_dir)
@@ -555,6 +611,12 @@ def main() -> int:
     parser.add_argument("--expensive", help="exact command for the escalation route")
     parser.add_argument("--verify", type=Path, help="executable; exit code is the verdict")
     parser.add_argument("--label", default="", help="free-text tag recorded with the run")
+    parser.add_argument(
+        "--exclude-dir",
+        action="append",
+        default=[],
+        help="extra agent-scaffolding directory to keep out of the patch (repeatable)",
+    )
     arguments = parser.parse_args()
 
     arguments.out_dir = arguments.out_dir.expanduser().resolve()
@@ -601,6 +663,7 @@ def main() -> int:
     print(f"기준 커밋 {commit[:12]}  저장소 {repo}")
     print(f"싼 경로: {arguments.cheap}")
 
+    scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)
     cheap = attempt(
         "cheap",
         shlex.split(arguments.cheap),
@@ -611,6 +674,7 @@ def main() -> int:
         arguments.out_dir,
         registry,
         keep_on_pass=True,
+        scaffolding=frozenset(scaffolding),
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
@@ -642,6 +706,7 @@ def main() -> int:
             arguments.out_dir,
             registry,
             keep_on_pass=True,
+            scaffolding=frozenset(scaffolding),
         )
         record["expensive"] = expensive
         reason = (

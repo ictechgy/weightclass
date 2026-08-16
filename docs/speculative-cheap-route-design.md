@@ -144,11 +144,21 @@ the tests on what the agent wrote" that avoids this.
 
 What the design does bound is the blast radius: it happens in a clone under a
 temp directory, against a `.git` the child cannot use to reach the real
-repository, and the workspace is deleted unless it passes. What it does not
-bound is the host. Anyone running this against genuinely untrusted output should
-put the verify command itself in a container or `sandbox-exec` jail; the runner
-deliberately does not try to build that jail itself, because a half-built
-sandbox is worse than an honest warning.
+repository, and the tree is deleted unless it passes. What it does not bound is
+the host.
+
+**Accepted patches from earlier tasks are not protected from it.** The intended
+use is twenty tasks into one output directory, and a verify script from task
+fifteen runs with enough privilege to rewrite task three's patch. The runner
+raises the bar — workspaces live under `<out-dir>/.work` so the verifier's
+parent directory is not the artifact directory, and an accepted patch is left
+read-only — but neither is a fence. Code running as the user reaches whatever
+the user reaches.
+
+Anyone running this against genuinely untrusted output should put the verify
+command itself in a container or `sandbox-exec` jail. The runner deliberately
+does not try to build that jail, because a half-built sandbox invites more trust
+than it earns; an honest warning is worth more.
 
 ### Isolation choice, and its sharp edge
 
