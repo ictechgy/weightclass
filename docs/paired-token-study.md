@@ -12,8 +12,9 @@ routing work is optimization on top of an unmeasured assumption.
 
 **Status: closed at Phase 1b. Phase 2 never ran.** Calibration found **0 of 18
 tasks tier-sensitive** against a pre-registered floor of 9. The floor is written
-over all 36 tasks and 18 were calibrated — the 18 likeliest to be sensitive —
-which the result section addresses directly; the shortfall is not a near miss.
+over all 36 tasks and 18 were calibrated — the likeliest to be sensitive among
+the tasks the Phase 1 pilot had not already used — which the result section
+addresses directly; the shortfall is not a near miss.
 Reporting it and stopping is the condition this document set for itself. The answer to the goal question,
 within the stated scope, is that this task shape cannot value tier routing at
 all: effort moved cost and never changed whether the work got done. See

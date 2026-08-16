@@ -33,8 +33,10 @@ cost and nothing else, so routing up had no quality risk to justify its price.
 The study stopped there because it had pre-registered the condition: a floor of
 nine tier-sensitive tasks, and a written instruction to report a shortfall as
 the finding rather than lower the bar. That floor is stated over all 36 tasks
-while 18 were calibrated; the doc argues why the untested tail cannot hold nine,
-and why buying certainty was not worth another round.
+while 18 were calibrated; the doc does not claim the untested tail is proven
+empty, only that finding nine tier-sensitive tasks in a mostly `low`-rated
+remainder, after none surfaced among the hardest eighteen, was not worth another
+calibration round to rule out.
 
 Read that as a bound on the evidence, not a proof about all work: one fixture,
 one vendor (Codex) for calibration, and small, fully specified maintenance tasks.
