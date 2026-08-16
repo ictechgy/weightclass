@@ -41,6 +41,11 @@ def main() -> int:
     )
     arguments = parser.parse_args()
 
+    # c 는 비용비이므로 (0, 1) 안에 있어야 한다. 범위를 벗어나면 손익분기
+    # 1-c 가 뒤집히고 절감이 음수나 100% 초과로 나와 조용히 헛소리를 한다.
+    if not 0 < arguments.cost_ratio < 1:
+        parser.error(f"--cost-ratio must be between 0 and 1, exclusive: {arguments.cost_ratio}")
+
     records = [
         json.loads(line)
         for line in arguments.log.read_text(encoding="utf-8").splitlines()

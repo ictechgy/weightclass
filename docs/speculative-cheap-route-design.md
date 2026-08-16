@@ -98,22 +98,44 @@ auditable.
 One reviewed command in the policy, alongside the routes. Its **exit code is the
 verdict** — zero passes, anything else fails. Nothing is parsed from its output.
 
-The user composes what it does. The study's own gate is a reasonable default to
-document:
+The user composes what it does. A reasonable default, in the same spirit as the
+study's own gate:
 
 ```sh
-python -m pytest -q \
-  && git diff --cached --name-only --diff-filter=D | grep -q . && exit 1
-  && ! git diff | grep -qE 'sk-[A-Za-z0-9]{16,}|BEGIN [A-Z ]*PRIVATE KEY'
+#!/bin/sh
+set -e
+python -m pytest -q
+# 자격증명이 작업 트리에 들어왔는지. git 이 아니라 파일을 직접 훑는다.
+! grep -rIqE 'sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY' \
+    --exclude-dir=.git .
 ```
 
-That is a project-specific command, which is why it belongs in the policy and
-not in weightclass. The router does not learn how to test anything.
+**Do not reach for `git` inside the verify script.** It runs inside the
+workspace the child just had write access to, which includes `.git/config` and
+`.gitattributes`; a `filter.<name>.clean` planted there executes on the host the
+next time git stages or diffs that tree. The runner takes its own diff in a
+separate clone for exactly this reason, and a verify script that runs `git diff`
+would walk straight back into it. Read files, not the repository.
 
 **The secret scan is not optional.** A cheap run that writes a credential and
 then passes the test suite would otherwise have its diff promoted with the
 credential inside it. Verification is the only thing standing between the
 tolerated failure mode and the user's tree.
+
+### Verification executes untrusted code, and cannot not
+
+The verify command runs the agent's output — that is the whole point — so a
+`conftest.py`, a `Makefile` target, a `setup.py`, or a `.pth` file the child
+wrote will execute with the verifier's privileges. There is no version of "run
+the tests on what the agent wrote" that avoids this.
+
+What the design does bound is the blast radius: it happens in a clone under a
+temp directory, against a `.git` the child cannot use to reach the real
+repository, and the workspace is deleted unless it passes. What it does not
+bound is the host. Anyone running this against genuinely untrusted output should
+put the verify command itself in a container or `sandbox-exec` jail; the runner
+deliberately does not try to build that jail itself, because a half-built
+sandbox is worse than an honest warning.
 
 ### Isolation choice, and its sharp edge
 

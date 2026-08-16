@@ -84,6 +84,7 @@ class Attempt(TypedDict, total=False):
     verify: VerifyResult
     error: str
 
+
 # 자식 하나가 걸려도 스크립트가 영원히 매달리지 않게 한다. 벤더 CLI 는 스스로
 # 끝나지 않는 경우가 있다.
 CHILD_TIMEOUT = 3600
@@ -182,7 +183,19 @@ def extract_tokens(stdout: str, stderr: str) -> int | None:
 
 
 def run_verify(verify: Path, workspace: Path) -> VerifyResult:
-    """The gate. Exit code is the whole verdict; nothing is parsed from output."""
+    """The gate. Exit code is the whole verdict; nothing is parsed from output.
+
+    This executes the child's output by design — running the tests is the point
+    — so a `conftest.py`, `Makefile`, or `.pth` the child wrote runs with these
+    privileges. That cannot be avoided while still verifying anything. The
+    clone bounds what it can reach in the repository; it does not bound the
+    host. Put the verify command in a container or jail if the output is
+    genuinely untrusted.
+
+    Do not use `git` inside the verify script: it would run against a `.git`
+    the child could write to, and a planted `filter.<name>.clean` executes on
+    the host. `write_patch` takes its diff in a separate clone for this reason.
+    """
     started = time.monotonic()
     try:
         result = subprocess.run(
@@ -203,16 +216,38 @@ def run_verify(verify: Path, workspace: Path) -> VerifyResult:
     }
 
 
-def changed(workspace: Path) -> bool:
-    return bool(run_git(["status", "--porcelain"], workspace).strip())
+def write_patch(repo: Path, commit: str, workspace: Path, destination: Path) -> int:
+    """Emit the attempt's work as a patch, without running git over the child's `.git`.
 
+    The child has write access to its workspace, and that includes
+    `.git/config` and `.gitattributes`. Git reads both when it stages and
+    diffs, and between them a `filter.<name>.clean` command can be made to run
+    on the host. That would turn "read what the agent wrote" into arbitrary
+    execution outside the sandbox the agent was given.
 
-def write_patch(workspace: Path, destination: Path) -> int:
-    """Emit the attempt's work as a patch. Applying it stays a human action."""
-    run_git(["add", "-A", "--", ".", ":(exclude).*/"], workspace)
-    patch = run_git(
-        ["-c", "core.pager=cat", "diff", "--cached", "--no-color", "--no-ext-diff"], workspace
-    )
+    So the diff is taken somewhere the child never had a handle on: a second
+    clone of the *original* repository, into which the child's files are copied
+    with its `.git` left behind. A `.gitattributes` the child planted comes
+    along, but it is inert — the filter it names is defined in config, and this
+    config is ours.
+    """
+    with tempfile.TemporaryDirectory(prefix="spec-patch-", dir=destination.parent) as scratch:
+        patchspace = Path(scratch) / "tree"
+        clone_at(repo, commit, patchspace)
+        keep = patchspace / ".git"
+        for entry in patchspace.iterdir():
+            if entry != keep:
+                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+        for entry in workspace.iterdir():
+            if entry.name == ".git":
+                continue
+            target = patchspace / entry.name
+            shutil.copytree(entry, target) if entry.is_dir() else shutil.copy2(entry, target)
+
+        run_git(["add", "-A", "--", ".", ":(exclude).*/"], patchspace)
+        patch = run_git(
+            ["-c", "core.pager=cat", "diff", "--cached", "--no-color", "--no-ext-diff"], patchspace
+        )
     destination.write_text(patch, encoding="utf-8")
     return patch.count("\n")
 
@@ -228,25 +263,61 @@ def register(registry: Path, workspace: Path, add: bool) -> None:
     if registry.exists():
         live = {line for line in registry.read_text(encoding="utf-8").splitlines() if line.strip()}
     live.add(str(workspace)) if add else live.discard(str(workspace))
-    registry.write_text("".join(f"{path}\n" for path in sorted(live)), encoding="utf-8")
+    # 원자적으로 바꾼다. 이 파일의 존재 이유가 크래시 대비인데, 전체를 다시
+    # 쓰는 도중 죽으면 잘린 레지스트리가 남아 정확히 그 목적을 무너뜨린다.
+    body = "".join(f"{path}\n" for path in sorted(live))
+    temporary = registry.with_suffix(f".{os.getpid()}.tmp")
+    temporary.write_text(body, encoding="utf-8")
+    temporary.replace(registry)
 
 
-def discard(registry: Path, workspace: Path) -> None:
-    shutil.rmtree(workspace, ignore_errors=True)
+def discard(registry: Path, workspace: Path, out_dir: Path) -> None:
+    if is_own_workspace(workspace, out_dir):
+        shutil.rmtree(workspace, ignore_errors=True)
     register(registry, workspace, add=False)
 
 
-def prune(registry: Path) -> int:
+def is_own_workspace(candidate: Path, out_dir: Path) -> bool:
+    """Whether a registry line names a directory this script actually created.
+
+    The registry is a plain file. It can be edited, corrupted by a partial
+    write, or left over from a different `--out-dir`. Deleting whatever it says
+    would make a stray line into an arbitrary `rm -rf`, so a line is honoured
+    only if it is a direct child of this run's `--out-dir` and carries the
+    prefix `mkdtemp` was given. Symlinks are resolved first so a link cannot
+    point the deletion somewhere else.
+    """
+    try:
+        resolved = candidate.resolve(strict=True)
+        root = out_dir.resolve(strict=True)
+    except OSError:
+        return False
+    return (
+        resolved.parent == root
+        and resolved.name.startswith(("spec-cheap-", "spec-expensive-"))
+        and resolved.is_dir()
+        and not resolved.is_symlink()
+    )
+
+
+def prune(registry: Path, out_dir: Path) -> int:
     if not registry.exists():
         print("등록된 작업공간 없음")
         return 0
     live = [line for line in registry.read_text(encoding="utf-8").splitlines() if line.strip()]
-    for path in live:
-        if Path(path).exists():
-            shutil.rmtree(path, ignore_errors=True)
-            print(f"삭제: {path}")
+    removed = 0
+    for line in live:
+        candidate = Path(line)
+        if not candidate.exists():
+            continue
+        if not is_own_workspace(candidate, out_dir):
+            print(f"건너뜀(이 스크립트가 만든 작업공간이 아님): {line}")
+            continue
+        shutil.rmtree(candidate, ignore_errors=True)
+        removed += 1
+        print(f"삭제: {line}")
     registry.write_text("", encoding="utf-8")
-    print(f"{len(live)}개 정리 완료")
+    print(f"{removed}개 정리 완료 (등록 {len(live)}개)")
     return 0
 
 
@@ -265,15 +336,18 @@ def attempt(
     workspace = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=out_dir))
     register(registry, workspace, add=True)
     record: Attempt = {"route": name, "workspace": str(workspace)}
-    patch = out_dir / f"{name}.patch"
+    # 패치 이름에 작업공간의 무작위 접미사를 물려 준다. 고정 이름이면 과제를
+    # 20개 재는 동안 out_dir/cheap.patch 를 계속 덮어써서 마지막 하나만 남고,
+    # 그 20개를 재는 것이 이 스크립트의 목적이다.
+    patch = out_dir / f"{workspace.name}.patch"
     try:
         clone_at(repo, commit, workspace)
         record["child"] = run_child(command, workspace, task)
-        record["made_changes"] = changed(workspace)
         # 패치는 검증 **전에** 뜬다. 검증은 테스트를 돌리므로 __pycache__,
         # 커버리지 파일, 빌드 산출물을 남기고, 나중에 뜨면 그것들이 패치에
         # 섞여 들어가 적용이 깨진다. 에이전트의 작업은 이 시점에 이미 끝났다.
-        record["patch_lines"] = write_patch(workspace, patch)
+        record["patch_lines"] = write_patch(repo, commit, workspace, patch)
+        record["made_changes"] = record["patch_lines"] > 0
         record["verify"] = run_verify(verify, workspace)
     except RunFailure as error:
         record["error"] = str(error)
@@ -284,7 +358,7 @@ def attempt(
     if passed and keep_on_pass:
         record["patch"] = str(patch)
     else:
-        discard(registry, workspace)
+        discard(registry, workspace, out_dir)
         record["workspace"] = None
         patch.unlink(missing_ok=True)
     return record
@@ -307,11 +381,15 @@ def main() -> int:
     arguments = parser.parse_args()
 
     arguments.out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # mkdir(mode=...) 는 디렉터리가 이미 있으면 아무것도 하지 않고, parents=True
+    # 로 만들어진 상위 디렉터리는 기본 umask 를 받는다. 작업공간에는 에이전트가
+    # 쓴 코드가 들어가므로 소유자 전용을 실제로 강제한다.
+    arguments.out_dir.chmod(0o700)
     registry = arguments.out_dir / "workspaces.txt"
     log = arguments.out_dir / "runs.jsonl"
 
     if arguments.prune:
-        return prune(registry)
+        return prune(registry, arguments.out_dir)
 
     missing = [
         name
