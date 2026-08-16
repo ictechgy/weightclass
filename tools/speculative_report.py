@@ -58,6 +58,8 @@ def main() -> int:
             # 손상된 줄만 견디고 필드 누락에는 죽는 것은 일관성이 없다. 이
             # 리포트가 읽는 모양을 갖췄는지 여기서 한 번에 본다.
             record["cheap"]["accepted"]
+            if record.get("expensive") is not None:
+                record["expensive"]["accepted"]
             records.append(record)
         except (ValueError, KeyError, TypeError):
             damaged += 1
@@ -70,12 +72,21 @@ def main() -> int:
     # 인프라 실패(클론 불가, 복사 오류, 자식 기동 실패)는 싼 경로의 품질과
     # 무관하다. p 에 섞으면 도구 고장이 "싼 모델이 나쁘다" 로 둔갑한다.
     # attempt 는 그런 경우 error 를 남기되 "made no change" 만은 진짜 결과다.
-    broken = [
-        r
-        for r in records
-        if r["cheap"].get("error") and "made no change" not in str(r["cheap"].get("error"))
-    ]
-    usable = [r for r in records if r not in broken]
+    def is_infrastructure_failure(record: dict[str, object]) -> bool:
+        cheap = record["cheap"]
+        assert isinstance(cheap, dict)
+        error = cheap.get("error")
+        # "made no change" 와 "modified the patched files" 는 싼 경로에 대한
+        # 진짜 판정이다. 나머지 error 는 도구가 고장난 것이다.
+        return bool(error) and not any(
+            marker in str(error) for marker in ("made no change", "modified the patched files")
+        )
+
+    # 인덱스가 아니라 술어로 가른다. `r not in broken` 은 dict 값 동등성이라,
+    # 토큰과 시간이 모두 None 인 인프라 실패 두 건이 함께 걸려 나가고 비용도
+    # O(n*m) 이다.
+    broken = [r for r in records if is_infrastructure_failure(r)]
+    usable = [r for r in records if not is_infrastructure_failure(r)]
     if broken:
         print(f"경고: 인프라 실패 {len(broken)}건은 p 계산에서 제외한다")
         for r in broken[:3]:

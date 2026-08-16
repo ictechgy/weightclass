@@ -376,7 +376,15 @@ def make_patch(handover: Path) -> tuple[str, list[str]]:
     only after the tree it came from has passed.
     """
     run_git(["add", "-A"], handover)
-    dropped = [line for line in run_git(["clean", "-ndX"], handover).splitlines() if line.strip()]
+    # `git clean -n` 은 "Would remove <path>" 라는 로케일 의존 문장을 낸다.
+    # ls-files 는 경로만 NUL 로 구분해 주므로 파싱할 것이 없다.
+    dropped = [
+        name
+        for name in run_git(
+            ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], handover
+        ).split("\0")
+        if name
+    ]
     if dropped:
         run_git(["clean", "-fdX"], handover)
     patch = run_git(
@@ -583,7 +591,12 @@ def attempt(
     if verdict and verdict["passed"] and not record.get("made_changes"):
         record["error"] = "route made no change; not counted as a pass"
     record["accepted"] = bool(verdict and verdict["passed"] and record.get("made_changes"))
-    if record["accepted"] and keep_on_pass:
+    # keep_on_pass 는 통과한 시도의 산출물을 남길지를 정한다. 남기지 않으면
+    # patch 도 없으므로 accepted 로 표시해서는 안 된다. main 이 winner 의
+    # patch 를 읽기 때문이다.
+    if record["accepted"] and not keep_on_pass:
+        record["accepted"] = False
+    if record["accepted"]:
         # 검증을 통과한 뒤에야 디스크에 쓴다.
         patch.write_text(patch_text, encoding="utf-8")
         # 승인된 패치는 읽기 전용으로 둔다. 뒤 과제의 검증이 무심코 훑고 쓰는
@@ -644,6 +657,10 @@ def main() -> int:
     ]
     if missing:
         parser.error(f"required unless --prune: {', '.join(missing)}")
+
+    for name, raw in (("--cheap", arguments.cheap), ("--expensive", arguments.expensive)):
+        if not shlex.split(raw):
+            parser.error(f"{name} is empty; it must name an executable command")
 
     repo = arguments.repo.expanduser().resolve()
     verify = arguments.verify.expanduser().resolve()
