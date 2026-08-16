@@ -277,17 +277,20 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
     disjoint subset is the caller's job because only they can check the answer
     against a real invoice.
 
-    A rate naming a field the vendor did not report is a typo, not a deliberate
-    exclusion, so it returns None rather than quietly pricing part of the run.
+    A field the table prices but this run does not report counts as zero, not as
+    an error: a run that touched no cache genuinely has no cached tokens, and
+    failing there would silently drop the whole run from the cost sample. A rate
+    that matches *nothing* across the breakdown is a different matter — that is a
+    typo, and it produces None rather than a plausible-looking partial number.
     """
     breakdown = usage.get("breakdown") or {}
     if not breakdown or not rates:
         return None
+    if not any(field in breakdown for field in rates):
+        return None
     priced = 0.0
     for field, rate in rates.items():
-        if field not in breakdown:
-            return None
-        priced += breakdown[field] * rate / 1_000_000
+        priced += breakdown.get(field, 0) * rate / 1_000_000
     return priced
 
 
@@ -1103,6 +1106,11 @@ def main() -> int:
             parser.error(f"--prices is not readable JSON: {error}")
         if not isinstance(loaded, dict):
             parser.error("--prices must be a JSON object keyed by 'cheap' and 'expensive'")
+        unknown = set(loaded) - {"cheap", "expensive"}
+        if unknown:
+            # 오타난 키를 조용히 무시하면 그 arm 의 요금표가 비어 비용이 전혀
+            # 계산되지 않고, 사용자는 리포트에서 "비용을 못 얻었다" 만 본다.
+            parser.error(f"--prices has unknown keys: {', '.join(sorted(unknown))}")
         for arm in ("cheap", "expensive"):
             table = loaded.get(arm)
             if table is None:

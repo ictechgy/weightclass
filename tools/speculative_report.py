@@ -206,9 +206,17 @@ def main() -> int:
         if not isinstance(usage, dict):
             return None
         value = usage.get("cost_usd")
-        return float(value) if isinstance(value, (int, float)) else None
+        # bool 은 int 의 하위형이라 isinstance 를 그냥 통과한다. NaN 과 무한대,
+        # 음수도 마찬가지로 걸러야 한다 — 손상되거나 조작된 로그가 그럴듯한
+        # 절감률을 만들어 내는 것을 막는다.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        cost = float(value)
+        return cost if math.isfinite(cost) and cost >= 0 else None
 
     paired: list[float] = []
+    cheap_total = 0.0
+    expensive_total = 0.0
     for r in usable:
         cheap_cost = cost_of(r["cheap"])
         expensive_cost = cost_of(r.get("expensive"))
@@ -217,19 +225,27 @@ def main() -> int:
         # 요금표가 비었거나 벤더가 0 을 보고한 경우이므로 표본에서 뺀다.
         if cheap_cost and expensive_cost:
             paired.append(cheap_cost / expensive_cost)
+            cheap_total += cheap_cost
+            expensive_total += expensive_cost
 
     # 한 건으로 c 를 바꾸면 그 한 과제의 특성이 전체 결론을 정한다. 중앙값이
     # 의미를 가지려면 최소 세 건은 있어야 한다.
     MINIMUM_PAIRED = 3
-    multiturn = sum(
-        1
-        for r in usable
-        for arm in ("cheap", "expensive")
-        if isinstance(r.get(arm), dict)
-        and isinstance(r[arm].get("child"), dict)
-        and isinstance(r[arm]["child"].get("usage"), dict)
-        and "turn" in str(r[arm]["child"]["usage"].get("source", ""))
-    )
+
+    def is_multiturn(attempt: object) -> bool:
+        # cost_of 와 같은 방식으로 단계별로 좁힌다. 재첨자로 다시 꺼내면
+        # isinstance 로 좁힌 타입이 유지되지 않아 읽는 사람도 검사기도 헷갈린다.
+        if not isinstance(attempt, dict):
+            return False
+        child = attempt.get("child")
+        if not isinstance(child, dict):
+            return False
+        usage = child.get("usage")
+        if not isinstance(usage, dict):
+            return False
+        return "turn" in str(usage.get("source", ""))
+
+    multiturn = sum(1 for r in usable for arm in ("cheap", "expensive") if is_multiturn(r.get(arm)))
     if multiturn:
         print(
             f"\n주의: 여러 턴을 돈 실행 {multiturn}건. turn.completed 가 턴별 증분인지"
@@ -237,11 +253,21 @@ def main() -> int:
         )
 
     if len(paired) >= MINIMUM_PAIRED:
-        measured = statistics.median(paired)
+        # 기대 비용 식 c + p 는 c 를 **비용 가중** 비율로 본다. 과제별 비율의
+        # 중앙값은 다른 값이고, 비용 분포가 치우치면 크게 갈린다. 공식에는
+        # 가중 비율을 넣고 중앙값은 이상치 확인용으로 함께 보여 준다.
+        measured = cheap_total / expensive_total
+        median_ratio = statistics.median(paired)
         print(
-            f"\n실측 비용비 c = {measured:.3f}  (승급이 일어난 {len(paired)}개 과제에서"
-            " 같은 과제를 양쪽 모델로 돌린 값의 중앙값)"
+            f"\n실측 비용비 c = {measured:.3f}  (승급이 일어난 {len(paired)}개 과제의"
+            " 비용 합계 비율. 기대 비용 식이 전제하는 가중치다)"
         )
+        print(f"  과제별 비율의 중앙값: {median_ratio:.3f}")
+        if abs(median_ratio - measured) > 0.1:
+            print(
+                "  둘이 크게 다르다 — 비용이 큰 과제 몇 건이 합계를 지배한다는 뜻이다."
+                " 과제를 더 모으기 전에는 어느 쪽도 안정적이지 않다."
+            )
         print(
             "  이 c 는 승급이 일어난 과제, 즉 싼 경로가 실패한 부분집합에서만 나온다."
             " 그 과제들이 더 길거나 어려웠다면 전체를 대표하지 않는다."
