@@ -91,6 +91,9 @@ class Attempt(TypedDict, total=False):
     # 리포트가 p 에서 무엇을 빼야 하는지 문자열 부분 일치로 추측하지 않도록
     # 여기서 정한다.
     failure_kind: str
+    # 벤더 CLI 가 0 이 아닌 코드로 끝나고 변경도 없을 때. 라우트 실패인지
+    # 벤더 장애인지 구별할 수 없으므로 리포트가 사람에게 보여 준다.
+    child_failed_without_changes: bool
     patch: str
     verify: VerifyResult
     error: str
@@ -143,7 +146,15 @@ def _kill_group(child: subprocess.Popen[str]) -> None:
 # .gitattributes 가 그것을 불러낼 수 있다. 이 스크립트가 돌리는 git 은
 # 저장소 config 만 보게 한다.
 _GIT_ENV = {
-    **os.environ,
+    **{
+        name: value
+        for name, value in os.environ.items()
+        # GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_ALTERNATE_OBJECT_DIRECTORIES
+        # 같은 변수는 우리가 cwd 로 지정한 트리가 아니라 다른 곳을 대상으로
+        # 삼게 만든다. 호출자의 셸에 그런 것이 설정돼 있으면 인계 트리가 아닌
+        # 저장소를 스테이징하게 된다.
+        if not name.startswith("GIT_")
+    },
     "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_TERMINAL_PROMPT": "0",
@@ -711,6 +722,13 @@ def attempt(
             record["verify"] = run_verify(verify, handover, verify_home)
         finally:
             discard(registry, verify_home, out_dir)
+        # 벤더 CLI 가 0 이 아닌 코드로 죽었고 아무것도 바꾸지 않았다면, 그것이
+        # 라우트의 실패인지(못 해냈다) 도구의 실패인지(인증 만료, 쿼터 소진,
+        # 네트워크) 여기서는 구별할 수 없다. 추측해서 p 에 넣으면 벤더 장애가
+        # "싼 모델이 나쁘다" 로 둔갑하므로, 표시만 하고 사람이 보게 한다.
+        child = record["child"]
+        if child["exit_code"] not in (0, None) and not record.get("made_changes"):
+            record["child_failed_without_changes"] = True
         # 검증은 자식이 쓴 코드를 실행하므로 인계 트리를 바꿀 수 있다. 바뀌면
         # 통과한 트리와 우리가 건네는 패치가 더 이상 같은 것이 아니다.
         #
@@ -846,8 +864,8 @@ def main() -> int:
     task_file = arguments.task_file.expanduser()
     try:
         task = task_file.read_text(encoding="utf-8")
-    except OSError as error:
-        parser.error(f"--task-file is not readable: {error}")
+    except (OSError, UnicodeDecodeError) as error:
+        parser.error(f"--task-file is not readable as UTF-8 text: {error}")
     commit = head_commit(repo)
 
     # 라우트 명령 전문은 찍지 않는다. argv 로 넘긴 자격증명이 CI 로그나

@@ -162,6 +162,30 @@ def main() -> int:
     lo, hi = wilson(failed, total)
     c = arguments.cost_ratio
 
+    # 어떤 라우트로 잰 p 인지 보여 준다. 러너가 기록하는데 리포트가 감추면
+    # 서로 다른 라우트의 실행이 한 로그에 섞여도 알 길이 없다.
+    identities = {
+        json.dumps(r.get("routes", {}), sort_keys=True, ensure_ascii=False) for r in usable
+    }
+    if len(identities) > 1:
+        print(f"경고: 서로 다른 라우트 조합 {len(identities)}종이 한 로그에 섞여 있다")
+    elif identities:
+        routes = json.loads(identities.pop())
+        if routes:
+            cheap_id = routes.get("cheap", {})
+            expensive_id = routes.get("expensive", {})
+            print(
+                f"라우트: 싼 쪽 {cheap_id.get('executable')}@{cheap_id.get('argv_digest')}"
+                f" / 승급 {expensive_id.get('executable')}@{expensive_id.get('argv_digest')}"
+            )
+
+    suspect = [r for r in usable if r["cheap"].get("child_failed_without_changes")]
+    if suspect:
+        print(
+            f"주의: 벤더 CLI 가 0 이 아닌 코드로 끝나고 변경도 없던 실행 {len(suspect)}건."
+            " 라우트 실패인지 인증/쿼터/네트워크 장애인지 구별되지 않는다."
+        )
+
     print(f"과제 {total}개 (기록 {len(records)}개)")
     print(f"  싼 경로 검증 통과: {cheap_passed}")
     print(f"  승급 필요        : {failed}")
