@@ -25,16 +25,22 @@ one tier down. Only five of the eighteen were run at two tiers at all — two th
 passed at both and three that failed at both — while the rest passed at the
 routed tier and stopped, so no comparison exists for them. The headline rests on
 those five.
+
 On work of that shape — small, well-specified maintenance tasks — effort moved
 cost and nothing else, so routing up had no quality risk to justify its price.
-The study was stopped at its own pre-registered floor rather than continuing.
+The study stopped there because it had pre-registered the condition: a floor of
+nine tier-sensitive tasks, and a written instruction to report a shortfall as
+the finding rather than lower the bar. That floor is stated over all 36 tasks
+while 18 were calibrated; the doc argues why the untested tail cannot hold nine,
+and why buying certainty was not worth another round.
 
 Read that as a bound on the evidence, not a proof about all work: one fixture,
 one vendor (Codex) for calibration, and small, fully specified maintenance tasks.
-The comparison is also one-directional — calibration escalates *upward* from the
-routed tier, so what it rules out is routing up paying for itself, not the
-possibility that an even cheaper tier would have done. Nothing here was ever run
-at `low`, so the cheap end is untested rather than vindicated.
+The comparison is also lopsided. Calibration recovers by escalating *upward*, so
+what it rules out is routing up paying for itself; the only downward runs were
+the `A1` coverage the design mandates for `high`-routed tasks, which is how those
+two came to be tried a tier lower. Nothing was ever run at `low`, so the cheap
+end is untested rather than vindicated.
 It does not show effort never matters. It does show that nobody, including this
 router, should assert a saving without measuring it on their own workload —
 which is why every savings surface here abstains by default.
