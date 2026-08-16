@@ -46,13 +46,18 @@ The study itself was lopsided: calibration recovers by escalating *upward*, so
 what it ruled out is routing up paying for itself.
 
 The cheap direction was measured separately afterwards, and it is the more
-useful result. The 15 tasks that had passed at their routed tier were re-run
-pinned at `low`: **all 15 passed, with no critical failures.** One task the
-router had sent to `high` for 77,170 tokens passed at `low` on 31,727. So on
-this workload the classifier routed above what the work required, every time.
-Token savings point the same way without being established — 632,983 → 506,529
-in aggregate (+20.0%), but the per-task mean is +14.1% with a 95% interval of
-[−1.0%, +29.1%], and 4 of the 15 cost *more* at `low`.
+useful result. The 15 tasks that had passed at their routed tier — 13 routed
+`standard`, 2 routed `high`, so every one of them above `low` — were re-run
+pinned at `low`. **All 15 passed.** None hit a critical failure either, meaning
+none deleted a source file, wrote a secret, or left the fixture's own test suite
+red. One task the router had sent to `high` for 77,170 tokens passed at `low` on
+31,727. For all 15 of these, then, the tier the classifier picked was higher
+than the work turned out to need.
+
+Token savings point the same way without being established. In aggregate `low`
+used 506,529 tokens against 632,983 — **20.0% fewer** — but the per-task mean
+saving is 14.1% with a 95% interval of [−1.0%, +29.1%], so it is not separable
+from zero, and 4 of the 15 cost *more* at `low`.
 
 Do not read that as "route everything cheaply." Those 15 were selected for
 having already passed, and a pass/fail acceptance test cannot detect work that
