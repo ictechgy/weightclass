@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -417,13 +418,15 @@ def _claude_usage(stdout: str) -> Usage | None:
     breakdown: dict[str, int] = {}
     for field in _CLAUDE_USAGE_FIELDS:
         value = usage_fields.get(field)
-        if isinstance(value, int):
+        if isinstance(value, int) and not isinstance(value, bool):
             breakdown[field] = value
     cost = payload.get("total_cost_usd")
     usage: Usage = {"breakdown": breakdown, "source": "claude-json"}
     if breakdown:
         usage["total_tokens"] = sum(breakdown.values())
-    if isinstance(cost, (int, float)):
+    # bool 은 int 의 하위형이라 isinstance 를 그냥 통과한다. true 가 1.0 달러로,
+    # 토큰 필드의 true 가 1 토큰으로 기록되는 것을 막는다.
+    if not isinstance(cost, bool) and isinstance(cost, (int, float)) and math.isfinite(cost):
         usage["cost_usd"] = float(cost)
     return usage if breakdown or "cost_usd" in usage else None
 
@@ -464,7 +467,7 @@ def _codex_usage(stdout: str) -> Usage | None:
             continue
         for field in fields:
             value = raw.get(field)
-            if isinstance(value, int):
+            if isinstance(value, int) and not isinstance(value, bool):
                 totals[field] = totals.get(field, 0) + value
                 seen = True
         turns += 1
@@ -1116,9 +1119,17 @@ def main() -> int:
             if table is None:
                 continue
             if not isinstance(table, dict) or not all(
-                isinstance(v, (int, float)) for v in table.values()
+                # bool 은 int 의 하위형이고, json.loads 는 기본으로 NaN/Infinity 를
+                # 허용한다. 둘 다 그럴듯한 비용을 만들어 낸다.
+                not isinstance(v, bool)
+                and isinstance(v, (int, float))
+                and math.isfinite(v)
+                and v >= 0
+                for v in table.values()
             ):
-                parser.error(f"--prices['{arm}'] must map token field names to numbers")
+                parser.error(
+                    f"--prices['{arm}'] must map token field names to finite, non-negative numbers"
+                )
             rates[arm] = {k: float(v) for k, v in table.items()}
 
     # 하나라도 주어지면 그 목록 + PATH/HOME 만 남긴다. 아무것도 안 주면 기존대로

@@ -71,15 +71,13 @@ the honest version is a dozen lines:
 #!/bin/sh
 set -e
 
-# 이 저장소의 실제 테스트 명령. 자동 감지하지 않는다 — 감지에 실패하면
-# 아무것도 안 돌리고 통과해 버리는 것이 가장 나쁜 결과다.
-python3 -m pytest -q
-
-# 자격증명이 트리에 들어왔는지. 내용·경로명·심링크 타깃을 모두 본다.
-# grep 을 쓰지 않는 이유는 실측했다: \xff\xfe\x00sk-... 를 담은 파일에 대해
-# macOS 의 grep -a 도, strings|grep 도 못 찾고, tr -d '\0' 은 죽는다.
+# 시크릿 스캔을 **먼저** 돌린다. 테스트는 에이전트가 쓴 코드를 실행하는
+# 행위이고, 그 코드는 conftest.py 든 무엇이든 스캔이 보기 전에 흔적을
+# 지울 수 있다. 유출을 확인하는 검사가 유출한 쪽의 코드를 먼저 실행하면
+# 안 된다.
 python3 - <<'SCAN'
 import os, pathlib, re, sys
+
 PATTERNS = re.compile(
     rb"sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
     rb"|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|BEGIN [A-Z ]*PRIVATE KEY"
@@ -87,24 +85,28 @@ PATTERNS = re.compile(
 for path in pathlib.Path(".").rglob("*"):
     if ".git" in path.parts:
         continue
-    blobs = [os.fsencode(path)]
+    blobs = [os.fsencode(path)]          # 파일 이름 자체가 시크릿일 수 있다
     if path.is_symlink():
         blobs.append(os.fsencode(os.readlink(path)))
     elif path.is_file():
         try:
             blobs.append(path.read_bytes())
-        except OSError:
-            # 읽을 수 없는 항목은 "깨끗함" 이 아니다. 검사하지 못했으므로 거부한다.
-            print(f"unreadable file, refusing to pass", file=sys.stderr)
+        except OSError as error:
+            # 읽지 못한 것은 "깨끗함" 이 아니라 "검사하지 못함" 이다.
+            where = "".join(c for c in str(path.parent) if c.isprintable())[:120]
+            print(f"unreadable entry under {where}/: {type(error).__name__}", file=sys.stderr)
             sys.exit(1)
     if any(PATTERNS.search(b) for b in blobs):
-        # 경로명 자체가 시크릿일 수 있으므로 그대로 찍지 않는다. 어느
-        # 디렉터리인지만 알리고 값은 로그로 옮기지 않는다.
-        # 경로도 에이전트가 짓는 문자열이다. 제어 문자를 걷어내고 자른다.
+        # 경로도 시크릿을 담을 수 있으므로 디렉터리까지만 알린다.
         where = "".join(c for c in str(path.parent) if c.isprintable())[:120]
         print(f"credential-like string under {where}/", file=sys.stderr)
         sys.exit(1)
 SCAN
+
+# 스캔을 통과한 뒤에야 이 저장소의 실제 테스트 명령을 돌린다. 자동
+# 감지하지 않는다 — 감지에 실패하면 아무것도 안 돌리고 통과해 버리는
+# 것이 가장 나쁜 결과다.
+python3 -m pytest -q
 ```
 
 Replace the test line with whatever your repo actually runs. Do not use `git`
@@ -131,9 +133,15 @@ Pricing all five would double-count. The safe starting point is the two totals:
 Then **check the result against one real invoice line** before trusting it. If
 your provider bills cached input at a discount, add `cached_input_tokens` and
 lower the `input_tokens` rate accordingly — but only once you have confirmed
-which figure contains which. Naming a field the vendor never reports is treated
-as a typo and produces no cost at all, rather than a partial number that looks
-authoritative.
+which figure contains which.
+
+A field the table prices but a particular run does not report counts as zero:
+a run that touched no cache genuinely has no cached tokens. It is only when
+*none* of the priced names appear anywhere in the run's breakdown that the whole
+table is treated as a typo and produces no cost at all — better than a partial
+number that looks authoritative. Top-level keys other than `cheap` and
+`expensive` are rejected outright, because a misspelled arm would otherwise
+leave that side unpriced with no complaint.
 
 Claude needs none of this — it reports its own cost, and a vendor-reported
 number always wins over the table, which can go stale.
