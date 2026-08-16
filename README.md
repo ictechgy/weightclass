@@ -23,10 +23,12 @@ arm's interval exclude zero; Codex's result is a wide null. In calibration, 0 of
 18 candidates were tier-sensitive, and the two tasks routed to `high` also passed
 one tier down. Only five of the eighteen were run at two tiers at all — two that
 passed at both and three that failed at both — while the rest passed at the
-routed tier and stopped, so no comparison exists for them. The headline rests on
-those five, and really on three: two of the three fail-at-both cases turned out
-to be defects in the study's own acceptance tests, which rejected correct work
-for choosing a different interface.
+routed tier and stopped, so no comparison exists for them. Of those five, two of
+the three fail-at-both cases turned out to be defects in the study's own
+acceptance tests, which rejected correct work for choosing a different interface.
+The pilot adds two more clean two-effort observations — the tasks it routed to
+`high` also ran at `medium` as the fixed arm, and completed at both on both
+vendors. So the headline rests on a handful of observations, not on the full 36.
 
 On work of that shape — small, well-specified maintenance tasks — effort moved
 cost and nothing else, so routing up had no quality risk to justify its price.

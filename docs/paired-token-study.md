@@ -371,8 +371,9 @@ Zero against a floor of nine. The floor is defined over all 36 tasks while only
 here proves they do not. But the calibrated 18 were selected as the *most
 likely* to be tier-sensitive — 9 rated `high` and 9 rated `standard` — and the
 uncalibrated remainder is 13 `low`, 3 `standard`, and 2 `high`. Even those two
-`high` tasks, `p05` and `p09`, are not unknowns: both ran in the Phase 1 pilot
-and both passed on the first attempt. Finding nine tier-sensitive tasks in that
+`high` tasks, `p05` and `p09`, are not unknowns — nor are the other four pilot
+tasks sitting in that remainder: all six ran in Phase 1 and all six passed on
+the first attempt. Finding nine tier-sensitive tasks in that
 tail, after none were found among the hardest eighteen, is not a bet worth
 another calibration round to settle. Per the rule above the study stops here
 rather than lowering the floor, and **Phase 2 was never started.**
