@@ -152,6 +152,10 @@ CHILD_ENV_NAMES = frozenset(
         "http_proxy",
         "https_proxy",
         "no_proxy",
+        # curl 과 Node 계열이 참조한다. 이것만 설정된 사내 환경이 흔하고,
+        # 빠지면 인증이 아니라 네트워크에서 먼저 끊긴다.
+        "ALL_PROXY",
+        "all_proxy",
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
         "REQUESTS_CA_BUNDLE",
@@ -428,6 +432,14 @@ def run_child(
         # 시간이 다 됐어도 토큰은 이미 쓰였다. 부분 출력에서 건질 수 있으면
         # 건진다 — 비용에서 빼면 싼 경로가 실제보다 좋아 보인다.
         partial = extract_usage(stdout, stderr)
+        if partial is not None and "cost_usd" not in partial and rates:
+            # 정상 경로와 같은 요금 계산을 여기서도 한다. 빠뜨리면 비용을
+            # 보고하지 않는 벤더의 타임아웃이 언제나 무비용으로 잡혀, 바로 위
+            # 주석이 막으려던 편향이 그대로 남는다.
+            computed = price_from_tokens(partial, rates)
+            if computed is not None:
+                partial["cost_usd"] = computed
+                partial["source"] = f"{partial.get('source', '?')}+price-table"
         return {
             "exit_code": None,
             "timed_out": True,
@@ -465,6 +477,10 @@ def _claude_usage(stdout: str) -> Usage | None:
     except (ValueError, TypeError):
         return None
     if not isinstance(payload, dict):
+        return None
+    # Claude 출력인지 표식으로 확인한다. Codex 도 input_tokens/output_tokens
+    # 라는 같은 이름을 쓰므로, 한 줄짜리 JSON 이면 여기서 잘못 집계된다.
+    if "total_cost_usd" not in payload and payload.get("type") != "result":
         return None
     raw = payload.get("usage")
     usage_fields = raw if isinstance(raw, dict) else {}
@@ -1233,13 +1249,16 @@ def main() -> int:
             source = real_home / name
             if not source.exists():
                 parser.error(f"--child-home-stage: no such entry under HOME: {name}")
-            # 링크가 아니라 복사다. 링크로 두면 자식의 쓰기가 실제 홈으로
-            # 그대로 흘러 들어가 격리의 의미가 없다.
+            # 링크를 **따라가서** 내용을 복사한다. 여기서는 patch 수집 때와
+            # 반대다. 거기서는 링크를 링크로 남겨야 호스트 파일이 새어 나가지
+            # 않았지만, 여기서 링크를 남기면 임시 HOME 안의 그 링크가 실제
+            # 홈을 가리켜 자식의 쓰기가 그대로 되돌아간다. ~/.gitconfig 가
+            # ~/dotfiles/gitconfig 를 가리키는 구성은 흔하다.
             target = child_home / name
             if source.is_dir():
-                shutil.copytree(source, target, symlinks=True)
+                shutil.copytree(source, target, symlinks=False)
             else:
-                shutil.copy2(source, target, follow_symlinks=False)
+                shutil.copy2(source, target, follow_symlinks=True)
         print(f"자식 HOME: 임시 디렉터리에 {len(arguments.child_home_stage)}개 항목 복사")
     if allowed_env is None:
         print("자식 환경: 전체 전달 (--child-env-all)")
