@@ -16,11 +16,13 @@ That is now a measured statement, not only a cautious one. A pre-registered
 study ([`docs/paired-token-study.md`](docs/paired-token-study.md)) built a
 synthetic fixture, 36 blind-rated tasks, and a paired harness, then ran a pilot
 and a difficulty calibration against real vendors. **Wherever it observed the
-same task at two tiers, the tier never changed whether the task got done.** A
-pinned mid effort beat routing on both vendors in the pilot; in calibration, 0
-of 18 candidates were tier-sensitive, and the two tasks routed to `high` also
-passed one tier down. Five of the eighteen were run at two tiers — the rest
-passed at the routed tier and stopped, so no comparison exists for them.
+same task at two tiers, the tier never changed whether the task got done.** In
+the pilot a pinned mid effort came out ahead of routing on both vendors by point
+estimate — 5.5% on Codex, 5.1% on Claude — though only on Claude did the fixed
+arm's interval exclude zero; Codex's result is a wide null. In calibration, 0 of
+18 candidates were tier-sensitive, and the two tasks routed to `high` also passed
+one tier down. Five of the eighteen were run at two tiers — the rest passed at
+the routed tier and stopped, so no comparison exists for them.
 On work of that shape — small, well-specified maintenance tasks — effort moved
 cost and nothing else, so routing up had no quality risk to justify its price.
 The study was stopped at its own pre-registered floor rather than continuing.

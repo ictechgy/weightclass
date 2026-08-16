@@ -353,20 +353,26 @@ candidate would need its pair.
 | drop-unrecoverable: failed at the routed tier *and* one step up | 3 |
 | **tier sensitive** | **0** |
 
-`drop-unrecoverable` is a label about the *run*, not a judgement that the task
-was hard: it means only that one escalation step did not recover it. As the next
-paragraph shows, two of the three failed because of a defect in this study's
-acceptance tests rather than anything about difficulty or tier.
+Both labels describe the *run*, not the task, and neither is as strong as it
+sounds. `tier-insensitive` covers 15 tasks but only 2 of them were actually
+observed at two tiers; the other 13 passed at the routed tier and stopped there,
+so for those the label records "no escalation was needed," not a demonstrated
+insensitivity. `drop-unrecoverable` means only that one escalation step did not
+recover the run — as the next paragraph shows, two of the three failed because
+of a defect in this study's acceptance tests rather than anything about
+difficulty or tier. What no label in this table can hide is the empty row: the
+comparison that would have justified routing was never observed once.
 
 Zero against a floor of nine. The floor is defined over all 36 tasks while only
-18 were calibrated, so strictly the other 18 might still hold the nine. They do
-not. The calibrated 18 were chosen as the *most likely* to be tier-sensitive: 9
-rated `high` and 9 rated `standard`. The untested remainder breaks down as 13
-`low`, 3 `standard`, and 2 `high` — and those two `high` tasks, `p05` and `p09`,
-are not unknowns either: both were in the Phase 1 pilot and both passed on the
-first attempt. Nine tier-sensitive tasks cannot be hiding in a `low`-rated tail
-after none were found among the hardest eighteen. Per the rule above the study
-stops here rather than lowering the floor, and **Phase 2 was never started.**
+18 were calibrated, so strictly the other 18 might still hold the nine. Nothing
+here proves they do not. But the calibrated 18 were selected as the *most
+likely* to be tier-sensitive — 9 rated `high` and 9 rated `standard` — and the
+untested remainder is 13 `low`, 3 `standard`, and 2 `high`. Even those two
+`high` tasks, `p05` and `p09`, are not unknowns: both ran in the Phase 1 pilot
+and both passed on the first attempt. Finding nine tier-sensitive tasks in that
+tail, after none were found among the hardest eighteen, is not a bet worth 36
+more invocations to settle. Per the rule above the study stops here rather than
+lowering the floor, and **Phase 2 was never started.**
 
 The three failures are not hidden tier sensitivity: they failed at *both* tiers,
 so they were never candidates. Two were investigated and the cause was a defect
@@ -392,10 +398,11 @@ Of the nine calibrated tasks the blind raters judged `high`, seven were routed
 discussed above.
 So even human-rated difficulty did not predict a need for effort.
 
-Combined with the pilot, where a pinned `medium` beat routing on both vendors,
-the finding is that on work of this shape **routing up bought nothing**: every
-step above the routed tier was spent without changing an outcome, which is *why*
-the pilot came out the way it did.
+Combined with the pilot, where a pinned `medium` came out ahead of routing on
+both vendors by point estimate (decisively only on Claude; Codex was a wide
+null), the finding is that on work of this shape **routing up bought nothing**:
+every step above the routed tier was spent without changing an outcome, which is
+*why* the pilot came out the way it did.
 
 Be careful not to stretch that into "the cheapest tier always suffices," which
 this design cannot support. Calibration runs at the routed tier and escalates
@@ -406,7 +413,8 @@ measured is that raising the tier never rescued anything — which makes routing
 up a cost with no demonstrated benefit here, and leaves the value of routing
 down an open question.
 
-State the scope honestly: one vendor, one synthetic fixture, and small
+State the scope honestly: one vendor for calibration (Codex, chosen because its
+runs cost roughly a fifteenth of Claude's), one synthetic fixture, and small
 well-specified maintenance tasks. This does not show that effort never matters.
 It shows that this shape of work cannot be used to value tier routing, and that
 the fixture is probably too small to host work hard enough to try — almost
@@ -430,9 +438,10 @@ Phase 2's sizing below is retained as a record of the decision that was prepared
 not as a plan that is still live.
 
 Phase 2's size was to have been a real decision rather than a default, because
-the pilot had measured what each run costs. Codex averaged roughly 35k tokens per invocation
-and Claude roughly 500k, so three arms over 36 tasks on two vendors is about
-216 invocations and on the order of 58M tokens, dominated by Claude.
+the pilot had measured what each run costs. Codex averaged roughly 35k tokens
+per invocation and Claude roughly 500k, so three arms over 36 tasks on two
+vendors is about 216 invocations and on the order of 58M tokens, dominated by
+Claude.
 
 Three options, in increasing cost:
 
