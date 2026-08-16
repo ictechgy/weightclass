@@ -121,7 +121,7 @@ class Attempt(TypedDict, total=False):
 
 # 작업공간 이름의 접두사. mkdtemp 호출부와 삭제 허용 목록이 같은 상수를
 # 보게 해서, 한쪽만 바뀌면 --prune 이 조용히 아무것도 못 지우는 일을 막는다.
-WORKSPACE_PREFIXES = ("spec-cheap-", "spec-expensive-", "spec-home-")
+WORKSPACE_PREFIXES = ("spec-cheap-", "spec-expensive-", "spec-home-", "spec-childhome-")
 
 # 벤더 자식이 기본으로 보는 환경. 허용 목록이지 차단 목록이 아니다 — 모르는
 # 비밀은 차단 목록으로 막을 수 없고, 이 머신에 어떤 제공자의 키가 있는지
@@ -166,15 +166,33 @@ CHILD_ENV_NAMES = frozenset(
         "XDG_CACHE_HOME",
     }
 )
+# 어떤 실행 파일이 어떤 접두사를 필요로 하는가. Codex 실행이 ANTHROPIC_API_KEY
+# 를 볼 이유가 없고, 그 반대도 마찬가지다.
+VENDOR_ENV_PREFIXES = {
+    "codex": ("OPENAI_", "CODEX_"),
+    "claude": ("ANTHROPIC_", "CLAUDE_"),
+}
+# 실행 파일 이름으로 벤더를 못 알아보면 양쪽을 다 준다. 모르는 CLI 의 인증을
+# 우리가 끊어 버리는 것보다는 낫고, 그때도 AWS 나 GitHub 키는 여전히 빠진다.
 CHILD_ENV_PREFIXES = ("ANTHROPIC_", "OPENAI_", "CLAUDE_", "CODEX_")
 
 
-def default_child_env() -> frozenset[str]:
-    """Names the vendor child keeps when no `--child-env` is given."""
+def default_child_env(executable: str | None = None) -> frozenset[str]:
+    """Names the vendor child keeps when `--child-env-all` is not given.
+
+    When the executable names a vendor we recognise, only that vendor's
+    prefixes come through — a Codex run has no business reading an Anthropic
+    key. An unrecognised CLI gets both rather than none, because guessing wrong
+    in that direction breaks authentication instead of leaking anything new.
+    """
+    prefixes: tuple[str, ...] = CHILD_ENV_PREFIXES
+    if executable:
+        for vendor, vendor_prefixes in VENDOR_ENV_PREFIXES.items():
+            if vendor in Path(executable).name.lower():
+                prefixes = vendor_prefixes
+                break
     return frozenset(
-        name
-        for name in os.environ
-        if name in CHILD_ENV_NAMES or name.startswith(CHILD_ENV_PREFIXES)
+        name for name in os.environ if name in CHILD_ENV_NAMES or name.startswith(prefixes)
     )
 
 
@@ -396,6 +414,13 @@ def run_child(
     if home is not None:
         environment = dict(environment if environment is not None else os.environ)
         environment["HOME"] = str(home)
+        # HOME 하나만 바꾸면 격리가 반만 된다. XDG_CONFIG_HOME 이나 CODEX_HOME
+        # 같은 변수가 여전히 실제 홈을 가리키면 CLI 는 그쪽을 먼저 본다.
+        # 홈 위치를 다시 지목하는 변수는 전부 떨군다 — 남겨서 얻을 것이 없다.
+        for name in list(environment):
+            if name.endswith(("_HOME", "_CONFIG_DIR", "_CONFIG_HOME", "_DATA_HOME", "_CACHE_HOME")):
+                if name != "HOME":
+                    del environment[name]
     try:
         with subprocess.Popen(
             command,
@@ -1233,9 +1258,15 @@ def main() -> int:
             rates[arm] = {k: float(v) for k, v in table.items()}
 
     # 기본이 허용 목록이다. 모르는 비밀은 차단 목록으로 막을 수 없다.
-    allowed_env = (
-        None if arguments.child_env_all else default_child_env() | frozenset(arguments.child_env)
-    )
+    # arm 마다 실행 파일이 다르므로 허용 목록도 arm 마다 만든다.
+    def env_for(argv: list[str]) -> frozenset[str] | None:
+        if arguments.child_env_all:
+            return None
+        return default_child_env(argv[0]) | frozenset(arguments.child_env)
+
+    cheap_env = env_for(cheap_argv)
+    expensive_env = env_for(expensive_argv)
+    allowed_env = cheap_env
     if arguments.child_home and arguments.child_home_stage:
         parser.error("use either --child-home or --child-home-stage, not both")
     child_home = arguments.child_home.expanduser().resolve() if arguments.child_home else None
@@ -1243,8 +1274,15 @@ def main() -> int:
         parser.error(f"--child-home is not a directory: {child_home}")
     if arguments.child_home_stage:
         real_home = Path(os.path.expanduser("~"))
-        child_home = Path(tempfile.mkdtemp(prefix="spec-childhome-", dir=arguments.out_dir))
+        # 작업공간과 같은 .work 아래에 만들고 즉시 등록한다. 이 디렉터리는
+        # 사용자 자격증명의 **복사본**을 담으므로, 남겨 두면 실행이 끝난 뒤에도
+        # 비밀이 디스크에 흩어진다. 등록하지 않으면 --prune 으로도 회수되지
+        # 않는다.
+        work_root = arguments.out_dir / ".work"
+        work_root.mkdir(mode=0o700, exist_ok=True)
+        child_home = Path(tempfile.mkdtemp(prefix="spec-childhome-", dir=work_root))
         child_home.chmod(0o700)
+        register(registry, child_home, add=True)
         for name in arguments.child_home_stage:
             source = real_home / name
             if not source.exists():
@@ -1283,7 +1321,7 @@ def main() -> int:
         registry,
         scaffolding=frozenset(scaffolding),
         rates=rates.get("cheap"),
-        allowed_env=allowed_env,
+        allowed_env=cheap_env,
         child_home=child_home,
     )
     cheap_child = cheap.get("child")
@@ -1323,7 +1361,7 @@ def main() -> int:
             registry,
             scaffolding=frozenset(scaffolding),
             rates=rates.get("expensive"),
-            allowed_env=allowed_env,
+            allowed_env=expensive_env,
             child_home=child_home,
         )
         record["expensive"] = expensive
@@ -1333,6 +1371,10 @@ def main() -> int:
             else ""
         )
         print(f"  승급 경로 {'통과' if expensive['accepted'] else '실패'}{reason}")
+
+    # 자격증명 복사본을 담은 임시 HOME 은 반드시 지운다.
+    if arguments.child_home_stage and child_home is not None:
+        discard(registry, child_home, arguments.out_dir)
 
     with log.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
