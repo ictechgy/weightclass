@@ -14,8 +14,8 @@ routing work is optimization on top of an unmeasured assumption.
 tasks tier-sensitive** against a pre-registered floor of 9. The floor is written
 over all 36 tasks and 18 were calibrated — the likeliest to be sensitive among
 the tasks the Phase 1 pilot had not already used — which the result section
-addresses directly; the shortfall is not a near miss.
-Reporting it and stopping is the condition this document set for itself. The answer to the goal question,
+addresses directly; the shortfall is not a near miss. Reporting it and stopping
+is the condition this document set for itself. The answer to the goal question,
 within the stated scope, is that this task shape cannot value tier routing at
 all: effort moved cost and never changed whether the work got done. See
 [Calibration result](#calibration-result-the-stopping-condition-fired). The plan
@@ -370,7 +370,7 @@ Zero against a floor of nine. The floor is defined over all 36 tasks while only
 18 were calibrated, so strictly the other 18 might still hold the nine. Nothing
 here proves they do not. But the calibrated 18 were selected as the *most
 likely* to be tier-sensitive — 9 rated `high` and 9 rated `standard` — and the
-untested remainder is 13 `low`, 3 `standard`, and 2 `high`. Even those two
+uncalibrated remainder is 13 `low`, 3 `standard`, and 2 `high`. Even those two
 `high` tasks, `p05` and `p09`, are not unknowns: both ran in the Phase 1 pilot
 and both passed on the first attempt. Finding nine tier-sensitive tasks in that
 tail, after none were found among the hardest eighteen, is not a bet worth
@@ -447,7 +447,7 @@ here.
 | **1** | pilot: 6 tasks × 3 arms × 2 vendors | 36 | done |
 | **1b** | difficulty calibration on 18 candidates, one vendor | 23 | done — 0 tier-sensitive |
 | **2** | comparison P plus control, on the calibrated set | 0 | **not started; blocked by 1b** |
-| **3** | comparisons 3 and 4 | deferred | dropped with the study |
+| **3** | comparisons 3 and 4 | 0 | dropped with the study |
 
 Phase 2's sizing below is retained as a record of the decision that was prepared,
 not as a plan that is still live.
