@@ -45,6 +45,7 @@ into a quoting exercise; the whole point of this project is exact commands.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -85,6 +86,10 @@ class Attempt(TypedDict, total=False):
     dropped_ignored: list[str]
     excluded_scaffolding: list[str]
     accepted: bool
+    # "route" = 싼 경로 자체에 대한 판정, "infrastructure" = 도구가 고장난 것.
+    # 리포트가 p 에서 무엇을 빼야 하는지 문자열 부분 일치로 추측하지 않도록
+    # 여기서 정한다.
+    failure_kind: str
     patch: str
     verify: VerifyResult
     error: str
@@ -138,6 +143,21 @@ _GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_TERMINAL_PROMPT": "0",
 }
+
+
+def _route_identity(argv: list[str]) -> dict[str, str]:
+    """Name a route without echoing its arguments.
+
+    The full command can carry credentials, so the log keeps the executable and
+    a digest of the rest. Two runs of the same route match; a changed flag is
+    visible as a changed digest without revealing what changed.
+    """
+    rest = " ".join(argv[1:]).encode("utf-8")
+    return {
+        "executable": Path(argv[0]).name,
+        "argv_digest": hashlib.sha256(rest).hexdigest()[:16],
+        "argv_count": str(len(argv) - 1),
+    }
 
 
 def run_git_bytes(arguments: list[str], cwd: Path) -> bytes:
@@ -261,7 +281,7 @@ def extract_tokens(stdout: str, stderr: str) -> int | None:
     return total or None
 
 
-def run_verify(verify: Path, workspace: Path) -> VerifyResult:
+def run_verify(verify: Path, workspace: Path, home: Path) -> VerifyResult:
     """The gate. Exit code is the whole verdict; nothing is parsed from output.
 
     This executes the child's output by design — running the tests is the point
@@ -284,8 +304,17 @@ def run_verify(verify: Path, workspace: Path) -> VerifyResult:
     environment = {
         name: value
         for name, value in os.environ.items()
-        if name in ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "SHELL", "USER")
+        if name in ("PATH", "LANG", "LC_ALL", "TZ", "SHELL", "USER")
     }
+    # HOME 을 그대로 물려주면 자식이 쓴 테스트가 ~/.ssh, ~/.aws/credentials,
+    # ~/.config 를 읽고 셸 rc 를 고칠 수 있다. 빈 디렉터리를 준다. 대부분의
+    # 테스트 러너는 쓸 수 있는 HOME 만 있으면 되고, 없으면 오히려 깨진다.
+    #
+    # 절대 경로로 /Users/<me>/.ssh 를 직접 여는 코드는 이것으로 막지 못한다.
+    # 담장이 아니라, `~` 를 쓰는 평범한 도구 경로를 닫는 것이다. 진짜 격리는
+    # 검증 명령 자체를 컨테이너나 jail 에 넣는 것뿐이다.
+    environment["HOME"] = str(home)
+    environment["TMPDIR"] = str(home)
     with subprocess.Popen(
         [str(verify)],
         cwd=workspace,
@@ -505,7 +534,7 @@ def resolved_own_workspace(candidate: Path, out_dir: Path) -> Path | None:
     accepted = (
         # 작업공간은 out_dir/.work 아래에만 만들어진다.
         resolved.parent == root / ".work"
-        and resolved.name.startswith(("spec-cheap-", "spec-expensive-"))
+        and resolved.name.startswith(("spec-cheap-", "spec-expensive-", "spec-home-"))
         and resolved.is_dir()
     )
     # 검사한 경로를 그대로 돌려준다. 검사와 삭제가 서로 다른 경로를 보면
@@ -597,7 +626,12 @@ def attempt(
         record["patch_lines"] = patch_bytes.count(b"\n")
         record["dropped_ignored"] = dropped
         record["made_changes"] = record["patch_lines"] > 0
-        record["verify"] = run_verify(verify, handover)
+        verify_home = Path(tempfile.mkdtemp(prefix="spec-home-", dir=work_root))
+        register(registry, verify_home, add=True)
+        try:
+            record["verify"] = run_verify(verify, handover, verify_home)
+        finally:
+            discard(registry, verify_home, out_dir)
         # 검증은 자식이 쓴 코드를 실행하므로 인계 트리를 바꿀 수 있다. 바뀌면
         # 통과한 트리와 우리가 건네는 패치가 더 이상 같은 것이 아니다.
         #
@@ -609,11 +643,13 @@ def attempt(
         if not tracked_files_unchanged(handover):
             record["verify"]["passed"] = False
             record["error"] = "verification modified the patched files; patch no longer matches"
+            record["failure_kind"] = "route"
     except (RunFailure, subprocess.SubprocessError, OSError) as error:
         # RunFailure 만 잡으면 clone_at 의 CalledProcessError 나 복사 중의
         # OSError 가 그대로 올라가, 등록된 채 지워지지 않은 작업공간이 남는다.
         # 이 함수의 계약은 "무슨 일이 있어도 검증 실패로 끝난다" 여야 한다.
         record["error"] = f"{type(error).__name__}: {error}"
+        record["failure_kind"] = "infrastructure"
         record["verify"] = {"passed": False, "exit_code": None, "timed_out": False, "seconds": 0}
 
     # 자식이 돌던 워크스페이스는 어느 쪽이든 항상 버린다. 넘길 것은 재구성한
@@ -630,6 +666,7 @@ def attempt(
     # 서로 다른 답을 내는 곳이 생긴다.
     if verdict and verdict["passed"] and not record.get("made_changes"):
         record["error"] = "route made no change; not counted as a pass"
+        record["failure_kind"] = "route"
     record["accepted"] = bool(verdict and verdict["passed"] and record.get("made_changes"))
     # keep_on_pass 는 통과한 시도의 산출물을 남길지를 정한다. 남기지 않으면
     # patch 도 없으므로 accepted 로 표시해서는 안 된다. main 이 winner 의
@@ -637,12 +674,21 @@ def attempt(
     if record["accepted"] and not keep_on_pass:
         record["accepted"] = False
     if record["accepted"]:
-        # 검증을 통과한 뒤에야 디스크에 쓴다.
-        patch.write_bytes(patch_bytes)
-        # 승인된 패치는 읽기 전용으로 둔다. 뒤 과제의 검증이 무심코 훑고 쓰는
-        # 것은 막지만, 작정한 코드는 chmod 로 되돌릴 수 있다. 담장이 아니라
-        # 실수에 대한 방어다.
-        patch.chmod(0o400)
+        # 검증을 통과한 뒤에야 디스크에 쓴다. 여기서 실패해도 이 함수의 계약은
+        # 지켜야 한다 — 무슨 일이 있어도 판정을 남기고 정상 반환한다.
+        try:
+            patch.write_bytes(patch_bytes)
+            # 승인된 패치는 읽기 전용으로 둔다. 뒤 과제의 검증이 무심코 훑고 쓰는
+            # 것은 막지만, 작정한 코드는 chmod 로 되돌릴 수 있다. 담장이 아니라
+            # 실수에 대한 방어다.
+            patch.chmod(0o400)
+        except OSError as error:
+            record["accepted"] = False
+            record["error"] = f"could not write the patch: {error}"
+            record["failure_kind"] = "infrastructure"
+            discard(registry, handover, out_dir)
+            record["workspace"] = None
+            return record
         record["patch"] = str(patch)
     else:
         discard(registry, handover, out_dir)
@@ -749,6 +795,12 @@ def main() -> int:
     record: dict[str, object] = {
         "commit": commit,
         "label": arguments.label,
+        # 어떤 라우트로 잰 p 인지 남긴다. 명령 전문은 argv 에 자격증명이 있을
+        # 수 있으므로 실행 파일 이름과 인자 지문만 남긴다.
+        "routes": {
+            "cheap": _route_identity(cheap_argv),
+            "expensive": _route_identity(expensive_argv),
+        },
         "cheap": cheap,
         "escalated": False,
         "expensive": None,

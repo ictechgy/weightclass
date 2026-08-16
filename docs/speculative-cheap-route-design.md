@@ -181,6 +181,12 @@ parent directory is not the artifact directory, and an accepted patch is left
 read-only — but neither is a fence. Code running as the user reaches whatever
 the user reaches.
 
+The runner does what it can cheaply: the verify command gets a scrubbed
+environment with no provider tokens, and `HOME` and `TMPDIR` point at an empty
+scratch directory, so `~/.ssh`, `~/.aws/credentials`, and shell rc files are not
+where the child's code will look for them. Code that opens `/Users/you/.ssh` by
+absolute path walks straight past all of it.
+
 Anyone running this against genuinely untrusted output should put the verify
 command itself in a container or `sandbox-exec` jail. The runner deliberately
 does not try to build that jail, because a half-built sandbox invites more trust

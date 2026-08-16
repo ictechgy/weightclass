@@ -48,9 +48,13 @@ def main() -> int:
 
     # 한 줄이 손상됐다고 이미 수집한 측정 전체를 버릴 이유는 없다. 러너는
     # append 만 하고 잠금이 없어, 크래시나 동시 실행이 잘린 줄을 남길 수 있다.
+    log_path = arguments.log.expanduser()
+    if not log_path.is_file():
+        parser.error(f"no such log: {log_path}")
+
     records = []
     damaged = 0
-    for line in arguments.log.read_text(encoding="utf-8").splitlines():
+    for line in log_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         try:
@@ -77,9 +81,13 @@ def main() -> int:
     def is_infrastructure_failure(record: dict[str, object]) -> bool:
         cheap = record["cheap"]
         assert isinstance(cheap, dict)
+        # 러너가 failure_kind 로 알려준다. 예전에는 에러 문자열을 부분
+        # 일치로 추측했는데, 러너에서 문구를 다듬으면 조용히 분류가 틀어졌다.
+        kind = cheap.get("failure_kind")
+        if kind is not None:
+            return bool(kind == "infrastructure")
+        # failure_kind 이전에 수집된 기록과의 호환.
         error = cheap.get("error")
-        # "made no change" 와 "modified the patched files" 는 싼 경로에 대한
-        # 진짜 판정이다. 나머지 error 는 도구가 고장난 것이다.
         return bool(error) and not any(
             marker in str(error) for marker in ("made no change", "modified the patched files")
         )
