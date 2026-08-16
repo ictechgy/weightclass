@@ -50,7 +50,9 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -106,6 +108,14 @@ class RunFailure(RuntimeError):
     """A step failed in a way that makes the rest of the run meaningless."""
 
 
+def _kill_group(child: subprocess.Popen[str]) -> None:
+    """Kill the whole process group, not just the child we can see."""
+    try:
+        os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        child.kill()
+
+
 def run_git(arguments: list[str], cwd: Path) -> str:
     result = subprocess.run(
         ["git", *arguments], cwd=cwd, capture_output=True, text=True, timeout=GIT_TIMEOUT
@@ -141,22 +151,38 @@ def clone_at(repo: Path, commit: str, destination: Path) -> None:
 def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
     """One vendor invocation. The task goes in on stdin and never into the log."""
     started = time.monotonic()
+    # 자체 프로세스 그룹에서 돌린다. subprocess 의 타임아웃은 직계 자식만
+    # 죽이므로, 벤더 CLI 가 띄운 손자들은 "타임아웃" 을 보고한 뒤에도 계속
+    # 돌며 작업공간에 쓴다 — 곧 지울 디렉터리에.
     try:
-        result = subprocess.run(
+        with subprocess.Popen(
             command,
             cwd=workspace,
-            input=task,
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=CHILD_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        return {"exit_code": None, "timed_out": True, "seconds": CHILD_TIMEOUT, "tokens": None}
+            start_new_session=True,
+        ) as child:
+            try:
+                stdout, stderr = child.communicate(task, timeout=CHILD_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                _kill_group(child)
+                child.communicate()
+                return {
+                    "exit_code": None,
+                    "timed_out": True,
+                    "seconds": CHILD_TIMEOUT,
+                    "tokens": None,
+                }
+            code = child.returncode
+    except OSError as error:
+        raise RunFailure(f"could not start the route: {error}") from error
     return {
-        "exit_code": result.returncode,
+        "exit_code": code,
         "timed_out": False,
         "seconds": round(time.monotonic() - started, 1),
-        "tokens": extract_tokens(result.stdout, result.stderr),
+        "tokens": extract_tokens(stdout, stderr),
     }
 
 
@@ -178,7 +204,12 @@ def extract_tokens(stdout: str, stderr: str) -> int | None:
     usage = payload.get("usage") if isinstance(payload, dict) else None
     if not isinstance(usage, dict):
         return None
-    total = sum(int(usage.get(field, 0) or 0) for field in _CLAUDE_USAGE_FIELDS)
+    try:
+        total = sum(int(usage.get(field, 0) or 0) for field in _CLAUDE_USAGE_FIELDS)
+    except (TypeError, ValueError):
+        # 독스트링이 약속한 것은 최선 노력이다. 벤더가 문자열이나 실수를 담기
+        # 시작하면 조용히 None 이 되어야지, 측정 전체를 멈추면 안 된다.
+        return None
     return total or None
 
 
@@ -242,7 +273,16 @@ def write_patch(repo: Path, commit: str, workspace: Path, destination: Path) -> 
             if entry.name == ".git":
                 continue
             target = patchspace / entry.name
-            shutil.copytree(entry, target) if entry.is_dir() else shutil.copy2(entry, target)
+            # 심링크는 **따라가지 않고 링크 자체로** 복사한다. 기본값은 따라가는
+            # 것이라, 자식이 ~/.ssh/id_rsa 를 가리키는 링크를 심어두면 그 내용이
+            # 패치로 복사되어 나간다. 사용자가 적용하라고 받는 바로 그 패치다.
+            # 링크로 남기면 git 은 링크로 기록하고, 이상한 링크는 diff 에 보인다.
+            if entry.is_symlink():
+                shutil.copy2(entry, target, follow_symlinks=False)
+            elif entry.is_dir():
+                shutil.copytree(entry, target, symlinks=True)
+            else:
+                shutil.copy2(entry, target, follow_symlinks=False)
 
         run_git(["add", "-A", "--", ".", ":(exclude).*/"], patchspace)
         patch = run_git(
@@ -272,12 +312,25 @@ def register(registry: Path, workspace: Path, add: bool) -> None:
 
 
 def discard(registry: Path, workspace: Path, out_dir: Path) -> None:
-    if is_own_workspace(workspace, out_dir):
-        shutil.rmtree(workspace, ignore_errors=True)
+    """Delete a failed attempt's workspace, and keep it registered if we cannot.
+
+    Silently swallowing the error and unregistering would leave a tree of
+    untrusted output on disk with nothing left pointing at it. Staying in the
+    registry is what makes `--prune` able to finish the job later.
+    """
+    target = resolved_own_workspace(workspace, out_dir)
+    if target is None:
+        register(registry, workspace, add=False)
+        return
+    try:
+        shutil.rmtree(target)
+    except OSError as error:
+        print(f"작업공간을 지우지 못했다, 등록에 남긴다: {target} ({error})", file=sys.stderr)
+        return
     register(registry, workspace, add=False)
 
 
-def is_own_workspace(candidate: Path, out_dir: Path) -> bool:
+def resolved_own_workspace(candidate: Path, out_dir: Path) -> Path | None:
     """Whether a registry line names a directory this script actually created.
 
     The registry is a plain file. It can be edited, corrupted by a partial
@@ -287,17 +340,21 @@ def is_own_workspace(candidate: Path, out_dir: Path) -> bool:
     prefix `mkdtemp` was given. Symlinks are resolved first so a link cannot
     point the deletion somewhere else.
     """
+    if candidate.is_symlink():
+        return None
     try:
         resolved = candidate.resolve(strict=True)
         root = out_dir.resolve(strict=True)
     except OSError:
-        return False
-    return (
+        return None
+    accepted = (
         resolved.parent == root
         and resolved.name.startswith(("spec-cheap-", "spec-expensive-"))
         and resolved.is_dir()
-        and not resolved.is_symlink()
     )
+    # 검사한 경로를 그대로 돌려준다. 검사와 삭제가 서로 다른 경로를 보면
+    # 그 사이에 링크를 갈아끼워 다른 곳을 지우게 만들 수 있다.
+    return resolved if accepted else None
 
 
 def prune(registry: Path, out_dir: Path) -> int:
@@ -310,12 +367,17 @@ def prune(registry: Path, out_dir: Path) -> int:
         candidate = Path(line)
         if not candidate.exists():
             continue
-        if not is_own_workspace(candidate, out_dir):
+        target = resolved_own_workspace(candidate, out_dir)
+        if target is None:
             print(f"건너뜀(이 스크립트가 만든 작업공간이 아님): {line}")
             continue
-        shutil.rmtree(candidate, ignore_errors=True)
+        try:
+            shutil.rmtree(target)
+        except OSError as error:
+            print(f"삭제 실패, 그대로 둔다: {target} ({error})")
+            continue
         removed += 1
-        print(f"삭제: {line}")
+        print(f"삭제: {target}")
     registry.write_text("", encoding="utf-8")
     print(f"{removed}개 정리 완료 (등록 {len(live)}개)")
     return 0
@@ -349,8 +411,11 @@ def attempt(
         record["patch_lines"] = write_patch(repo, commit, workspace, patch)
         record["made_changes"] = record["patch_lines"] > 0
         record["verify"] = run_verify(verify, workspace)
-    except RunFailure as error:
-        record["error"] = str(error)
+    except (RunFailure, subprocess.SubprocessError, OSError) as error:
+        # RunFailure 만 잡으면 clone_at 의 CalledProcessError 나 복사 중의
+        # OSError 가 그대로 올라가, 등록된 채 지워지지 않은 작업공간이 남는다.
+        # 이 함수의 계약은 "무슨 일이 있어도 검증 실패로 끝난다" 여야 한다.
+        record["error"] = f"{type(error).__name__}: {error}"
         record["verify"] = {"passed": False, "exit_code": None, "timed_out": False, "seconds": 0}
 
     verdict = record.get("verify")
@@ -380,6 +445,7 @@ def main() -> int:
     parser.add_argument("--label", default="", help="free-text tag recorded with the run")
     arguments = parser.parse_args()
 
+    arguments.out_dir = arguments.out_dir.expanduser().resolve()
     arguments.out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     # mkdir(mode=...) 는 디렉터리가 이미 있으면 아무것도 하지 않고, parents=True
     # 로 만들어진 상위 디렉터리는 기본 umask 를 받는다. 작업공간에는 에이전트가
