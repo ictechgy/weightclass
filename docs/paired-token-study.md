@@ -338,7 +338,12 @@ consistent; or the prompt describes a symptom and the cause has to be found.
 ### Calibration result: the stopping condition fired
 
 Calibration ran on 18 candidates — the 9 rated `high` by the blind raters plus 9
-rated `standard` — using 23 invocations and 981,613 tokens.
+rated `standard` — using 23 invocations and 981,613 tokens. Unlike the other
+phases, that count is not a product: the second run is conditional. Thirteen
+tasks passed at the routed tier and stopped after one run; two routed to `high`
+took the mandatory extra run a tier down; three failed and took an escalation
+run. 13 + (2 × 2) + (3 × 2) = 23. The planned estimate of ~36 assumed every
+candidate would need its pair.
 
 | verdict | count |
 | --- | ---: |
@@ -360,12 +365,13 @@ while the test looked only for a tuple return or a function attribute. Had those
 tests been correct, the tasks would most likely have passed at the routed tier —
 tier-*insensitive*, not sensitive. The count stays 0.
 
-Two tasks were routed to `high`. That is exactly the case where the calibration
-rule above mandates a third run one tier down, to cover `A1`, and **both tasks
-passed there too.** (`A1` is pinned to the vendor effort `medium`, which is what
-the `standard` tier maps to; the tier name is used here for consistency.) The two
-runs where the router spent the most are the two where the cheaper tier is
-confirmed sufficient.
+Two tasks were routed to `high`. That is the one case where the calibration rule
+above mandates an extra run a tier down, to cover `A1`; since both passed at
+`high`, no escalation run was needed and that extra run was their second. **Both
+passed a tier down as well.** (`A1` is pinned to the vendor effort `medium`,
+which is what the `standard` tier maps to; the tier name is used here for
+consistency.) The two tasks where the router spent the most are the two where the
+cheaper tier is confirmed sufficient.
 Six further tasks the blind raters judged `high` were routed `standard` and
 passed, so even human-rated difficulty did not predict a need for effort.
 
@@ -390,7 +396,7 @@ here.
 | --- | --- | ---: | --- |
 | **0** | fixture, 36 tasks, blind ratings, harness, evidence builder | 0 | done |
 | **1** | pilot: 6 tasks × 3 arms × 2 vendors | 36 | done |
-| **1b** | difficulty calibration on 18 candidates, one vendor, two efforts | 23 | done — 0 tier-sensitive |
+| **1b** | difficulty calibration on 18 candidates, one vendor | 23 | done — 0 tier-sensitive |
 | **2** | comparison P plus control, on the calibrated set | 0 | **not started; blocked by 1b** |
 | **3** | comparisons 3 and 4 | deferred | dropped with the study |
 
