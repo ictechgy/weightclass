@@ -772,6 +772,11 @@ def main() -> int:
                     ]
                     priced_retries = len(retry_costs)
                     all_retries = sum(1 for r in usable if isinstance(r.get("retry"), dict))
+                    # 값이 빠진 비율이 크면 경고로 끝낼 일이 아니다. a 와 r 은
+                    # 값이 있는 것만 보고 s 와 q 는 전부를 세므로, 두 수가 같은
+                    # 모집단이 아니게 된다. 빠진 비용이 얼마였을지 모르므로
+                    # 방향도 모른다 — 넓히는 것으로 메울 수 없다.
+                    priced_enough = not all_retries or priced_retries * 2 >= all_retries
                     if all_retries and priced_retries < all_retries:
                         print(
                             f"  주의: 재시도 {all_retries}건 중 {priced_retries}건만 비용을"
@@ -804,7 +809,12 @@ def main() -> int:
                         q = attempted / len(advised_failures) if advised_failures else 1.0
                         # r 을 쟀으면 그것을 쓴다. 못 쟀으면 c 로 대신하되
                         # 그것이 대입이라고 말한다.
-                        if r_ratio is None:
+                        if r_ratio is not None and not priced_enough:
+                            print(
+                                "  재시도의 절반 이상이 비용 없이 기록됐다. 그 표본으로"
+                                " 낸 r 은 전체를 대표하지 않으므로 판정하지 않는다."
+                            )
+                        elif r_ratio is None:
                             # r 은 이 판정의 절반이다. 못 쟀는데 c 로 대신하고
                             # 판정까지 내면, 재지 않은 것을 잰 것처럼 보이게
                             # 된다. 조언이 붙은 재시도는 c 보다 비싸므로 그
@@ -832,12 +842,26 @@ def main() -> int:
                                     len(expensive_values)
                                 )
                                 # 분모가 흔들리면 비율은 반대로 흔들린다.
-                                widen = (mean_e + 1.96 * se_e) / max(mean_e - 1.96 * se_e, 1e-9)
-                                widen = min(max(widen, 1.0), 20.0)
+                                lower_e = mean_e - 1.96 * se_e
                                 centre = (bound_low + bound_high) / 2
-                                half = max((bound_high - bound_low) / 2, centre * (widen - 1) / 2)
-                                bound_low = max(0.0, centre - half)
-                                bound_high = centre + half
+                                if lower_e <= 0:
+                                    # 분모의 구간이 0 을 지나면 비율의 상한이
+                                    # 없다. 상한을 지어내지 않고 판정을 막는다.
+                                    print(
+                                        "  승급 과제의 비싼 비용 평균이 0 을 배제하지"
+                                        " 못한다. a 와 r 의 상한이 없으므로 판정하지"
+                                        " 않는다."
+                                    )
+                                    bound_low, bound_high = 0.0, float("inf")
+                                else:
+                                    widen = (mean_e + 1.96 * se_e) / lower_e
+                                    # 분자와 분모의 불확실성을 max 로 고르면
+                                    # 덜 덮는다. 둘 다 있으므로 함께 더한다.
+                                    numerator_half = (bound_high - bound_low) / 2
+                                    denominator_half = centre * (widen - 1) / 2
+                                    half = numerator_half + denominator_half
+                                    bound_low = max(0.0, centre - half)
+                                    bound_high = centre + half
                             basis = f"{q:.2f}·r" if q < 1 else "r"
                             print(
                                 f"  손익분기 s = a + {basis} = {a_ratio + r_ratio * q:.3f}"

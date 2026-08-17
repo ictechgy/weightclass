@@ -301,3 +301,32 @@ def test_host_secret_values_are_never_short() -> None:
     finally:
         os.environ.clear()
         os.environ.update(saved)
+
+
+@pytest.mark.parametrize("separator", ["\\n", "\\r\\n", "\\\\n"], ids=["\\n", "\\r\\n", "이중"])
+def test_serialised_key_separators(separator: str) -> None:
+    """직렬화 구분자를 하나씩 열거하면 다음 형태에서 또 뚫린다.
+
+    라운드 6 은 `\\n` 을, 라운드 7 은 `\\r\\n` 을 놓쳤다. 둘 다 키가 통째로
+    나갔다.
+    """
+    module = load_runner()
+    lines = pem_body()
+    blob = '{"private_key": "' + separator.join([f"{BEGIN}{KEY}", *lines, f"{END}{KEY}"]) + '"}'
+    cleaned = module.verify_excerpt(blob)
+    assert not [line for line in lines if line in cleaned]
+
+
+def test_proxy_userinfo_is_redacted_but_the_address_survives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """프록시 URL 의 userinfo 는 자격증명이다.
+
+    러너는 그 사실을 알면서 프록시 변수를 자식에게 넘긴다. 자식이 그것을
+    찍으면 이름 기반 필터는 "PROXY" 를 비밀로 보지 않아 그대로 나간다.
+    """
+    module = load_runner()
+    monkeypatch.setenv("HTTPS_PROXY", "http://alice:s3cr3tpassw0rd@proxy.corp:8080")
+    cleaned = module.verify_excerpt("curl failed via http://alice:s3cr3tpassw0rd@proxy.corp:8080")
+    assert "s3cr3tpassw0rd" not in cleaned
+    assert "proxy.corp:8080" in cleaned

@@ -862,6 +862,12 @@ SCAN_WINDOW_CHARS = 64000
 _HOST_SECRET_NAMES = re.compile(
     r"(?i)(secret|token|password|passwd|api_?key|private_?key|credential|_key$)"
 )
+# 프록시 URL 은 http://user:pass@host 형태가 흔하고 그 userinfo 는 그대로
+# 자격증명이다. 이 스크립트는 그 사실을 알면서 프록시 변수를 자식에게
+# 넘긴다 — 그러면 자식이 그것을 찍을 수 있고, 이름 기반 필터는 "PROXY" 를
+# 비밀로 보지 않아 그대로 조언자에게 간다.
+_PROXY_NAMES = re.compile(r"(?i)^(https?|all)_proxy$")
+_URL_USERINFO = re.compile(r"://[^/\s:@]+:([^/\s@]+)@")
 
 
 _PEM_BEGIN_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
@@ -875,6 +881,11 @@ PEM_LOOKAHEAD = 200
 _PEM_BODY_RUN = re.compile(r"[A-Za-z0-9+/=]{12,}")
 # PEM 헤더 줄: `Proc-Type: 4,ENCRYPTED` 처럼 이름과 값이 콜론으로 갈린다.
 _PEM_HEADER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s")
+# 진짜 줄바꿈이거나, JSON 에 직렬화되면서 이스케이프된 줄바꿈. 뒤쪽은
+# `\n` 과 `\r\n` 둘 다이고 이중 이스케이프도 있을 수 있다.
+_LINE_SEPARATOR = re.compile(r"\r?\n|(?:\\+r)?\\+n")
+# 줄 내용을 판정하기 전에 걷어낼 직렬화 부스러기.
+_ESCAPE_NOISE = re.compile(r"\\+[rn]|\\+")
 
 
 def looks_like_key_block(text: str, after: int) -> bool:
@@ -901,17 +912,12 @@ def _key_body_end(text: str, body_at: int) -> int:
     position = body_at
     limit = min(len(text), body_at + PEM_MAX_SPAN)
     while position < limit:
-        # JSON 에 직렬화된 키는 물리적 줄바꿈이 없다. `\n` 두 글자가 구분자다.
-        # 그것을 줄로 보지 않으면 키 전체가 한 줄이 되고, 그 안의 END 마커에
-        # 있는 공백 때문에 본문이 아니라고 판정되어 키가 통째로 남는다.
-        candidates = [x for x in (text.find("\n", position), text.find("\\n", position)) if x >= 0]
-        if not candidates:
-            stop = limit
-        else:
-            nearest = min(candidates)
-            width = 1 if text[nearest] == "\n" else 2
-            stop = limit if nearest >= limit else nearest + width
-        line = text[position:stop].strip().strip('"').replace("\\n", "").replace("\\", "")
+        # JSON 에 직렬화된 키는 물리적 줄바꿈이 없다. 구분자를 하나씩
+        # 열거하면(`\n` 만, 그 다음엔 `\r\n` 만) 다음 형태에서 또 뚫린다.
+        # 실제 줄바꿈과 이스케이프된 줄바꿈을 한 번에 본다.
+        separator = _LINE_SEPARATOR.search(text, position, limit)
+        stop = separator.end() if separator else limit
+        line = _ESCAPE_NOISE.sub("", text[position:stop]).strip().strip('"')
         if not line:
             position = stop
             continue
@@ -980,6 +986,13 @@ def host_secret_values() -> list[str]:
     """
     values = []
     for name, value in os.environ.items():
+        if _PROXY_NAMES.match(name):
+            # URL 전체가 아니라 비밀번호만 지운다. 프록시 주소는 실패 진단에
+            # 필요하고 비밀이 아니다.
+            userinfo = _URL_USERINFO.search(value)
+            if userinfo and len(userinfo.group(1)) >= 6:
+                values.append(userinfo.group(1))
+            continue
         if not _HOST_SECRET_NAMES.search(name):
             continue
         # 짧은 값은 평범한 문자열과 부딪혀 과잉 삭제를 만든다.
