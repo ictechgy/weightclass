@@ -906,6 +906,16 @@ def looks_like_key_block(text: str, after: int) -> bool:
     return bool(_PEM_BODY_RUN.search(window))
 
 
+def _looks_like_key_line(candidate: str) -> bool:
+    """이 조각이 키 본문 한 줄처럼 보이는가."""
+    if not candidate or " " in candidate:
+        return False
+    if _PEM_END_RE.search(candidate) or _PEM_BEGIN_RE.search(candidate):
+        return True
+    base64ish = sum(1 for ch in candidate if ch.isalnum() or ch in "+/=")
+    return len(candidate) >= 16 and base64ish >= len(candidate) * 0.9
+
+
 def _key_body_end(text: str, body_at: int) -> int:
     """END 마커가 없을 때 키 본문이 어디까지인지.
 
@@ -914,6 +924,10 @@ def _key_body_end(text: str, body_at: int) -> int:
     훑으면 헤더의 `-` 나 `:` 에서 멈춰 본문이 그대로 남는다.
     """
     position = body_at
+    # 전진 여부가 아니라 **내용을 소비했는지** 를 본다. BEGIN 뒤의 줄바꿈은
+    # 빈 줄로 소비되므로 위치는 언제나 전진하고, 그것을 성공으로 읽으면
+    # 본문을 한 줄도 못 읽은 경우까지 성공으로 잡힌다.
+    consumed_content = False
     # 상한을 두면 큰 키(16384비트 RSA, 암호화 키)가 중간에서 잘려 나머지
     # 줄들이 그대로 나간다. 주사는 비키 내용에서 자연히 멈추므로 상한이
     # 필요 없다 — 여기 오는 것은 이미 키 블록으로 판정된 자리다.
@@ -925,11 +939,18 @@ def _key_body_end(text: str, body_at: int) -> int:
         separator = _LINE_SEPARATOR.search(text, position, limit)
         stop = separator.end() if separator else limit
         line = _ESCAPE_NOISE.sub("", text[position:stop]).strip().strip('"')
+        # CI 출력은 줄마다 접두사가 붙는다("[INFO] ", "stdout | ", 타임스탬프).
+        # 그것을 그대로 판정하면 공백 때문에 본문이 아니라고 보고 멈춰, 키가
+        # 통째로 남는다. 마지막 공백 뒤 조각도 함께 본다.
+        tail = line.rsplit(" ", 1)[-1] if " " in line else ""
+        if tail and _looks_like_key_line(tail):
+            line = tail
         if not line:
             position = stop
             continue
         if _PEM_HEADER_LINE.match(line):
             position = stop
+            consumed_content = True
             continue
         # base64 판정이 헐거우면 평범한 영어 줄을 키 본문으로 삼킨다.
         # "FAILED next" 도 전부 alnum 이다. 진짜 본문 줄은 길고(대개 64자)
@@ -942,15 +963,19 @@ def _key_body_end(text: str, body_at: int) -> int:
         if base64ish < len(squeezed) * 0.9:
             break
         position = stop
+        consumed_content = True
         if len(squeezed) < 24:
             # 짧은 줄은 키의 마지막 줄일 수 있다. 받고 멈춘다.
             break
-    return position
+    return position if consumed_content else body_at
 
 
 # 줄 단위로 범위를 못 정했을 때 쓰는 문자 단위 폴백. 키 본문에 나올 수 있는
-# 문자 — base64, 직렬화 부스러기, PEM 헤더의 구두점, 공백 — 를 삼킨다.
-_KEY_RUN = re.compile(r'[A-Za-z0-9+/=\s\\"\':,.-]+')
+# 문자 — base64, 직렬화 부스러기, PEM 헤더의 구두점 — 를 삼킨다.
+#
+# 줄바꿈은 넣지 않는다. 줄을 넘어가면 다음 줄의 토큰을 가운데서 잘라 그
+# 앵커를 없애고, 그러면 뒤의 모양 패턴들이 그 토큰을 못 잡는다.
+_KEY_RUN = re.compile(r'[A-Za-z0-9+/=\t \\"\':,.-]+')
 
 
 def _key_run_end(text: str, body_at: int) -> int:

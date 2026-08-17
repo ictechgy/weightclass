@@ -210,10 +210,19 @@ def main() -> int:
         print(f"    그중 조언 후 재시도로 구제: {rescued_total}")
     print(f"  실제 승급        : {sum(1 for r in usable if isinstance(r.get('expensive'), dict))}")
     print(f"  둘 다 실패       : {both_failed}")
-    advice_first_on = any(
-        isinstance(r.get("advisor"), dict) and (r["advisor"] or {}).get("advise_first")
+    # 일부 기록만 시작 전 조언이면 그 비율은 p 도 p′ 도 아니다. 두 설정을
+    # 섞어 놓고 한쪽 이름을 붙이면, 조언 없는 실행이 섞인 수를 단일 설정의
+    # p′ 처럼 보이게 한다.
+    first_flags = {
+        bool(isinstance(r.get("advisor"), dict) and (r["advisor"] or {}).get("advise_first"))
         for r in usable
-    )
+    }
+    advice_first_on = first_flags == {True}
+    if len(first_flags) > 1:
+        print(
+            "\n경고: 시작 전 조언을 켠 실행과 끄고 돈 실행이 한 로그에 섞여 있다."
+            " 아래 실패율은 어느 설정의 값도 아니다."
+        )
     # 시작 전 조언이 켜졌으면 이 실패율은 계획을 받은 뒤의 것이다. p 라고
     # 부르면 조언 없는 설정의 p 와 섞인다.
     rate_name = "p′" if advice_first_on else "p"

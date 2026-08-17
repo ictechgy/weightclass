@@ -370,3 +370,40 @@ def test_schemeless_proxy_with_short_password(monkeypatch: pytest.MonkeyPatch) -
     cleaned = module.verify_excerpt("proxy error at user:aB3x5@proxy.corp:3128")
     assert "aB3x5" not in cleaned
     assert "proxy.corp:3128" in cleaned
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["[INFO] ", "stdout | ", "2026-08-17T10:00:00Z ", "  "],
+    ids=["bracket", "pipe", "timestamp", "indent"],
+)
+def test_log_prefixed_key_lines_are_redacted(prefix: str) -> None:
+    """CI 출력은 줄마다 접두사가 붙는다.
+
+    접두사를 그대로 판정하면 공백 때문에 본문이 아니라고 보고 멈춰, 키가
+    통째로 남는다.
+    """
+    module = load_runner()
+    lines = pem_body()
+    text = (
+        f"{prefix}{BEGIN}RSA {KEY}\n"
+        + "\n".join(prefix + line for line in lines)
+        + f"\n{prefix}{END}RSA {KEY}"
+    )
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+
+
+def test_fallback_does_not_cut_the_next_line_token() -> None:
+    """폴백이 줄을 넘어가면 다음 줄 토큰을 가운데서 잘라 앵커를 없앤다.
+
+    앵커가 없어지면 그 토큰은 모양 패턴에도 안 걸려 그대로 나간다.
+    """
+    module = load_runner()
+    text = (
+        f"E   ValueError: {BEGIN}{KEY} MIIEvQIBADANBgkqhkiG not found\n"
+        "E   using token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+    )
+    cleaned = module.verify_excerpt(text)
+    assert "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in cleaned
+    assert "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in cleaned
