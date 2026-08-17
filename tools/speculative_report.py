@@ -669,6 +669,13 @@ def main() -> int:
     print(f"  가장 불리한 끝 (c={c_hi:.3f}, p={hi:.1%}): 절감 {1 - worst:.1%}")
     print(f"  손익분기 p = {1 - c:.1%}  (c 가 {c_hi:.3f} 이면 {1 - c_hi:.1%})")
 
+    # 분모가 승급의 절반도 못 담으면, 그것은 요약이라고 부를 수 없다. 빠진
+    # 값의 방향은 알 수 없으므로 넓히는 것으로도 메울 수 없다 — jackknife 는
+    # 값 매겨진 것만 보기 때문이다. 판정을 내지 않는다. 이 규칙은 판정을
+    # 없앨 뿐 새로 만들지 않으므로, 틀려도 과도한 신중함으로만 틀린다.
+    thin_denominator = (
+        c_range is not None and escalated_total > 0 and len(paired) * 2 < escalated_total
+    )
     if timed_out_tasks and c_range is not None:
         # 판정을 내지 않는다. 빠진 비용이 위쪽으로 열려 있으면 구간도 위쪽으로
         # 열려 있고, 닫힌 구간을 근거로 "유리하다/손해다" 를 말할 수 없다.
@@ -677,6 +684,12 @@ def main() -> int:
             " 타임아웃난 실행은 예산을 끝까지 태운 가장 비싼 실행이므로, 한 건만으로도"
             " 위 결론이 뒤집힐 수 있다. 그 과제를 빼고 다시 모으거나, 러너의"
             " CHILD_TIMEOUT 을 늘려 끝까지 돌게 한 뒤 다시 재야 한다."
+        )
+    elif thin_denominator:
+        print(
+            f"\n  -> 판정 없음. 승급 {escalated_total}건 중 {len(paired)}건만 양쪽 비용을"
+            " 얻어, 분모가 승급의 절반도 대표하지 못한다. 빠진 값이 어느 쪽이었는지"
+            " 알 수 없으므로 구간을 넓히는 것으로도 메울 수 없다."
         )
     elif c_range is None:
         # c 를 재지 못했으면 판정하지 않는다. 남의 벤치마크에서 온 0.31 로
