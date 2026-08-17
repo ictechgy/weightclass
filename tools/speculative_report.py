@@ -365,6 +365,7 @@ def main() -> int:
     # 그것을 빼고 낸 결론은 한 건으로 뒤집힐 수 있다. 따로 센다.
     timed_out_tasks = 0
     unpriced_escalations = 0
+    zero_expensive = 0
     for r in usable:
         # 승급 여부는 p 를 세는 쪽과 같은 술어로 판정한다. 러너가 빈 dict 나
         # 오류 스텁을 남기면 "승급 N건 중 M건" 문구가 실제와 어긋난다.
@@ -381,7 +382,13 @@ def main() -> int:
             unusable_cheap += 1
             continue
         expensive_cost = cost_of(r.get("expensive")) if escalated else None
-        if escalated and not expensive_cost:
+        # 비싼 비용 0 은 관측값이지만 **분모로는 못 쓴다.** 이유를 나눠 센다 —
+        # 진위값 하나로 뭉뚱그리면 아래 나눗셈 가드가 공허해지고, 나중에 그
+        # 검사를 "0 도 관측값이다" 로 고치는 순간 ZeroDivisionError 가 된다.
+        if escalated and expensive_cost == 0:
+            zero_expensive += 1
+            expensive_cost = None
+        elif escalated and not expensive_cost:
             unpriced_escalations += 1
             expensive_cost = None
         tasks.append(Task(cheap_cost, expensive_cost, escalated))
@@ -390,7 +397,7 @@ def main() -> int:
     cheap_escalated = [x.cheap for x in tasks if x.escalated]
     cheap_passing = [x.cheap for x in tasks if not x.escalated]
     priced_pairs = [x for x in tasks if x.expensive is not None]
-    paired = [x.cheap / x.expensive for x in priced_pairs if x.expensive is not None]
+    paired = [x.cheap / x.expensive for x in priced_pairs if x.expensive]
     expensive_total = sum(x.expensive for x in priced_pairs if x.expensive)
 
     # 한 건으로 c 를 바꾸면 그 한 과제의 특성이 전체 결론을 정한다. 채택하는
@@ -532,9 +539,12 @@ def main() -> int:
         # 분자는 전수로 알 수 있다. 싼 경로는 모든 과제에서 돌았다. 분모는
         # 알 수 없다 — 비싼 경로는 승급 과제에서만 돌았으므로 그 평균으로
         # 메꾼다. 그 대입만이 남는 가정이고, 아래에서 그렇게 밝힌다.
-        expensive_mean = statistics.fmean(
-            [x.expensive for x in priced_pairs if x.expensive is not None]
-        )
+        expensive_mean = statistics.fmean([x.expensive for x in priced_pairs if x.expensive])
+        if expensive_mean <= 0:
+            # 여기 올 수 없어야 하지만, 올 수 있게 되면 조용히 죽는 것보다
+            # 말하고 멈추는 편이 낫다.
+            print("\n비용비 c 를 내지 못했다: 승급 과제의 비싼 비용 평균이 0 이다.")
+            return 0
         measured = statistics.fmean(cheap_all) / expensive_mean
         median_ratio = statistics.median(paired)
         print(
@@ -552,6 +562,11 @@ def main() -> int:
             f"  참고: 승급 과제만 짝지은 비율은 {paired_ratio:.3f} 다. 이 값은 과제"
             " 난이도가 상쇄된다는 장점이 있지만 c + p 식이 요구하는 값은 아니다."
         )
+        if zero_expensive:
+            print(
+                f"  승급 {zero_expensive}건은 비싼 비용이 0 이라 분모에서 뺐다."
+                " 0 은 관측값이지만 비율의 분모로는 쓸 수 없다."
+            )
         if unpriced_escalations:
             # 방향을 말할 수 있는 것은 타임아웃뿐이다. 그 실행은 예산을 끝까지
             # 태웠으므로 평균보다 비쌌을 가능성이 높다. 비용이 없거나 0 인
@@ -713,7 +728,7 @@ def main() -> int:
                 if not values or not priced_pairs:
                     return None
                 expensive_mean_all = statistics.fmean(
-                    [x.expensive for x in priced_pairs if x.expensive is not None]
+                    [x.expensive for x in priced_pairs if x.expensive]
                 )
                 mean = statistics.fmean(values)
                 # a 도 표본에서 온 값이다. 점추정만 쓰면 s > a + c 판정이
@@ -835,7 +850,7 @@ def main() -> int:
                     r_spread = 0.0
                     if retry_costs and priced_pairs:
                         expensive_mean_all = statistics.fmean(
-                            [x.expensive for x in priced_pairs if x.expensive is not None]
+                            [x.expensive for x in priced_pairs if x.expensive]
                         )
                         r_mean = statistics.fmean(retry_costs)
                         r_ratio = r_mean / expensive_mean_all

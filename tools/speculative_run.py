@@ -929,6 +929,16 @@ def looks_like_key_block(text: str, after: int) -> bool:
     window = text[after : after + PEM_LOOKAHEAD]
     if _PEM_BODY_RUN.search(window):
         return True
+    # 게이트가 12자 연속을 요구하면 8자로 접힌 본문을 못 알아보고, 그러면
+    # 키가 "이름만 언급" 으로 분류되어 통째로 남는다. 본 주사가 받아들이는
+    # 것과 같은 기준으로 줄을 본다.
+    for raw in _LINE_SEPARATOR.split(window)[1:]:
+        line = _ESCAPE_NOISE.sub("", raw).strip()
+        if not line:
+            continue
+        for candidate in (line, strip_log_prefix(line), *_prefix_variants(line)):
+            if candidate and _looks_like_key_line(candidate, minimum=8):
+                return True
     # 줄마다 접두사가 붙으면(diff 의 `+`, CI 의 `[INFO] `) 앞쪽 창이 헤더
     # 줄로만 채워지고, 그 헤더도 접두사 때문에 앵커된 패턴에 안 걸린다.
     # 그러면 진짜 키 블록이 "이름만 언급" 으로 분류되어 통째로 남는다.
@@ -1020,49 +1030,45 @@ def _key_body_end(text: str, body_at: int) -> int:
         stop = separator.end() if separator else limit
         line = _ESCAPE_NOISE.sub("", text[position:stop]).strip().strip('"')
         # CI 출력은 줄마다 접두사가 붙는다("[INFO] ", "stdout | ", 타임스탬프).
-        # 그것을 그대로 판정하면 공백 때문에 본문이 아니라고 보고 멈춰, 키가
-        # 통째로 남는다. 마지막 공백 뒤 조각도 함께 본다.
-        for candidate in _prefix_variants(line):
-            if _looks_like_key_line(candidate) or _PEM_HEADER_LINE.match(candidate):
-                line = candidate
-                break
+        # 접두사를 벗긴 형태까지 후보로 놓고 본다.
+        candidates = [line, *_prefix_variants(line)]
         # 접두사만 있는 줄(diff 의 "+" 하나, CI 의 "[INFO] ")은 빈 줄이다.
-        # 그것을 내용으로 보면 "짧은 마지막 줄" 규칙이 걸려 본문 앞에서
-        # 멈추고, 키가 그대로 남는다.
         if not line or not strip_log_prefix(line):
             position = stop
             continue
-        if _PEM_HEADER_LINE.match(line):
+        # **헤더를 먼저 본다.** 본문 판정을 먼저 돌리면 "Proc-Type: 4,ENCRYPTED"
+        # 의 마지막 조각 "4,ENCRYPTED" 가 본문 줄로 뽑히고, 그러면 이 줄이
+        # 헤더로 인식되지 못한 채 짧은 줄 규칙에 걸려 본문 앞에서 멈춘다.
+        if any(_PEM_HEADER_LINE.match(c) for c in candidates if c):
             position = stop
             consumed_content = True
             continue
-        # 접두사를 벗기면 헤더인 경우도 여기서 받는다.
-        if any(_PEM_HEADER_LINE.match(v) for v in _prefix_variants(line)):
-            position = stop
-            consumed_content = True
-            continue
-        # base64 판정이 헐거우면 평범한 영어 줄을 키 본문으로 삼킨다.
-        # "FAILED next" 도 전부 alnum 이다. 진짜 본문 줄은 길고(대개 64자)
-        # 공백이 없다. 마지막 줄만 짧을 수 있으므로 그것은 한 줄 더 받고
-        # 멈춘다.
-        squeezed = line.strip()
-        if " " in squeezed or "\t" in squeezed:
-            break
-        base64ish = sum(1 for ch in squeezed if ch.isalnum() or ch in "+/=")
-        if base64ish < len(squeezed) * 0.9:
+        # base64 판정이 헐거우면 평범한 영어 줄을 본문으로 삼킨다. 진짜 본문
+        # 줄은 공백이 없고 대부분 base64 문자다.
+        body = next((c for c in candidates if c and _looks_like_key_line(c, minimum=8)), None)
+        if body is None:
             break
         position = stop
         consumed_content = True
-        if len(squeezed) < 24:
-            # 짧은 줄은 키의 **마지막** 줄일 수 있다. 다만 16자 줄로 접힌
-            # 본문이나 로그가 다시 감싼 출력에서는 모든 줄이 짧고, 첫 줄에서
-            # 멈추면 나머지가 통째로 남는다. 다음 줄도 본문처럼 보이면 계속
-            # 간다 — 진짜 마지막 줄이면 다음 줄은 END 마커나 다른 내용이다.
-            following = text[position:].lstrip("\r\n")
-            head = following.split("\n", 1)[0] if following else ""
-            # 본 주사는 짧은 줄도 본문으로 받는다. 이어짐 판정만 16자를
-            # 요구하면 12자로 접힌 키가 첫 줄에서 끊긴다.
-            if not _looks_like_key_line(strip_log_prefix(head) or head, minimum=8):
+        if len(body) < 24:
+            # 짧은 줄은 키의 **마지막** 줄일 수 있다. 다만 12자나 16자로 접힌
+            # 본문에서는 모든 줄이 짧고, 첫 줄에서 멈추면 나머지가 통째로
+            # 남는다. 다음 줄이 본문이거나 헤더면 계속 간다.
+            #
+            # 본 주사와 **같은** 구분자를 써야 한다. 물리적 줄바꿈만 보면
+            # 직렬화된 키에서 뒤 전체가 한 줄로 잡혀 판정이 실패한다.
+            rest = text[position:]
+            skip = _LINE_SEPARATOR.match(rest)
+            rest = rest[skip.end() :] if skip else rest
+            nxt = _LINE_SEPARATOR.search(rest)
+            head = _ESCAPE_NOISE.sub("", rest[: nxt.start()] if nxt else rest).strip()
+            following = [head, *_prefix_variants(head)]
+            continues = any(
+                _looks_like_key_line(c, minimum=8) or _PEM_HEADER_LINE.match(c)
+                for c in following
+                if c
+            )
+            if not continues:
                 break
     return position if consumed_content else body_at
 
@@ -1684,16 +1690,19 @@ def advice_text(stdout: str, command: list[str]) -> str:
         return text
     for candidate in (text, *reversed(text.splitlines())):
         stripped = candidate.strip()
-        if not stripped.startswith("{"):
+        # 최상위가 배열인 봉투도 있다. `{` 만 보면 그것을 통째로 놓쳐
+        # 계측 데이터가 조언 자리에 들어간다.
+        if not stripped.startswith(("{", "[")):
             continue
         try:
             parsed = json.loads(stripped)
         except (ValueError, TypeError):
             continue
-        if isinstance(parsed, dict):
-            found = _first_text(parsed)
-            if found:
-                return found
+        # 최상위가 객체든 배열이든 같은 탐색을 돌린다. dict 만 보면 배열
+        # 봉투가 통째로 조언 자리에 들어간다.
+        found = _first_text(parsed)
+        if found:
+            return found
     return text
 
 

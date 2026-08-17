@@ -189,7 +189,7 @@ def test_marker_mention_does_not_swallow_the_report() -> None:
     )
     cleaned = module.verify_excerpt(text)
     assert cleaned.count("FAILED important") > 30
-    assert lines[0] not in cleaned
+    assert not [line for line in lines if line in cleaned]
 
 
 def test_unrelated_end_banner_does_not_extend_the_span() -> None:
@@ -204,7 +204,7 @@ def test_unrelated_end_banner_does_not_extend_the_span() -> None:
     )
     cleaned = module.verify_excerpt(text)
     assert cleaned.count("FAILED important") > 25
-    assert lines[0] not in cleaned
+    assert not [line for line in lines if line in cleaned]
 
 
 def test_credential_far_into_a_long_output_is_redacted() -> None:
@@ -367,7 +367,8 @@ def test_pgp_armored_private_key_is_redacted() -> None:
     lines = pem_body(600)
     marker = "PGP PRIVATE KEY BLOCK-----"
     text = f"{BEGIN}{marker}\n" + "\n".join(lines) + f"\n{END}{marker}"
-    assert lines[0] not in module.verify_excerpt(text)
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
 
 
 def test_schemeless_proxy_with_short_password(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -545,7 +546,8 @@ def test_stacked_line_prefixes(prefix: str) -> None:
         + "\n".join(prefix + line for line in lines)
         + f"\n{prefix}{END}RSA {KEY}"
     )
-    assert not [line for line in module.verify_excerpt(text).splitlines() if line.strip() in lines]
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
 
 
 def test_short_wrapped_key_lines() -> None:
@@ -609,3 +611,53 @@ def test_prefix_stripping_reaches_a_fixed_point(layers: int) -> None:
     )
     cleaned = module.verify_excerpt(text)
     assert not [line for line in lines if line in cleaned]
+
+
+@pytest.mark.parametrize("width", [8, 12, 15, 64], ids=lambda w: f"{w}col")
+@pytest.mark.parametrize(
+    "separator", ["\n", "\\n", "\\r\\n"], ids=["real", "escaped", "escaped-crlf"]
+)
+def test_folded_key_with_every_separator(width: int, separator: str) -> None:
+    """접힘 너비와 직렬화 구분자의 조합.
+
+    본 주사는 이스케이프된 구분자를 보는데 이어짐 탐침은 물리적 줄바꿈만
+    봤다. 두 경로가 같은 판정을 다르게 하면 그 틈이 유출이다.
+    """
+    module = load_runner()
+    blob = base64.b64encode(b"\x01" * 1200).decode()
+    lines = [blob[index : index + width] for index in range(0, len(blob), width)]
+    joined = separator.join([f"{BEGIN}RSA {KEY}", *lines, f"{END}RSA {KEY}"])
+    text = joined if separator == "\n" else '{"private_key": "' + joined + '"}'
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+
+
+@pytest.mark.parametrize("width", [8, 12, 64], ids=lambda w: f"{w}col")
+@pytest.mark.parametrize("prefix", ["+[INFO] ", "[INFO] ", "+"], ids=["stacked", "tag", "diff"])
+def test_folded_key_with_prefix(width: int, prefix: str) -> None:
+    """게이트가 12자 연속을 요구하면 8자로 접힌 본문을 못 알아본다."""
+    module = load_runner()
+    blob = base64.b64encode(b"\x01" * 1200).decode()
+    lines = [blob[index : index + width] for index in range(0, len(blob), width)]
+    text = (
+        f"{prefix}{BEGIN}RSA {KEY}\n"
+        + "\n".join(prefix + line for line in lines)
+        + f"\n{prefix}{END}RSA {KEY}"
+    )
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+
+
+@pytest.mark.parametrize(
+    ("envelope", "expected"),
+    [
+        ('{"result":"Return a copy."}', "Return a copy."),
+        ('[{"item":{"text":"Use a channel."}}]', "Use a channel."),
+        ('{"type":"x"}\n{"item":{"text":"Third form."}}', "Third form."),
+    ],
+    ids=["object", "array", "jsonl"],
+)
+def test_advice_body_is_extracted_from_every_envelope(envelope: str, expected: str) -> None:
+    """봉투를 그대로 붙이면 executor 가 조언 대신 계측 데이터를 읽는다."""
+    module = load_runner()
+    assert module.advice_text(envelope, ["claude", "--output-format", "json"]) == expected
