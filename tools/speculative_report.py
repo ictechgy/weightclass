@@ -219,7 +219,7 @@ def main() -> int:
     expensive_total = 0.0
     escalated_total = 0
     for r in usable:
-        cheap_cost = cost_of(r["cheap"])
+        cheap_cost = cost_of(r.get("cheap"))
         expensive_cost = cost_of(r.get("expensive"))
         # 어느 쪽이든 0 이면 비율이 의미를 잃는다. 싼 쪽 0 은 c=0 으로
         # "공짜" 라는 결론을 만들고, 비싼 쪽 0 은 나눗셈 자체가 안 된다.

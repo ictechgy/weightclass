@@ -537,8 +537,14 @@ def _claude_usage(stdout: str) -> Usage | None:
     if breakdown:
         usage["total_tokens"] = sum(breakdown.values())
     # bool 은 int 의 하위형이라 isinstance 를 그냥 통과한다. true 가 1.0 달러로,
-    # 토큰 필드의 true 가 1 토큰으로 기록되는 것을 막는다.
-    if not isinstance(cost, bool) and isinstance(cost, (int, float)) and math.isfinite(cost):
+    # 토큰 필드의 true 가 1 토큰으로 기록되는 것을 막는다. 음수도 거른다 —
+    # --prices 검증이 같은 기준을 쓰므로 두 경로가 어긋나면 안 된다.
+    if (
+        not isinstance(cost, bool)
+        and isinstance(cost, (int, float))
+        and math.isfinite(cost)
+        and cost >= 0
+    ):
         usage["cost_usd"] = float(cost)
     return usage if breakdown or "cost_usd" in usage else None
 
@@ -1348,7 +1354,13 @@ def main() -> int:
         if child_home is None:
             print(
                 "  HOME 은 그대로다. 변수만 좁혔을 뿐 ~/.aws/credentials 같은 파일은"
-                " 여전히 읽힌다. --child-home-stage 나 컨테이너가 필요하다."
+                " 여전히 읽힌다. --child-home 이나 컨테이너가 필요하다."
+            )
+        else:
+            print(
+                "  --child-home 은 두 arm 이 함께 쓰고 자식이 쓸 수 있다. 싼 경로가"
+                " 거기 남긴 설정을 승급 경로가 물려받는다. 그것이 문제라면 실행마다"
+                " 새 디렉터리를 주거나 컨테이너를 써야 한다."
             )
 
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)

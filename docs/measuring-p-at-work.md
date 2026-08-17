@@ -204,6 +204,11 @@ list is.
 vendor's auth directory in once, and the CLI authenticates while `~/.aws` and
 `~/.ssh` are simply not there.
 
+Both arms of a task share that directory and can write to it, so a cheap route
+can leave state the escalation route then runs under. That is the same exposure
+as running the CLI twice by hand, and the run says so when the flag is used. If
+it matters for your workload, hand each invocation a fresh directory.
+
 The runner deliberately does **not** build that directory for you. An earlier
 version did, and the copying logic produced a new security defect in each of
 five consecutive review rounds: credential copies left on disk, a staged HOME
