@@ -200,7 +200,15 @@ def main() -> int:
 
     print(f"과제 {total}개 (기록 {len(records)}개)")
     print(f"  싼 경로 검증 통과: {cheap_passed}")
-    print(f"  승급 필요        : {failed}")
+    print(f"  싼 경로 실패     : {failed}")
+    # 조언 후 재시도가 구제한 건은 실패했지만 승급하지 않았다. 둘을 한 줄로
+    # 묶으면 "승급 필요" 가 실제 승급 건수와 어긋난다.
+    rescued_total = sum(
+        1 for r in usable if isinstance(r.get("retry"), dict) and (r["retry"] or {}).get("accepted")
+    )
+    if rescued_total:
+        print(f"    그중 조언 후 재시도로 구제: {rescued_total}")
+    print(f"  실제 승급        : {sum(1 for r in usable if isinstance(r.get('expensive'), dict))}")
     print(f"  둘 다 실패       : {both_failed}")
     print(f"\np = {p:.1%}   95% CI [{lo:.1%}, {hi:.1%}]")
 
@@ -626,6 +634,79 @@ def main() -> int:
             " 없음) 분자에서 빠졌다. 그런 실행은 대개 가장 비싼 싼"
             " 실행이므로, 빠지면 c 가 낮아지고 절감이 부풀려진다."
         )
+
+    # ── 조언 패턴 ────────────────────────────────────────────────────────
+    # 설정이 섞이면 s 도 p 도 무엇의 값인지 알 수 없다. 라우트 지문과 같은
+    # 방식으로 먼저 확인한다.
+    advisor_configs = {
+        json.dumps(r.get("advisor") or {}, sort_keys=True, ensure_ascii=False) for r in usable
+    }
+    advised = [r for r in usable if isinstance(r.get("advisor"), dict)]
+    if advised and len(advisor_configs) > 1:
+        print(
+            f"\n경고: 조언 설정 {len(advisor_configs)}종이 한 로그에 섞여 있다. s 를 내지 않는다."
+        )
+    elif advised:
+        config = json.loads(advisor_configs.pop())
+        shapes = []
+        if config.get("advise_first"):
+            shapes.append("시작 전(A)")
+        if config.get("advise_on_failure"):
+            shapes.append("실패 후(B)")
+        if shapes:
+            print(f"\n조언: {' + '.join(shapes)}, 조언자가 보는 것 = {config.get('context')}")
+
+            def advice_cost(record: dict[str, object], key: str) -> float | None:
+                advice = record.get(key)
+                if not isinstance(advice, dict):
+                    return None
+                return cost_of(advice)
+
+            advice_costs = [
+                value
+                for r in usable
+                for key in ("advice_first", "advice_failure")
+                if (value := advice_cost(r, key)) is not None and value > 0
+            ]
+            if advice_costs and priced_pairs:
+                expensive_mean_all = statistics.fmean(
+                    [x.expensive for x in priced_pairs if x.expensive]
+                )
+                a_ratio = statistics.fmean(advice_costs) / expensive_mean_all
+                print(
+                    f"  조언 1회 비용비 a = {a_ratio:.3f}"
+                    f"  ({len(advice_costs)}회 평균 {statistics.fmean(advice_costs):.4f})"
+                )
+            else:
+                a_ratio = None
+                print("  조언 비용을 얻지 못해 a 를 내지 못한다.")
+
+            # s 는 실패한 실행에서만 나온다. 재시도가 기록된 건만 센다.
+            retried = [r for r in usable if isinstance(r.get("retry"), dict)]
+            if config.get("advise_on_failure"):
+                rescued = sum(1 for r in retried if (r["retry"] or {}).get("accepted"))
+                if retried:
+                    s_lo, s_hi = wilson(rescued, len(retried))
+                    s_hat = rescued / len(retried)
+                    print(
+                        f"  조언 후 재시도 성공률 s = {s_hat:.1%}"
+                        f"  95% CI [{s_lo:.1%}, {s_hi:.1%}]   ({rescued}/{len(retried)})"
+                    )
+                    if a_ratio is not None and c_range is not None:
+                        # 이득 조건은 s > a + c. 두 끝을 다 태워 판정한다.
+                        threshold_low = a_ratio + c_range[0]
+                        threshold_high = a_ratio + c_range[1]
+                        print(f"  손익분기 s = a + c = {a_ratio + c:.3f}")
+                        if s_lo > threshold_high:
+                            print("  -> 구간 전체가 손익분기 위다. 실패 후 조언이 승급보다 싸다.")
+                        elif s_hi < threshold_low:
+                            print("  -> 구간 전체가 손익분기 아래다. 그냥 승급하는 편이 낫다.")
+                        else:
+                            print("  -> 구간이 손익분기를 가로지른다. 아직 결론 낼 수 없다.")
+                    else:
+                        print("  a 나 c 를 재지 못해 판정하지 않는다.")
+                else:
+                    print("  아직 실패한 실행이 없어 s 를 낼 수 없다.")
 
     print("\n기대 비용 = c + p")
     print(f"  기대 비용 {c + p:.2f}  ->  절감 {1 - (c + p):.1%}")
