@@ -30,6 +30,12 @@ which prices *every* arm from `--prices` even where the vendor reported its own
 cost. You then own the accuracy of the table for both sides, which is the honest
 price of the comparison.
 
+It fails closed. `--prefer-prices` without `--prices` is rejected outright, and
+an arm the table cannot price records **no cost at all** rather than falling back
+to the vendor's number — because a silent fallback would put that one arm on a
+different basis while the flag promised otherwise. A missing cost drops the task
+from `c`; a wrong basis would corrupt it.
+
 ## What each vendor will and will not tell you
 
 Probed directly against the installed CLIs:

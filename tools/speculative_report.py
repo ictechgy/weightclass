@@ -296,12 +296,27 @@ def main() -> int:
     single_origin = len(origins) == 1 and None not in origins
     if not origins:
         origin_problem = "이 로그에는 비용이 하나도 없다"
+        origin_remedy = (
+            "  Claude 는 --output-format json 이면 total_cost_usd 를 준다."
+            " Codex 는 USD 를 주지 않으므로 --prices 로 요금표를 넘겨야 한다."
+        )
     elif origins == {None}:
         origin_problem = "이 로그는 cost_origin 을 남기지 않는 옛 러너가 썼다"
+        origin_remedy = (
+            "  비용은 있지만 그것이 벤더 청구액인지 요금표 환산값인지 알 수 없어,"
+            " 두 arm 을 나눠도 되는지 판단할 수 없다. 지금 러너로 다시 재야 한다."
+        )
     else:
         named = sorted(str(o) for o in origins if o is not None)
         unknown = " (일부는 출처 미상)" if None in origins else ""
         origin_problem = f"비용의 출처가 한 가지가 아니다 — 관측된 출처 {named}{unknown}"
+        origin_remedy = (
+            "  벤더가 알려준 청구액과 요금표 환산값은 세는 항목이 다르다 — 전자는"
+            " 캐시 읽기를 포함하고 후자는 표에 적은 필드만 센다. 섞인 값들의 평균은"
+            " 무엇의 평균도 아니므로 c 를 재지 않는다. 두 벤더를 비교하는 중이라면"
+            " 양쪽 요금표를 주고 --prefer-prices 로 한 기준에 세워라. 한 벤더 안에서"
+            " 섞였다면 설정마다 --out-dir 을 나눠야 한다."
+        )
 
     tasks: list[Task] = []
     escalated_total = 0
@@ -429,9 +444,10 @@ def main() -> int:
         담으려면 삭제 단위가 과제여야 한다.
 
         빼고 계산한 값들의 **최소/최대**를 구간이라고 부르면 안 된다. 한 건을
-        뺀 추정치는 원래 추정치에서 대략 1/n 만큼만 움직이므로, 그 폭은 표본이
-        늘수록 **좁아진다** — 불확실성은 반대로 가는데. jackknife 표준오차
-        sqrt((n-1)/n * Σ(θ_i - θ̄)^2) 에는 (n-1) 배가 들어간다.
+        뺀 추정치는 원래 추정치에서 대략 1/n 만큼만 움직이므로 그 폭은 1/n 로
+        줄어드는데, 참된 불확실성은 1/sqrt(n) 로 줄어든다. 둘 다 좁아지지만
+        전자가 훨씬 빨라서, 표본이 커질수록 과소평가가 심해진다. jackknife
+        표준오차 sqrt((n-1)/n * Σ(θ_i - θ̄)^2) 의 (n-1) 배가 그 차이를 메운다.
         """
         estimate = estimate_c(sample)
         if estimate is None or len(sample) < 3:
@@ -577,12 +593,7 @@ def main() -> int:
         )
     elif not single_origin:
         print(f"\n비용비 c = {c:.2f} — **가정값**이다. {origin_problem}.")
-        print(
-            "  벤더가 알려준 청구액과 요금표 환산값은 세는 항목이 다르다 — 전자는"
-            " 캐시 읽기를 포함하고 후자는 표에 적은 필드만 센다. 섞인 값들의 평균은"
-            " 무엇의 평균도 아니므로 c 를 재지 않는다. 한 설정당 하나의 --out-dir 을"
-            " 쓰고, Codex 쪽은 --prices 를 빠짐없이 주어야 한다."
-        )
+        print(origin_remedy)
     else:
         print(f"\n비용비 c = {c:.2f} — **가정값**이다. 승급 과제에서 양쪽 비용을 모두 얻지 못했다.")
         print(
@@ -648,19 +659,19 @@ def main() -> int:
         # c 를 재지 못했으면 판정하지 않는다. 남의 벤치마크에서 온 0.31 로
         # "유리하다" 를 찍으면, 재지 않은 것을 잰 것처럼 보이게 된다.
         if not single_origin:
-            print(
-                "\n  -> 판정 없음. 비용의 출처가 섞여 c 를 재지 않았다."
-                " 위에 적은 대로 설정을 나누고 다시 재야 한다."
-            )
+            print(f"\n  -> 판정 없음. {origin_problem}. 위에 적은 대로 다시 재야 한다.")
         elif measured_c is None:
             print(
                 "\n  -> 판정 없음. c 를 이 표본에서 재지 못해 가정값을 썼다."
                 " 양쪽 비용이 있는 승급 과제를 더 모아야 한다."
             )
         else:
+            # 이 분기는 c 를 쟀을 때만 온다. 그러려면 값 매겨진 승급이 3건
+            # 이상이고 과제는 그 상위집합이므로, "과제가 3건 미만" 은 여기서
+            # 나올 수 없다. 남는 원인은 한 건씩 뺀 추정치가 전부 같은 경우다.
             print(
                 "\n  -> 판정 없음. c 는 쟀지만 흔들림 폭을 구하지 못했다"
-                "(과제가 3건 미만이거나 모든 과제의 비율이 같다)."
+                "(한 건씩 빼도 값이 달라지지 않는다)."
                 " 구간 없이는 손익분기를 넘는지 말할 수 없다."
             )
     elif worst < 1:

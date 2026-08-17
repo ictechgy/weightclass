@@ -554,6 +554,12 @@ def run_child(
             "usage": dict(partial) if partial else None,
         }
     usage = extract_usage(stdout, stderr, command[0])
+    if usage is not None and prefer_prices and not rates:
+        # 공통 기준을 약속해 놓고 표가 없어 지키지 못했다. 벤더 숫자를 그대로
+        # 두면 사용자는 양쪽이 같은 기준이라고 믿는다. 비용을 버린다 —
+        # 리포트는 "비용 없음" 을 c 표본에서 빼므로, 틀린 c 보다 낫다.
+        usage.pop("cost_usd", None)
+        usage.pop("cost_origin", None)
     if usage is not None and rates and (prefer_prices or "cost_usd" not in usage):
         # 기본은 벤더가 준 숫자가 이긴다 — 우리 요금표는 낡을 수 있다. 다만
         # 두 벤더를 비교하려면 그 규칙이 걸림돌이 된다. Claude 는 캐시 읽기까지
@@ -564,6 +570,11 @@ def run_child(
             usage["cost_usd"] = computed
             usage["source"] = f"{usage.get('source', '?')}+price-table"
             usage["cost_origin"] = "price-table"
+        elif prefer_prices:
+            # 표로 값을 매기지 못했는데 벤더 숫자를 남기면, 이 arm 만 다른
+            # 기준이 된다. 그것이 정확히 --prefer-prices 가 막으려던 일이다.
+            usage.pop("cost_usd", None)
+            usage.pop("cost_origin", None)
     return {
         "exit_code": code,
         "timed_out": False,
@@ -1406,6 +1417,9 @@ def main() -> int:
                 )
             rates[arm] = {k: float(v) for k, v in table.items()}
 
+    if arguments.prefer_prices and not rates:
+        parser.error("--prefer-prices needs --prices; there is no table to price from")
+
     # 기본이 허용 목록이다. 모르는 비밀은 차단 목록으로 막을 수 없다.
     # arm 마다 실행 파일이 다르므로 허용 목록도 arm 마다 만든다.
     def env_for(argv: list[str], extra: list[str], arm: str) -> frozenset[str] | None:
@@ -1444,9 +1458,15 @@ def main() -> int:
             # 이미 넣어 준 이름도 여기 반영돼 있어야 한다.
             if names is None or any(n.startswith(families) for n in names):
                 continue
-            # CLAUDE_CODE_USE_* 는 claude 에만 해당한다. codex arm 에 대고
-            # AWS 자격증명을 넣으라고 하면, 필요도 없는 곳에 비밀을 넣게 된다.
-            if "claude" not in Path(argv[0]).name.lower():
+            # CLAUDE_CODE_USE_* 는 claude 에만 해당하므로 codex arm 에 대고
+            # AWS 자격증명을 넣으라고 하면 필요도 없는 곳에 비밀을 넣게 된다.
+            # 다만 "claude 가 아닌 것" 과 "무엇인지 모르는 것" 은 다르다.
+            # 래퍼 스크립트나 이름을 바꾼 런처는 벤더 미상으로 양쪽 접두사를
+            # 다 받으므로 CLAUDE_CODE_USE_* 도 받는다 — 그쪽이야말로 인증
+            # 실패가 p 를 오염시킬 자리다. 확실히 다른 벤더일 때만 건너뛴다.
+            name = Path(argv[0]).name.lower()
+            other_vendors = {v for v in VENDOR_ENV_PREFIXES if v != "claude"}
+            if any(v in name for v in other_vendors) and "claude" not in name:
                 continue
             print(
                 f"  주의: {switch} 가 켜져 있는데 {arm} 의 허용 목록에"
