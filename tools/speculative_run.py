@@ -732,10 +732,16 @@ def wants_structured_output(command: list[str]) -> bool:
     자식이 c 를 마음대로 정한다. 플래그가 없으면 구조화 파서를 아예 돌리지
     않고 stderr 누적 토큰만 긁는다.
     """
-    joined = " ".join(command)
-    return (
-        "--json" in command or "--output-format json" in joined or "--output-format=json" in joined
-    )
+    # argv 를 이어 붙여 부분 문자열로 찾으면, 다른 플래그의 **값** 안에 있는
+    # 같은 글자가 걸린다. --append-system-prompt "... --output-format json ..."
+    # 하나로 구조화 파서가 켜지고, 그러면 자식의 산문에서 비용을 읽는다 —
+    # 이 함수가 막으려던 바로 그 일이다. 토큰 위치로 판정한다.
+    for index, token in enumerate(command):
+        if token in ("--json", "--output-format=json"):
+            return True
+        if token == "--output-format" and command[index + 1 : index + 2] == ["json"]:
+            return True
+    return False
 
 
 def extract_usage(
