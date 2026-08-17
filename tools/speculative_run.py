@@ -864,9 +864,8 @@ _HOST_SECRET_NAMES = re.compile(
 )
 
 
-_PEM_BEGIN = "-----BEGIN "
-_PEM_END = "-----END "
-_PEM_KEY = "PRIVATE KEY-----"
+_PEM_BEGIN_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
+_PEM_END_RE = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY-----")
 # 개인키 하나의 최대 길이. 이보다 멀리 있는 END 는 같은 키의 끝이 아니라고
 # 본다 — BEGIN 을 이름만 언급한 오류 줄과 그 뒤 어딘가의 진짜 키 사이를
 # 통째로 지우는 것을 막는다.
@@ -874,6 +873,8 @@ PEM_MAX_SPAN = 12000
 # 마커 뒤 이만큼을 보고 진짜 키 블록인지 이름만 언급한 것인지 가른다.
 PEM_LOOKAHEAD = 200
 _PEM_BODY_RUN = re.compile(r"[A-Za-z0-9+/=]{12,}")
+# PEM 헤더 줄: `Proc-Type: 4,ENCRYPTED` 처럼 이름과 값이 콜론으로 갈린다.
+_PEM_HEADER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s")
 
 
 def looks_like_key_block(text: str, after: int) -> bool:
@@ -885,66 +886,77 @@ def looks_like_key_block(text: str, after: int) -> bool:
     조언자가 봐야 할 바로 그 내용이다.
     """
     window = text[after : after + PEM_LOOKAHEAD]
-    if "Proc-Type:" in window or "DEK-Info:" in window:
+    if _PEM_HEADER_LINE.search(window.lstrip()):
         return True
     return bool(_PEM_BODY_RUN.search(window))
 
 
-def redact_private_keys(text: str) -> str:
-    """개인키 블록을 지운다. 정규식이 아니라 인덱스 주사로 한다.
+def _key_body_end(text: str, body_at: int) -> int:
+    """END 마커가 없을 때 키 본문이 어디까지인지.
 
-    정규식으로 하면 두 가지를 동시에 만족시킬 수 없다. 본문 문자를 base64 로
-    좁히면 RFC 1421 암호화 키의 `Proc-Type:`/`DEK-Info:` 헤더나 JSON 에
-    escape 된 GCP 서비스 계정 키(`"private_key": "-----BEGIN ...\\nMIIE..."`)가
-    아예 안 걸려 키가 통째로 나간다. 반대로 임의 문자를 허용하면 BEGIN 을
-    언급만 한 오류 줄부터 수만 자를 삼키거나, 길이를 제한해도 비매치 입력에서
-    이차 시간이 된다.
-
-    주사는 선형이고 내용을 가리지 않는다. BEGIN 을 찾고, 상한 안에서 END 를
-    찾으면 그 구간을, 못 찾으면 base64 로 이어지는 만큼만 지운다.
+    줄 단위로 본다. PEM 헤더 줄(`Proc-Type: 4,ENCRYPTED`)이나 base64 로 보이는
+    줄이면 키의 일부이고, 그렇지 않은 줄이 나오면 거기서 멈춘다. 문자 종류로
+    훑으면 헤더의 `-` 나 `:` 에서 멈춰 본문이 그대로 남는다.
     """
-    if _PEM_KEY not in text:
-        return text
+    position = body_at
+    limit = min(len(text), body_at + PEM_MAX_SPAN)
+    while position < limit:
+        newline = text.find("\n", position)
+        stop = limit if newline < 0 or newline >= limit else newline + 1
+        line = text[position:stop].strip().strip('"').replace("\\n", "").replace("\\", "")
+        if not line:
+            position = stop
+            continue
+        if _PEM_HEADER_LINE.match(line):
+            position = stop
+            continue
+        # base64 판정이 헐거우면 평범한 영어 줄을 키 본문으로 삼킨다.
+        # "FAILED next" 도 전부 alnum 이다. 진짜 본문 줄은 길고(대개 64자)
+        # 공백이 없다. 마지막 줄만 짧을 수 있으므로 그것은 한 줄 더 받고
+        # 멈춘다.
+        squeezed = line.strip()
+        if " " in squeezed or "\t" in squeezed:
+            break
+        base64ish = sum(1 for ch in squeezed if ch.isalnum() or ch in "+/=")
+        if base64ish < len(squeezed) * 0.9:
+            break
+        position = stop
+        if len(squeezed) < 24:
+            # 짧은 줄은 키의 마지막 줄일 수 있다. 받고 멈춘다.
+            break
+    return position
+
+
+def redact_private_keys(text: str) -> str:
+    """개인키 블록을 지운다. 정규식 한 방이 아니라 마커 주사로 한다.
+
+    본문 문자를 base64 로 좁히면 RFC 1421 암호화 키의 `Proc-Type:` 헤더나
+    JSON 에 escape 된 GCP 서비스 계정 키가 아예 안 걸려 키가 통째로 나간다.
+    반대로 임의 문자를 허용하면 BEGIN 을 언급만 한 줄부터 수만 자를 삼키거나
+    비매치 입력에서 이차 시간이 된다. 마커만 정규식으로 잡고 나머지는
+    선형으로 정한다.
+    """
     out: list[str] = []
     index = 0
     while True:
-        begin = text.find(_PEM_BEGIN, index)
-        while begin >= 0 and not text.startswith(_PEM_KEY, begin + len(_PEM_BEGIN)):
-            # "-----BEGIN CERTIFICATE-----" 처럼 키가 아닌 것은 건드리지 않는다.
-            marker = text.find(_PEM_KEY, begin + len(_PEM_BEGIN))
-            newline = text.find("\n", begin)
-            if marker < 0 or (0 <= newline < marker):
-                begin = text.find(_PEM_BEGIN, begin + 1)
-                continue
-            break
-        if begin < 0:
+        begin = _PEM_BEGIN_RE.search(text, index)
+        if begin is None:
             out.append(text[index:])
             return "".join(out)
-        body_at = text.find(_PEM_KEY, begin) + len(_PEM_KEY)
+        body_at = begin.end()
         if not looks_like_key_block(text, body_at):
-            # 이름만 언급한 줄이다. 지우지 않고 지나간다.
             out.append(text[index:body_at])
             index = body_at
             continue
-        out.append(text[index:begin])
-        end = text.find(_PEM_END, begin)
-        stop = -1
-        if 0 <= end - begin <= PEM_MAX_SPAN:
-            tail = text.find(_PEM_KEY, end + len(_PEM_END))
-            if tail >= 0:
-                stop = tail + len(_PEM_KEY)
-        if stop < 0:
-            # END 가 없거나 너무 멀다. 본문으로 보이는 만큼만 지운다.
-            stop = begin + len(_PEM_BEGIN)
-            stop = text.find(_PEM_KEY, stop) + len(_PEM_KEY)
-            while (
-                stop < len(text)
-                and text[stop]
-                in ' \t\r\n\\"nABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/='
-            ):
-                stop += 1
+        out.append(text[index : begin.start()])
+        # END 는 이 키의 본문이 끝나는 자리 근처에 있어야 한다. 그냥 앞으로
+        # 찾으면 다른 블록의 END 나 "-----END OF REPORT-----" 같은 배너가
+        # 걸려 그 사이의 실패 신호가 통째로 사라진다. 본문의 끝을 먼저 정하고
+        # 그 부근까지만 본다.
+        body_end = _key_body_end(text, body_at)
+        closing = _PEM_END_RE.search(text, body_at, min(body_end + 200, body_at + PEM_MAX_SPAN))
+        index = closing.end() if closing else body_end
         out.append("[REDACTED]")
-        index = stop
 
 
 def host_secret_values() -> list[str]:

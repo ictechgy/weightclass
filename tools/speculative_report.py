@@ -782,36 +782,46 @@ def main() -> int:
                         q = attempted / len(advised_failures) if advised_failures else 1.0
                         # r 을 쟀으면 그것을 쓴다. 못 쟀으면 c 로 대신하되
                         # 그것이 대입이라고 말한다.
-                        base_low, base_high = (
-                            (max(0.0, (r_ratio - r_spread) * q), (r_ratio + r_spread) * q)
-                            if r_ratio is not None
-                            else (c_range[0], c_range[1])
-                        )
-                        basis = (
-                            (f"{q:.2f}·r" if q < 1 else "r") if r_ratio is not None else "c(대입)"
-                        )
-                        threshold_low = max(0.0, a_ratio - a_spread) + base_low
-                        threshold_high = a_ratio + a_spread + base_high
-                        # a 와 r 은 둘 다 같은 분모(승급 과제의 비싼 평균)로
-                        # 나눈 값이고, 그 분모도 표본이다. c 의 구간이 그
-                        # 불확실성을 이미 재 놓았으므로 비율만큼 넓힌다.
-                        if c > 0 and c_range is not None:
-                            widen = max(c_range[1] / c, c / max(c_range[0], 1e-9))
-                            centre = (threshold_low + threshold_high) / 2
-                            half = (threshold_high - threshold_low) / 2
-                            threshold_low = max(0.0, centre - half * widen)
-                            threshold_high = centre + half * widen
-                        base_point = (r_ratio * q) if r_ratio is not None else c
-                        print(
-                            f"  손익분기 s = a + {basis} = {a_ratio + base_point:.3f}"
-                            f"  (구간 [{threshold_low:.3f}, {threshold_high:.3f}])"
-                        )
-                        if s_lo > threshold_high:
-                            print("  -> 구간 전체가 손익분기 위다. 실패 후 조언이 승급보다 싸다.")
-                        elif s_hi < threshold_low:
-                            print("  -> 구간 전체가 손익분기 아래다. 그냥 승급하는 편이 낫다.")
+                        if r_ratio is None:
+                            # r 은 이 판정의 절반이다. 못 쟀는데 c 로 대신하고
+                            # 판정까지 내면, 재지 않은 것을 잰 것처럼 보이게
+                            # 된다. 조언이 붙은 재시도는 c 보다 비싸므로 그
+                            # 대입은 언제나 조언 쪽에 유리하다.
+                            print(
+                                "  재시도 비용을 얻지 못해 손익분기를 내지 않는다."
+                                " c 로 대신하면 조언 쪽에 유리한 방향으로만 틀린다."
+                            )
                         else:
-                            print("  -> 구간이 손익분기를 가로지른다. 아직 결론 낼 수 없다.")
+                            # q 도 표본이다. 시도율의 Wilson 구간을 r 에 태운다.
+                            q_lo, q_hi = wilson(attempted, len(advised_failures))
+                            bound_low = max(0.0, a_ratio - a_spread) + max(
+                                0.0, (r_ratio - r_spread) * q_lo
+                            )
+                            bound_high = a_ratio + a_spread + (r_ratio + r_spread) * q_hi
+                            # a 와 r 은 같은 분모(승급 과제의 비싼 평균)로 나눈
+                            # 값이고 그 분모도 표본이다. c 의 구간이 그
+                            # 불확실성을 재 놓았으므로 그 비율만큼 넓힌다.
+                            # 폭이 0 이면 곱해도 0 이라 중심의 비율로 최소 폭을
+                            # 준다 — 관측이 적을수록 구간은 넓어야 한다.
+                            if c > 0 and c_range is not None:
+                                widen = max(c_range[1] / c, c / max(c_range[0], 1e-9))
+                                centre = (bound_low + bound_high) / 2
+                                half = max((bound_high - bound_low) / 2, centre * (widen - 1))
+                                bound_low = max(0.0, centre - half * widen)
+                                bound_high = centre + half * widen
+                            basis = f"{q:.2f}·r" if q < 1 else "r"
+                            print(
+                                f"  손익분기 s = a + {basis} = {a_ratio + r_ratio * q:.3f}"
+                                f"  (구간 [{bound_low:.3f}, {bound_high:.3f}])"
+                            )
+                            if s_lo > bound_high:
+                                print(
+                                    "  -> 구간 전체가 손익분기 위다. 실패 후 조언이 승급보다 싸다."
+                                )
+                            elif s_hi < bound_low:
+                                print("  -> 구간 전체가 손익분기 아래다. 그냥 승급하는 편이 낫다.")
+                            else:
+                                print("  -> 구간이 손익분기를 가로지른다. 아직 결론 낼 수 없다.")
                     else:
                         print("  a 나 c 를 재지 못해 판정하지 않는다.")
                 else:
@@ -824,7 +834,7 @@ def main() -> int:
         print("\n기대 비용: 아래 c + p 는 **조언 없는** 경로의 모형이다.")
         print(
             "  이 로그는 조언을 켜고 잰 것이므로 실제 비용 모형은 다르다"
-            " — 시작 전 조언은 a + c + p′, 실패 후 조언은 c + p·(a + r + 1 − s)"
+            " — 시작 전 조언은 a + c + p′, 실패 후 조언은 c + p·(a + q·r + 1 − s)"
             "(r 은 조언이 붙은 재시도의 비용비로, 최초 싼 실행의 c 와 다르다)."
             " 두 설정을 나란히 재기 전에는 절감을 말하지 않는다."
         )
@@ -888,7 +898,7 @@ def main() -> int:
         # 않는다. 조언 자체의 판정은 위쪽 s > a + c 가 한다.
         print(
             "\n  -> 판정 없음(c + p 기준). 이 로그는 조언을 켜고 쟀다."
-            " 조언의 이득 판정은 위의 s > a + r 을 보라."
+            " 조언의 이득 판정은 위의 s > a + q·r 을 보라(q 는 재시도 시도율)."
         )
     elif timed_out_tasks and c_range is not None:
         # 판정을 내지 않는다. 빠진 비용이 위쪽으로 열려 있으면 구간도 위쪽으로
