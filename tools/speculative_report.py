@@ -210,7 +210,16 @@ def main() -> int:
         print(f"    그중 조언 후 재시도로 구제: {rescued_total}")
     print(f"  실제 승급        : {sum(1 for r in usable if isinstance(r.get('expensive'), dict))}")
     print(f"  둘 다 실패       : {both_failed}")
-    print(f"\np = {p:.1%}   95% CI [{lo:.1%}, {hi:.1%}]")
+    advice_first_on = any(
+        isinstance(r.get("advisor"), dict) and (r["advisor"] or {}).get("advise_first")
+        for r in usable
+    )
+    # 시작 전 조언이 켜졌으면 이 실패율은 계획을 받은 뒤의 것이다. p 라고
+    # 부르면 조언 없는 설정의 p 와 섞인다.
+    rate_name = "p′" if advice_first_on else "p"
+    print(f"\n{rate_name} = {p:.1%}   95% CI [{lo:.1%}, {hi:.1%}]")
+    if advice_first_on:
+        print("  (시작 전 조언을 받은 뒤의 실패율이다. 조언 없는 p 와 같은 값이 아니다)")
 
     # 승급이 일어난 과제에서는 같은 과제를 양쪽 모델로 돌린 셈이다. 거기서
     # c 를 짝지어 실측할 수 있다 — 가정하거나 남의 벤치마크에서 빌려오는 것보다
@@ -777,6 +786,18 @@ def main() -> int:
                     # 모집단이 아니게 된다. 빠진 비용이 얼마였을지 모르므로
                     # 방향도 모른다 — 넓히는 것으로 메울 수 없다.
                     priced_enough = not all_retries or priced_retries * 2 >= all_retries
+                    # 조언 비용도 마찬가지다. a 가 작은 부분집합에서 나오면
+                    # s 와 같은 모집단이 아니다.
+                    advice_attempted = sum(
+                        1 for r in usable if isinstance(r.get("advice_failure"), dict)
+                    )
+                    advice_priced = sum(
+                        1
+                        for r in usable
+                        if (value := advice_cost(r, "advice_failure")) is not None and value > 0
+                    )
+                    if advice_attempted and advice_priced * 2 < advice_attempted:
+                        priced_enough = False
                     if all_retries and priced_retries < all_retries:
                         print(
                             f"  주의: 재시도 {all_retries}건 중 {priced_retries}건만 비용을"
@@ -811,8 +832,9 @@ def main() -> int:
                         # 그것이 대입이라고 말한다.
                         if r_ratio is not None and not priced_enough:
                             print(
-                                "  재시도의 절반 이상이 비용 없이 기록됐다. 그 표본으로"
-                                " 낸 r 은 전체를 대표하지 않으므로 판정하지 않는다."
+                                "  조언이나 재시도의 절반 이상이 비용 없이 기록됐다."
+                                " 그 표본으로 낸 a 와 r 은 전체를 대표하지 않으므로"
+                                " 판정하지 않는다."
                             )
                         elif r_ratio is None:
                             # r 은 이 판정의 절반이다. 못 쟀는데 c 로 대신하고
@@ -843,7 +865,7 @@ def main() -> int:
                                 )
                                 # 분모가 흔들리면 비율은 반대로 흔들린다.
                                 lower_e = mean_e - 1.96 * se_e
-                                centre = (bound_low + bound_high) / 2
+                                upper_e = mean_e + 1.96 * se_e
                                 if lower_e <= 0:
                                     # 분모의 구간이 0 을 지나면 비율의 상한이
                                     # 없다. 상한을 지어내지 않고 판정을 막는다.
@@ -854,14 +876,13 @@ def main() -> int:
                                     )
                                     bound_low, bound_high = 0.0, float("inf")
                                 else:
-                                    widen = (mean_e + 1.96 * se_e) / lower_e
-                                    # 분자와 분모의 불확실성을 max 로 고르면
-                                    # 덜 덮는다. 둘 다 있으므로 함께 더한다.
-                                    numerator_half = (bound_high - bound_low) / 2
-                                    denominator_half = centre * (widen - 1) / 2
-                                    half = numerator_half + denominator_half
-                                    bound_low = max(0.0, centre - half)
-                                    bound_high = centre + half
+                                    # 비율 구간은 **끝점** 으로 낸다. 반폭을
+                                    # 더하면 분자와 분모가 동시에 불리한 조합을
+                                    # 덜 덮는다. a 와 r 은 mean_e 로 나눈 값이
+                                    # 므로, 다른 분모를 가정하려면 그 비율을
+                                    # 되돌려 곱한다.
+                                    bound_low = bound_low * mean_e / upper_e
+                                    bound_high = bound_high * mean_e / lower_e
                             basis = f"{q:.2f}·r" if q < 1 else "r"
                             print(
                                 f"  손익분기 s = a + {basis} = {a_ratio + r_ratio * q:.3f}"
@@ -894,7 +915,8 @@ def main() -> int:
     if advisor_on:
         # 모형이 아니라고 말해 놓고 그 식의 절감률을 찍으면, 사용자는 그
         # 숫자를 가져간다. 조언이 켜진 로그에서는 아예 내지 않는다.
-        print(f"\n(참고) 조언 없는 경로였다면 c + p = {c + p:.2f}")
+        label = "c + p′" if advice_first_on else "c + p"
+        print(f"\n(참고) 이 로그의 {label} = {c + p:.2f} — 조언 비용은 빠져 있다")
     else:
         print("\n기대 비용 = c + p")
         print(f"  기대 비용 {c + p:.2f}  ->  절감 {1 - (c + p):.1%}")

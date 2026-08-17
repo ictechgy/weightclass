@@ -867,11 +867,15 @@ _HOST_SECRET_NAMES = re.compile(
 # 넘긴다 — 그러면 자식이 그것을 찍을 수 있고, 이름 기반 필터는 "PROXY" 를
 # 비밀로 보지 않아 그대로 조언자에게 간다.
 _PROXY_NAMES = re.compile(r"(?i)^(https?|all)_proxy$")
-_URL_USERINFO = re.compile(r"://[^/\s:@]+:([^/\s@]+)@")
+# 스킴이 없는 형태(user:pass@host)도 curl, wget, pip 가 받아들이고 사내
+# 프록시 설정에서 흔하다. 스킴을 요구하면 그 형태가 통째로 빠져나간다.
+_URL_USERINFO = re.compile(r"(?:://|^)([^/\s:@]+):([^/\s@]+)@")
 
 
-_PEM_BEGIN_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
-_PEM_END_RE = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY-----")
+# "-----BEGIN PGP PRIVATE KEY BLOCK-----" 처럼 마커가 KEY 로 끝나지 않는
+# 형식이 있다. PRIVATE KEY 를 담은 armored 블록은 전부 잡는다.
+_PEM_BEGIN_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----")
+_PEM_END_RE = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----")
 # 개인키 하나의 최대 길이. 이보다 멀리 있는 END 는 같은 키의 끝이 아니라고
 # 본다 — BEGIN 을 이름만 언급한 오류 줄과 그 뒤 어딘가의 진짜 키 사이를
 # 통째로 지우는 것을 막는다.
@@ -910,7 +914,10 @@ def _key_body_end(text: str, body_at: int) -> int:
     훑으면 헤더의 `-` 나 `:` 에서 멈춰 본문이 그대로 남는다.
     """
     position = body_at
-    limit = min(len(text), body_at + PEM_MAX_SPAN)
+    # 상한을 두면 큰 키(16384비트 RSA, 암호화 키)가 중간에서 잘려 나머지
+    # 줄들이 그대로 나간다. 주사는 비키 내용에서 자연히 멈추므로 상한이
+    # 필요 없다 — 여기 오는 것은 이미 키 블록으로 판정된 자리다.
+    limit = len(text)
     while position < limit:
         # JSON 에 직렬화된 키는 물리적 줄바꿈이 없다. 구분자를 하나씩
         # 열거하면(`\n` 만, 그 다음엔 `\r\n` 만) 다음 형태에서 또 뚫린다.
@@ -941,6 +948,22 @@ def _key_body_end(text: str, body_at: int) -> int:
     return position
 
 
+# 줄 단위로 범위를 못 정했을 때 쓰는 문자 단위 폴백. 키 본문에 나올 수 있는
+# 문자 — base64, 직렬화 부스러기, PEM 헤더의 구두점, 공백 — 를 삼킨다.
+_KEY_RUN = re.compile(r'[A-Za-z0-9+/=\s\\"\':,.-]+')
+
+
+def _key_run_end(text: str, body_at: int) -> int:
+    """줄 판정이 실패했을 때 키처럼 보이는 문자 연속의 끝.
+
+    여기까지 왔다는 것은 마커 뒤가 키 본문이라고 이미 판정했다는 뜻이다.
+    범위를 못 정했다고 아무것도 지우지 않으면 키가 통째로 나간다. 덜 지우는
+    것보다 더 지우는 편이 낫다.
+    """
+    run = _KEY_RUN.match(text, body_at)
+    return run.end() if run else min(len(text), body_at + PEM_MAX_SPAN)
+
+
 def redact_private_keys(text: str) -> str:
     """개인키 블록을 지운다. 정규식 한 방이 아니라 마커 주사로 한다.
 
@@ -968,8 +991,14 @@ def redact_private_keys(text: str) -> str:
         # 걸려 그 사이의 실패 신호가 통째로 사라진다. 본문의 끝을 먼저 정하고
         # 그 부근까지만 본다.
         body_end = _key_body_end(text, body_at)
+        if body_end <= body_at:
+            # 줄 단위로 범위를 정하지 못했다. 본문과 END 가 한 물리적 줄에
+            # 있거나 공백이 섞인 형태다. 여기서 body_at 을 그대로 쓰면 아무것도
+            # 지우지 않고 다음 반복으로 넘어가, 키가 통째로 출력된다 —
+            # fail-open 이다. 문자 단위로라도 키처럼 보이는 만큼을 삼킨다.
+            body_end = _key_run_end(text, body_at)
         closing = _PEM_END_RE.search(text, body_at, min(body_end + 200, body_at + PEM_MAX_SPAN))
-        index = closing.end() if closing else body_end
+        index = max(closing.end() if closing else body_end, body_at + 1)
         out.append("[REDACTED]")
 
 
@@ -990,8 +1019,17 @@ def host_secret_values() -> list[str]:
             # URL 전체가 아니라 비밀번호만 지운다. 프록시 주소는 실패 진단에
             # 필요하고 비밀이 아니다.
             userinfo = _URL_USERINFO.search(value)
-            if userinfo and len(userinfo.group(1)) >= 6:
-                values.append(userinfo.group(1))
+            if userinfo:
+                # 사용자 이름도 자격증명일 수 있다(토큰을 사용자 자리에 넣는
+                # 형태가 흔하다). 길이 하한을 두면 짧은 비밀번호가 빠져나가고,
+                # 짧은 값을 그대로 지우면 과잉이 된다 — 그래서 이름과 값을
+                # 붙인 형태로도 지운다.
+                user, password = userinfo.group(1), userinfo.group(2)
+                values.append(f"{user}:{password}")
+                if len(password) >= 6:
+                    values.append(password)
+                if len(user) >= 12:
+                    values.append(user)
             continue
         if not _HOST_SECRET_NAMES.search(name):
             continue

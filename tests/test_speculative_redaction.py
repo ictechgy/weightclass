@@ -330,3 +330,43 @@ def test_proxy_userinfo_is_redacted_but_the_address_survives(
     cleaned = module.verify_excerpt("curl failed via http://alice:s3cr3tpassw0rd@proxy.corp:8080")
     assert "s3cr3tpassw0rd" not in cleaned
     assert "proxy.corp:8080" in cleaned
+
+
+def test_key_body_and_end_marker_on_one_line() -> None:
+    """줄 단위로 범위를 못 정해도 지워야 한다.
+
+    범위를 못 정하면 아무것도 안 지우고 다음 반복으로 넘어가, 키가 통째로
+    출력됐다 — fail-open 이다.
+    """
+    module = load_runner()
+    blob = base64.b64encode(b"\x01" * 1200).decode()
+    text = f"{BEGIN}{KEY} {blob} {END}{KEY}"
+    assert blob[:40] not in module.verify_excerpt(text)
+
+
+def test_large_key_is_redacted_entirely() -> None:
+    """본문 주사에 인위적 상한을 두면 큰 키가 중간에서 잘려 나머지가 나간다."""
+    module = load_runner()
+    blob = base64.b64encode(b"\x02" * 10_500).decode()
+    lines = [blob[index : index + 64] for index in range(0, len(blob), 64)]
+    text = f"{BEGIN}RSA {KEY}\n" + "\n".join(lines) + f"\n{END}RSA {KEY}"
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+
+
+def test_pgp_armored_private_key_is_redacted() -> None:
+    """마커가 KEY 로 끝나지 않는 형식도 있다."""
+    module = load_runner()
+    lines = pem_body(600)
+    marker = "PGP PRIVATE KEY BLOCK-----"
+    text = f"{BEGIN}{marker}\n" + "\n".join(lines) + f"\n{END}{marker}"
+    assert lines[0] not in module.verify_excerpt(text)
+
+
+def test_schemeless_proxy_with_short_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    """스킴 없는 형태도 curl, wget, pip 가 받아들인다. 짧은 비밀번호도 비밀이다."""
+    module = load_runner()
+    monkeypatch.setenv("HTTP_PROXY", "user:aB3x5@proxy.corp:3128")
+    cleaned = module.verify_excerpt("proxy error at user:aB3x5@proxy.corp:3128")
+    assert "aB3x5" not in cleaned
+    assert "proxy.corp:3128" in cleaned
