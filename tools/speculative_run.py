@@ -474,6 +474,12 @@ def run_child(
     if timed_out:
         # 시간이 다 됐어도 토큰은 이미 쓰였다. 부분 출력에서 건질 수 있으면
         # 건진다 — 비용에서 빼면 싼 경로가 실제보다 좋아 보인다.
+        #
+        # 다만 문서가 권하는 두 호출 형태에서는 대개 아무것도 못 건진다.
+        # codex --json 의 turn.completed 도, claude --output-format json 의
+        # 결과 객체도 마지막에만 나오므로 중간에 죽은 실행에는 없다. 그래도
+        # 시도하는 것은 다른 형태로 부르는 사용자를 위해서이고, 못 건진
+        # 타임아웃은 cost_usd 없이 기록되어 리포트의 c 표본에서 빠진다.
         partial = extract_usage(stdout, stderr)
         if partial is not None and "cost_usd" not in partial and rates:
             # 정상 경로와 같은 요금 계산을 여기서도 한다. 빠뜨리면 비용을
@@ -515,15 +521,24 @@ def _claude_usage(stdout: str) -> Usage | None:
     `modelUsage.<model id>.costUSD`, but those keys are dynamic and contain
     brackets (`claude-opus-5[1m]`), so the root field is the one to read.
     """
-    try:
-        payload = json.loads(stdout)
-    except (ValueError, TypeError):
-        return None
+    # stdout 전체를 한 번에 파싱하면 CLI 경고나 node deprecation 한 줄만 섞여도
+    # 실패한다. 그러면 비용이 통째로 사라지고 리포트는 "비용을 못 얻었다" 만
+    # 말한다. 줄 단위로도 찾아본다.
+    payload: object = None
+    for candidate in (stdout, *stdout.splitlines()):
+        text = candidate.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(parsed, dict) and (
+            "total_cost_usd" in parsed or parsed.get("type") == "result"
+        ):
+            payload = parsed
+            break
     if not isinstance(payload, dict):
-        return None
-    # Claude 출력인지 표식으로 확인한다. Codex 도 input_tokens/output_tokens
-    # 라는 같은 이름을 쓰므로, 한 줄짜리 JSON 이면 여기서 잘못 집계된다.
-    if "total_cost_usd" not in payload and payload.get("type") != "result":
         return None
     raw = payload.get("usage")
     usage_fields = raw if isinstance(raw, dict) else {}
@@ -918,47 +933,14 @@ def discard(registry: Path, workspace: Path, out_dir: Path) -> None:
         print(f"작업공간을 확인할 수 없어 등록에 남긴다: {workspace}", file=sys.stderr)
         return
     try:
-        _force_remove(target)
+        shutil.rmtree(target)
     except OSError as error:
+        # 권한을 고쳐서 재시도하지 않는다. 경로 기반 chmod 는 심링크를 따라가고
+        # 검사와 사용 사이에 갈아끼울 틈이 있어, 자식이 트리 밖의 권한을 바꾸게
+        # 만들 수 있다. 지우지 못한 것은 등록에 남겨 사람이 보게 하는 편이 낫다.
         print(f"작업공간을 지우지 못했다, 등록에 남긴다: {target} ({error})", file=sys.stderr)
         return
     register(registry, workspace, add=False)
-
-
-def _force_remove(path: Path) -> None:
-    """Delete a tree even when something in it is unreadable.
-
-    A staged HOME holds copies of real credentials, and an agent's workspace can
-    hold anything the agent chose to create. Either may contain a directory with
-    its execute bit cleared, which stops `rmtree` from descending. Leaving
-    secrets on disk because of a permission bit is the wrong trade: restore the
-    bits first, then delete.
-
-    Walking the tree beforehand is used rather than an `onexc` hook because the
-    hook fires per failed operation and cannot re-descend into a directory whose
-    listing already failed.
-    """
-    try:
-        path.chmod(0o700)
-    except OSError:
-        pass
-    # 반드시 하향식이다. 상향식으로 돌면 잠긴 디렉터리 안으로 내려가지 못해
-    # 그 아래는 손도 대지 못한 채 rmtree 가 다시 막힌다. 내려가기 **전에**
-    # 각 디렉터리의 실행 비트를 되돌린다.
-    for parent, directories, _files in os.walk(path, topdown=True):
-        for name in directories:
-            entry = Path(parent, name)
-            # 심링크는 건너뛴다. chmod 는 링크를 따라가므로, 자식이 워크스페이스
-            # 안에 ~/.ssh 를 가리키는 디렉터리 링크를 심어 두면 이 정리 코드가
-            # 트리 **밖**의 권한을 바꾼다. os.walk 는 링크로는 내려가지 않으니
-            # 건너뛰어도 지울 것을 놓치지 않는다.
-            if entry.is_symlink():
-                continue
-            try:
-                entry.chmod(0o700)
-            except OSError:
-                pass
-    shutil.rmtree(path)
 
 
 def resolved_own_workspace(candidate: Path, out_dir: Path) -> Path | None:
@@ -1008,7 +990,7 @@ def prune(registry: Path, out_dir: Path) -> int:
             kept.append(line)
             continue
         try:
-            _force_remove(target)
+            shutil.rmtree(target)
         except OSError as error:
             print(f"삭제 실패, 등록에 남긴다: {target} ({error})")
             kept.append(line)
@@ -1062,8 +1044,6 @@ def attempt(
     build_scaffolding: list[str] = []
     try:
         clone_at(repo, commit, workspace)
-        # 스테이징한 HOME 은 시도마다 새로 만든다. 공유하면 싼 경로가 남긴
-        # 설정·훅·인증 상태를 비싼 경로가 물려받는다.
         record["child"] = run_child(command, workspace, task, rates, allowed_env, child_home)
         # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
         # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
