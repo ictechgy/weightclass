@@ -500,10 +500,16 @@ def main() -> int:
         """
         if not sample:
             return None
-        priced = [x.expensive for x in sample if x.expensive]
+        # 분모 모집단은 **관측된 비싼 비용 전부** 다. 0 을 빼면 평균이 커져 c
+        # 가 작아진다. 점추정과 이 함수가 서로 다른 모집단을 쓰면 구간이
+        # 점추정과 다른 값을 중심으로 잡히므로, 두 곳은 같은 규칙이어야 한다.
+        priced = [x.expensive_observed for x in sample if x.expensive_observed is not None]
         if not priced:
             return None
-        return statistics.fmean([x.cheap for x in sample]) / statistics.fmean(priced)
+        mean_expensive = statistics.fmean(priced)
+        if mean_expensive <= 0:
+            return None
+        return statistics.fmean([x.cheap for x in sample]) / mean_expensive
 
     def jackknife(sample: list[Task]) -> tuple[float, float] | None:
         """c 의 95% 구간. **과제** 를 하나씩 빼고 다시 계산한다.
@@ -557,12 +563,15 @@ def main() -> int:
         # 알 수 없다 — 비싼 경로는 승급 과제에서만 돌았으므로 그 평균으로
         # 메꾼다. 그 대입만이 남는 가정이고, 아래에서 그렇게 밝힌다.
         expensive_mean = statistics.fmean(observed_expensive_costs)
-        if expensive_mean <= 0:
+        point = estimate_c(tasks)
+        if point is None:
             # 여기 올 수 없어야 하지만, 올 수 있게 되면 조용히 죽는 것보다
             # 말하고 멈추는 편이 낫다.
             print("\n비용비 c 를 내지 못했다: 승급 과제의 비싼 비용 평균이 0 이다.")
             return 0
-        measured = statistics.fmean(cheap_all) / expensive_mean
+        # 점추정과 구간이 같은 함수를 통과한다. 규칙을 두 곳에 적으면 한쪽만
+        # 고쳐지고, 그러면 구간이 점추정과 다른 값을 중심으로 잡힌다.
+        measured = point
         median_ratio = statistics.median(paired)
         print(
             f"\n실측 비용비 c = {measured:.3f}"
@@ -850,7 +859,10 @@ def main() -> int:
                     # 타임아웃만 막으면 부족하다. 보통의 미가격 승급도 분모
                     # 에서 빠지므로, 남은 비싼 비용 평균이 승급 전체를
                     # 대표하지 않는다. a 와 r 이 모두 그 평균으로 나눈 값이다.
-                    if unpriced_escalations or zero_expensive:
+                    # zero_expensive 는 **분모에 들어간다**(평균에 0 으로 기여).
+                    # 빠지는 것은 unpriced_escalations 뿐이므로 그것만 게이트다.
+                    # 둘을 함께 걸면 값이 멀쩡한 로그에서 판정을 막는다.
+                    if unpriced_escalations:
                         priced_enough = False
                     # 조언 비용도 마찬가지다. a 가 작은 부분집합에서 나오면
                     # s 와 같은 모집단이 아니다.
@@ -893,9 +905,9 @@ def main() -> int:
                         # r 을 쟀으면 그것을 쓴다. 못 쟀으면 c 로 대신하되
                         # 그것이 대입이라고 말한다.
                         if r_ratio is not None and not priced_enough:
-                            if timed_out_tasks or unpriced_escalations or zero_expensive:
+                            if timed_out_tasks or unpriced_escalations:
                                 print(
-                                    f"  승급 {unpriced_escalations + zero_expensive}건의 비싼"
+                                    f"  승급 {unpriced_escalations}건의 비싼"
                                     f" 비용이 없거나 0 이고 과제 {timed_out_tasks}건이"
                                     " 타임아웃이다. 비싼 경로 평균이 승급 전체를"
                                     " 대표하지 않으므로 판정하지 않는다."
@@ -1056,16 +1068,26 @@ def main() -> int:
     thin_denominator = (
         c_range is not None and escalated_total > 0 and len(paired) * 2 < escalated_total
     )
+    advise_first_on = any(
+        isinstance(rec.get("advisor"), dict) and (rec["advisor"] or {}).get("advise_first")
+        for rec in usable
+    )
     failure_advice_on = any(
         isinstance(rec.get("advisor"), dict) and (rec["advisor"] or {}).get("advise_on_failure")
         for rec in usable
     )
-    if advisor_on and timed_out_tasks and failure_advice_on:
+    if advisor_on and timed_out_tasks:
         # 조언 분기가 타임아웃 경고를 가리면 안 된다. 빠진 비용이 위쪽으로
-        # 열려 있다는 사실은 조언 판정에도 그대로 해당한다.
+        # 열려 있다는 사실은 조언 판정에도 그대로 해당한다. **어느 모양이든**
+        # 그렇다 — 시작 전 조언만 켠 로그에서 이 경고를 건너뛰면 불완전한 c 를
+        # c_A 라고 소개하며 Shape A 손익식을 제시하게 된다.
         print(
-            f"\n  -> 판정 없음. 과제 {timed_out_tasks}건이 타임아웃이라 그 비용을"
-            " 모른다. 위의 조언 판정도 같은 이유로 보류됐다."
+            f"\n  -> 판정 없음. 과제 {timed_out_tasks}건이 타임아웃이라 그 비용을 모른다."
+            + (
+                " 위의 조언 판정도 같은 이유로 보류됐다."
+                if failure_advice_on
+                else " 이 로그의 c 를 c_A 로 쓰면 안 된다 — 빠진 비용만큼 작다."
+            )
         )
     elif advisor_on:
         # 조언이 켜진 로그에서는 c + p 기반 판정을 내지 않는다. 위에 그 식이
@@ -1074,12 +1096,14 @@ def main() -> int:
         print(
             "\n  -> 판정 없음(c + p 기준). 이 로그는 조언을 켜고 쟀다."
             + (
-                " 조언의 이득 판정은 위의 s > a + q·r 을 보라(q 는 재시도 시도율)."
-                if any(
-                    isinstance(rec.get("advisor"), dict)
-                    and (rec["advisor"] or {}).get("advise_on_failure")
-                    for rec in usable
+                (
+                    " 실패 후 조언을 **더 붙일지** 의 한계 판정은 위의"
+                    " s′ > a′ + q′·r′ 을 보라(q′ 는 재시도 시도율). 시작 전"
+                    " 조언까지 포함한 전체 이득은 그 식이 답하지 않는다."
+                    if advise_first_on
+                    else " 조언의 이득 판정은 위의 s > a + q·r 을 보라(q 는 재시도 시도율)."
                 )
+                if failure_advice_on
                 else " 시작 전 조언만 켠 로그에는 그 판정이 없다. 이득 조건은"
                 " a + (c_A − c) < p − p′ 이고, c_A 는 이 로그의 c, 나머지 셋은"
                 " 조언을 끄고 같은 과제를 한 번 더 재야 나온다 — a 를 p − p′ 와"

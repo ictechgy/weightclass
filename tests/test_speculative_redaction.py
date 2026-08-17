@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import json
 import os
 import sys
 import time
@@ -808,3 +809,118 @@ def test_message_stream_array_takes_the_last_element() -> None:
     stream = '[{"type":"a","item":{"text":"first"}},{"type":"b","item":{"text":"last"}}]'
     body, _ = module.advice_text_extracted(stream, ["claude", "--output-format", "json"])
     assert body == "last"
+
+
+# --- 라운드 18: 이음매, 경계 해석, 봉투 모양 ---------------------------------
+
+
+def test_separately_redacted_parts_leak_at_the_seam():
+    """따로 지운 두 텍스트를 이어 붙이면 앵커가 갈라진다.
+
+    검증 출력이 마커 앞부분으로 끝나고 diff 가 나머지로 시작하면, 각각은
+    무해해 보이지만 이어 붙이면 온전한 키다. untrusted_block 은 **먼저
+    이어 붙인 뒤** 지우므로 이 형태를 잡는다.
+    """
+    module = load_runner()
+    lines = pem_body()
+    head = "verification output ends here " + BEGIN + "PRI"
+    tail = "VATE KEY-----\n" + "\n".join(lines) + "\n" + END + KEY + "\n"
+    cleaned = module.untrusted_block(head, tail)
+    for line in lines:
+        assert line not in cleaned
+    # 반대 방향도 확인한다: 실패 신호는 남아야 한다.
+    assert "verification output ends here" in cleaned
+
+
+def test_stdout_and_stderr_are_joined_without_a_separator():
+    """두 스트림 사이에 넣는 줄바꿈이 마커를 가르면 안 된다."""
+    module = load_runner()
+    lines = pem_body()
+    joined = ("stdout part " + BEGIN + "PRI") + (
+        "VATE KEY-----\n" + "\n".join(lines) + "\n" + END + KEY
+    )
+    cleaned = module.verify_excerpt(joined)
+    for line in lines:
+        assert line not in cleaned
+
+
+@pytest.mark.parametrize(
+    "url,secret",
+    [
+        ("http://user:pa/ssword@proxy:3128", "pa/ssword"),
+        ("http://user:pa?ssword@proxy:3128", "pa?ssword"),
+        ("http://user:pa#ssword@proxy:3128", "pa#ssword"),
+        ("http://user:SuperSecretValue123@proxy/x?notify=ops@example.com", "SuperSecretValue123"),
+        ("http://user:SuperSecretValue123@proxy/a@b/c", "SuperSecretValue123"),
+    ],
+)
+def test_both_boundary_readings_are_registered(monkeypatch, url, secret):
+    """authority 를 먼저 자르는 해석과 @ 를 먼저 찾는 해석이 서로를 깬다.
+
+    어느 하나만 쓰면 다른 형태의 자격증명이 목록에서 빠진다. 둘 다 후보로
+    낸다 — 리댁션은 정확 일치이므로 후보가 늘어도 손해가 없다.
+    """
+    module = load_runner()
+    monkeypatch.setenv("HTTPS_PROXY", url)
+    assert secret not in module.verify_excerpt(f"auth failed for {secret}")
+
+
+def test_percent_encoded_proxy_password_is_redacted_when_decoded(monkeypatch):
+    """프록시 URL 은 인코딩된 값을 담지만 클라이언트는 복호된 값을 찍는다."""
+    module = load_runner()
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:Ultra%40Secret%21Value@proxy")
+    cleaned = module.verify_excerpt("proxy rejected Ultra@Secret!Value")
+    assert "Ultra@Secret!Value" not in cleaned
+    assert "proxy rejected" in cleaned
+
+
+def test_doubly_escaped_host_secret_is_redacted(monkeypatch):
+    """이미 직렬화된 페이로드를 한 번 더 감싸면 이스케이프가 두 겹이 된다."""
+    module = load_runner()
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", 'quote"and\\backslash_secret_value')
+    once = json.dumps('quote"and\\backslash_secret_value')[1:-1]
+    twice = json.dumps(once)[1:-1]
+    assert once not in module.verify_excerpt(f"payload {once} end")
+    assert twice not in module.verify_excerpt(f"payload {twice} end")
+
+
+def test_serialisation_noise_after_the_marker_does_not_open_the_gate():
+    """`json.dumps(pem.splitlines())` 는 마커 줄 뒤에 `",` 를 남긴다."""
+    module = load_runner()
+    pem, lines = plain_pem()
+    wrapped = json.dumps(pem.splitlines(), indent=2)
+    cleaned = module.verify_excerpt(wrapped)
+    for line in lines:
+        assert line not in cleaned
+
+
+def test_prose_after_the_marker_still_closes_the_gate():
+    """부스러기 허용이 산문까지 통과시키면 보고서가 통째로 지워진다."""
+    module = load_runner()
+    report = "\n".join(
+        [BEGIN + KEY + " was not found in the bundle"]
+        + [f"FAILED important test {index}" for index in range(40)]
+    )
+    assert module.verify_excerpt(report).count("FAILED important") > 30
+
+
+def test_output_text_blocks_are_concatenated():
+    """Responses 계열은 조각 타입이 output_text 다. 스트림으로 보면 마지막만 남는다."""
+    module = load_runner()
+    payload = [
+        {"type": "output_text", "text": "first "},
+        {"type": "output_text", "text": "second"},
+    ]
+    assert module._first_text(payload) == "first second"
+
+
+def test_mixed_content_array_ignores_non_text_blocks():
+    """텍스트 블록과 tool_use 가 섞인 배열에서 파일 본문이 조언 자리에 오면 안 된다."""
+    module = load_runner()
+    payload = [
+        {"type": "text", "text": "use a bounded queue"},
+        {"type": "tool_use", "name": "Write", "input": {"content": "FILE_BODY_MARKER"}},
+    ]
+    result = module._first_text(payload)
+    assert "FILE_BODY_MARKER" not in result
+    assert "bounded queue" in result

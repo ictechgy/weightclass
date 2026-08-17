@@ -58,6 +58,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
@@ -854,6 +855,8 @@ _SECRET_SHAPES = re.compile(
     re.DOTALL,
 )
 VERIFY_EXCERPT_CHARS = 4000
+# 검증 출력과 diff 를 한 덩어리로 보낼 때의 상한. 두 몫을 합친 크기다.
+COMBINED_EXCERPT_CHARS = 8000
 
 
 _HOST_SECRET_NAMES = re.compile(
@@ -863,7 +866,8 @@ _HOST_SECRET_NAMES = re.compile(
 # 자격증명이다. 이 스크립트는 그 사실을 알면서 프록시 변수를 자식에게
 # 넘긴다 — 그러면 자식이 그것을 찍을 수 있고, 이름 기반 필터는 "PROXY" 를
 # 비밀로 보지 않아 그대로 조언자에게 간다.
-_PROXY_NAMES = re.compile(r"(?i)^(https?|all)_proxy$")
+# ftp_proxy 도 자격증명을 담는다. 빼면 그 URL 의 비밀번호는 목록에 없다.
+_PROXY_NAMES = re.compile(r"(?i)^(https?|ftp|all)_proxy$")
 
 
 # 스킴이 없는 형태(user:pass@host)도 curl, wget, pip 가 받아들이고 사내
@@ -875,12 +879,45 @@ def split_userinfo(value: str) -> tuple[str, str] | None:
     스킴을 사용자 이름으로 잡는다. 비밀번호에 `@` 가 들어갈 수 있어 마지막
     `@` 를 기준으로 삼아야 하는 것도 정규식만으로는 지저분하다.
     """
+    for candidate in userinfo_candidates(value):
+        return candidate
+    return None
+
+
+def userinfo_candidates(value: str) -> list[tuple[str, str]]:
+    """URL 의 자격증명 후보 **전부**. 해석이 갈리면 둘 다 낸다.
+
+    경계를 어디서 자를지에 정답이 없다. authority 를 먼저 자르면
+    `http://user:p/ass@proxy` 의 @ 가 통째로 사라져 자격증명을 못 찾고,
+    @ 를 먼저 찾으면 `http://user:pw@proxy/x?notify=ops@example.com` 의
+    마지막 @ 가 경계가 돼 비밀번호에 호스트와 쿼리가 붙는다. 어느 하나를
+    고르면 다른 쪽이 유출된다.
+
+    그래서 고르지 않는다. 리댁션은 정확 일치 치환이므로 후보가 하나 더
+    늘어도 무해한 문자열 하나를 더 지울 뿐이고, 빠뜨리면 자격증명이 남는다.
+    """
     rest = value.split("://", 1)[-1].strip()
-    # authority 는 경로/쿼리/프래그먼트 앞까지다. 그것을 안 자르면
-    # "?notify=ops@example.com" 의 @ 가 경계로 잡혀 비밀번호에 주소와 쿼리가
-    # 통째로 붙는다 — 그러면 진짜 비밀번호는 목록에 없다.
+    if "@" not in rest:
+        return []
+    authority_first = rest
     for boundary in ("/", "?", "#"):
-        rest = rest.split(boundary, 1)[0]
+        authority_first = authority_first.split(boundary, 1)[0]
+    at_first = rest
+    userinfo_end = rest.rfind("@")
+    host = rest[userinfo_end + 1 :]
+    for boundary in ("/", "?", "#"):
+        host = host.split(boundary, 1)[0]
+    at_first = rest[:userinfo_end] + "@" + host
+    found: list[tuple[str, str]] = []
+    for reading in (authority_first, at_first):
+        parsed = _split_one_userinfo(reading)
+        if parsed is not None and parsed not in found:
+            found.append(parsed)
+    return found
+
+
+def _split_one_userinfo(rest: str) -> tuple[str, str] | None:
+    """authority 하나에서 user 와 password 를 가른다."""
     if "@" not in rest:
         return None
     # 비밀번호에 @ 가 있을 수 있으므로 authority 안에서 **마지막** @ 를 본다.
@@ -910,7 +947,21 @@ PEM_MAX_SPAN = 12000
 # 마커 뒤 이만큼을 보고 진짜 키 블록인지 이름만 언급한 것인지 가른다.
 # 마커 뒤 몇 **줄** 을 보고 키 블록인지 가른다. 문자 수로 제한하면 접두사가
 # 길 때 본문에 닿지 못한다.
+# 텍스트 조각 블록의 `type` 이름들. 벤더마다 다르다.
+TEXT_BLOCK_TYPES = frozenset({"text", "output_text", "input_text", "summary_text"})
 PEM_LOOKAHEAD_LINES = 6
+# 마커 뒤에 올 수 있는 직렬화 부스러기 줄 수. `json.dumps(pem.splitlines())`
+# 는 마커 줄 뒤에 `",` 를 남긴다.
+PEM_NOISE_TOLERANCE = 2
+# 직렬화 잔해에만 나오는 글자들. 산문에는 이것만으로 된 줄이 없다.
+_NOISE_CHARS = frozenset('",[]{}\\ \t')
+
+
+def _is_serialisation_noise(line: str) -> bool:
+    """직렬화가 남긴 잔해 줄인가. 짧고, 이 글자들로만 이뤄져야 한다."""
+    return 0 < len(line) <= 8 and all(char in _NOISE_CHARS for char in line)
+
+
 # 한 줄을 알아보는 데 볼 최대 글자 수. 줄바꿈 없는 출력에서 마커마다 끝까지
 # 훑으면 이차 시간이 되고, 그 길이는 자식이 정한다.
 PEM_LOOKAHEAD_LINE_CHARS = 512
@@ -945,6 +996,7 @@ def looks_like_key_block(text: str, after: int) -> bool:
     # 한 줄을 알아보기에 넉넉하다.
     position = after
     skipped = 0
+    noise = 0
     horizon = min(len(text), after + PEM_LOOKAHEAD_LINES * PEM_LOOKAHEAD_LINE_CHARS)
     for _ in range(PEM_LOOKAHEAD_LINES + PEM_LOOKAHEAD_LINES * 4):
         if position >= horizon:
@@ -975,9 +1027,18 @@ def looks_like_key_block(text: str, after: int) -> bool:
         # 키가 들어 있다.
         if _PEM_BODY_RUN.search(line):
             return True
-        # 한 줄이라도 본문도 헤더도 아니면 그 뒤는 키가 아니다. 마커를 이름만
-        # 언급한 줄이 여기서 걸러진다.
-        return False
+        # 한 줄이 본문도 헤더도 아니라고 바로 단정하지 않는다. 직렬화가
+        # 남기는 부스러기(`",` 처럼)가 마커 바로 뒤에 올 수 있고, 그 한 줄로
+        # 키를 "이름만 언급" 으로 몰면 통째로 남는다. 몇 줄은 더 본다 —
+        # 이름만 언급한 줄은 그 뒤로도 본문이 안 나오므로 결국 False 다.
+        # 부스러기는 **모양으로** 판정한다. `json.dumps(pem.splitlines())` 가
+        # 남기는 `",` 처럼 따옴표·쉼표·괄호·역슬래시뿐인 짧은 줄만 넘긴다.
+        # 산문 한 줄을 넘기면 마커를 이름만 언급한 보고서가 통째로 지워진다.
+        if not _is_serialisation_noise(line):
+            return False
+        noise += 1
+        if noise > PEM_NOISE_TOLERANCE:
+            return False
     return False
 
 
@@ -1199,13 +1260,13 @@ def host_secret_values() -> list[str]:
         if _PROXY_NAMES.match(name):
             # URL 전체가 아니라 비밀번호만 지운다. 프록시 주소는 실패 진단에
             # 필요하고 비밀이 아니다.
-            userinfo = split_userinfo(value)
-            if userinfo:
+            # 경계 해석이 갈리는 URL 은 후보가 둘이다. 하나만 쓰면 다른
+            # 해석에 해당하는 자격증명이 목록에서 빠진다.
+            for user, password in userinfo_candidates(value):
                 # 사용자 이름도 자격증명일 수 있다(토큰을 사용자 자리에 넣는
                 # 형태가 흔하다). 길이 하한을 두면 짧은 비밀번호가 빠져나가고,
                 # 짧은 값을 그대로 지우면 과잉이 된다 — 그래서 이름과 값을
                 # 붙인 형태로도 지운다.
-                user, password = userinfo
                 if not password:
                     # 사용자 자리에 토큰만 있는 형태. 그 값 자체가 비밀이다.
                     # 문맥 형태는 두 가지다 — 콜론이 아예 없는 TOKEN@host 와
@@ -1232,14 +1293,18 @@ def host_secret_values() -> list[str]:
         # 짧은 값은 평범한 문자열과 부딪혀 과잉 삭제를 만든다.
         if len(value) >= 12 and not value.isspace():
             values.append(value)
-    # 값이 JSON 으로 직렬화되면 따옴표, 역슬래시, 줄바꿈이 이스케이프되어
-    # 원문과 다른 바이트가 된다. 자식의 출력이나 조언 봉투는 대개 JSON 이므로
-    # 직렬화된 형태로도 대조해야 한다.
-    serialised = []
+    # 값이 다른 표현으로 나타날 수 있다. JSON 직렬화는 따옴표와 역슬래시를
+    # 바꾸고(중첩되면 두 번 바뀐다), 프록시 URL 의 자격증명은 퍼센트 인코딩
+    # 되어 저장되지만 클라이언트는 복호된 값을 찍는다.
+    variants: list[str] = []
     for value in values:
-        encoded = json.dumps(value)[1:-1]
-        if encoded != value:
-            serialised.append(encoded)
+        once = json.dumps(value)[1:-1]
+        twice = json.dumps(once)[1:-1]
+        decoded = urllib.parse.unquote(value)
+        for form in (once, twice, decoded):
+            if form and form != value:
+                variants.append(form)
+    serialised = variants
     # 긴 것부터 지워야 짧은 것이 긴 것의 일부를 먼저 갉아먹지 않는다.
     return sorted(set(values) | set(serialised), key=len, reverse=True)
 
@@ -1272,10 +1337,26 @@ def verify_excerpt(output: str) -> str:
     for secret in host_secret_values():
         cleaned = cleaned.replace(secret, "[REDACTED]")
     cleaned = _SECRET_SHAPES.sub("[REDACTED]", cleaned)
-    if len(cleaned) <= VERIFY_EXCERPT_CHARS:
+    return _tail(cleaned, VERIFY_EXCERPT_CHARS)
+
+
+def _tail(cleaned: str, limit: int) -> str:
+    """지운 뒤 뒤쪽만 남긴다. 실패 이유는 대개 끝에 있다."""
+    if len(cleaned) <= limit:
         return cleaned
-    # 실패 이유는 대개 끝에 있다. 앞을 자르고 뒤를 남긴다.
-    return "[...앞부분 생략...]\n" + cleaned[-VERIFY_EXCERPT_CHARS:]
+    return "[...앞부분 생략...]\n" + cleaned[-limit:]
+
+
+def untrusted_block(*parts: str) -> str:
+    """여러 조각을 **먼저 이어 붙인 뒤 한 번에** 지운다.
+
+    조각마다 따로 지우고 나중에 이어 붙이면 이음매에서 앵커가 갈라진다.
+    검증 출력이 `-----BEGIN PRIVATE KEY-----` 로 끝나고 diff 가 본문과 END
+    로 시작하면, 따로 볼 때는 양쪽 다 "마커만 있거나 본문만 있는" 무해한
+    텍스트지만 이어 붙이면 온전한 키다. 그래서 여기서는 구분자도 넣지
+    않는다 — 구분자 자체가 앵커를 가르는 수단이 된다.
+    """
+    return _tail(redact_text("".join(parts)), COMBINED_EXCERPT_CHARS)
 
 
 def run_verify(verify: Path, workspace: Path, home: Path) -> tuple[VerifyResult, str]:
@@ -1345,7 +1426,10 @@ def run_verify(verify: Path, workspace: Path, home: Path) -> tuple[VerifyResult,
         # 있다. 거기에 SIGKILL 을 보내면 사용자 머신의 무관한 프로세스를
         # 죽인다. 검증기가 백그라운드 프로세스를 띄우고 정상 종료하면 그것은
         # 살아남는다 — 남의 프로세스를 죽일 위험보다 그편이 낫다.
-    combined = f"{out}\n{err}".strip()
+    # **구분자 없이 잇는다.** 사이에 줄바꿈을 넣으면 자식이 `-----BEGIN PRI`
+    # 를 stdout 에, 나머지를 stderr 에 써서 마커를 갈라 리댁션을 피할 수 있다.
+    # 두 스트림의 경계 한 줄이 붙는 대신 그 회피로가 사라진다.
+    combined = (out + err).strip()
     if timed_out:
         return {
             "passed": False,
@@ -1745,20 +1829,23 @@ def _first_text(payload: object, depth: int = 0) -> str:
         # 두 모양이 섞여 있다. 메시지 스트림은 마지막이 결과이고, content
         # 배열은 조각을 이어야 본문이 된다. 모양으로 가른다 — 원소가 전부
         # 텍스트 블록이면 조각이고, 아니면 스트림이다.
-        text_blocks = all(
-            isinstance(value, dict)
-            and isinstance(value.get("text"), str)
-            and value.get("type", "text") == "text"
+        # 원소 **하나라도** 텍스트 블록이면 조각 배열로 본다. `all` 로 보면
+        # `[{"type":"text",...},{"type":"tool_use",...}]` 같은 섞인 배열이
+        # 스트림으로 분류돼 마지막 tool_use 안의 파일 본문이 조언 자리에
+        # 들어간다. 타입 이름도 벤더마다 다르다(Responses 는 output_text).
+        blocks = [
+            value
             for value in payload
-        )
-        if text_blocks:
+            if isinstance(value, dict)
+            and isinstance(value.get("text"), str)
+            and value.get("type", "text") in TEXT_BLOCK_TYPES
+        ]
+        if blocks:
             # 구분자를 넣으면 조각 경계에 걸친 자격증명의 앵커가 갈라진다 —
             # "-----BEGIN PRI" + "VATE KEY-----" 가 그 사이의 줄바꿈 때문에
             # 마커로 안 잡힌다. 그리고 조각마다 strip 하면 사이의 공백이
             # 사라져 단어가 붙는다. 원문 그대로 잇는다.
-            raw = "".join(
-                value["text"] for value in payload if isinstance(value, dict) and value.get("text")
-            )
+            raw = "".join(value["text"] for value in blocks)
             return raw.strip()
         pieces = [found for value in payload if (found := _first_text(value, depth + 1))]
         return pieces[-1] if pieces else ""
@@ -2470,27 +2557,21 @@ def main() -> int:
     # 조언자에게 거짓을 주는 것이고, 그 조언은 아무 근거가 없다.
     reached_verify = bool(cheap.get("verify")) and cheap.get("failure_kind") != "infrastructure"
     if not cheap["accepted"] and arguments.advise_on_failure and reached_verify:
-        excerpt = verify_excerpt(cheap_verify_output)
-        # 무엇을 만들었는지도 보여 준다. 검증 출력만으로는 무엇을 고쳐야
-        # 하는지 알기 어렵다. 패치도 자식이 쓴 텍스트이므로 같은 규칙으로
-        # 지우고 자른다.
+        # 검증 출력과 diff 를 **한 덩어리로** 지운다. 둘은 각각 자식이 쓴
+        # 텍스트이고, 따로 지우면 그 이음매가 리댁션의 사각지대가 된다.
         # 실패한 시도의 패치는 디스크에 쓰이지 않는다. attempt 가 돌려준
         # 바이트를 쓴다 — 그러지 않으면 이 분기는 언제나 비어 있다.
-        diff_excerpt = (
-            verify_excerpt(cheap_patch.decode("utf-8", errors="replace")) if cheap_patch else ""
-        )
-        produced = (
-            f"----- THE DIFF IT PRODUCED (untrusted) -----\n{diff_excerpt}\n----- END -----\n\n"
-            if diff_excerpt
-            else ""
+        excerpt = untrusted_block(
+            cheap_verify_output,
+            cheap_patch.decode("utf-8", errors="replace") if cheap_patch else "",
         )
         prompt = (
             f"{cheap_task}\n\n"
             "----- WHAT A FIRST ATTEMPT PRODUCED (untrusted output) -----\n"
-            f"The attempt failed its verification command. Its output follows.\n\n"
+            "The attempt failed its verification command. Its verification output "
+            "follows, and the diff it produced is appended directly after it.\n\n"
             f"{excerpt}\n"
             "----- END -----\n\n"
-            f"{produced}"
             "Explain what went wrong and what to do differently. "
             f"{ADVICE_BRIEF}"
         )

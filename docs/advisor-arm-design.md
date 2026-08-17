@@ -81,13 +81,17 @@ verify  ── pass → accept
         └─ fail → escalate to the expensive route
 ```
 
-Let one full expensive run cost `1`, the un-advised cheap route `c`, one advisor
-call `a`, and let `p` be the cheap route's failure rate without advice and `p′`
-with it. The advised cheap run is **not** `c`: it carries the plan in its prompt,
+Let one full expensive run cost `1` and the un-advised cheap route `c`. **The two
+shapes do not call the same advisor.** Shape A's advisor gets the task and reads
+the repository; Shape B's gets the task plus a failure excerpt and a diff. The
+inputs differ, so the costs differ, and one symbol for both would hide that.
+Shape A's call is `a_A`, Shape B's is `a_B`; where the text says `a` without a
+subscript it means whichever call that shape makes. Let `p` be the cheap route's
+failure rate without advice and `p′` with it. The advised cheap run is **not** `c`: it carries the plan in its prompt,
 so give it its own symbol `c_A`, for the same reason Shape B's retry gets `r`.
 
 ```
-expected cost = a + c_A + p′        pays when   a + (c_A − c) < p − p′
+expected cost = a_A + c_A + p′      pays when   a_A + (c_A − c) < p − p′
 ```
 
 Writing `c` where `c_A` belongs understates the arm by exactly the prompt the
@@ -234,30 +238,36 @@ tokens. It does not have to cost that.
 Measure **two** configurations:
 
 1. **baseline + Shape B** — cheap → verify → (advisor → retry → verify) → escalate.
-   Yields `c`, `p`, `a`, `q`, `r` and `s` in one pass, because the un-advised cheap
-   run and its verify result are the first stage of the same pipeline.
-2. **Shape A + Shape B** — the same pipeline with a plan prepended. Yields `c_A`,
-   `p′`, and the primed `a`, `q′`, `r′`, `s′`.
+   Yields `c`, `p`, `a_B`, `q`, `r` and `s` in one pass, because the un-advised
+   cheap run and its verify result are the first stage of the same pipeline.
+   It does **not** yield `a_A`: Shape A's advisor never runs here.
+2. **Shape A + Shape B** — the same pipeline with a plan prepended. Yields `a_A`,
+   `c_A`, `p′`, and the primed failure stage `a_B′`, `q′`, `r′`, `s′`.
 
 Configuration 2 **is** A+B, so A+B is measured, not modelled. What nobody runs is
 **Shape A alone**, and that is the only figure to model:
 
 ```
-A alone      = a + c_A + p′
-A + B        = a + c_A + p′·(a′ + q′·r′ + (1 − s′))
+A alone      = a_A + c_A + p′
+A + B        = a_A + c_A + p′·(a_B′ + q′·r′ + (1 − s′))
 ```
 
 Every term after the up-front advice is primed — including the failure-stage
 advisor call itself, whose input is the already-advised task plus the failure
-artifacts and so costs `a′`, not `a` — because each is measured on a run whose
+artifacts and so costs `a_B′`, not `a_B` — because each is measured on a run whose
 prompt already contains the plan: the retry cost, the retry-attempt rate
 and the rescue rate are all different quantities from their Shape-B-only
 counterparts. Reusing the unprimed symbols would silently assume the plan
 changes nothing about what happens after a failure.
 
-`a + c_A + p′` for Shape A alone drops the failure-stage terms that configuration
-2 actually ran, so it is an extrapolation: it assumes the up-front plan's effect
-on `p′` is unchanged when the failure-stage advice is switched off. Reporting it
+`a_A + c_A + p′` for Shape A alone is an extrapolation when it is read off a
+configuration-2 log. The reason is not that the equation drops terms — it drops
+them correctly, because Shape A alone does not run them. The reason is that the
+`p′` measured under configuration 2 is the failure rate of a cheap run whose
+prompt carries the plan **and** whose failures were about to be advised; nothing
+in that log says it is the same `p′` when the failure-stage advice is off. `c_A`
+is safe to carry across (the advised cheap run is identical in both), `p′` is
+not. Reporting it
 as a measurement would be exactly the error this project keeps catching in
 review. It is reported with the word "modelled" attached, or not at all.
 
@@ -283,7 +293,7 @@ To pre-register:
   `c`, since the retry carries the advice in its prompt; `q` is the fraction of
   advised failures that produced a retry at all.
 - **The decision rule for Shape A**: a named margin on `p − p′` **against
-  `a + (c_A − c)`**, not against `a` alone, plus the explicit statement that a
+  `a_A + (c_A − c)`**, not against `a_A` alone, plus the explicit statement that a
   null result means "no measurable effect on failures" and not "no effect on
   quality".
 - **The minimum number of failures** needed before `s` is reported at all. `s`
@@ -294,7 +304,7 @@ To pre-register:
 
 | V1 property | after |
 | --- | --- |
-| exactly one foreground child | up to six (cheap, advisor, retry, expensive, plus two verify runs) |
+| exactly one foreground child | up to seven for A+B (cheap, **two** advisor calls, retry, expensive, plus two verify runs); six when only one shape is on |
 | does not retry or recover | retries once, on a mechanical signal, with new input |
 | never creates or deletes directories | creates and deletes workspaces, including one it always deletes |
 | never runs anything but the selected route | runs a verify command and an advisor command |
@@ -314,7 +324,7 @@ In order:
    `tools/speculative_report.py`, behind `--advisor`, `--advise-first` and
    `--advise-on-failure`. Neither tool ships in the distribution, so this needs no
    boundary change and nothing reaches users who have not asked for it.
-2. **Run it on real work** and get `a`, `s`, and `p′`.
+2. **Run it on real work** and get `a_A`, `a_B`, `s`, and `p′`.
 3. **Only then** decide whether the pattern belongs inside `weightclass`, which
    is where the boundary above actually moves.
 
