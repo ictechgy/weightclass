@@ -994,8 +994,16 @@ def stage_home(names: list[str], work_root: Path, registry: Path) -> Path:
     home.chmod(0o700)
     register(registry, home, add=True)
     for name in names:
-        source = real_home / name
-        target = home / name
+        # 이름을 그대로 이어 붙이면 ".." 나 절대 경로가 임시 HOME 밖을
+        # 가리킨다. 복사 **대상**이 밖으로 나가면 이 함수가 사용자의 파일을
+        # 덮어쓰는 도구가 된다. 양쪽 끝을 모두 확인한다.
+        source = (real_home / name).resolve()
+        target = (home / name).resolve()
+        if not source.is_relative_to(real_home.resolve()):
+            raise RunFailure(f"--child-home-stage escapes HOME: {name}")
+        if not target.is_relative_to(home.resolve()):
+            raise RunFailure(f"--child-home-stage escapes the staged HOME: {name}")
+        target.parent.mkdir(parents=True, exist_ok=True)
         if source.is_dir():
             shutil.copytree(source, target, symlinks=False)
         else:
@@ -1047,10 +1055,13 @@ def attempt(
         # 스테이징한 HOME 은 시도마다 새로 만든다. 공유하면 싼 경로가 남긴
         # 설정·훅·인증 상태를 비싼 경로가 물려받는다.
         attempt_home = stage_home(home_stage, work_root, registry) if home_stage else child_home
-        record["child"] = run_child(command, workspace, task, rates, allowed_env, attempt_home)
-        if home_stage and attempt_home is not None:
-            # 자격증명 복사본이므로 자식이 끝나는 즉시 지운다.
-            discard(registry, attempt_home, out_dir)
+        try:
+            record["child"] = run_child(command, workspace, task, rates, allowed_env, attempt_home)
+        finally:
+            # 자격증명 복사본이므로 자식이 어떻게 끝나든 지운다. 예외로 빠져
+            # 나가는 경로에서 남기면 비밀이 디스크에 흩어진 채 잊힌다.
+            if home_stage and attempt_home is not None:
+                discard(registry, attempt_home, out_dir)
         # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
         # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
         # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
@@ -1161,8 +1172,9 @@ def main() -> int:
         default=[],
         help=(
             "extra environment variable the vendor child may see (repeatable). "
-            "By default it gets PATH/HOME/locale/proxy plus ANTHROPIC_*, OPENAI_*, "
-            "CLAUDE_*, CODEX_* — everything else is dropped."
+            "By default it gets PATH/HOME/locale/proxy plus its own vendor's namespace "
+            "(OPENAI_*/CODEX_* for codex, ANTHROPIC_*/CLAUDE_* for claude, both when the "
+            "executable name matches neither) — everything else is dropped."
         ),
     )
     parser.add_argument(
@@ -1327,8 +1339,14 @@ def main() -> int:
     if child_home is not None and not child_home.is_dir():
         parser.error(f"--child-home is not a directory: {child_home}")
     if arguments.child_home_stage:
-        real_home = Path(os.path.expanduser("~"))
+        real_home = Path(os.path.expanduser("~")).resolve()
         for name in arguments.child_home_stage:
+            # 실행에 들어가기 전에 막는다. 자식을 띄운 뒤에 실패하면 사용자는
+            # "경로 실패" 만 보고, 그 실행 비용도 이미 나간 뒤다.
+            if Path(name).is_absolute() or ".." in Path(name).parts:
+                parser.error(f"--child-home-stage must be a plain name under HOME: {name}")
+            if not (real_home / name).resolve().is_relative_to(real_home):
+                parser.error(f"--child-home-stage escapes HOME: {name}")
             if not (real_home / name).exists():
                 parser.error(f"--child-home-stage: no such entry under HOME: {name}")
         print(f"자식 HOME: 시도마다 임시 디렉터리에 {len(arguments.child_home_stage)}개 항목 복사")
@@ -1353,10 +1371,10 @@ def main() -> int:
     else:
         dropped = len(set(os.environ) - allowed_env)
         print(f"자식 환경: {len(allowed_env & set(os.environ))}개 전달, {dropped}개 제외")
-        if child_home is None:
+        if child_home is None and not arguments.child_home_stage:
             print(
                 "  HOME 은 그대로다. 변수만 좁혔을 뿐 ~/.aws/credentials 같은 파일은"
-                " 여전히 읽힌다. --child-home 이나 컨테이너가 필요하다."
+                " 여전히 읽힌다. --child-home-stage 나 컨테이너가 필요하다."
             )
 
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)
