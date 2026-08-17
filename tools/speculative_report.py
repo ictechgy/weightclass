@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import statistics
 from pathlib import Path
 
@@ -48,10 +49,16 @@ def main() -> int:
     parser.add_argument(
         "--cost-ratio",
         type=float,
-        default=0.31,
+        default=None,
         help="cheap route cost relative to expensive (default 0.31, the measured value)",
     )
     arguments = parser.parse_args()
+
+    # 기본값을 쓴 사람에게 "네가 준 값과 다르다" 고 경고하면 무슨 말인지 알 수
+    # 없다. 명시했는지 여부를 구분한다.
+    given_cost_ratio = arguments.cost_ratio is not None
+    if arguments.cost_ratio is None:
+        arguments.cost_ratio = 0.31
 
     # c 는 비용비이므로 (0, 1) 안에 있어야 한다. 범위를 벗어나면 손익분기
     # 1-c 가 뒤집히고 절감이 음수나 100% 초과로 나와 조용히 헛소리를 한다.
@@ -203,9 +210,11 @@ def main() -> int:
         if not isinstance(child, dict):
             return None
         if child.get("timed_out"):
-            # 중간에 죽인 실행의 사용량은 부분값이다. 그것을 c 표본에 넣으면
-            # 싼 경로의 비용이 실제보다 낮게 잡혀 절감이 부풀려진다. 비용을
-            # 모르는 것으로 처리해 표본에서 빠지게 한다.
+            # 중간에 죽인 실행의 사용량은 부분값이라 표본에 넣으면 비용이
+            # 낮게 잡힌다. 다만 빼는 것도 공짜가 아니다 — 타임아웃난 싼 실행은
+            # 예산을 끝까지 태운, 가장 비싼 싼 실행이다. 넣어도 빼도 c 는
+            # 낮아지는 쪽으로 치우친다. 부분값을 실측값으로 부르지 않는 쪽을
+            # 택하고, 몇 건이 그렇게 빠졌는지 아래에서 따로 알린다.
             return None
         usage = child.get("usage")
         if not isinstance(usage, dict):
@@ -219,20 +228,72 @@ def main() -> int:
         cost = float(value)
         return cost if math.isfinite(cost) and cost >= 0 else None
 
+    def cost_source(attempt: object) -> str | None:
+        if not isinstance(attempt, dict):
+            return None
+        child = attempt.get("child")
+        if not isinstance(child, dict):
+            return None
+        usage = child.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        source = usage.get("source")
+        return source if isinstance(source, str) else None
+
+    def has_missing_prices(attempt: object) -> bool:
+        if not isinstance(attempt, dict):
+            return False
+        child = attempt.get("child")
+        if not isinstance(child, dict):
+            return False
+        usage = child.get("usage")
+        return isinstance(usage, dict) and bool(usage.get("priced_fields_missing"))
+
+    def timed_out(attempt: object) -> bool:
+        if not isinstance(attempt, dict):
+            return False
+        child = attempt.get("child")
+        return isinstance(child, dict) and bool(child.get("timed_out"))
+
     paired: list[float] = []
+    pair_costs: list[tuple[float, float]] = []
     cheap_total = 0.0
     expensive_total = 0.0
     escalated_total = 0
+    timeout_dropped = 0
+    mixed_provenance = 0
+    # 싼 경로는 승급 여부와 무관하게 **모든** 과제에서 돌았다. 그래서 싼 비용은
+    # 전수로 알 수 있고, c 의 분자가 그 전수와 얼마나 다른지 확인할 수 있다.
+    cheap_all: list[float] = []
+    cheap_escalated: list[float] = []
     for r in usable:
         cheap_cost = cost_of(r.get("cheap"))
         expensive_cost = cost_of(r.get("expensive"))
+        if cheap_cost:
+            cheap_all.append(cheap_cost)
+            if isinstance(r.get("expensive"), dict):
+                cheap_escalated.append(cheap_cost)
+        if isinstance(r.get("expensive"), dict) and (
+            timed_out(r.get("cheap")) or timed_out(r.get("expensive"))
+        ):
+            timeout_dropped += 1
         # 어느 쪽이든 0 이면 비율이 의미를 잃는다. 싼 쪽 0 은 c=0 으로
         # "공짜" 라는 결론을 만들고, 비싼 쪽 0 은 나눗셈 자체가 안 된다.
         # 요금표가 비었거나 벤더가 0 을 보고한 경우이므로 표본에서 뺀다.
-        if r.get("expensive") is not None:
+        # 승급 여부는 p 를 세는 쪽과 같은 술어로 판정한다. 러너가 빈 dict 나
+        # 오류 스텁을 남기면 "승급 N건 중 M건" 문구가 실제와 어긋난다.
+        if isinstance(r.get("expensive"), dict):
             escalated_total += 1
         if cheap_cost and expensive_cost:
+            # 벤더가 알려준 청구액과 우리 요금표로 환산한 값은 정의가 다르다.
+            # Claude 의 total_cost_usd 는 캐시 읽기까지 포함하고, 요금표 환산은
+            # 표에 적은 필드만 센다. 그 둘을 나눈 값을 c 라고 부르면 안 된다.
+            cheap_source = cost_source(r.get("cheap")) or "?"
+            expensive_source = cost_source(r.get("expensive")) or "?"
+            if ("claude-json" in cheap_source) != ("claude-json" in expensive_source):
+                mixed_provenance += 1
             paired.append(cheap_cost / expensive_cost)
+            pair_costs.append((cheap_cost, expensive_cost))
             cheap_total += cheap_cost
             expensive_total += expensive_cost
 
@@ -252,7 +313,9 @@ def main() -> int:
         usage = child.get("usage")
         if not isinstance(usage, dict):
             return False
-        return "turn" in str(usage.get("source", ""))
+        # 부분 문자열 "turn" 은 "returned" 같은 값에도 걸린다. 러너가 붙이는
+        # 표식만 본다 — 이 경고가 c 를 믿을지 말지의 유일한 근거다.
+        return bool(re.search(r"\(\d+turn\)", str(usage.get("source", ""))))
 
     multiturn = sum(1 for r in usable for arm in ("cheap", "expensive") if is_multiturn(r.get(arm)))
     if multiturn:
@@ -261,6 +324,22 @@ def main() -> int:
             " 누적인지 확인되지 않아 그 실행의 토큰은 과대 집계일 수 있다."
         )
 
+    # c 의 흔들림 폭. 한 건씩 빼고 다시 계산해(jackknife) 표본 하나가 값을
+    # 얼마나 움직이는지 본다. 3~6건짜리 표본에서 이 폭은 대개 p 의 CI 보다
+    # 크고, 그것을 감추면 절감 구간이 실제보다 좁아 보인다.
+    def jackknife(costs: list[tuple[float, float]]) -> tuple[float, float] | None:
+        if len(costs) < 2:
+            return None
+        cheap_sum = sum(x for x, _ in costs)
+        expensive_sum = sum(y for _, y in costs)
+        values = []
+        for x, y in costs:
+            rest_expensive = expensive_sum - y
+            if rest_expensive > 0:
+                values.append((cheap_sum - x) / rest_expensive)
+        return (min(values), max(values)) if values else None
+
+    c_range: tuple[float, float] | None = None
     if len(paired) >= MINIMUM_PAIRED:
         # 기대 비용 식 c + p 는 c 를 **비용 가중** 비율로 본다. 과제별 비율의
         # 중앙값은 다른 값이고, 비용 분포가 치우치면 크게 갈린다. 공식에는
@@ -271,10 +350,32 @@ def main() -> int:
             f"\n실측 비용비 c = {measured:.3f}  (승급 {escalated_total}건 중 양쪽 비용을"
             f" 얻은 {len(paired)}건의 비용 합계 비율. 기대 비용 식이 전제하는 가중치다)"
         )
-        if len(paired) < escalated_total:
+        missing = escalated_total - len(paired) - timeout_dropped
+        if timeout_dropped:
             print(
-                f"  승급 {escalated_total - len(paired)}건은 비용이 없거나 0 이라 빠졌다."
-                " 표본이 승급 전체를 대표하지 않을 수 있다."
+                f"  승급 {timeout_dropped}건은 어느 한쪽이 타임아웃이라 빠졌다. 그 실행은"
+                " 예산을 끝까지 태운 가장 비싼 실행이므로, 빼면 c 가 낮아지는 쪽으로"
+                " 치우친다 — 즉 절감이 과대 보고된다."
+            )
+        if missing > 0:
+            print(f"  승급 {missing}건은 비용이 없거나 0 이라 빠졌다.")
+        if mixed_provenance:
+            print(
+                f"  주의: {mixed_provenance}건은 한쪽이 벤더가 알려준 청구액이고 다른 쪽은"
+                " 요금표 환산값이다. 두 숫자는 세는 항목이 다르므로(벤더 청구액은 캐시"
+                " 읽기를 포함, 요금표는 적은 필드만) 그 비율은 c 가 아니다."
+            )
+        # 요금표가 값을 매기기로 한 필드 중 일부가 그 실행에 없었다면, 없는
+        # 캐시 필드일 수도 있지만 CLI 가 필드 이름을 바꾼 것일 수도 있다.
+        # 후자면 절반짜리 비용이 그대로 c 에 들어간다.
+        partial_priced = sum(
+            1 for r in usable for arm in ("cheap", "expensive") if has_missing_prices(r.get(arm))
+        )
+        if partial_priced:
+            print(
+                f"  주의: {partial_priced}건은 요금표가 값을 매기기로 한 필드 일부가"
+                " 없는 채로 계산됐다. 진짜 0 일 수도, CLI 가 필드 이름을 바꾼 것일 수도"
+                " 있다 — 후자면 비용이 절반만 잡힌다."
             )
         print(f"  과제별 비율의 중앙값: {median_ratio:.3f}")
         if abs(median_ratio - measured) > 0.1:
@@ -282,11 +383,34 @@ def main() -> int:
                 "  둘이 크게 다르다 — 비용이 큰 과제 몇 건이 합계를 지배한다는 뜻이다."
                 " 과제를 더 모으기 전에는 어느 쪽도 안정적이지 않다."
             )
+        c_range = jackknife(pair_costs)
+        if c_range is not None:
+            print(
+                f"  한 건씩 빼고 다시 계산하면 c 는 [{c_range[0]:.3f}, {c_range[1]:.3f}]"
+                f" 사이에서 움직인다 (표본 {len(pair_costs)}건)."
+            )
+        # 승급 부분집합 편향. 싼 경로는 모든 과제에서 돌았으므로 전수와 비교할
+        # 수 있다. 싼 모델이 일찍 포기해서 실패하는 흔한 양상이면 승급 과제의
+        # 싼 비용이 체계적으로 낮고, 그러면 c 가 과소 추정된다.
+        if len(cheap_escalated) >= 2 and len(cheap_all) > len(cheap_escalated):
+            all_mean = statistics.fmean(cheap_all)
+            escalated_mean = statistics.fmean(cheap_escalated)
+            print(
+                f"  싼 경로 과제당 평균 비용: 전체 {all_mean:.4f} /"
+                f" 승급된 과제 {escalated_mean:.4f}"
+            )
+            if all_mean > 0 and abs(escalated_mean - all_mean) / all_mean > 0.2:
+                direction = "낮다" if escalated_mean < all_mean else "높다"
+                print(
+                    f"    승급 과제의 싼 비용이 전체 평균보다 {direction}. c 의 분자는"
+                    " 승급 과제에서만 나오므로 c 가 그만큼"
+                    f" {'과소' if escalated_mean < all_mean else '과대'} 추정된다."
+                )
         print(
             "  이 c 는 승급이 일어난 과제, 즉 싼 경로가 실패한 부분집합에서만 나온다."
             " 그 과제들이 더 길거나 어려웠다면 전체를 대표하지 않는다."
         )
-        if abs(measured - c) > 0.05:
+        if given_cost_ratio and abs(measured - c) > 0.05:
             print(f"  주의: --cost-ratio 로 준 {c:.2f} 와 다르다. 아래 계산은 실측값을 쓴다.")
         c = measured
     elif paired:
@@ -303,16 +427,28 @@ def main() -> int:
 
     print("\n기대 비용 = c + p")
     print(f"  기대 비용 {c + p:.2f}  ->  절감 {1 - (c + p):.1%}")
-    print(f"  구간 하한 p={lo:.1%} 이면 절감 {1 - (c + lo):.1%}")
-    print(f"  구간 상한 p={hi:.1%} 이면 절감 {1 - (c + hi):.1%}")
-    print(f"  손익분기 p = {1 - c:.1%}")
+    # c 를 확정값으로 두고 p 만 흔들면 구간이 실제보다 좁다. c 도 표본에서
+    # 추정한 값이므로 둘의 흔들림을 함께 태운다. 결론을 내릴 때 쓰는 구간은
+    # 언제나 이 넓은 쪽이다.
+    c_lo, c_hi = c_range if c_range is not None else (c, c)
+    best, worst = c_lo + lo, c_hi + hi
+    if c_range is not None:
+        print(f"  c 도 흔들리므로 구간은 c∈[{c_lo:.3f}, {c_hi:.3f}] 와 p 를 함께 태운다")
+    print(f"  가장 유리한 끝 (c={c_lo:.3f}, p={lo:.1%}): 절감 {1 - best:.1%}")
+    print(f"  가장 불리한 끝 (c={c_hi:.3f}, p={hi:.1%}): 절감 {1 - worst:.1%}")
+    print(f"  손익분기 p = {1 - c:.1%}  (c 가 {c_hi:.3f} 이면 {1 - c_hi:.1%})")
 
-    if hi < 1 - c:
+    if worst < 1:
         print("\n  -> 구간 전체가 손익분기 아래다. 싼 경로 우선이 이 표본에서 유리하다.")
-    elif lo > 1 - c:
+    elif best > 1:
         print("\n  -> 구간 전체가 손익분기 위다. 싼 경로 우선은 손해다.")
     else:
         print("\n  -> 구간이 손익분기를 가로지른다. 아직 결론 낼 수 없다.")
+    if c_range is None and paired:
+        print(
+            "  주의: c 의 흔들림 폭을 계산할 표본이 없어 구간은 p 만 전파한다."
+            " 실제 불확실성은 이보다 넓다."
+        )
 
     # 토큰은 벤더 안에서만 의미가 있다. 합쳐서 비율을 내지 않는다.
     def child_tokens(attempt: object) -> int | None:

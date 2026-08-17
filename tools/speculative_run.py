@@ -92,6 +92,10 @@ class Usage(TypedDict, total=False):
     total_tokens: int
     breakdown: dict[str, int]
     source: str
+    # 요금표가 값을 매기기로 한 필드 중 이 실행에 없던 것들. 없는 캐시 필드는
+    # 진짜 0 이지만 CLI 가 필드 이름을 바꾼 경우와 구별되지 않으므로, 조용히
+    # 절반짜리 비용을 내지 않도록 리포트가 볼 수 있게 남긴다.
+    priced_fields_missing: str
 
 
 class Attempt(TypedDict, total=False):
@@ -346,6 +350,22 @@ def clone_at(repo: Path, commit: str, destination: Path) -> None:
     run_git(["remote", "remove", "origin"], destination)
 
 
+def is_finite_nonnegative(value: object) -> bool:
+    """유한하고 0 이상인 수인가. bool 과 임의 정밀도 정수까지 함께 막는다.
+
+    `math.isfinite` 는 float 로 변환할 수 없는 큰 정수에서 무한대를 돌려주지
+    않고 OverflowError 로 죽는다. 신뢰할 수 없는 JSON 이 `10**400` 을 담고
+    있으면 측정 실행 전체가 그 자리에서 멈춘다. 검사 함수가 검사 대상 때문에
+    죽으면 안 되므로 여기서 잡는다.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
+
+
 def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
     """Turn a token breakdown into dollars using caller-supplied rates.
 
@@ -375,15 +395,29 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
     breakdown = usage.get("breakdown") or {}
     if not breakdown or not rates:
         return None
-    if not any(field in breakdown for field in rates):
+    matched = [field for field in rates if field in breakdown]
+    if not matched:
         return None
     priced = 0.0
     for field, rate in rates.items():
-        priced += breakdown.get(field, 0) * rate / 1_000_000
+        count = breakdown.get(field, 0)
+        if not is_finite_nonnegative(count):
+            # 신뢰할 수 없는 JSON 의 토큰 수를 그대로 곱하면 OverflowError 가
+            # 난다. 값 하나가 이상하다고 실행을 죽이지 말고 비용을 포기한다.
+            return None
+        priced += count * rate / 1_000_000
     # 벤더가 준 비용과 --prices 요율은 유한성과 부호를 확인하는데 계산 결과만
-    # 확인하지 않으면 기준이 어긋난다. 아주 큰 토큰 수는 곱셈에서 무한대가 될
-    # 수 있다.
-    return priced if math.isfinite(priced) and priced >= 0 else None
+    # 확인하지 않으면 기준이 어긋난다.
+    if not is_finite_nonnegative(priced):
+        return None
+    if len(matched) < len(rates):
+        # 값을 매기기로 한 필드 중 일부만 나타났다. 없는 캐시 필드는 실제로 0
+        # 이지만, CLI 가 output_tokens 를 다른 이름으로 바꾼 경우에도 똑같이
+        # 보인다. 그때는 절반짜리 비용이 그럴듯한 얼굴로 c 에 들어간다.
+        # 조용히 넘기지 않고 어떤 필드가 없었는지 남긴다.
+        missing = ",".join(sorted(set(rates) - set(matched)))
+        usage["priced_fields_missing"] = missing
+    return priced
 
 
 def run_child(
@@ -472,7 +506,9 @@ def run_child(
             else:
                 timed_out = False
             code = child.returncode
-    except OSError as error:
+    except FileNotFoundError as error:
+        raise RunFailure(f"could not start the route: {error}") from error
+    except PermissionError as error:
         raise RunFailure(f"could not start the route: {error}") from error
     if timed_out:
         # 시간이 다 됐어도 토큰은 이미 쓰였다. 부분 출력에서 건질 수 있으면
@@ -495,7 +531,9 @@ def run_child(
         return {
             "exit_code": None,
             "timed_out": True,
-            "seconds": CHILD_TIMEOUT,
+            # 상수를 쓰면 kill 과 drain 에 든 최대 30초가 빠진다. 타임아웃은
+            # 싼 arm 에 몰리므로 시간 기준 비교가 싼 쪽에 유리해진다.
+            "seconds": round(time.monotonic() - started, 1),
             "tokens": partial.get("total_tokens") if partial else None,
             "usage": dict(partial) if partial else None,
         }
@@ -528,6 +566,7 @@ def _claude_usage(stdout: str) -> Usage | None:
     # 실패한다. 그러면 비용이 통째로 사라지고 리포트는 "비용을 못 얻었다" 만
     # 말한다. 줄 단위로도 찾아본다.
     payload: object = None
+    seen = 0
     for candidate in (stdout, *stdout.splitlines()):
         text = candidate.strip()
         if not text.startswith("{"):
@@ -539,8 +578,11 @@ def _claude_usage(stdout: str) -> Usage | None:
         if isinstance(parsed, dict) and (
             "total_cost_usd" in parsed or parsed.get("type") == "result"
         ):
+            # 첫 번째에서 멈추지 않는다. 결과 객체는 마지막에 오고, 그 앞에
+            # 같은 모양의 객체가 있다면 스트리밍 중간값이거나 자식이 찍은
+            # 값이다. 먼저 나온 것을 쓰면 더 싼 숫자를 고르는 쪽으로 편향된다.
             payload = parsed
-            break
+            seen += 1
     if not isinstance(payload, dict):
         return None
     raw = payload.get("usage")
@@ -548,21 +590,21 @@ def _claude_usage(stdout: str) -> Usage | None:
     breakdown: dict[str, int] = {}
     for field in _CLAUDE_USAGE_FIELDS:
         value = usage_fields.get(field)
-        if isinstance(value, int) and not isinstance(value, bool):
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             breakdown[field] = value
     cost = payload.get("total_cost_usd")
-    usage: Usage = {"breakdown": breakdown, "source": "claude-json"}
+    # 후보가 둘 이상이면 어느 것이 진짜인지 우리가 정할 수 없다. 값은 쓰되
+    # 출처에 남겨, 리포트가 그 실행을 의심할 수 있게 한다.
+    usage: Usage = {
+        "breakdown": breakdown,
+        "source": "claude-json" if seen <= 1 else f"claude-json({seen}candidates)",
+    }
     if breakdown:
         usage["total_tokens"] = sum(breakdown.values())
     # bool 은 int 의 하위형이라 isinstance 를 그냥 통과한다. true 가 1.0 달러로,
     # 토큰 필드의 true 가 1 토큰으로 기록되는 것을 막는다. 음수도 거른다 —
     # --prices 검증이 같은 기준을 쓰므로 두 경로가 어긋나면 안 된다.
-    if (
-        not isinstance(cost, bool)
-        and isinstance(cost, (int, float))
-        and math.isfinite(cost)
-        and cost >= 0
-    ):
+    if is_finite_nonnegative(cost) and isinstance(cost, (int, float)):
         usage["cost_usd"] = float(cost)
     return usage if breakdown or "cost_usd" in usage else None
 
@@ -609,7 +651,7 @@ def _codex_usage(stdout: str) -> Usage | None:
         parsed_any = False
         for field in fields:
             value = raw.get(field)
-            if isinstance(value, int) and not isinstance(value, bool):
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 totals[field] = totals.get(field, 0) + value
                 seen = True
                 parsed_any = True
@@ -645,7 +687,10 @@ def extract_usage(stdout: str, stderr: str) -> Usage | None:
             return usage
     # 구형 경로: --json 없이 돌린 codex 는 stderr 에 누적 토큰만 찍는다.
     total = extract_tokens(stdout, stderr)
-    return {"total_tokens": total, "breakdown": {}, "source": "stderr-scrape"} if total else None
+    # `if total` 이면 진짜 0 토큰이 결측으로 바뀐다. 0 은 관측된 값이다.
+    if total is None:
+        return None
+    return {"total_tokens": total, "breakdown": {}, "source": "stderr-scrape"}
 
 
 def extract_tokens(stdout: str, stderr: str) -> int | None:
@@ -1168,15 +1213,22 @@ def main() -> int:
         action="store_true",
         help="pass the entire environment to the vendor child, as older versions did",
     )
-    parser.add_argument(
-        "--child-home",
-        type=Path,
-        help=(
-            "HOME for the vendor child. --child-env narrows variables but not the "
-            "filesystem, and the CLI reads its credentials from HOME, so dotfiles stay "
-            "reachable unless you point it elsewhere and stage the vendor's auth there."
-        ),
-    )
+    # HOME 은 arm 마다 따로 받는다. 하나를 두 arm 이 공유하면 싼 경로가 거기에
+    # .bashrc 나 CLI 훅처럼 **실행되는** 파일을 남길 수 있고, 승급 경로가 그것을
+    # 물려받는다. 싼 경로는 실패할 것을 전제로 돌리는 쪽이므로, 그 실패가 채점
+    # 기준이 되는 승급 경로에 스며드는 통로를 기본값으로 열어 둘 수 없다.
+    # 같은 값을 두 번 적어 공유할 수는 있다 — 그때는 명령줄에 그렇게 보인다.
+    for arm, flag in (("cheap", "--cheap-home"), ("expensive", "--expensive-home")):
+        parser.add_argument(
+            flag,
+            type=Path,
+            help=(
+                f"HOME for the {arm} route's vendor child. --child-env narrows variables "
+                "but not the filesystem, and the CLI reads its credentials from HOME, so "
+                "dotfiles stay reachable unless you point it elsewhere and stage the "
+                "vendor's auth there."
+            ),
+        )
     parser.add_argument(
         "--prices",
         type=Path,
@@ -1278,15 +1330,10 @@ def main() -> int:
                 # 빈 표는 all() 이 True 라 통과한 뒤 그 arm 을 조용히 무요금으로
                 # 만든다. 키를 적어 두고 값을 비운 것은 실수일 가능성이 높다.
                 parser.error(f"--prices['{arm}'] is empty; remove the key or fill it in")
-            if not all(
-                # bool 은 int 의 하위형이고, json.loads 는 기본으로 NaN/Infinity 를
-                # 허용한다. 둘 다 그럴듯한 비용을 만들어 낸다.
-                not isinstance(v, bool)
-                and isinstance(v, (int, float))
-                and math.isfinite(v)
-                and v >= 0
-                for v in table.values()
-            ):
+            # bool 은 int 의 하위형이고, json.loads 는 기본으로 NaN/Infinity 를
+            # 허용한다. 둘 다 그럴듯한 비용을 만들어 낸다. 임의 정밀도 정수는
+            # 검사 자체를 OverflowError 로 죽이므로 헬퍼 안에서 잡는다.
+            if not all(is_finite_nonnegative(v) for v in table.values()):
                 parser.error(
                     f"--prices['{arm}'] must map token field names to finite, non-negative numbers"
                 )
@@ -1305,14 +1352,39 @@ def main() -> int:
             )
         return default_child_env(argv[0]) | frozenset(arguments.child_env)
 
+    # 벤더별로 좁히면 Bedrock/Vertex 로 붙는 claude 가 인증에 필요한
+    # AWS_*/GOOGLE_* 을 잃는다. 그러면 자식은 "라우트 실패" 로 기록되고 p 가
+    # 인증 실패로 오염된다. 실패한 뒤 로그를 뒤지게 두지 않고 미리 알린다.
+    BACKEND_SWITCHES = {
+        "CLAUDE_CODE_USE_BEDROCK": ("AWS_", "AWS_PROFILE"),
+        "CLAUDE_CODE_USE_VERTEX": ("GOOGLE_", "CLOUDSDK_"),
+    }
+    for switch, families in BACKEND_SWITCHES.items():
+        if os.environ.get(switch) and not any(
+            name.startswith(families) for name in default_child_env(cheap_argv[0])
+        ):
+            print(
+                f"  주의: {switch} 가 켜져 있는데 {'/'.join(families)} 자격증명이"
+                " 좁히기에서 빠졌다. 자식이 인증에 실패하면 라우트 실패로 기록되어"
+                " p 가 오염된다. --child-env 로 필요한 이름을 넣어라."
+            )
+
     cheap_env = env_for(cheap_argv)
     expensive_env = env_for(expensive_argv)
     # 진단은 두 arm 을 함께 본다. 하나만 찍으면 다른 쪽이 다른 벤더로 판별돼
     # 다른 목록을 받는데도 사용자는 알 수 없다.
     allowed_env = cheap_env if cheap_env is None else cheap_env | (expensive_env or frozenset())
-    child_home = arguments.child_home.expanduser().resolve() if arguments.child_home else None
-    if child_home is not None and not child_home.is_dir():
-        parser.error(f"--child-home is not a directory: {child_home}")
+
+    def home_for(value: Path | None, flag: str) -> Path | None:
+        if value is None:
+            return None
+        resolved = value.expanduser().resolve()
+        if not resolved.is_dir():
+            parser.error(f"{flag} is not a directory: {resolved}")
+        return resolved
+
+    cheap_home = home_for(arguments.cheap_home, "--cheap-home")
+    expensive_home = home_for(arguments.expensive_home, "--expensive-home")
     # 프록시 URL 은 http://user:pass@host 형태가 흔하고 그 userinfo 는 그대로
     # 자격증명이다. 자식에게 넘기지 않으면 네트워크가 끊기므로 넘기되, 그것이
     # 비밀을 넘기는 일이라는 사실은 알린다.
@@ -1332,19 +1404,37 @@ def main() -> int:
     if allowed_env is None:
         print("자식 환경: 전체 전달 (--child-env-all)")
     else:
-        dropped = len(set(os.environ) - allowed_env)
-        print(f"자식 환경: {len(allowed_env & set(os.environ))}개 전달, {dropped}개 제외")
-        if child_home is None:
+        # arm 마다 벤더가 다르면 허용 목록도 다르다. 합집합으로 한 줄만 찍으면
+        # 그 숫자는 어느 arm 에도 해당하지 않는다.
+        present = set(os.environ)
+        if cheap_env == expensive_env:
+            kept = len(allowed_env & present)
+            print(f"자식 환경: {kept}개 전달, {len(present - allowed_env)}개 제외")
+        else:
+            for arm, names in (("싼 경로", cheap_env), ("승급 경로", expensive_env)):
+                arm_names = names or frozenset()
+                print(
+                    f"자식 환경({arm}): {len(arm_names & present)}개 전달,"
+                    f" {len(present - arm_names)}개 제외"
+                )
+        if cheap_home is None or expensive_home is None:
             print(
                 "  HOME 은 그대로다. 변수만 좁혔을 뿐 ~/.aws/credentials 같은 파일은"
-                " 여전히 읽힌다. --child-home 이나 컨테이너가 필요하다."
+                " 여전히 읽힌다. --cheap-home/--expensive-home 이나 컨테이너가 필요하다."
             )
-        else:
+        if cheap_home is not None and cheap_home == expensive_home:
             print(
-                "  --child-home 은 두 arm 이 함께 쓰고 자식이 쓸 수 있다. 싼 경로가"
-                " 거기 남긴 설정을 승급 경로가 물려받는다. 그것이 문제라면 실행마다"
-                " 새 디렉터리를 주거나 컨테이너를 써야 한다."
+                "  주의: 두 arm 이 같은 HOME 을 쓴다. 자식은 거기에 쓸 수 있고, 쓰이는"
+                " 것은 설정만이 아니다 — .bashrc 나 CLI 훅처럼 **실행되는** 파일을 싼"
+                " 경로가 남기면 승급 경로가 그것을 물려받는다. 싼 경로의 실패를"
+                " 채점하는 쪽이 그 실패에 오염된다."
             )
+        for home in (cheap_home, expensive_home):
+            if home is not None:
+                # 자식이 쓴 것은 다음 실행에도 남는다. 실행 사이에 지우지
+                # 않으면 20개 과제가 서로 오염된다.
+                print(f"  HOME {home} 에 자식이 남긴 것은 다음 실행까지 간다")
+                break
 
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)
     cheap = attempt(
@@ -1359,7 +1449,7 @@ def main() -> int:
         scaffolding=frozenset(scaffolding),
         rates=rates.get("cheap"),
         allowed_env=cheap_env,
-        child_home=child_home,
+        child_home=cheap_home,
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
@@ -1399,7 +1489,7 @@ def main() -> int:
             scaffolding=frozenset(scaffolding),
             rates=rates.get("expensive"),
             allowed_env=expensive_env,
-            child_home=child_home,
+            child_home=expensive_home,
         )
         record["expensive"] = expensive
         reason = (

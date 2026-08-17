@@ -129,6 +129,15 @@ python3 -m pytest -q
 Replace the test line with whatever your repo actually runs. Do not use `git`
 inside it: the tree is assembled from untrusted agent output.
 
+**A passing verify is not proof the work is good, and the agent can forge the
+pass.** The tree the tests run on is the tree the agent wrote, so a `conftest.py`
+hook, a `pytest.ini` with the right `addopts`, or a `Makefile` target can make the
+command exit zero without the tests meaning anything. Nothing in this harness can
+prevent that — running the agent's code is the entire point of the step. It means
+the `p` you measure is a **lower bound** on how often the cheap route actually
+fails, and therefore the saving is an upper bound. Read a few accepted patches by
+hand before you trust the aggregate.
+
 ### 3. Write the price table, if you are measuring Codex
 
 Rates are **USD per million tokens**, keyed by the token field they price. The
@@ -152,6 +161,13 @@ your provider bills cached input at a discount, add `cached_input_tokens` and
 lower the `input_tokens` rate accordingly — but only once you have confirmed
 which figure contains which.
 
+**An omission here is not symmetric between the arms.** If
+`reasoning_output_tokens` turns out to be a separate line item rather than a
+breakout of `output_tokens`, the two-field table understates whichever model
+reasons more — normally the expensive one. That shrinks `c` and inflates the
+reported saving. The direction is the one that flatters the idea, so resolve it
+against an invoice rather than leaving it.
+
 A field the table prices but a particular run does not report counts as zero:
 a run that touched no cache genuinely has no cached tokens. It is only when
 *none* of the priced names appear anywhere in the run's breakdown that the whole
@@ -159,6 +175,13 @@ table is treated as a typo and produces no cost at all — better than a partial
 number that looks authoritative. Top-level keys other than `cheap` and
 `expensive` are rejected outright, because a misspelled arm would otherwise
 leave that side unpriced with no complaint.
+
+That leaves a middle case: `input_tokens` matches and `output_tokens` does not,
+because the CLI renamed it. A missing cache field really is zero; a missing
+output field is half a bill wearing a whole bill's face. The runner cannot tell
+them apart, so it records which priced fields were absent and the report says how
+many runs were computed that way. **If that count is not zero, check the field
+names against the CLI's output before believing the cost.**
 
 Claude needs none of this — it reports its own cost, and a vendor-reported
 number always wins over the table, which can go stale.
@@ -186,6 +209,12 @@ tools/speculative_run.py \
 
 One task per invocation. Around twenty real tasks gives a usable interval.
 
+**Keep one `--out-dir` per configuration.** The report reads every record in the
+log as one sample; it flags mixed route fingerprints, but it cannot tell that you
+changed the price table or edited `verify.sh` halfway through. Change either and
+start a new directory, or the two halves merge into a single `p` and `c` that
+describe neither.
+
 **The child gets a narrowed environment by default.** It keeps PATH, HOME,
 locale, proxy and CA settings, plus **its own vendor's** namespace: a `codex`
 executable sees `OPENAI_*` and `CODEX_*` but not `ANTHROPIC_*`, and vice versa.
@@ -203,14 +232,21 @@ That narrows variables, not the filesystem. The CLI finds its own credentials
 under `HOME`, so `~/.aws/credentials` stays readable however short the variable
 list is.
 
-`--child-home <dir>` points the child at a HOME you prepared yourself — copy the
-vendor's auth directory in once, and the CLI authenticates while `~/.aws` and
-`~/.ssh` are simply not there.
+`--cheap-home <dir>` and `--expensive-home <dir>` point each arm's child at a
+HOME you prepared yourself — copy the vendor's auth directory in once, and the
+CLI authenticates while `~/.aws` and `~/.ssh` are simply not there.
 
-Both arms of a task share that directory and can write to it, so a cheap route
-can leave state the escalation route then runs under. That is the same exposure
-as running the CLI twice by hand, and the run says so when the flag is used. If
-it matters for your workload, hand each invocation a fresh directory.
+**They are two flags on purpose.** A single shared HOME is writable by the child,
+and what a child writes there is not only configuration: a `.bashrc`, a CLI hook,
+a `settings.json` that names a command to run. The cheap route is the one you
+expect to misbehave, and the expensive route is what grades it. One directory for
+both lets the first plant code inside the second. You can still pass the same
+path twice — but then it is visible in the command line rather than implied by a
+default, and the run says so.
+
+Whatever the child leaves in either directory also survives into the next task.
+Twenty tasks into one HOME is twenty tasks that can contaminate each other; hand
+out a fresh directory per run if that matters for your workload.
 
 The runner deliberately does **not** build that directory for you. An earlier
 version did, and the copying logic produced a new security defect in each of
@@ -234,8 +270,22 @@ tools/speculative_report.py --log ~/spec-runs/runs.jsonl
 
 When both arms recorded a cost, `c` is **measured from your own tasks** rather
 than assumed: on every escalated task the same task ran through both models, so
-the ratio is paired and task difficulty cancels out. The report says so
-explicitly, and warns when it had to fall back to the assumed value.
+the same task sits on both sides of the ratio.
+
+Two things about that number are easy to over-read, and the report now says both
+out loud rather than leaving them to the reader:
+
+- **It comes from the escalated tasks only.** Those are the tasks the cheap route
+  failed. If the cheap model tends to fail by giving up early, its cost on
+  exactly those tasks is systematically low, which drags `c` down and inflates
+  the saving. The cheap route ran on *every* task, so the report prints its
+  average cost over all tasks next to its average over escalated ones. If those
+  two differ much, `c` is not the ratio you want.
+- **It is an estimate from very few pairs.** Twenty tasks at a 20% failure rate
+  is four escalations. The report recomputes `c` with each pair left out in turn
+  and shows the range; the savings interval then varies `c` and `p` together
+  instead of treating `c` as exact. That interval is wider than the one you get
+  from `p` alone, and it is the honest one.
 
 The decision:
 
