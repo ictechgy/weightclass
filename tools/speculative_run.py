@@ -534,7 +534,12 @@ def run_child(
         # 결과 객체도 마지막에만 나오므로 중간에 죽은 실행에는 없다. 그래도
         # 시도하는 것은 다른 형태로 부르는 사용자를 위해서이고, 못 건진
         # 타임아웃은 cost_usd 없이 기록되어 리포트의 c 표본에서 빠진다.
-        partial = extract_usage(stdout, stderr, command[0])
+        partial = extract_usage(stdout, stderr, command[0], wants_structured_output(command))
+        if partial is not None and prefer_prices and not rates:
+            # 정상 경로와 같은 fail-closed 규칙. 타임아웃에서만 벤더 숫자를
+            # 남기면, 그 arm 만 다른 기준이 되는 것을 여기서 허용하게 된다.
+            partial.pop("cost_usd", None)
+            partial.pop("cost_origin", None)
         if partial is not None and rates and (prefer_prices or "cost_usd" not in partial):
             # 정상 경로와 같은 요금 계산을 여기서도 한다. 빠뜨리면 비용을
             # 보고하지 않는 벤더의 타임아웃이 언제나 무비용으로 잡혀, 바로 위
@@ -544,6 +549,9 @@ def run_child(
                 partial["cost_usd"] = computed
                 partial["source"] = f"{partial.get('source', '?')}+price-table"
                 partial["cost_origin"] = "price-table"
+            elif prefer_prices:
+                partial.pop("cost_usd", None)
+                partial.pop("cost_origin", None)
         return {
             "exit_code": None,
             "timed_out": True,
@@ -553,7 +561,8 @@ def run_child(
             "tokens": partial.get("total_tokens") if partial else None,
             "usage": dict(partial) if partial else None,
         }
-    usage = extract_usage(stdout, stderr, command[0])
+    structured = wants_structured_output(command)
+    usage = extract_usage(stdout, stderr, command[0], structured)
     if usage is not None and prefer_prices and not rates:
         # 공통 기준을 약속해 놓고 표가 없어 지키지 못했다. 벤더 숫자를 그대로
         # 두면 사용자는 양쪽이 같은 기준이라고 믿는다. 비용을 버린다 —
@@ -715,15 +724,32 @@ def _codex_usage(stdout: str) -> Usage | None:
     }
 
 
-def extract_usage(stdout: str, stderr: str, executable: str | None = None) -> Usage | None:
+def wants_structured_output(command: list[str]) -> bool:
+    """이 호출이 구조화된 사용량 출력을 요청했는가.
+
+    요청하지 않았다면 stdout 은 모델이 쓴 산문이다. 거기 있는 JSON 모양의
+    줄은 벤더가 아니라 **모델** 이 찍은 것이고, 그것을 청구액으로 읽으면
+    자식이 c 를 마음대로 정한다. 플래그가 없으면 구조화 파서를 아예 돌리지
+    않고 stderr 누적 토큰만 긁는다.
+    """
+    joined = " ".join(command)
+    return (
+        "--json" in command or "--output-format json" in joined or "--output-format=json" in joined
+    )
+
+
+def extract_usage(
+    stdout: str, stderr: str, executable: str | None = None, structured: bool = True
+) -> Usage | None:
     """Best-effort usage from whichever vendor produced the output.
 
     벤더는 실행 파일 이름으로 확실히 알 수 있다. stdout 모양으로 추측하면,
     codex 실행의 출력에 claude 모양 한 줄이 섞이는 것만으로 그 줄이 채택된다.
-    아는 쪽을 먼저 시도하고, 모를 때만 둘 다 본다.
+    아는 쪽만 쓰고, 모르면 아예 쓰지 않는다 — 모르는 실행 파일의 stdout 은
+    자식이 무엇이든 찍을 수 있는 곳이다.
     """
-    readers: tuple[Callable[[str], Usage | None], ...] = (_claude_usage, _codex_usage)
-    if executable:
+    readers: tuple[Callable[[str], Usage | None], ...] = ()
+    if structured and executable:
         name = Path(executable).name.lower()
         is_codex = "codex" in name
         is_claude = "claude" in name

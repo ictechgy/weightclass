@@ -226,6 +226,13 @@ tools/speculative_run.py \
 
 One task per invocation. Around twenty real tasks gives a usable interval.
 
+**Both `--output-format json` (Claude) and `--json` (Codex) are load-bearing, not
+cosmetic.** Without them the CLI prints the model's prose to stdout, and the
+runner will not read a cost from prose — a JSON-looking line there was written by
+the *model*, not the vendor, and treating it as a bill would let the cheap route
+name its own price. The runner checks the command for those flags and skips the
+structured parsers when they are absent.
+
 **Keep one `--out-dir` per configuration.** The report reads every record in the
 log as one sample; it flags mixed route fingerprints, but it cannot tell that you
 changed the price table or edited `verify.sh` halfway through. Change either and
@@ -347,6 +354,12 @@ the report says so, names the sources it saw, and falls back to the assumed
 value rather than dividing them.
 
 The decision:
+
+**A timed-out run suspends the verdict.** Its cost is not merely unknown, it is
+unbounded upward — that run burned the whole budget, so it is probably the most
+expensive one in the sample, and leaving it out can reverse the conclusion by
+itself. The report prints the numbers and then declines to call it. Rerun the
+task with a longer `CHILD_TIMEOUT`, or drop it and collect more.
 
 | result | reading |
 | --- | --- |

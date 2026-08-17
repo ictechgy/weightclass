@@ -318,9 +318,19 @@ def main() -> int:
             " 섞였다면 설정마다 --out-dir 을 나눠야 한다."
         )
 
+    def timed_out(attempt: object) -> bool:
+        if not isinstance(attempt, dict):
+            return False
+        child = attempt.get("child")
+        return isinstance(child, dict) and bool(child.get("timed_out"))
+
     tasks: list[Task] = []
     escalated_total = 0
     unusable_cheap = 0
+    # 타임아웃난 실행의 비용은 모르는 것이 아니라 **위쪽이 열려 있는** 것이다.
+    # 예산을 끝까지 태웠으므로 그 한 건이 표본에서 가장 비쌀 가능성이 높고,
+    # 그것을 빼고 낸 결론은 한 건으로 뒤집힐 수 있다. 따로 센다.
+    timed_out_tasks = 0
     unpriced_escalations = 0
     for r in usable:
         # 승급 여부는 p 를 세는 쪽과 같은 술어로 판정한다. 러너가 빈 dict 나
@@ -328,6 +338,8 @@ def main() -> int:
         escalated = isinstance(r.get("expensive"), dict)
         if escalated:
             escalated_total += 1
+        if timed_out(r.get("cheap")) or timed_out(r.get("expensive")):
+            timed_out_tasks += 1
         cheap_cost = cost_of(r.get("cheap")) if single_origin else None
         if not cheap_cost:
             # 0 도 여기서 뺀다. 싼 쪽 0 은 c 를 끌어내려 "거의 공짜" 라는
@@ -655,7 +667,16 @@ def main() -> int:
     print(f"  가장 불리한 끝 (c={c_hi:.3f}, p={hi:.1%}): 절감 {1 - worst:.1%}")
     print(f"  손익분기 p = {1 - c:.1%}  (c 가 {c_hi:.3f} 이면 {1 - c_hi:.1%})")
 
-    if c_range is None:
+    if timed_out_tasks and c_range is not None:
+        # 판정을 내지 않는다. 빠진 비용이 위쪽으로 열려 있으면 구간도 위쪽으로
+        # 열려 있고, 닫힌 구간을 근거로 "유리하다/손해다" 를 말할 수 없다.
+        print(
+            f"\n  -> 판정 없음. 과제 {timed_out_tasks}건이 타임아웃이라 그 비용을 모른다."
+            " 타임아웃난 실행은 예산을 끝까지 태운 가장 비싼 실행이므로, 한 건만으로도"
+            " 위 결론이 뒤집힐 수 있다. 그 과제를 빼고 다시 모으거나, 러너의"
+            " CHILD_TIMEOUT 을 늘려 끝까지 돌게 한 뒤 다시 재야 한다."
+        )
+    elif c_range is None:
         # c 를 재지 못했으면 판정하지 않는다. 남의 벤치마크에서 온 0.31 로
         # "유리하다" 를 찍으면, 재지 않은 것을 잰 것처럼 보이게 된다.
         if not single_origin:
