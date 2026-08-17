@@ -390,7 +390,7 @@ def main() -> int:
     cheap_escalated = [x.cheap for x in tasks if x.escalated]
     cheap_passing = [x.cheap for x in tasks if not x.escalated]
     priced_pairs = [x for x in tasks if x.expensive is not None]
-    paired = [x.cheap / x.expensive for x in priced_pairs if x.expensive]
+    paired = [x.cheap / x.expensive for x in priced_pairs if x.expensive is not None]
     expensive_total = sum(x.expensive for x in priced_pairs if x.expensive)
 
     # 한 건으로 c 를 바꾸면 그 한 과제의 특성이 전체 결론을 정한다. 채택하는
@@ -532,7 +532,9 @@ def main() -> int:
         # 분자는 전수로 알 수 있다. 싼 경로는 모든 과제에서 돌았다. 분모는
         # 알 수 없다 — 비싼 경로는 승급 과제에서만 돌았으므로 그 평균으로
         # 메꾼다. 그 대입만이 남는 가정이고, 아래에서 그렇게 밝힌다.
-        expensive_mean = statistics.fmean([x.expensive for x in priced_pairs if x.expensive])
+        expensive_mean = statistics.fmean(
+            [x.expensive for x in priced_pairs if x.expensive is not None]
+        )
         measured = statistics.fmean(cheap_all) / expensive_mean
         median_ratio = statistics.median(paired)
         print(
@@ -711,7 +713,7 @@ def main() -> int:
                 if not values or not priced_pairs:
                     return None
                 expensive_mean_all = statistics.fmean(
-                    [x.expensive for x in priced_pairs if x.expensive]
+                    [x.expensive for x in priced_pairs if x.expensive is not None]
                 )
                 mean = statistics.fmean(values)
                 # a 도 표본에서 온 값이다. 점추정만 쓰면 s > a + c 판정이
@@ -833,7 +835,7 @@ def main() -> int:
                     r_spread = 0.0
                     if retry_costs and priced_pairs:
                         expensive_mean_all = statistics.fmean(
-                            [x.expensive for x in priced_pairs if x.expensive]
+                            [x.expensive for x in priced_pairs if x.expensive is not None]
                         )
                         r_mean = statistics.fmean(retry_costs)
                         r_ratio = r_mean / expensive_mean_all
@@ -890,7 +892,9 @@ def main() -> int:
                             # 안 된다 — 싼 비용과 비싼 비용이 같은 비율로
                             # 움직이면 c 의 구간은 좁은데 분모는 여전히
                             # 흔들린다. 분모의 표준오차를 직접 낸다.
-                            expensive_values = [x.expensive for x in priced_pairs if x.expensive]
+                            expensive_values = [
+                                x.expensive for x in priced_pairs if x.expensive is not None
+                            ]
                             if len(expensive_values) > 1:
                                 mean_e = statistics.fmean(expensive_values)
                                 se_e = statistics.stdev(expensive_values) / math.sqrt(

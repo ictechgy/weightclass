@@ -953,14 +953,14 @@ def strip_log_prefix(line: str) -> str:
     """줄머리 접두사를 벗긴 내용. 키 블록 안에서만 쓴다."""
     # 접두사는 겹쳐서 붙는다("+[INFO] ", "[INFO] +"). 한 번만 벗기면 남은
     # 겹이 헤더 인식을 막아 키가 통째로 남는다. 더 벗겨지지 않을 때까지 반복.
-    previous = ""
+    # 상한을 두면 겹이 많을 때 남는다. 매 번 문자열이 짧아지거나 같아지므로
+    # 고정점에 반드시 도달한다 — 길이가 줄지 않으면 그 자리가 고정점이다.
     current = line
-    for _ in range(6):
-        current = _LOG_PREFIX.sub("", current, count=1).strip()
-        if current == previous:
-            break
-        previous = current
-    return current
+    while True:
+        nxt = _LOG_PREFIX.sub("", current, count=1).strip()
+        if nxt == current:
+            return current
+        current = nxt
 
 
 def _prefix_variants(line: str) -> list[str]:
@@ -981,14 +981,19 @@ def _prefix_variants(line: str) -> list[str]:
     return [v for v in variants if v]
 
 
-def _looks_like_key_line(candidate: str) -> bool:
-    """이 조각이 키 본문 한 줄처럼 보이는가."""
+def _looks_like_key_line(candidate: str, minimum: int = 16) -> bool:
+    """이 조각이 키 본문 한 줄처럼 보이는가.
+
+    `minimum` 은 부르는 자리에 따라 다르다. 접두사 후보를 고를 때는 높게
+    잡아야 평범한 단어를 본문으로 오인하지 않고, 본문이 이어지는지 볼 때는
+    낮아야 한다 — 12자로 접힌 키가 첫 줄에서 끊기면 나머지가 통째로 남는다.
+    """
     if not candidate or " " in candidate:
         return False
     if _PEM_END_RE.search(candidate) or _PEM_BEGIN_RE.search(candidate):
         return True
     base64ish = sum(1 for ch in candidate if ch.isalnum() or ch in "+/=")
-    return len(candidate) >= 16 and base64ish >= len(candidate) * 0.9
+    return len(candidate) >= minimum and base64ish >= len(candidate) * 0.9
 
 
 def _key_body_end(text: str, body_at: int) -> int:
@@ -1055,7 +1060,9 @@ def _key_body_end(text: str, body_at: int) -> int:
             # 간다 — 진짜 마지막 줄이면 다음 줄은 END 마커나 다른 내용이다.
             following = text[position:].lstrip("\r\n")
             head = following.split("\n", 1)[0] if following else ""
-            if not _looks_like_key_line(strip_log_prefix(head) or head):
+            # 본 주사는 짧은 줄도 본문으로 받는다. 이어짐 판정만 16자를
+            # 요구하면 12자로 접힌 키가 첫 줄에서 끊긴다.
+            if not _looks_like_key_line(strip_log_prefix(head) or head, minimum=8):
                 break
     return position if consumed_content else body_at
 
@@ -1618,10 +1625,11 @@ def ask_advisor(
     # 봉투에서 본문을 못 꺼내면 원문이 그대로 온다. 거기서는 줄바꿈이
     # `\n` 두 글자라, 줄 단위로 도는 블록 리댁터가 전체를 한 줄로 본다.
     # 리댁션 전에 이스케이프를 실제 줄바꿈으로 되돌린다.
-    extracted = advice_text(body, command)
-    if wants_structured_output(command):
-        extracted = extracted.replace("\\r\\n", "\n").replace("\\n", "\n")
-    text = "" if failed else redact_text(extracted)
+    # 이스케이프를 실제 줄바꿈으로 되돌리지 않는다. 그것은 정확 일치의
+    # 앵커를 부순다 — 값 안에 `\n` 두 글자가 있는 비밀이 두 조각으로
+    # 갈리면 어느 쪽도 목록과 맞지 않는다. 줄 구분자 패턴이 이스케이프된
+    # 줄바꿈을 이미 줄로 보므로 정규화가 필요 없다.
+    text = "" if failed else redact_text(advice_text(body, command))
     truncated = len(text) > ADVICE_MAX_CHARS
     if truncated:
         text = text[:ADVICE_MAX_CHARS]

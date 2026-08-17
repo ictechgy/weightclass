@@ -105,19 +105,25 @@ verify  ── pass → accept
                 └─ fail → escalate to the expensive route
 ```
 
-With `s` the probability that the advised retry passes and `r` the cost of that
+With `s` the probability that the advised retry passes, `r` the cost of that
 retry — **not** `c`, because the retry carries the advice in its prompt and so
-costs more than the first attempt:
+costs more than the first attempt — and `q` the fraction of advised failures that
+actually produce a retry (advice can come back empty, or the advisor call can
+fail, and then nothing is retried and no retry cost is paid):
 
 ```
-expected cost = c + p·(a + r + (1 − s))        pays when   s > a + r
+expected cost = c + p·(a + q·r + (1 − s))      pays when   s > a + q·r
 ```
+
+Charging `r` to every advised failure overstates the arm's cost and can produce
+the wrong verdict against it.
 
 **Shape B's condition does not contain `p`.** That matters more than it looks:
 the decision can be made from the failed runs alone, which makes the
 pre-registration cleaner and the sample requirement smaller. At `c ≈ 0.31` and
-`a ≈ 0.1` the break-even is `s > 0.41` if the retry costs the same as the first
-attempt — and higher once `r > c`, which it normally is. It replaces a full expensive run with one short
+`a ≈ 0.1` the break-even is `s > 0.41` when every advised failure retries at the
+first attempt's cost — higher once `r > c`, which it normally is, and lower when
+`q < 1`. It replaces a full expensive run with one short
 advisory call plus one more cheap run, so the saving per rescued task is large —
 but the bar rises fast with `a`, and at `a ≈ c ≈ 0.31` it is already `s > 0.62`.
 
@@ -228,7 +234,7 @@ Then **model** the two configurations nobody ran, and label them as modelled:
 
 ```
 A alone      = a + c + p′
-A + B        = a + c + p′·(a + r + (1 − s′))
+A + B        = a + c + p′·(a + q·r + (1 − s′))
 ```
 
 `s′` — the advised-retry success rate *after* an up-front plan — is not the same
@@ -248,10 +254,11 @@ To pre-register:
 - **n**, and the early-stopping rule.
 - **The primary endpoint: cost per passing task.** Not a blind quality rating —
   see the ceiling above.
-- **The decision rule for Shape B**: `s > a + r`, evaluated on the *interval* of
-  every term, not the point estimates, and abstaining when the interval crosses.
-  `r` is the measured cost of the advised retry and is normally above `c`, since
-  the retry carries the advice in its prompt.
+- **The decision rule for Shape B**: `s > a + q·r`, evaluated on the *interval*
+  of every term, not the point estimates, and abstaining when the interval
+  crosses. `r` is the measured cost of the advised retry and is normally above
+  `c`, since the retry carries the advice in its prompt; `q` is the fraction of
+  advised failures that produced a retry at all.
 - **The decision rule for Shape A**: a named margin on `p − p′`, plus the explicit
   statement that a null result means "no measurable effect on failures" and not
   "no effect on quality".

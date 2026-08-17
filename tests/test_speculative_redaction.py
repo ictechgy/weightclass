@@ -583,3 +583,29 @@ def test_key_far_beyond_any_scan_window() -> None:
     cleaned = module.verify_excerpt(text)
     assert not [line for line in lines if line in cleaned]
     assert "FAILED tail" in cleaned
+
+
+@pytest.mark.parametrize("width", [12, 15, 16, 24, 64], ids=lambda w: f"{w}col")
+def test_key_body_folded_to_any_width(width: int) -> None:
+    """본 주사와 이어짐 판정의 하한이 어긋나면 짧게 접힌 키가 첫 줄에서 끊긴다."""
+    module = load_runner()
+    blob = base64.b64encode(b"\x01" * 1200).decode()
+    lines = [blob[index : index + width] for index in range(0, len(blob), width)]
+    text = f"{BEGIN}RSA {KEY}\n" + "\n".join(lines) + f"\n{END}RSA {KEY}"
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+
+
+@pytest.mark.parametrize("layers", [1, 2, 4, 8], ids=lambda n: f"{n}layer")
+def test_prefix_stripping_reaches_a_fixed_point(layers: int) -> None:
+    """상한을 두면 겹이 많을 때 남는다."""
+    module = load_runner()
+    prefix = "+[INFO] " * layers
+    lines = pem_body()
+    text = (
+        f"{prefix}{BEGIN}RSA {KEY}\n{prefix}Proc-Type: 4,ENCRYPTED\n{prefix}\n"
+        + "\n".join(prefix + line for line in lines)
+        + f"\n{prefix}{END}RSA {KEY}"
+    )
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
