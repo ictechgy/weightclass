@@ -250,7 +250,9 @@ def test_redaction_is_fast_on_hostile_input() -> None:
     module = load_runner()
     hostile = {
         "비매치 대량": "x" * 200_000,
-        "마커 반복": (BEGIN + KEY) * 5_000,
+        # 줄바꿈 없는 마커 반복. 게이트가 마커마다 끝까지 훑으면 이차 시간이
+        # 되고, 그 길이는 자식이 정한다.
+        "마커 반복": (BEGIN + KEY) * 20_000,
         "언급 반복": (f"{BEGIN}{KEY} nope\n") * 5_000,
         "이스케이프 줄바꿈 대량": ("\\n" + "A" * 64) * 3_000,
     }
@@ -661,3 +663,57 @@ def test_advice_body_is_extracted_from_every_envelope(envelope: str, expected: s
     """봉투를 그대로 붙이면 executor 가 조언 대신 계측 데이터를 읽는다."""
     module = load_runner()
     assert module.advice_text(envelope, ["claude", "--output-format", "json"]) == expected
+
+
+@pytest.mark.parametrize("layers", [1, 8, 51, 120], ids=lambda n: f"{n}layer")
+def test_long_stacked_prefix_does_not_push_body_out_of_the_gate(layers: int) -> None:
+    """고정 문자 창을 쓰면 접두사가 길 때 본문 첫 글자가 창 밖으로 밀린다."""
+    module = load_runner()
+    prefix = "+[INFO] " * layers
+    lines = pem_body()
+    text = (
+        f"{prefix}{BEGIN}RSA {KEY}\n"
+        + "\n".join(prefix + line for line in lines)
+        + f"\n{prefix}{END}RSA {KEY}"
+    )
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://:opaquepassword123@proxy:3128", "http://opaquetoken123:@proxy:3128"],
+    ids=["empty-user", "empty-password"],
+)
+def test_proxy_userinfo_with_one_empty_half(url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """http://:pass@host 와 http://token:@host 는 둘 다 유효하고 쓰인다."""
+    module = load_runner()
+    monkeypatch.setenv("HTTP_PROXY", url)
+    parsed = module.split_userinfo(url)
+    assert parsed is not None
+    secret = parsed[0] or parsed[1]
+    assert secret not in module.verify_excerpt(f"auth {secret} failed")
+
+
+def test_host_secret_survives_json_serialisation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """값이 JSON 으로 직렬화되면 따옴표와 역슬래시가 바뀌어 원문과 다른 바이트가 된다."""
+    module = load_runner()
+    monkeypatch.setenv("MY_SVC_TOKEN", 'zzTOP"SECRETvalue123')
+    cleaned = module.verify_excerpt('{"seen": "zzTOP\\"SECRETvalue123"}')
+    assert 'zzTOP\\"SECRETvalue123' not in cleaned
+    assert 'zzTOP"SECRETvalue123' not in cleaned
+
+
+def test_crlf_key_is_redacted() -> None:
+    module = load_runner()
+    lines = pem_body()
+    text = f"{BEGIN}RSA {KEY}\r\n" + "\r\n".join(lines) + f"\r\n{END}RSA {KEY}"
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+
+
+def test_content_array_envelope_is_joined() -> None:
+    """content 배열은 조각을 이어야 본문이 된다. 첫 조각만 쓰면 나머지가 사라진다."""
+    module = load_runner()
+    envelope = '{"content":[{"text":"first"},{"text":"second"}]}'
+    assert module.advice_text(envelope, ["claude", "--output-format", "json"]) == "first\nsecond"

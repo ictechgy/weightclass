@@ -264,12 +264,6 @@ def main() -> int:
             return None
         return cost if math.isfinite(cost) and cost >= 0 else None
 
-    def timed_out_attempt(attempt: object) -> bool:
-        if not isinstance(attempt, dict):
-            return False
-        child = attempt.get("child")
-        return isinstance(child, dict) and bool(child.get("timed_out"))
-
     def cost_origin(attempt: object) -> str | None:
         """벤더가 알려준 청구액인가, 우리 요금표로 환산한 값인가.
 
@@ -310,8 +304,13 @@ def main() -> int:
     #   - 승급함, 비싼 쪽을 신뢰할 수 없다 -> 분자에만, 분모에서 빠진 것을 센다
     class Task(NamedTuple):
         cheap: float
+        # 비율의 분모로 쓸 수 있는 값(0 이 아님).
         expensive: float | None
         escalated: bool
+        # 관측된 비싼 비용. 0 도 관측값이므로 평균에는 들어간다. 나눗셈에만
+        # 못 쓴다 — 둘을 통째로 묶어 빼면 평균이 커져 a 와 r 이 작아지고,
+        # 그것은 조언 쪽에 유리한 방향이다.
+        expensive_observed: float | None
 
     # c 는 두 평균의 비다. **표본 전체가 한 출처여야 한다.** 쌍 단위로만
     # 확인하면 부족하다 — 어떤 과제는 벤더 청구액, 어떤 과제는 요금표
@@ -382,6 +381,7 @@ def main() -> int:
             unusable_cheap += 1
             continue
         expensive_cost = cost_of(r.get("expensive")) if escalated else None
+        observed_expensive = expensive_cost
         # 비싼 비용 0 은 관측값이지만 **분모로는 못 쓴다.** 이유를 나눠 센다 —
         # 진위값 하나로 뭉뚱그리면 아래 나눗셈 가드가 공허해지고, 나중에 그
         # 검사를 "0 도 관측값이다" 로 고치는 순간 ZeroDivisionError 가 된다.
@@ -391,12 +391,17 @@ def main() -> int:
         elif escalated and not expensive_cost:
             unpriced_escalations += 1
             expensive_cost = None
-        tasks.append(Task(cheap_cost, expensive_cost, escalated))
+        tasks.append(Task(cheap_cost, expensive_cost, escalated, observed_expensive))
 
     cheap_all = [x.cheap for x in tasks]
     cheap_escalated = [x.cheap for x in tasks if x.escalated]
     cheap_passing = [x.cheap for x in tasks if not x.escalated]
     priced_pairs = [x for x in tasks if x.expensive is not None]
+    # 평균의 모집단은 관측된 것 전부다. 0 을 빼면 평균이 커져 a 와 r 이
+    # 작아지고 조언 쪽에 유리해진다.
+    observed_expensive_costs = [
+        x.expensive_observed for x in tasks if x.expensive_observed is not None
+    ]
     paired = [x.cheap / x.expensive for x in priced_pairs if x.expensive]
     expensive_total = sum(x.expensive for x in priced_pairs if x.expensive)
 
@@ -539,7 +544,7 @@ def main() -> int:
         # 분자는 전수로 알 수 있다. 싼 경로는 모든 과제에서 돌았다. 분모는
         # 알 수 없다 — 비싼 경로는 승급 과제에서만 돌았으므로 그 평균으로
         # 메꾼다. 그 대입만이 남는 가정이고, 아래에서 그렇게 밝힌다.
-        expensive_mean = statistics.fmean([x.expensive for x in priced_pairs if x.expensive])
+        expensive_mean = statistics.fmean(observed_expensive_costs)
         if expensive_mean <= 0:
             # 여기 올 수 없어야 하지만, 올 수 있게 되면 조용히 죽는 것보다
             # 말하고 멈추는 편이 낫다.
@@ -713,7 +718,7 @@ def main() -> int:
                 # 중간에 죽은 호출의 사용량은 부분값이다. run_child 가 그것을
                 # 건져 두므로 값이 있는 것처럼 보이지만, 그것으로 "전부 가격이
                 # 있다" 를 만족시키면 판정이 부분값 위에 선다.
-                if timed_out_attempt(advice):
+                if timed_out(advice):
                     return None
                 return cost_of(advice)
 
@@ -727,9 +732,7 @@ def main() -> int:
                 values = [value for r in usable if (value := advice_cost(r, key)) is not None]
                 if not values or not priced_pairs:
                     return None
-                expensive_mean_all = statistics.fmean(
-                    [x.expensive for x in priced_pairs if x.expensive]
-                )
+                expensive_mean_all = statistics.fmean(observed_expensive_costs)
                 mean = statistics.fmean(values)
                 # a 도 표본에서 온 값이다. 점추정만 쓰면 s > a + c 판정이
                 # 실제보다 확정적으로 보인다.
@@ -811,7 +814,7 @@ def main() -> int:
                         value
                         for r in usable
                         if isinstance(r.get("retry"), dict)
-                        and not timed_out_attempt(r.get("retry"))
+                        and not timed_out(r.get("retry"))
                         and (value := cost_of(r.get("retry"))) is not None
                     ]
                     priced_retries = len(retry_costs)
@@ -849,9 +852,7 @@ def main() -> int:
                     r_ratio = None
                     r_spread = 0.0
                     if retry_costs and priced_pairs:
-                        expensive_mean_all = statistics.fmean(
-                            [x.expensive for x in priced_pairs if x.expensive]
-                        )
+                        expensive_mean_all = statistics.fmean(observed_expensive_costs)
                         r_mean = statistics.fmean(retry_costs)
                         r_ratio = r_mean / expensive_mean_all
                         r_spread = (
@@ -907,10 +908,17 @@ def main() -> int:
                             # 안 된다 — 싼 비용과 비싼 비용이 같은 비율로
                             # 움직이면 c 의 구간은 좁은데 분모는 여전히
                             # 흔들린다. 분모의 표준오차를 직접 낸다.
-                            expensive_values = [
-                                x.expensive for x in priced_pairs if x.expensive is not None
-                            ]
-                            if len(expensive_values) > 1:
+                            expensive_values = observed_expensive_costs
+                            if len(expensive_values) <= 1:
+                                # 분모가 한 관측뿐이면 그 평균을 정확히 아는
+                                # 값처럼 쓰게 된다. lower_e <= 0 에서 판정을
+                                # 막는 것과 같은 이유로 여기서도 막는다.
+                                print(
+                                    "  승급 과제의 비싼 비용 관측이 하나뿐이라 분모의"
+                                    " 흔들림을 낼 수 없다. 판정하지 않는다."
+                                )
+                                bound_low, bound_high = 0.0, float("inf")
+                            else:
                                 mean_e = statistics.fmean(expensive_values)
                                 se_e = statistics.stdev(expensive_values) / math.sqrt(
                                     len(expensive_values)
@@ -971,7 +979,11 @@ def main() -> int:
             label = "c + 실패율(설정 혼합)"
         else:
             label = "c + p′" if advice_first_on else "c + p"
-        print(f"\n(참고) 이 로그의 {label} = {c + p:.2f} — 조언 비용은 빠져 있다")
+        print(
+            f"\n(참고) 이 로그의 {label} = {c + p:.2f}. 실제 모형과의 차이는 조언"
+            " 비용만이 아니다 — 재시도가 구제해 승급하지 않은 과제도 이 식에는"
+            " 승급으로 들어 있어, 이 값은 실제보다 클 수도 작을 수도 있다."
+        )
     else:
         print("\n기대 비용 = c + p")
         print(f"  기대 비용 {c + p:.2f}  ->  절감 {1 - (c + p):.1%}")
@@ -1028,7 +1040,16 @@ def main() -> int:
         # 않는다. 조언 자체의 판정은 위쪽 s > a + c 가 한다.
         print(
             "\n  -> 판정 없음(c + p 기준). 이 로그는 조언을 켜고 쟀다."
-            " 조언의 이득 판정은 위의 s > a + q·r 을 보라(q 는 재시도 시도율)."
+            + (
+                " 조언의 이득 판정은 위의 s > a + q·r 을 보라(q 는 재시도 시도율)."
+                if any(
+                    isinstance(rec.get("advisor"), dict)
+                    and (rec["advisor"] or {}).get("advise_on_failure")
+                    for rec in usable
+                )
+                else " 시작 전 조언만 켠 로그에는 그 판정이 없다 — a < p − p′ 를 보려면"
+                " 조언을 끄고 같은 과제를 한 번 더 재야 한다."
+            )
         )
     elif timed_out_tasks and c_range is not None:
         # 판정을 내지 않는다. 빠진 비용이 위쪽으로 열려 있으면 구간도 위쪽으로

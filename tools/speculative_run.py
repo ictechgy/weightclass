@@ -890,9 +890,11 @@ def split_userinfo(value: str) -> tuple[str, str] | None:
     user, separator, password = userinfo.partition(":")
     if not separator:
         # 비밀번호 없이 토큰만 넣는 형태(https://TOKEN@host)가 흔하다.
-        # 여기서 None 을 돌려주면 그 토큰이 목록에 없어 그대로 나간다.
         return userinfo, ""
-    if not user or not password:
+    # 한쪽이 비어도 자격증명이다. http://:pass@host 와 http://token:@host 는
+    # 둘 다 유효하고 실제로 쓰인다. 여기서 None 을 돌려주면 그 값이 목록에
+    # 없어 그대로 나간다.
+    if not user and not password:
         return None
     return user, password
 
@@ -906,8 +908,12 @@ _PEM_END_RE = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----")
 # 통째로 지우는 것을 막는다.
 PEM_MAX_SPAN = 12000
 # 마커 뒤 이만큼을 보고 진짜 키 블록인지 이름만 언급한 것인지 가른다.
-# 접두사와 헤더 줄이 앞을 채우면 200자로는 본문에 닿지 못한다.
-PEM_LOOKAHEAD = 400
+# 마커 뒤 몇 **줄** 을 보고 키 블록인지 가른다. 문자 수로 제한하면 접두사가
+# 길 때 본문에 닿지 못한다.
+PEM_LOOKAHEAD_LINES = 6
+# 한 줄을 알아보는 데 볼 최대 글자 수. 줄바꿈 없는 출력에서 마커마다 끝까지
+# 훑으면 이차 시간이 되고, 그 길이는 자식이 정한다.
+PEM_LOOKAHEAD_LINE_CHARS = 512
 _PEM_BODY_RUN = re.compile(r"[A-Za-z0-9+/=]{12,}")
 # PEM 헤더 줄: `Proc-Type: 4,ENCRYPTED` 처럼 이름과 값이 콜론으로 갈린다.
 _PEM_HEADER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s")
@@ -926,28 +932,41 @@ def looks_like_key_block(text: str, after: int) -> bool:
     키까지가 한 구간으로 묶여 그 사이의 실패 신호가 통째로 사라진다 —
     조언자가 봐야 할 바로 그 내용이다.
     """
-    window = text[after : after + PEM_LOOKAHEAD]
-    if _PEM_BODY_RUN.search(window):
-        return True
-    # 게이트가 12자 연속을 요구하면 8자로 접힌 본문을 못 알아보고, 그러면
-    # 키가 "이름만 언급" 으로 분류되어 통째로 남는다. 본 주사가 받아들이는
-    # 것과 같은 기준으로 줄을 본다.
-    for raw in _LINE_SEPARATOR.split(window)[1:]:
-        line = _ESCAPE_NOISE.sub("", raw).strip()
-        if not line:
+    # 고정 문자 창을 쓰지 않는다. 접두사가 길면(51겹 "+[INFO] " 이면 400자를
+    # 넘는다) 본문 첫 글자가 창 밖으로 밀려 키가 "이름만 언급" 으로 분류되고
+    # 통째로 남는다. 그리고 splitlines() 는 이스케이프된 구분자를 못 본다 —
+    # 본 주사는 보는데.
+    #
+    # **줄 수**로 제한하고 본 주사와 같은 구분자·같은 후보·같은 하한을 쓴다.
+    # 게이트와 주사가 서로 다른 기준을 쓰면 그 틈이 곧 유출이다.
+    # 줄 수로 제한하되 **문자 수 상한도 함께** 둔다. 줄바꿈이 없는 텍스트
+    # 에서는 한 줄이 곧 전체이고, 마커마다 끝까지 훑으면 이차 시간이 된다.
+    # 자식이 출력 길이를 정하므로 그것은 공격 가능한 성질이다. 상한은 본문
+    # 한 줄을 알아보기에 넉넉하다.
+    position = after
+    horizon = min(len(text), after + PEM_LOOKAHEAD_LINES * PEM_LOOKAHEAD_LINE_CHARS)
+    for _ in range(PEM_LOOKAHEAD_LINES):
+        if position >= horizon:
+            break
+        separator = _LINE_SEPARATOR.search(text, position, horizon)
+        stop = separator.end() if separator else horizon
+        line = _ESCAPE_NOISE.sub("", text[position:stop]).strip().strip('"')
+        position = stop
+        if not line or not strip_log_prefix(line):
             continue
-        for candidate in (line, strip_log_prefix(line), *_prefix_variants(line)):
-            if candidate and _looks_like_key_line(candidate, minimum=8):
+        for candidate in (line, *_prefix_variants(line)):
+            if not candidate:
+                continue
+            if _PEM_HEADER_LINE.match(candidate) or _looks_like_key_line(candidate, minimum=8):
                 return True
-    # 줄마다 접두사가 붙으면(diff 의 `+`, CI 의 `[INFO] `) 앞쪽 창이 헤더
-    # 줄로만 채워지고, 그 헤더도 접두사 때문에 앵커된 패턴에 안 걸린다.
-    # 그러면 진짜 키 블록이 "이름만 언급" 으로 분류되어 통째로 남는다.
-    for raw in window.splitlines():
-        line = raw.strip()
-        if _PEM_HEADER_LINE.match(line):
+        # 줄 **안** 의 base64 연속도 본다. 본문과 END 마커가 한 물리적 줄에
+        # 있으면 줄 전체에 공백이 있어 후보가 모두 탈락하지만, 그 줄에는
+        # 키가 들어 있다.
+        if _PEM_BODY_RUN.search(line):
             return True
-        if any(_PEM_HEADER_LINE.match(v) for v in _prefix_variants(line)):
-            return True
+        # 한 줄이라도 본문도 헤더도 아니면 그 뒤는 키가 아니다. 마커를 이름만
+        # 언급한 줄이 여기서 걸러진다.
+        return False
     return False
 
 
@@ -1087,10 +1106,17 @@ def _key_run_end(text: str, body_at: int) -> int:
     #
     # 줄 끝까지 지운다. 여기까지 온 것은 마커 뒤가 키 본문이라고 이미 판정한
     # 자리이므로, 한 줄을 통째로 잃는 것이 토큰을 반토막 내는 것보다 낫다.
-    # body_at 이 바로 줄바꿈이면(표준 여러 줄 PEM 이 그렇다) find 가 body_at
-    # 을 돌려주어 전진하지 못한다. 한 글자 뒤에서 찾는다.
-    newline = text.find("\n", body_at + 1)
-    return len(text) if newline < 0 else newline
+    # 구분자 **연속** 을 먼저 건너뛴다. body_at+1 로 한 글자만 넘기면 CRLF
+    # 에서 바로 다음 글자가 `\n` 이라 find 가 그 자리를 돌려주고, 한 글자만
+    # 전진해 키가 그대로 남는다.
+    position = body_at
+    while True:
+        skip = _LINE_SEPARATOR.match(text, position)
+        if skip is None or skip.end() == position:
+            break
+        position = skip.end()
+    separator = _LINE_SEPARATOR.search(text, position)
+    return separator.start() if separator else len(text)
 
 
 def redact_private_keys(text: str) -> str:
@@ -1122,10 +1148,15 @@ def redact_private_keys(text: str) -> str:
         body_end = _key_body_end(text, body_at)
         if body_end <= body_at:
             # 줄 단위로 범위를 정하지 못했다. 본문과 END 가 한 물리적 줄에
-            # 있거나 공백이 섞인 형태다. 여기서 body_at 을 그대로 쓰면 아무것도
-            # 지우지 않고 다음 반복으로 넘어가, 키가 통째로 출력된다 —
-            # fail-open 이다. 문자 단위로라도 키처럼 보이는 만큼을 삼킨다.
+            # 있거나 부스러기가 섞인 형태다. 여기서 body_at 을 그대로 쓰면
+            # 아무것도 지우지 않고 넘어가 키가 통째로 출력된다 — fail-open.
             body_end = _key_run_end(text, body_at)
+            # 그 한 줄 뒤부터 주사를 **다시** 시도한다. 마커 직후 한 줄만
+            # 이상하고 그 아래가 정상 본문인 형태에서, 한 줄만 지우고 나머지를
+            # 남기는 일을 막는다.
+            resumed = _key_body_end(text, body_end)
+            if resumed > body_end:
+                body_end = resumed
         closing = _PEM_END_RE.search(text, body_at, min(body_end + 200, body_at + PEM_MAX_SPAN))
         index = max(closing.end() if closing else body_end, body_at + 1)
         out.append("[REDACTED]")
@@ -1177,8 +1208,16 @@ def host_secret_values() -> list[str]:
         # 짧은 값은 평범한 문자열과 부딪혀 과잉 삭제를 만든다.
         if len(value) >= 12 and not value.isspace():
             values.append(value)
+    # 값이 JSON 으로 직렬화되면 따옴표, 역슬래시, 줄바꿈이 이스케이프되어
+    # 원문과 다른 바이트가 된다. 자식의 출력이나 조언 봉투는 대개 JSON 이므로
+    # 직렬화된 형태로도 대조해야 한다.
+    serialised = []
+    for value in values:
+        encoded = json.dumps(value)[1:-1]
+        if encoded != value:
+            serialised.append(encoded)
     # 긴 것부터 지워야 짧은 것이 긴 것의 일부를 먼저 갉아먹지 않는다.
-    return sorted(set(values), key=len, reverse=True)
+    return sorted(set(values) | set(serialised), key=len, reverse=True)
 
 
 def redact_text(text: str) -> str:
@@ -1635,7 +1674,14 @@ def ask_advisor(
     # 앵커를 부순다 — 값 안에 `\n` 두 글자가 있는 비밀이 두 조각으로
     # 갈리면 어느 쪽도 목록과 맞지 않는다. 줄 구분자 패턴이 이스케이프된
     # 줄바꿈을 이미 줄로 보므로 정규화가 필요 없다.
-    text = "" if failed else redact_text(advice_text(body, command))
+    extracted = advice_text(body, command)
+    # 구조화 출력을 요청했는데 본문을 못 꺼냈다면 남은 것은 봉투다. 그것을
+    # 과제에 붙이면 executor 가 조언 대신 계측 데이터를 읽고, 리댁션도
+    # 인코딩된 텍스트와 디코딩된 값을 비교하게 되어 어긋난다. 조언을 버린다.
+    envelope_only = wants_structured_output(command) and extracted.strip().startswith(("{", "["))
+    if envelope_only:
+        print("  조언 봉투에서 본문을 꺼내지 못해 이번 조언은 쓰지 않는다")
+    text = "" if failed or envelope_only else redact_text(extracted)
     truncated = len(text) > ADVICE_MAX_CHARS
     if truncated:
         text = text[:ADVICE_MAX_CHARS]
@@ -1672,10 +1718,16 @@ def _first_text(payload: object, depth: int = 0) -> str:
             if found:
                 return found
     elif isinstance(payload, list):
-        for value in reversed(payload):
-            found = _first_text(value, depth + 1)
-            if found:
-                return found
+        # 두 모양이 섞여 있다. 메시지 스트림(JSONL)은 마지막이 결과이고,
+        # content 배열은 조각을 **이어야** 본문이 된다. 조각이 여럿이면
+        # 잇고, 하나뿐이면 그것이 답이다.
+        pieces = [found for value in payload if (found := _first_text(value, depth + 1))]
+        if not pieces:
+            return ""
+        if len(pieces) == 1:
+            return pieces[0]
+        joined = "\n".join(pieces).strip()
+        return joined if joined else pieces[-1]
     return ""
 
 
