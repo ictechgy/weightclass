@@ -869,7 +869,9 @@ _HOST_SECRET_NAMES = re.compile(
 _PROXY_NAMES = re.compile(r"(?i)^(https?|all)_proxy$")
 # 스킴이 없는 형태(user:pass@host)도 curl, wget, pip 가 받아들이고 사내
 # 프록시 설정에서 흔하다. 스킴을 요구하면 그 형태가 통째로 빠져나간다.
-_URL_USERINFO = re.compile(r"(?:://|^)([^/\s:@]+):([^/\s@]+)@")
+# 비밀번호에 @ 가 들어 있으면(특수문자 정책에서 흔하다) 첫 @ 에서 끊는
+# 방식은 앞부분만 잡는다. 마지막 @ 까지 탐욕적으로 가되 공백은 넘지 않는다.
+_URL_USERINFO = re.compile(r"(?:://|^)([^/\s:@]+):(\S+)@")
 
 
 # "-----BEGIN PGP PRIVATE KEY BLOCK-----" 처럼 마커가 KEY 로 끝나지 않는
@@ -970,14 +972,6 @@ def _key_body_end(text: str, body_at: int) -> int:
     return position if consumed_content else body_at
 
 
-# 줄 단위로 범위를 못 정했을 때 쓰는 문자 단위 폴백. 키 본문에 나올 수 있는
-# 문자 — base64, 직렬화 부스러기, PEM 헤더의 구두점 — 를 삼킨다.
-#
-# 줄바꿈은 넣지 않는다. 줄을 넘어가면 다음 줄의 토큰을 가운데서 잘라 그
-# 앵커를 없애고, 그러면 뒤의 모양 패턴들이 그 토큰을 못 잡는다.
-_KEY_RUN = re.compile(r'[A-Za-z0-9+/=\t \\"\':,.-]+')
-
-
 def _key_run_end(text: str, body_at: int) -> int:
     """줄 판정이 실패했을 때 키처럼 보이는 문자 연속의 끝.
 
@@ -985,8 +979,15 @@ def _key_run_end(text: str, body_at: int) -> int:
     범위를 못 정했다고 아무것도 지우지 않으면 키가 통째로 나간다. 덜 지우는
     것보다 더 지우는 편이 낫다.
     """
-    run = _KEY_RUN.match(text, body_at)
-    return run.end() if run else min(len(text), body_at + PEM_MAX_SPAN)
+    # 문자 종류로 훑지 않는다. 어떤 문자 집합을 고르든 그 집합 밖의 글자에서
+    # 멈추고, 그 자리가 토큰 한가운데면 앵커(ghp_ 의 접두사 같은)가 잘려
+    # 나가 본체만 남는다 — 지우려는 동작이 유출을 만든다. 라운드 10 에서
+    # 줄바꿈을 빼자 이번에는 밑줄에서 잘렸다.
+    #
+    # 줄 끝까지 지운다. 여기까지 온 것은 마커 뒤가 키 본문이라고 이미 판정한
+    # 자리이므로, 한 줄을 통째로 잃는 것이 토큰을 반토막 내는 것보다 낫다.
+    newline = text.find("\n", body_at)
+    return len(text) if newline < 0 else newline
 
 
 def redact_private_keys(text: str) -> str:

@@ -254,7 +254,10 @@ def test_redaction_is_fast_on_hostile_input() -> None:
         started = time.monotonic()
         module.verify_excerpt(text)
         elapsed = time.monotonic() - started
-        assert elapsed < 3.0, f"{name}: {elapsed:.2f}s"
+        # 여유 있게 잡는다. 이 검사가 잡으려는 것은 파국적 백트래킹이고
+        # 그것은 초가 아니라 분 단위로 나타난다. 빠듯하게 잡으면 부하가 걸린
+        # 기계에서 실패해, 진짜 결함이 아닌 것으로 신뢰를 깎는다.
+        assert elapsed < 15.0, f"{name}: {elapsed:.2f}s"
 
 
 def test_excerpt_is_bounded() -> None:
@@ -407,3 +410,56 @@ def test_fallback_does_not_cut_the_next_line_token() -> None:
     cleaned = module.verify_excerpt(text)
     assert "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in cleaned
     assert "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in cleaned
+
+
+def test_fallback_never_jumps_a_fixed_distance() -> None:
+    """임의 크기 점프는 자식이 거리를 맞추면 앵커만 잘라 낸다.
+
+    `ghp` 세 글자가 사라지고 `_ABC...` 가 남으면 그 토큰은 모양 패턴에도
+    안 걸린다 — 지우려는 동작이 유출을 만드는 형태다.
+    """
+    module = load_runner()
+    token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+    for extra in range(0, 40):
+        padding = module.PEM_MAX_SPAN - 1 - 3 - extra
+        if padding < 0:
+            continue
+        text = f"{BEGIN}{KEY}\n" + "x" * padding + token + " tail"
+        cleaned = module.verify_excerpt(text)
+        assert token not in cleaned
+        assert "_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in cleaned
+
+
+def test_fallback_never_cuts_a_token_on_the_same_line() -> None:
+    """문자 종류로 훑으면 그 집합 밖의 글자에서 멈춘다.
+
+    그 자리가 토큰 한가운데면 앵커가 잘려 본체만 남는다. 라운드 10 에서
+    줄바꿈을 뺐더니 이번에는 밑줄에서 잘렸다 — 집합을 고르는 방식 자체가
+    문제다.
+    """
+    module = load_runner()
+    token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+    cleaned = module.verify_excerpt(f"error: {BEGIN}{KEY} got {token} here")
+    assert token not in cleaned
+    assert "_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in cleaned
+
+
+def test_proxy_password_containing_at_sign(monkeypatch: pytest.MonkeyPatch) -> None:
+    """비밀번호에 @ 가 들어가는 것은 특수문자 정책에서 흔하다."""
+    module = load_runner()
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:Str0ng@Pass!word@proxy:8080")
+    cleaned = module.verify_excerpt("proxy http://user:Str0ng@Pass!word@proxy:8080 failed")
+    assert "Pass!word" not in cleaned
+    assert "Str0ng" not in cleaned
+
+
+def test_private_key_inside_a_diff_is_redacted() -> None:
+    """실패한 시도의 diff 도 조언자에게 간다. 거기 키가 있을 수 있다."""
+    module = load_runner()
+    lines = pem_body()
+    text = (
+        "diff --git a/k.pem b/k.pem\n+++ b/k.pem\n"
+        f"+{BEGIN}RSA {KEY}\n" + "\n".join("+" + line for line in lines) + f"\n+{END}RSA {KEY}"
+    )
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]

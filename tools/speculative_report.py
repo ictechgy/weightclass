@@ -225,7 +225,8 @@ def main() -> int:
         )
     # 시작 전 조언이 켜졌으면 이 실패율은 계획을 받은 뒤의 것이다. p 라고
     # 부르면 조언 없는 설정의 p 와 섞인다.
-    rate_name = "p′" if advice_first_on else "p"
+    # 혼합이면 어느 이름도 맞지 않는다. 이름을 붙이면 그 설정의 값처럼 읽힌다.
+    rate_name = "실패율" if len(first_flags) > 1 else ("p′" if advice_first_on else "p")
     print(f"\n{rate_name} = {p:.1%}   95% CI [{lo:.1%}, {hi:.1%}]")
     if advice_first_on:
         print("  (시작 전 조언을 받은 뒤의 실패율이다. 조언 없는 p 와 같은 값이 아니다)")
@@ -794,7 +795,10 @@ def main() -> int:
                     # 값이 있는 것만 보고 s 와 q 는 전부를 세므로, 두 수가 같은
                     # 모집단이 아니게 된다. 빠진 비용이 얼마였을지 모르므로
                     # 방향도 모른다 — 넓히는 것으로 메울 수 없다.
-                    priced_enough = not all_retries or priced_retries * 2 >= all_retries
+                    # 절반이면 충분하다는 기준은 너무 헐겁다. 값이 없는 재시도
+                    # 하나가 임의로 비쌌을 수 있고, 그것이 결론을 뒤집는다.
+                    # 돈에 대한 단정적 판정에는 전수를 요구한다.
+                    priced_enough = priced_retries == all_retries
                     # 조언 비용도 마찬가지다. a 가 작은 부분집합에서 나오면
                     # s 와 같은 모집단이 아니다.
                     advice_attempted = sum(
@@ -805,7 +809,7 @@ def main() -> int:
                         for r in usable
                         if (value := advice_cost(r, "advice_failure")) is not None and value > 0
                     )
-                    if advice_attempted and advice_priced * 2 < advice_attempted:
+                    if advice_priced != advice_attempted:
                         priced_enough = False
                     if all_retries and priced_retries < all_retries:
                         print(
@@ -841,8 +845,9 @@ def main() -> int:
                         # 그것이 대입이라고 말한다.
                         if r_ratio is not None and not priced_enough:
                             print(
-                                "  조언이나 재시도의 절반 이상이 비용 없이 기록됐다."
-                                " 그 표본으로 낸 a 와 r 은 전체를 대표하지 않으므로"
+                                f"  조언 {advice_attempted}건 중 {advice_priced}건,"
+                                f" 재시도 {all_retries}건 중 {priced_retries}건만 비용이"
+                                " 있다. 값 없는 하나가 임의로 비쌌을 수 있으므로"
                                 " 판정하지 않는다."
                             )
                         elif r_ratio is None:
@@ -924,7 +929,10 @@ def main() -> int:
     if advisor_on:
         # 모형이 아니라고 말해 놓고 그 식의 절감률을 찍으면, 사용자는 그
         # 숫자를 가져간다. 조언이 켜진 로그에서는 아예 내지 않는다.
-        label = "c + p′" if advice_first_on else "c + p"
+        if len(first_flags) > 1:
+            label = "c + 실패율(설정 혼합)"
+        else:
+            label = "c + p′" if advice_first_on else "c + p"
         print(f"\n(참고) 이 로그의 {label} = {c + p:.2f} — 조언 비용은 빠져 있다")
     else:
         print("\n기대 비용 = c + p")
