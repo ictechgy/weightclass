@@ -20,7 +20,7 @@ import math
 import re
 import statistics
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 
 def _safe(text: str, limit: int = 200) -> str:
@@ -377,7 +377,12 @@ def main() -> int:
     timed_out_tasks = 0
     unpriced_escalations = 0
     zero_expensive = 0
-    costed_records: list[Any] = []
+    # a 와 r 의 분모. tasks 와 달리 싼 비용을 못 얻은 승급도 포함한다.
+    all_expensive_costs: list[float] = []
+    # 그 분모가 승급 전체를 대표하는지 보는 카운터. c 쪽 카운터
+    # (unpriced_escalations, zero_expensive)는 싼 비용이 없는 레코드보다
+    # **뒤** 에서 증가하므로 이 질문에 답하지 못한다.
+    expensive_missing = 0
     for r in usable:
         # 승급 여부는 p 를 세는 쪽과 같은 술어로 판정한다. 러너가 빈 dict 나
         # 오류 스텁을 남기면 "승급 N건 중 M건" 문구가 실제와 어긋난다.
@@ -386,6 +391,15 @@ def main() -> int:
             escalated_total += 1
         if timed_out(r.get("cheap")) or timed_out(r.get("expensive")):
             timed_out_tasks += 1
+        # 비싼 비용 관측은 **싼 비용이 있는지와 무관하다.** 아래 continue 뒤에서
+        # 모으면 a 와 r 의 분모가 "싼 비용도 얻은 승급" 이라는 부분집합이 되고,
+        # 그 부분집합이 승급 전체를 대표한다는 근거는 어디에도 없다.
+        if escalated:
+            standalone_expensive = cost_of(r.get("expensive"))
+            if standalone_expensive is None or standalone_expensive <= 0:
+                expensive_missing += 1
+            else:
+                all_expensive_costs.append(standalone_expensive)
         cheap_cost = cost_of(r.get("cheap")) if single_origin else None
         if not cheap_cost:
             # 0 도 여기서 뺀다. 싼 쪽 0 은 c 를 끌어내려 "거의 공짜" 라는
@@ -405,10 +419,6 @@ def main() -> int:
             unpriced_escalations += 1
             expensive_cost = None
         tasks.append(Task(cheap_cost, expensive_cost, escalated, observed_expensive))
-        # a 와 r 은 이 과제들의 비싼 비용 평균으로 나눈다. 그러니 a, r, q, s 의
-        # 모집단도 여기 들어온 과제여야 한다. usable 을 쓰면 싼 비용을 못 얻어
-        # 위에서 빠진 레코드가 분자에만 남아, 분자와 분모가 다른 표본이 된다.
-        costed_records.append(r)
 
     cheap_all = [x.cheap for x in tasks]
     cheap_escalated = [x.cheap for x in tasks if x.escalated]
@@ -724,7 +734,7 @@ def main() -> int:
     advisor_configs = {
         json.dumps(r.get("advisor") or {}, sort_keys=True, ensure_ascii=False) for r in usable
     }
-    advised = [r for r in costed_records if isinstance(r.get("advisor"), dict)]
+    advised = [r for r in usable if isinstance(r.get("advisor"), dict)]
     if advised and len(advisor_configs) > 1:
         print(
             f"\n경고: 조언 설정 {len(advisor_configs)}종이 한 로그에 섞여 있다. s 를 내지 않는다."
@@ -757,12 +767,10 @@ def main() -> int:
                 # cost_of 는 0 을 관측값으로 받아들인다. 여기서 > 0 을
                 # 요구하면 구독 실행처럼 0 을 보고하는 경우가 "가격 없음" 이
                 # 되어, 전수 검사가 영원히 통과하지 못한다.
-                values = [
-                    value for r in costed_records if (value := advice_cost(r, key)) is not None
-                ]
+                values = [value for r in usable if (value := advice_cost(r, key)) is not None]
                 if not values or not priced_pairs:
                     return None
-                expensive_mean_all = statistics.fmean(observed_expensive_costs)
+                expensive_mean_all = statistics.fmean(all_expensive_costs)
                 mean = statistics.fmean(values)
                 # a 도 표본에서 온 값이다. 점추정만 쓰면 s > a + q·r 판정이
                 # 실제보다 확정적으로 보인다.
@@ -778,11 +786,11 @@ def main() -> int:
                 return (mean / expensive_mean_all, spread / expensive_mean_all, len(values))
 
             def advice_attempts(key: str) -> int:
-                return sum(1 for r in costed_records if isinstance(r.get(key), dict))
+                return sum(1 for r in usable if isinstance(r.get(key), dict))
 
             for key, label in (("advice_first", "시작 전"), ("advice_failure", "실패 후")):
                 attempts = advice_attempts(key)
-                priced = sum(1 for r in costed_records if advice_cost(r, key) is not None)
+                priced = sum(1 for r in usable if advice_cost(r, key) is not None)
                 if attempts and priced < attempts:
                     print(
                         f"  주의: {label} 조언 {attempts}건 중 {priced}건만 비용을 얻었다."
@@ -806,9 +814,7 @@ def main() -> int:
             # 분모는 "재시도가 기록된 건" 이 아니라 "조언을 받은 실패" 다.
             # 조언이 비어 재시도조차 못 한 건은 비용은 쓰고 승급했는데 분모에서
             # 빠져, s 가 위로 치우친다.
-            advised_failures = [
-                r for r in costed_records if isinstance(r.get("advice_failure"), dict)
-            ]
+            advised_failures = [r for r in usable if isinstance(r.get("advice_failure"), dict)]
             if config.get("advise_first") and config.get("advise_on_failure"):
                 print(
                     "  주의: 시작 전 조언과 실패 후 조언이 함께 켜져 있다. 여기 s′ 는"
@@ -844,13 +850,13 @@ def main() -> int:
                     # 조건은 s > a + c 가 아니라 s > a + q·r 이다.
                     retry_costs = [
                         value
-                        for r in costed_records
+                        for r in usable
                         if isinstance(r.get("retry"), dict)
                         and not timed_out(r.get("retry"))
                         and (value := cost_of(r.get("retry"))) is not None
                     ]
                     priced_retries = len(retry_costs)
-                    all_retries = sum(1 for r in costed_records if isinstance(r.get("retry"), dict))
+                    all_retries = sum(1 for r in usable if isinstance(r.get("retry"), dict))
                     # 값이 빠진 비율이 크면 경고로 끝낼 일이 아니다. a 와 r 은
                     # 값이 있는 것만 보고 s 와 q 는 전부를 세므로, 두 수가 같은
                     # 모집단이 아니게 된다. 빠진 비용이 얼마였을지 모르므로
@@ -868,18 +874,19 @@ def main() -> int:
                     # 타임아웃만 막으면 부족하다. 보통의 미가격 승급도 분모
                     # 에서 빠지므로, 남은 비싼 비용 평균이 승급 전체를
                     # 대표하지 않는다. a 와 r 이 모두 그 평균으로 나눈 값이다.
-                    # zero_expensive 는 **분모에 들어간다**(평균에 0 으로 기여).
-                    # 빠지는 것은 unpriced_escalations 뿐이므로 그것만 게이트다.
-                    # 둘을 함께 걸면 값이 멀쩡한 로그에서 판정을 막는다.
-                    if unpriced_escalations:
+                    # a 와 r 의 분모는 all_expensive_costs 다. 그것이 승급
+                    # 전체를 대표하는지는 **그 분모의 카운터** 로 본다. c 쪽
+                    # 카운터를 빌려 쓰면, 싼 비용이 없어 c 의 루프에서 먼저
+                    # 빠진 승급이 어느 카운터에도 안 잡혀 게이트가 눈이 먼다.
+                    if expensive_missing:
                         priced_enough = False
                     # 조언 비용도 마찬가지다. a 가 작은 부분집합에서 나오면
                     # s 와 같은 모집단이 아니다.
                     advice_attempted = sum(
-                        1 for r in costed_records if isinstance(r.get("advice_failure"), dict)
+                        1 for r in usable if isinstance(r.get("advice_failure"), dict)
                     )
                     advice_priced = sum(
-                        1 for r in costed_records if advice_cost(r, "advice_failure") is not None
+                        1 for r in usable if advice_cost(r, "advice_failure") is not None
                     )
                     if advice_priced != advice_attempted:
                         priced_enough = False
@@ -892,7 +899,7 @@ def main() -> int:
                     r_ratio = None
                     r_spread = 0.0
                     if retry_costs and priced_pairs:
-                        expensive_mean_all = statistics.fmean(observed_expensive_costs)
+                        expensive_mean_all = statistics.fmean(all_expensive_costs)
                         r_mean = statistics.fmean(retry_costs)
                         r_ratio = r_mean / expensive_mean_all
                         r_spread = (
@@ -914,9 +921,9 @@ def main() -> int:
                         # r 을 쟀으면 그것을 쓴다. 못 쟀으면 c 로 대신하되
                         # 그것이 대입이라고 말한다.
                         if r_ratio is not None and not priced_enough:
-                            if timed_out_tasks or unpriced_escalations:
+                            if timed_out_tasks or expensive_missing:
                                 print(
-                                    f"  승급 {unpriced_escalations}건의 비싼"
+                                    f"  승급 {expensive_missing}건의 비싼"
                                     f" 비용이 없거나 0 이고 과제 {timed_out_tasks}건이"
                                     " 타임아웃이다. 비싼 경로 평균이 승급 전체를"
                                     " 대표하지 않으므로 판정하지 않는다."
@@ -949,7 +956,7 @@ def main() -> int:
                             # 안 된다 — 싼 비용과 비싼 비용이 같은 비율로
                             # 움직이면 c 의 구간은 좁은데 분모는 여전히
                             # 흔들린다. 분모의 표준오차를 직접 낸다.
-                            expensive_values = observed_expensive_costs
+                            expensive_values = all_expensive_costs
                             if len(expensive_values) <= 1:
                                 # 분모가 한 관측뿐이면 그 평균을 정확히 아는
                                 # 값처럼 쓰게 된다. lower_e <= 0 에서 판정을
@@ -1095,7 +1102,15 @@ def main() -> int:
             " 얻어, 분모가 승급의 절반도 대표하지 못한다. 빠진 값이 어느 쪽이었는지"
             " 알 수 없으므로 구간을 넓히는 것으로도 메울 수 없다."
         )
-    if advisor_on and timed_out_tasks:
+    if advisor_on and c_range is None:
+        # c 를 재지 못한 로그다. 사다리 뒤쪽의 c_range is None 분기는 아래
+        # advisor_on 이 먼저 흡수해 도달하지 못하므로 여기서 막는다. 이것을
+        # 빠뜨리면 재지 못한 c 를 c_A 라고 소개하게 된다.
+        print(
+            "\n  -> 판정 없음. 이 로그는 조언을 켜고 쟀지만 c 를 내지 못했다."
+            " c_A 도 없으므로 Shape A 손익식을 세울 수 없다."
+        )
+    elif advisor_on and timed_out_tasks:
         # 조언 분기가 타임아웃 경고를 가리면 안 된다. 빠진 비용이 위쪽으로
         # 열려 있다는 사실은 조언 판정에도 그대로 해당한다. **어느 모양이든**
         # 그렇다 — 시작 전 조언만 켠 로그에서 이 경고를 건너뛰면 불완전한 c 를
@@ -1125,8 +1140,10 @@ def main() -> int:
                 if failure_advice_on
                 else " 시작 전 조언만 켠 로그에는 그 판정이 없다. 이득 조건은"
                 " a_A + (c_A − c) < p − p′ 이고, 이 중 **a_A, c_A, p′ 세 항은"
-                " 이 로그가 이미 준다** — 위에 찍힌 c 가 c_A 이고, 통과율이"
-                " p′ 다. 조언을 끄고 같은 과제를 한 번 더 재야 나오는 것은"
+                " 이 로그가 이미 준다** — 위에 찍힌 c 가 c_A 이고, 싼 경로의"
+                " **실패율** 이 p′ 다(통과율이 아니다 — 식은 실패율 차 p − p′"
+                " 를 쓰므로 여기서 뒤집으면 결론이 반대가 된다)."
+                " 조언을 끄고 같은 과제를 한 번 더 재야 나오는 것은"
                 " 기준선 두 항, c 와 p 뿐이다. a_A 를 p − p′ 와 바로 비교하면"
                 " 계획이 늘린 프롬프트 비용(c_A − c)이 빠져 조언 쪽에 유리하게"
                 " 틀린다."

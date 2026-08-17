@@ -860,16 +860,31 @@ _SECRET_SHAPES = re.compile(
     # 함께 나오고, 거기에는 API_KEY_HEADER = "X-Api-Key" 나
     # TOKEN_RE = re.compile(...) 같은 평범한 코드가 있다. 그것까지 지우면
     # 조언자가 진단할 코드를 잃는다 — 이 기능의 존재 이유를 지우는 셈이다.
-    # 자격증명처럼 생긴 문자만, 12자 이상일 때만 지운다. 값에 **점을 허용하지
-    # 않는다** — 점이 들어간 값은 거의 언제나 코드다(`credentials.secret_key`,
-    # `os.environ.get(...)`, `re.compile(...)`). 자격증명 쪽에서 점이 나오는
-    # 형태(JWT, PEM)는 각각 전용 분기가 따로 있으므로 잃는 것이 없다.
+    # 코드와 자격증명을 **구분자 주변의 공백** 으로 가른다. 사람이 쓴 코드는
+    # `NAME = value` 처럼 띄우고, 환경 덤프와 설정 파일은 `NAME=value` 처럼
+    # 붙인다. 점만으로 가르면 둘 중 한쪽이 반드시 틀린다 — 앞선 판은 점을
+    # 통째로 뺐다가 `PASSWORD=correct.horse.battery` 와 SendGrid 키
+    # (`SG.<22자>.<43자>`)를 통째로 내보냈다.
+    #
+    # 붙여 쓴 형태는 값에 점을 허용한다. 띄어 쓴 형태는 자격증명처럼 생겨야
+    # 한다 — 점이 없고 숫자가 있어야 `credentials.secret_key` 나
+    # `re.compile(...)` 가 걸리지 않는다.
     r"|(?i:[A-Z0-9_]{0,40}(?:secret|token|password|passwd|api_?key|private_?key|credential)"
-    r"[A-Z0-9_]{0,40})[\"']?\s*[=:]\s*[\"']?[^\s\r\n.(){}<>,;\[\]]{12,}"
+    r"[A-Z0-9_]{0,40})"
+    r"(?:"
+    r"[\"']?[=:][\"']?[^\s\r\n(){}<>,;\[\]]{12,}"
+    r"|"
+    r"[\"']?\s*[=:]\s*[\"'][^\"'\r\n]{12,}[\"']"
+    r"|"
+    r"[\"']?\s+[=:]\s+(?=[^\r\n]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}"
+    r")"
     # JWT
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     re.DOTALL,
 )
+# 목록에 넣을 최소 길이. 이보다 짧으면 흔한 문자열일 가능성이 커서, 지우는
+# 이득보다 보고서를 알아볼 수 없게 만드는 손해가 크다.
+MINIMUM_SECRET_CHARS = 6
 VERIFY_EXCERPT_CHARS = 4000
 # 검증 출력과 diff 를 한 덩어리로 보낼 때의 상한. 두 몫을 합친 크기다.
 COMBINED_EXCERPT_CHARS = 8000
@@ -1332,8 +1347,16 @@ def host_secret_values() -> list[str]:
         once = json.dumps(value)[1:-1]
         twice = json.dumps(once)[1:-1]
         decoded = urllib.parse.unquote(value)
-        for form in (once, twice, decoded):
-            if form and form != value:
+        # 복호를 한 번 더 직렬화한 형태까지 본다. 로거가 URL 을 풀어 쓴 뒤
+        # JSON 으로 감싸면 원문도, JSON(원문)도, 복호값도 아닌 네 번째 표현이
+        # 나온다.
+        decoded_once = json.dumps(decoded)[1:-1]
+        for form in (once, twice, decoded, decoded_once):
+            # **길이 하한을 파생 표현에도 건다.** 퍼센트 복호는 길이를 줄인다 —
+            # `%2F%2F%2F%2F` 는 열두 자를 통과하고 나서 `////` 네 글자가 되어
+            # 목록에 들어가고, 그 뒤 경로마다 [REDACTED] 가 박힌다. 과잉 삭제도
+            # 유출만큼 이 기능을 망가뜨린다.
+            if form and form != value and len(form) >= MINIMUM_SECRET_CHARS:
                 variants.append(form)
     serialised = variants
     # 긴 것부터 지워야 짧은 것이 긴 것의 일부를 먼저 갉아먹지 않는다.
@@ -1362,12 +1385,25 @@ def join_streams(out: str, err: str) -> str:
     한해서다.
     """
     forward = redact_text(out + err)
-    reverse = redact_text(err + out)
-    if len(reverse) >= len(forward):
-        # 역순에서 더 지워진 것이 없다. 정방향 결과가 그대로 안전하다.
+    # **길이로 판정하지 않는다.** 두 순서가 서로 다른 자격증명을 같은 길이만큼
+    # 지우면 길이는 같은데 잡은 것은 다르다. "따로 지운 것과 이어서 지운 것이
+    # 다른가" 를 직접 묻는다 — 다르면 그 이음매에서만 형성되는 것이 있다.
+    if redact_text(err + out) == redact_text(err) + redact_text(out):
         return forward.strip()
-    kept_out = out[:-SEAM_WINDOW] if len(out) > SEAM_WINDOW else ""
-    kept_err = err[SEAM_WINDOW:] if len(err) > SEAM_WINDOW else ""
+    # 역순 이음매를 이루는 조각은 **err 의 꼬리와 out 의 머리** 다. 그 둘을
+    # 버린다. 앞선 판에서는 반대쪽(out 의 꼬리, err 의 머리)을 버려, 검출을
+    # 유발한 두 조각이 고스란히 살아남았다.
+    #
+    # 스트림이 창보다 짧으면 통째로 버린다. 조각이 창 안에 다 들어간다는
+    # 보장이 없으면 남기는 쪽이 위험하다.
+    kept_err = err[:-SEAM_WINDOW] if len(err) > SEAM_WINDOW else ""
+    kept_out = out[SEAM_WINDOW:] if len(out) > SEAM_WINDOW else ""
+    if not kept_out and not kept_err:
+        # 양쪽 다 창보다 짧다. 이 자리에서 자격증명이 형성된다는 것은
+        # **그 값이 한쪽 스트림 안에 통째로 들어 있다** 는 뜻이다 — 갈라진
+        # 것은 이름 쪽이다. 그러니 순서를 바꿔 다시 지어도 값은 그대로 남는다.
+        # 남길 방법이 없으므로 버린다. 조언자는 diff 로 진단해야 한다.
+        return "[...검증 출력 전체 생략: 두 스트림 경계에서 자격증명이 형성됨...]"
     return (
         redact_text(kept_out) + "\n[...두 스트림이 만나는 자리 생략...]\n" + redact_text(kept_err)
     ).strip()
@@ -1841,9 +1877,8 @@ def ask_advisor(
     # 지우고 나서 자른다. 순서가 반대면 8000자 경계에 걸친 값이 앵커를 잃고
     # 남는다 — 검증 출력에서 라운드 1 이 고친 것과 같은 실수다.
     # 봉투에서 본문을 못 꺼내면 원문이 그대로 온다. 거기서는 줄바꿈이
-    # `\n` 두 글자라, 줄 단위로 도는 블록 리댁터가 전체를 한 줄로 본다.
-    # 리댁션 전에 이스케이프를 실제 줄바꿈으로 되돌린다.
-    # 이스케이프를 실제 줄바꿈으로 되돌리지 않는다. 그것은 정확 일치의
+    # `\n` 두 글자다. 그렇다고 **이스케이프를 실제 줄바꿈으로 되돌리지
+    # 않는다.** 그것은 정확 일치의
     # 앵커를 부순다 — 값 안에 `\n` 두 글자가 있는 비밀이 두 조각으로
     # 갈리면 어느 쪽도 목록과 맞지 않는다. 줄 구분자 패턴이 이스케이프된
     # 줄바꿈을 이미 줄로 보므로 정규화가 필요 없다.
@@ -2562,7 +2597,12 @@ def main() -> int:
             "first",
             f"{task}\n\nYou are advising another model that will do this work. {ADVICE_BRIEF}",
         )
-        cheap_task = compose_task(task, text)
+        # **빈 조언은 붙이지 않는다.** Shape B 는 `if text:` 로 막는데 여기만
+        # 막지 않으면, 조언 경로가 죽거나 조언자가 빈 답을 냈을 때 계획이
+        # 붙었다고 기록된 로그가 남는다. 그 로그의 p′ 는 계획 없는 실행의
+        # 실패율이므로, 조언이 아무 효과가 없다는 결론이 조용히 만들어진다.
+        if text:
+            cheap_task = compose_task(task, text)
 
     cheap, cheap_verify_output, cheap_patch = attempt(
         "cheap",

@@ -999,3 +999,71 @@ def test_key_bodies_folded_at_any_width_are_redacted(width):
     folded = "\n".join(blob[index : index + width] for index in range(0, len(blob), width))
     pem = BEGIN + KEY + "\n" + folded + "\n" + END + KEY
     assert blob[200:240] not in module.verify_excerpt(pem)
+
+
+# --- 라운드 20: 창의 방향, 판정 술어, 코드와 자격증명의 경계 -------------------
+
+
+def test_the_reverse_seam_window_drops_the_right_edges():
+    """역순 이음매를 이루는 조각은 err 의 꼬리와 out 의 머리다.
+
+    앞선 판은 반대쪽(out 의 꼬리, err 의 머리)을 버려, 검출을 유발한 두
+    조각이 고스란히 살아남았다.
+    """
+    module = load_runner()
+    out = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" + "p" * 5000
+    err = "q" * 5000 + "AWS_SECRET_ACCESS_KEY="
+    assert "wJalrXUtnFEMI" not in module.join_streams(out, err)
+
+
+def test_short_streams_are_dropped_when_the_seam_forms_a_credential():
+    """양쪽이 창보다 짧으면 값이 한 스트림 안에 통째로 있다. 남길 방법이 없다."""
+    module = load_runner()
+    joined = module.join_streams("KEY=SECRETVALUE1234567890AB", "AWS_SECRET_ACCESS_")
+    assert "SECRETVALUE1234" not in joined
+
+
+def test_the_seam_verdict_does_not_rest_on_length():
+    """길이가 같아도 잡은 것이 다를 수 있다. 동등성으로 판정해야 한다."""
+    module = load_runner()
+    # 평범한 출력은 두 순서가 같은 결과를 내므로 그대로 이어진다.
+    assert module.join_streams("out ok ", "err ok") == "out ok err ok"
+
+
+@pytest.mark.parametrize(
+    "line,token",
+    [
+        ("PASSWORD=correct.horse.battery", "correct.horse"),
+        ("DB_PASSWORD=Some.Long.Pass.Phrase", "Some.Long"),
+        (
+            "SENDGRID_API_KEY=SG.abcdefghijklmnopqrstuv.abcdefghijklmnopqrstuvwxyz0123",
+            "SG.abcdefg",
+        ),
+    ],
+)
+def test_dotted_credentials_are_redacted(line, token):
+    """점이 든 값도 자격증명이다. 점을 통째로 빼면 SendGrid 키가 그대로 나간다."""
+    module = load_runner()
+    assert token not in module.verify_excerpt(line)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "AWS_SECRET_ACCESS_KEY = credentials.secret_key",
+        "self.api_key = config.api_key",
+        "password = get_password(user)",
+        'TOKEN_RE = re.compile(r"x")',
+    ],
+)
+def test_spaced_assignments_read_as_code(source):
+    """사람이 쓴 코드는 구분자를 띄우고, 환경 덤프는 붙인다. 그 차이로 가른다."""
+    module = load_runner()
+    assert module.verify_excerpt(source) == source
+
+
+def test_short_decoded_forms_do_not_enter_the_redaction_list(monkeypatch):
+    """퍼센트 복호는 길이를 줄인다. 하한을 안 걸면 `////` 가 목록에 들어간다."""
+    monkeypatch.setenv("SOME_TOKEN", "%2F%2F%2F%2F%2F%2F")
+    module = load_runner()
+    assert "////" in module.verify_excerpt("path a////b and c////d")
