@@ -20,6 +20,7 @@ import math
 import re
 import statistics
 from pathlib import Path
+from typing import NamedTuple
 
 
 def _safe(text: str, limit: int = 200) -> str:
@@ -270,53 +271,64 @@ def main() -> int:
         child = attempt.get("child")
         return isinstance(child, dict) and bool(child.get("timed_out"))
 
-    paired: list[float] = []
-    pair_costs: list[tuple[float, float]] = []
-    cheap_total = 0.0
-    expensive_total = 0.0
+    # c 는 (싼 비용 평균) / (비싼 비용 평균) 이다. **두 평균이 같은 기준으로
+    # 걸러진 모집단에서 나와야 한다.** 예전에는 분자가 "비용이 있으면 무엇이든"
+    # 이고 분모는 출처 검증까지 통과한 것만이라, 검증에서 뺀 실행의 싼 비용이
+    # 분자에는 남아 있었다. 그래서 과제 단위로 한 번에 판정한다.
+    #
+    # 한 과제는 다음 중 하나다:
+    #   - 싼 비용을 신뢰할 수 없다        -> 어느 쪽에도 안 들어간다
+    #   - 승급 안 함, 싼 비용 신뢰 가능    -> 분자에만
+    #   - 승급함, 양쪽 다 신뢰 가능        -> 분자와 분모 둘 다
+    #   - 승급함, 비싼 쪽을 신뢰할 수 없다 -> 분자에만, 분모에서 빠진 것을 센다
+    class Task(NamedTuple):
+        cheap: float
+        expensive: float | None
+        escalated: bool
+
+    tasks: list[Task] = []
     escalated_total = 0
     timeout_dropped = 0
     mixed_provenance = 0
-    # 싼 경로는 승급 여부와 무관하게 **모든** 과제에서 돌았다. 그래서 싼 비용은
-    # 전수로 알 수 있고, c 의 분자가 그 전수와 얼마나 다른지 확인할 수 있다.
-    cheap_all: list[float] = []
-    cheap_escalated: list[float] = []
-    cheap_passing: list[float] = []
+    unusable_cheap = 0
     for r in usable:
-        cheap_cost = cost_of(r.get("cheap"))
-        expensive_cost = cost_of(r.get("expensive"))
-        if cheap_cost is not None:
-            cheap_all.append(cheap_cost)
-            if isinstance(r.get("expensive"), dict):
-                cheap_escalated.append(cheap_cost)
-            else:
-                cheap_passing.append(cheap_cost)
-        if isinstance(r.get("expensive"), dict) and (
-            timed_out(r.get("cheap")) or timed_out(r.get("expensive"))
-        ):
-            timeout_dropped += 1
-        # 어느 쪽이든 0 이면 비율이 의미를 잃는다. 싼 쪽 0 은 c=0 으로
-        # "공짜" 라는 결론을 만들고, 비싼 쪽 0 은 나눗셈 자체가 안 된다.
-        # 요금표가 비었거나 벤더가 0 을 보고한 경우이므로 표본에서 뺀다.
         # 승급 여부는 p 를 세는 쪽과 같은 술어로 판정한다. 러너가 빈 dict 나
         # 오류 스텁을 남기면 "승급 N건 중 M건" 문구가 실제와 어긋난다.
-        if isinstance(r.get("expensive"), dict):
+        escalated = isinstance(r.get("expensive"), dict)
+        if escalated:
             escalated_total += 1
-        if cheap_cost and expensive_cost:
-            # 벤더가 알려준 청구액과 우리 요금표로 환산한 값은 정의가 다르다.
-            # Claude 의 total_cost_usd 는 캐시 읽기까지 포함하고, 요금표 환산은
-            # 표에 적은 필드만 센다. 그 둘을 나눈 값을 c 라고 부르면 안 된다.
-            cheap_origin = cost_origin(r.get("cheap"))
-            expensive_origin = cost_origin(r.get("expensive"))
-            if cheap_origin != expensive_origin or cheap_origin is None:
-                # 경고만 하고 그 쌍을 그대로 c 에 넣으면, 비교할 수 없다고
-                # 말한 숫자로 결론을 낸 것이 된다. 표본에서 뺀다.
-                mixed_provenance += 1
-                continue
-            paired.append(cheap_cost / expensive_cost)
-            pair_costs.append((cheap_cost, expensive_cost))
-            cheap_total += cheap_cost
-            expensive_total += expensive_cost
+        cheap_cost = cost_of(r.get("cheap"))
+        if not cheap_cost:
+            # 0 도 여기서 뺀다. 싼 쪽 0 은 c 를 끌어내려 "거의 공짜" 라는
+            # 결론을 만드는데, 실제로는 요금표가 비었거나 사용량을 못 읽은
+            # 경우가 대부분이다.
+            unusable_cheap += 1
+            continue
+        expensive_cost = cost_of(r.get("expensive")) if escalated else None
+        if escalated and expensive_cost:
+            if timed_out(r.get("cheap")) or timed_out(r.get("expensive")):
+                timeout_dropped += 1
+                expensive_cost = None
+            else:
+                # 벤더가 알려준 청구액과 우리 요금표로 환산한 값은 정의가
+                # 다르다. Claude 의 total_cost_usd 는 캐시 읽기까지 포함하고,
+                # 요금표 환산은 표에 적은 필드만 센다. 그 둘을 나눈 값을 c 라고
+                # 부르면 안 된다.
+                cheap_origin = cost_origin(r.get("cheap"))
+                expensive_origin = cost_origin(r.get("expensive"))
+                if cheap_origin != expensive_origin or cheap_origin is None:
+                    mixed_provenance += 1
+                    expensive_cost = None
+        elif escalated:
+            expensive_cost = None
+        tasks.append(Task(cheap_cost, expensive_cost, escalated))
+
+    cheap_all = [x.cheap for x in tasks]
+    cheap_escalated = [x.cheap for x in tasks if x.escalated]
+    cheap_passing = [x.cheap for x in tasks if not x.escalated]
+    priced_pairs = [x for x in tasks if x.expensive is not None]
+    paired = [x.cheap / x.expensive for x in priced_pairs if x.expensive]
+    expensive_total = sum(x.expensive for x in priced_pairs if x.expensive)
 
     # 한 건으로 c 를 바꾸면 그 한 과제의 특성이 전체 결론을 정한다. 채택하는
     # 값은 비용 가중 비율이고 그것은 큰 과제 하나에 더 취약하므로, 중앙값보다
@@ -369,32 +381,59 @@ def main() -> int:
         18: 2.101,
         19: 2.093,
         20: 2.086,
+        25: 2.060,
+        30: 2.042,
+        40: 2.021,
+        60: 2.000,
+        120: 1.980,
     }
 
-    def jackknife(cheap_mean: float, expensive_costs: list[float]) -> tuple[float, float] | None:
-        """c 의 95% 구간. 승급 한 건씩 빼고 다시 계산해 표준오차를 구한다.
+    def t_quantile(df: int) -> float:
+        """자유도 df 의 95% t 분위수. 표에 없으면 바로 위 항목을 쓴다.
 
-        c 는 (전수로 잰 싼 평균) / (승급 과제의 비싼 평균) 이다. 불확실성은
-        거의 전부 분모에서 온다 — 분자는 모든 과제를 셌고 분모는 서너 건이다.
-        그래서 승급 건을 하나씩 빼며 흔든다.
+        표가 20 에서 끝나고 그 밖을 1.96 으로 떨어뜨리면, df=20 의 2.086 에서
+        df=21 의 1.96 으로 한 계단 뛴다. 실제 값은 2.080 이므로 그 자리에서만
+        구간이 갑자기 좁아진다. 보수적인 쪽(더 큰 배수)으로 올림한다.
+        """
+        for key in sorted(T_QUANTILE_95):
+            if df <= key:
+                return T_QUANTILE_95[key]
+        return 1.96
+
+    def estimate_c(sample: list[Task]) -> float | None:
+        """c = (싼 비용 평균) / (비싼 비용 평균). 두 평균은 같은 표본에서 나온다.
+
+        분자는 표본의 모든 과제, 분모는 그중 비싼 비용을 신뢰할 수 있는
+        과제다. 분모의 대입 — 승급하지 않은 과제에서도 비싼 비용이 같았으리라 —
+        이 남은 유일한 가정이다.
+        """
+        if not sample:
+            return None
+        priced = [x.expensive for x in sample if x.expensive]
+        if not priced:
+            return None
+        return statistics.fmean([x.cheap for x in sample]) / statistics.fmean(priced)
+
+    def jackknife(sample: list[Task]) -> tuple[float, float] | None:
+        """c 의 95% 구간. **과제** 를 하나씩 빼고 다시 계산한다.
+
+        분모만 흔들면 분자의 변동을 통째로 버린다. 승급된 과제는 양쪽에
+        기여하므로, 그 과제를 빼면 두 평균이 함께 움직인다 — 그 상관까지
+        담으려면 삭제 단위가 과제여야 한다.
 
         빼고 계산한 값들의 **최소/최대**를 구간이라고 부르면 안 된다. 한 건을
         뺀 추정치는 원래 추정치에서 대략 1/n 만큼만 움직이므로, 그 폭은 표본이
         늘수록 **좁아진다** — 불확실성은 반대로 가는데. jackknife 표준오차
         sqrt((n-1)/n * Σ(θ_i - θ̄)^2) 에는 (n-1) 배가 들어간다.
         """
-        n_all = len(expensive_costs)
-        if n_all < 2 or cheap_mean <= 0:
+        estimate = estimate_c(sample)
+        if estimate is None or len(sample) < 3:
             return None
-        total = sum(expensive_costs)
-        if total <= 0:
-            return None
-        estimate = cheap_mean / (total / n_all)
         leave_one_out = []
-        for y in expensive_costs:
-            rest = total - y
-            if rest > 0:
-                leave_one_out.append(cheap_mean / (rest / (n_all - 1)))
+        for index in range(len(sample)):
+            value = estimate_c(sample[:index] + sample[index + 1 :])
+            if value is not None:
+                leave_one_out.append(value)
         n = len(leave_one_out)
         if n < 2:
             return None
@@ -405,12 +444,13 @@ def main() -> int:
             # 정확하다는 뜻이 아니라 표본이 그 질문에 답하지 못한다는 뜻이다.
             # 구간을 주지 않는다.
             return None
-        margin = T_QUANTILE_95.get(n - 1, 1.96) * math.sqrt(variance)
+        margin = t_quantile(n - 1) * math.sqrt(variance)
         # 비용비는 음수가 될 수 없다. 위쪽은 자르지 않는다 — 싼 쪽이 더 비쌀
         # 수 있고, 그 사실이 결론이어야 한다.
         return (max(0.0, estimate - margin), estimate + margin)
 
     c_range: tuple[float, float] | None = None
+    measured_c: float | None = None
     if len(paired) >= MINIMUM_PAIRED:
         # 기대 비용 식 c + p 는 c 를 "전체 과제의 싼 비용 / 전체 과제의 비싼
         # 비용" 으로 본다. 승급 과제만 쓴 짝지은 비율은 그 값이 아니다 — 승급
@@ -419,19 +459,28 @@ def main() -> int:
         # 분자는 전수로 알 수 있다. 싼 경로는 모든 과제에서 돌았다. 분모는
         # 알 수 없다 — 비싼 경로는 승급 과제에서만 돌았으므로 그 평균으로
         # 메꾼다. 그 대입만이 남는 가정이고, 아래에서 그렇게 밝힌다.
-        expensive_mean = expensive_total / len(paired)
-        measured = statistics.fmean(cheap_all) / expensive_mean if expensive_mean > 0 else 0.0
-        paired_ratio = cheap_total / expensive_total
+        expensive_mean = statistics.fmean([x.expensive for x in priced_pairs if x.expensive])
+        measured = statistics.fmean(cheap_all) / expensive_mean
         median_ratio = statistics.median(paired)
         print(
             f"\n실측 비용비 c = {measured:.3f}"
-            f"  (싼 경로 과제당 평균 {statistics.fmean(cheap_all):.4f} — {len(cheap_all)}건"
-            f" 전수 — 을 승급 {len(paired)}건의 비싼 경로 평균 {expensive_mean:.4f} 로 나눈 값)"
+            f"  (싼 경로 과제당 평균 {statistics.fmean(cheap_all):.4f} — {len(cheap_all)}건 —"
+            f" 을 승급 {len(paired)}건의 비싼 경로 평균 {expensive_mean:.4f} 로 나눈 값)"
         )
         print(
             "  분모는 대입값이다. 비싼 경로는 승급된 과제에서만 돌았으므로, 승급하지"
             " 않은 과제에서 그것이 얼마였을지는 잰 적이 없다."
         )
+        if unusable_cheap:
+            # 분자를 "전수" 라고 부르면 안 되는 이유. 빠진 과제는 무작위가
+            # 아니다 — 타임아웃은 예산을 끝까지 태운 가장 비싼 싼 실행이고,
+            # 그런 실행일수록 승급으로 이어진다.
+            print(
+                f"  과제 {unusable_cheap}건은 싼 비용을 읽지 못해(타임아웃이거나"
+                " 사용량이 없음) 분자에서 빠졌다. 그런 실행은 대개 가장 비싼"
+                " 싼 실행이므로, 빠지면 c 가 낮아지고 절감이 부풀려진다."
+            )
+        paired_ratio = sum(x.cheap for x in priced_pairs) / expensive_total
         print(
             f"  참고: 승급 과제만 짝지은 비율은 {paired_ratio:.3f} 다. 이 값은 과제"
             " 난이도가 상쇄된다는 장점이 있지만 c + p 식이 요구하는 값은 아니다."
@@ -447,10 +496,10 @@ def main() -> int:
             print(f"  승급 {missing}건은 비용이 없거나 0 이라 빠졌다.")
         if mixed_provenance:
             print(
-                f"  {mixed_provenance}건은 한쪽이 벤더가 알려준 청구액이고 다른 쪽은"
-                " 요금표 환산값이라 **표본에서 뺐다**. 두 숫자는 세는 항목이 다르므로"
-                "(벤더 청구액은 캐시 읽기를 포함, 요금표는 적은 필드만) 그 비율은"
-                " c 가 아니다."
+                f"  승급 {mixed_provenance}건은 양쪽 비용의 출처가 다르거나 알 수 없어"
+                " 분모에서 뺐다. 벤더가 알려준 청구액과 요금표 환산값은 세는 항목이"
+                " 다르므로(전자는 캐시 읽기를 포함, 후자는 표에 적은 필드만) 그 비율은"
+                " c 가 아니다. cost_origin 이 없는 옛 로그도 여기 들어간다."
             )
         # 요금표가 값을 매기기로 한 필드 중 일부가 그 실행에 없었다면, 없는
         # 캐시 필드일 수도 있지만 CLI 가 필드 이름을 바꾼 것일 수도 있다.
@@ -471,17 +520,21 @@ def main() -> int:
                 " 없는 채로 계산됐다. 진짜 0 일 수도, CLI 가 필드 이름을 바꾼 것일 수도"
                 " 있다 — 후자면 비용이 절반만 잡힌다."
             )
-        print(f"  과제별 비율의 중앙값: {median_ratio:.3f}")
-        if abs(median_ratio - measured) > 0.1:
+        # 중앙값은 승급 과제별 비율의 중앙값이고 paired_ratio 는 같은 과제들의
+        # 비용 가중 비율이다. 둘은 같은 추정량의 두 요약이므로 비교가 성립한다.
+        # 예전에는 이 중앙값을 새 c 와 비교했는데, 그 둘은 애초에 다른 값을
+        # 재는 것이라 차이가 나도 "큰 과제가 지배한다" 는 뜻이 아니었다.
+        print(f"  승급 과제별 비율의 중앙값: {median_ratio:.3f}")
+        if abs(median_ratio - paired_ratio) > 0.1:
             print(
-                "  둘이 크게 다르다 — 비용이 큰 과제 몇 건이 합계를 지배한다는 뜻이다."
-                " 과제를 더 모으기 전에는 어느 쪽도 안정적이지 않다."
+                "    가중 비율과 크게 다르다 — 비용이 큰 승급 과제 몇 건이 합계를"
+                " 지배한다는 뜻이다. 과제를 더 모아야 안정된다."
             )
-        c_range = jackknife(statistics.fmean(cheap_all), [y for _, y in pair_costs])
+        c_range = jackknife(tasks)
         if c_range is not None:
             print(
                 f"  c 의 95% 구간 [{c_range[0]:.3f}, {c_range[1]:.3f}]"
-                f" (jackknife, 표본 {len(pair_costs)}건)"
+                f" (jackknife, 과제 {len(tasks)}건 delete-one)"
             )
         # 승급 부분집합 편향. 싼 경로는 모든 과제에서 돌았으므로 전수와 비교할
         # 수 있다. 싼 모델이 일찍 포기해서 실패하는 흔한 양상이면 승급 과제의
@@ -500,14 +553,20 @@ def main() -> int:
                 low = escalated_mean < passing_mean
                 print(
                     f"    승급 과제의 싼 비용이 그렇지 않은 과제보다"
-                    f" {'낮다' if low else '높다'}. c 의 분자는 전수라 이것이 c 를"
-                    " 직접 틀리게 하지는 않지만, 두 무리의 과제 성격이 다르다는"
-                    " 뜻이므로 분모의 대입이 그만큼 위태롭다."
+                    f" {'낮다' if low else '높다'}. c 의 분자는 두 무리를 다 담으므로"
+                    " 이것이 c 를 직접 틀리게 하지는 않지만, 두 무리의 과제 성격이"
+                    " 다르다는 뜻이므로 분모의 대입이 그만큼 위태롭다."
                 )
-        print(
-            "  분자는 전수라 부분집합 편향이 없다. 남은 위험은 분모뿐이다 — 승급"
-            " 과제가 더 길거나 어려웠다면 비싼 평균이 전체를 대표하지 않는다."
-        )
+        if unusable_cheap:
+            print(
+                "  분자가 승급 여부로 걸러지지는 않지만 전수도 아니다. 위에 적은"
+                " 누락과, 승급 과제가 더 길거나 어려웠을 가능성이 함께 남는다."
+            )
+        else:
+            print(
+                "  분자는 전수라 부분집합 편향이 없다. 남은 위험은 분모뿐이다 — 승급"
+                " 과제가 더 길거나 어려웠다면 비싼 평균이 전체를 대표하지 않는다."
+            )
         if measured >= 1:
             print(
                 "  주의: 싼 경로가 승급 경로보다 비쌌다(c >= 1). 손익분기가 음수가"
@@ -516,6 +575,7 @@ def main() -> int:
             )
         if given_cost_ratio and abs(measured - c) > 0.05:
             print(f"  주의: --cost-ratio 로 준 {c:.2f} 와 다르다. 아래 계산은 실측값을 쓴다.")
+        measured_c = measured
         c = measured
     elif paired:
         print(
@@ -574,10 +634,17 @@ def main() -> int:
     if c_range is None:
         # c 를 재지 못했으면 판정하지 않는다. 남의 벤치마크에서 온 0.31 로
         # "유리하다" 를 찍으면, 재지 않은 것을 잰 것처럼 보이게 된다.
-        print(
-            "\n  -> 판정 없음. c 를 이 표본에서 재지 못해 가정값을 썼다."
-            " 양쪽 비용이 있는 승급 과제를 더 모아야 한다."
-        )
+        if measured_c is None:
+            print(
+                "\n  -> 판정 없음. c 를 이 표본에서 재지 못해 가정값을 썼다."
+                " 양쪽 비용이 있는 승급 과제를 더 모아야 한다."
+            )
+        else:
+            print(
+                "\n  -> 판정 없음. c 는 쟀지만 흔들림 폭을 구하지 못했다"
+                "(과제가 3건 미만이거나 모든 과제의 비율이 같다)."
+                " 구간 없이는 손익분기를 넘는지 말할 수 없다."
+            )
     elif worst < 1:
         print("\n  -> 구간 전체가 손익분기 아래다. 싼 경로 우선이 이 표본에서 유리하다.")
     elif best > 1:

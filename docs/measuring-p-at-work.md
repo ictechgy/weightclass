@@ -285,8 +285,11 @@ tools/speculative_report.py --log ~/spec-runs/runs.jsonl
 ```
 
 When both arms recorded a cost, `c` is **measured from your own tasks** rather
-than assumed: on every escalated task the same task ran through both models, so
-the same task sits on both sides of the ratio.
+than assumed. It is the average cheap cost per task divided by the average
+expensive cost per escalated task — not a paired per-task ratio. An earlier
+version of this report did use a paired ratio, and it was wrong for the formula
+it fed: `c + p` treats `c` as a cost ratio over *all* tasks, and the escalated
+tasks are the subset where the cheap route failed.
 
 Two things about that number are easy to over-read, and the report now says both
 out loud rather than leaving them to the reader:
