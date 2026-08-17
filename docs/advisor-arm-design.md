@@ -228,7 +228,7 @@ Then **model** the two configurations nobody ran, and label them as modelled:
 
 ```
 A alone      = a + c + p′
-A + B        = a + c + p′·(a + c + (1 − s′))
+A + B        = a + c + p′·(a + r + (1 − s′))
 ```
 
 `s′` — the advised-retry success rate *after* an up-front plan — is not the same
@@ -248,8 +248,10 @@ To pre-register:
 - **n**, and the early-stopping rule.
 - **The primary endpoint: cost per passing task.** Not a blind quality rating —
   see the ceiling above.
-- **The decision rule for Shape B**: `s > a + c`, evaluated on the *interval*, not
-  the point estimate, and abstaining when the interval crosses.
+- **The decision rule for Shape B**: `s > a + r`, evaluated on the *interval* of
+  every term, not the point estimates, and abstaining when the interval crosses.
+  `r` is the measured cost of the advised retry and is normally above `c`, since
+  the retry carries the advice in its prompt.
 - **The decision rule for Shape A**: a named margin on `p − p′`, plus the explicit
   statement that a null result means "no measurable effect on failures" and not
   "no effect on quality".

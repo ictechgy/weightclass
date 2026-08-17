@@ -716,6 +716,12 @@ def main() -> int:
             # 조언이 비어 재시도조차 못 한 건은 비용은 쓰고 승급했는데 분모에서
             # 빠져, s 가 위로 치우친다.
             advised_failures = [r for r in usable if isinstance(r.get("advice_failure"), dict)]
+            if config.get("advise_first") and config.get("advise_on_failure"):
+                print(
+                    "  주의: 시작 전 조언과 실패 후 조언이 함께 켜져 있다. 여기 s′ 는"
+                    " 계획을 받은 뒤의 재시도 성공률이므로, 실패 후 조언만 켠 설정의"
+                    " s 와 같은 값이 아니다. 두 설정의 수를 섞어 쓰면 안 된다."
+                )
             if config.get("advise_on_failure"):
                 rescued = sum(
                     1
@@ -731,8 +737,13 @@ def main() -> int:
                             f"  조언 {no_retry}건은 비어 있거나 조언자가 실패해 재시도조차"
                             " 못 했다. 비용은 썼고 승급했으므로 분모에 남긴다."
                         )
+                        print(
+                            "    그 건들은 재시도 비용을 쓰지 않았으므로, 아래 손익분기가"
+                            " r 을 모든 실패에 물리는 것은 보수적인(불리한) 쪽으로 틀린다."
+                        )
                     print(
-                        f"  조언 후 재시도 성공률 s = {s_hat:.1%}"
+                        f"  조언 후 재시도 성공률 {'s′' if config.get('advise_first') else 's'}"
+                        f" = {s_hat:.1%}"
                         f"  95% CI [{s_lo:.1%}, {s_hi:.1%}]   ({rescued}/{len(advised_failures)})"
                     )
                     # 재시도는 최초 싼 실행과 같은 비용이 아니다. 과제에 조언이
@@ -746,11 +757,18 @@ def main() -> int:
                         and value > 0
                     ]
                     r_ratio = None
+                    r_spread = 0.0
                     if retry_costs and priced_pairs:
                         expensive_mean_all = statistics.fmean(
                             [x.expensive for x in priced_pairs if x.expensive]
                         )
-                        r_ratio = statistics.fmean(retry_costs) / expensive_mean_all
+                        r_mean = statistics.fmean(retry_costs)
+                        r_ratio = r_mean / expensive_mean_all
+                        r_spread = (
+                            1.96 * statistics.stdev(retry_costs) / math.sqrt(len(retry_costs))
+                            if len(retry_costs) > 1
+                            else r_mean
+                        ) / expensive_mean_all
                         print(
                             f"  재시도 1회 비용비 r = {r_ratio:.3f}  ({len(retry_costs)}회)"
                             "  — 조언이 붙어 최초 싼 실행보다 비쌀 수 있다"
@@ -760,7 +778,9 @@ def main() -> int:
                         # r 을 쟀으면 그것을 쓴다. 못 쟀으면 c 로 대신하되
                         # 그것이 대입이라고 말한다.
                         base_low, base_high = (
-                            (r_ratio, r_ratio) if r_ratio is not None else (c_range[0], c_range[1])
+                            (max(0.0, r_ratio - r_spread), r_ratio + r_spread)
+                            if r_ratio is not None
+                            else (c_range[0], c_range[1])
                         )
                         basis = "r" if r_ratio is not None else "c(대입)"
                         threshold_low = max(0.0, a_ratio - a_spread) + base_low
