@@ -738,8 +738,8 @@ def main() -> int:
                             " 못 했다. 비용은 썼고 승급했으므로 분모에 남긴다."
                         )
                         print(
-                            "    그 건들은 재시도 비용을 쓰지 않았으므로, 아래 손익분기가"
-                            " r 을 모든 실패에 물리는 것은 보수적인(불리한) 쪽으로 틀린다."
+                            "    그 건들은 재시도 비용을 쓰지 않았으므로 손익분기에는"
+                            " 재시도 시도율 q 를 곱한 q·r 을 쓴다."
                         )
                     print(
                         f"  조언 후 재시도 성공률 {'s′' if config.get('advise_first') else 's'}"
@@ -775,17 +775,33 @@ def main() -> int:
                         )
                     if a_ratio is not None and c_range is not None:
                         # 이득 조건은 s > a + c. a 와 c 의 흔들림을 다 태운다.
+                        # 조언이 비어 재시도조차 못 한 실패에는 r 이 들지 않는다.
+                        # 모든 실패에 r 을 물리면 조언 경로가 실제보다 비싸
+                        # 보인다. 재시도 시도율 q 를 곱한다.
+                        attempted = len(advised_failures) - no_retry
+                        q = attempted / len(advised_failures) if advised_failures else 1.0
                         # r 을 쟀으면 그것을 쓴다. 못 쟀으면 c 로 대신하되
                         # 그것이 대입이라고 말한다.
                         base_low, base_high = (
-                            (max(0.0, r_ratio - r_spread), r_ratio + r_spread)
+                            (max(0.0, (r_ratio - r_spread) * q), (r_ratio + r_spread) * q)
                             if r_ratio is not None
                             else (c_range[0], c_range[1])
                         )
-                        basis = "r" if r_ratio is not None else "c(대입)"
+                        basis = (
+                            (f"{q:.2f}·r" if q < 1 else "r") if r_ratio is not None else "c(대입)"
+                        )
                         threshold_low = max(0.0, a_ratio - a_spread) + base_low
                         threshold_high = a_ratio + a_spread + base_high
-                        base_point = r_ratio if r_ratio is not None else c
+                        # a 와 r 은 둘 다 같은 분모(승급 과제의 비싼 평균)로
+                        # 나눈 값이고, 그 분모도 표본이다. c 의 구간이 그
+                        # 불확실성을 이미 재 놓았으므로 비율만큼 넓힌다.
+                        if c > 0 and c_range is not None:
+                            widen = max(c_range[1] / c, c / max(c_range[0], 1e-9))
+                            centre = (threshold_low + threshold_high) / 2
+                            half = (threshold_high - threshold_low) / 2
+                            threshold_low = max(0.0, centre - half * widen)
+                            threshold_high = centre + half * widen
+                        base_point = (r_ratio * q) if r_ratio is not None else c
                         print(
                             f"  손익분기 s = a + {basis} = {a_ratio + base_point:.3f}"
                             f"  (구간 [{threshold_low:.3f}, {threshold_high:.3f}])"
@@ -812,8 +828,13 @@ def main() -> int:
             "(r 은 조언이 붙은 재시도의 비용비로, 최초 싼 실행의 c 와 다르다)."
             " 두 설정을 나란히 재기 전에는 절감을 말하지 않는다."
         )
-    print("\n기대 비용 = c + p")
-    print(f"  기대 비용 {c + p:.2f}  ->  절감 {1 - (c + p):.1%}")
+    if advisor_on:
+        # 모형이 아니라고 말해 놓고 그 식의 절감률을 찍으면, 사용자는 그
+        # 숫자를 가져간다. 조언이 켜진 로그에서는 아예 내지 않는다.
+        print(f"\n(참고) 조언 없는 경로였다면 c + p = {c + p:.2f}")
+    else:
+        print("\n기대 비용 = c + p")
+        print(f"  기대 비용 {c + p:.2f}  ->  절감 {1 - (c + p):.1%}")
     # 이 식은 두 가지를 전제한다. 하나는 싼 비용비가 승급 과제와 그렇지 않은
     # 과제에서 같다는 것, 다른 하나는 비싼 경로의 과제당 비용이 양쪽에서 같다는
     # 것이다. 뒤의 것은 확인할 방법이 없다 — 비싼 경로는 승급된 과제에서만
