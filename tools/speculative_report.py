@@ -638,6 +638,14 @@ def main() -> int:
     # ── 조언 패턴 ────────────────────────────────────────────────────────
     # 설정이 섞이면 s 도 p 도 무엇의 값인지 알 수 없다. 라우트 지문과 같은
     # 방식으로 먼저 확인한다.
+    advisor_on = any(
+        isinstance(r.get("advisor"), dict)
+        and (
+            (r["advisor"] or {}).get("advise_first")
+            or (r["advisor"] or {}).get("advise_on_failure")
+        )
+        for r in usable
+    )
     advisor_configs = {
         json.dumps(r.get("advisor") or {}, sort_keys=True, ensure_ascii=False) for r in usable
     }
@@ -662,41 +670,76 @@ def main() -> int:
                     return None
                 return cost_of(advice)
 
-            advice_costs = [
-                value
-                for r in usable
-                for key in ("advice_first", "advice_failure")
-                if (value := advice_cost(r, key)) is not None and value > 0
-            ]
-            if advice_costs and priced_pairs:
+            # 시작 전 조언은 **모든** 과제에서, 실패 후 조언은 실패한 과제에서만
+            # 일어난다. 두 모집단의 비용을 한 평균으로 섞으면 그 값은 어느
+            # 쪽의 비용도 아니다. 단계별로 따로 낸다.
+            def advice_stats(key: str) -> tuple[float, float, int] | None:
+                values = [
+                    value
+                    for r in usable
+                    if (value := advice_cost(r, key)) is not None and value > 0
+                ]
+                if not values or not priced_pairs:
+                    return None
                 expensive_mean_all = statistics.fmean(
                     [x.expensive for x in priced_pairs if x.expensive]
                 )
-                a_ratio = statistics.fmean(advice_costs) / expensive_mean_all
-                print(
-                    f"  조언 1회 비용비 a = {a_ratio:.3f}"
-                    f"  ({len(advice_costs)}회 평균 {statistics.fmean(advice_costs):.4f})"
+                mean = statistics.fmean(values)
+                # a 도 표본에서 온 값이다. 점추정만 쓰면 s > a + c 판정이
+                # 실제보다 확정적으로 보인다. 표본이 둘 이상이면 흔들림을
+                # 표준오차로 낸다.
+                spread = (
+                    1.96 * statistics.stdev(values) / math.sqrt(len(values))
+                    if len(values) > 1
+                    else 0.0
                 )
-            else:
-                a_ratio = None
-                print("  조언 비용을 얻지 못해 a 를 내지 못한다.")
+                return (mean / expensive_mean_all, spread / expensive_mean_all, len(values))
+
+            a_first = advice_stats("advice_first")
+            a_failure = advice_stats("advice_failure")
+            for label, stats in (("시작 전", a_first), ("실패 후", a_failure)):
+                if stats is None:
+                    continue
+                ratio, spread, count = stats
+                band = f" ± {spread:.3f}" if spread else ""
+                print(f"  {label} 조언 1회 비용비 a = {ratio:.3f}{band}  ({count}회)")
+            a_ratio = a_failure[0] if a_failure else None
+            a_spread = a_failure[1] if a_failure else 0.0
+            if a_ratio is None:
+                print("  실패 후 조언 비용을 얻지 못해 a 를 내지 못한다.")
 
             # s 는 실패한 실행에서만 나온다. 재시도가 기록된 건만 센다.
-            retried = [r for r in usable if isinstance(r.get("retry"), dict)]
+            # 분모는 "재시도가 기록된 건" 이 아니라 "조언을 받은 실패" 다.
+            # 조언이 비어 재시도조차 못 한 건은 비용은 쓰고 승급했는데 분모에서
+            # 빠져, s 가 위로 치우친다.
+            advised_failures = [r for r in usable if isinstance(r.get("advice_failure"), dict)]
             if config.get("advise_on_failure"):
-                rescued = sum(1 for r in retried if (r["retry"] or {}).get("accepted"))
-                if retried:
-                    s_lo, s_hi = wilson(rescued, len(retried))
-                    s_hat = rescued / len(retried)
+                rescued = sum(
+                    1
+                    for r in advised_failures
+                    if isinstance(r.get("retry"), dict) and (r["retry"] or {}).get("accepted")
+                )
+                no_retry = sum(1 for r in advised_failures if not isinstance(r.get("retry"), dict))
+                if advised_failures:
+                    s_lo, s_hi = wilson(rescued, len(advised_failures))
+                    s_hat = rescued / len(advised_failures)
+                    if no_retry:
+                        print(
+                            f"  조언 {no_retry}건은 비어 있거나 조언자가 실패해 재시도조차"
+                            " 못 했다. 비용은 썼고 승급했으므로 분모에 남긴다."
+                        )
                     print(
                         f"  조언 후 재시도 성공률 s = {s_hat:.1%}"
-                        f"  95% CI [{s_lo:.1%}, {s_hi:.1%}]   ({rescued}/{len(retried)})"
+                        f"  95% CI [{s_lo:.1%}, {s_hi:.1%}]   ({rescued}/{len(advised_failures)})"
                     )
                     if a_ratio is not None and c_range is not None:
-                        # 이득 조건은 s > a + c. 두 끝을 다 태워 판정한다.
-                        threshold_low = a_ratio + c_range[0]
-                        threshold_high = a_ratio + c_range[1]
-                        print(f"  손익분기 s = a + c = {a_ratio + c:.3f}")
+                        # 이득 조건은 s > a + c. a 와 c 의 흔들림을 다 태운다.
+                        threshold_low = max(0.0, a_ratio - a_spread) + c_range[0]
+                        threshold_high = a_ratio + a_spread + c_range[1]
+                        print(
+                            f"  손익분기 s = a + c = {a_ratio + c:.3f}"
+                            f"  (구간 [{threshold_low:.3f}, {threshold_high:.3f}])"
+                        )
                         if s_lo > threshold_high:
                             print("  -> 구간 전체가 손익분기 위다. 실패 후 조언이 승급보다 싸다.")
                         elif s_hi < threshold_low:
@@ -706,8 +749,18 @@ def main() -> int:
                     else:
                         print("  a 나 c 를 재지 못해 판정하지 않는다.")
                 else:
-                    print("  아직 실패한 실행이 없어 s 를 낼 수 없다.")
+                    print("  아직 조언을 받은 실패가 없어 s 를 낼 수 없다.")
 
+    # 조언이 켜져 있으면 c + p 는 이 실행의 비용 모형이 아니다. 그것을
+    # "기대 비용" 이라 찍고 절감까지 내면, 조언 없는 설정의 숫자를 조언 있는
+    # 로그의 결론으로 보여 주는 것이 된다.
+    if advisor_on:
+        print("\n기대 비용: 아래 c + p 는 **조언 없는** 경로의 모형이다.")
+        print(
+            "  이 로그는 조언을 켜고 잰 것이므로 실제 비용 모형은 다르다"
+            " — 시작 전 조언은 a + c + p′, 실패 후 조언은 c + p·(a + c + 1 − s)."
+            " 두 설정을 나란히 재기 전에는 절감을 말하지 않는다."
+        )
     print("\n기대 비용 = c + p")
     print(f"  기대 비용 {c + p:.2f}  ->  절감 {1 - (c + p):.1%}")
     # 이 식은 두 가지를 전제한다. 하나는 싼 비용비가 승급 과제와 그렇지 않은
@@ -757,7 +810,15 @@ def main() -> int:
     thin_denominator = (
         c_range is not None and escalated_total > 0 and len(paired) * 2 < escalated_total
     )
-    if timed_out_tasks and c_range is not None:
+    if advisor_on:
+        # 조언이 켜진 로그에서는 c + p 기반 판정을 내지 않는다. 위에 그 식이
+        # 이 실행의 모형이 아니라고 적어 놓고 그 식으로 판정하면 앞뒤가 맞지
+        # 않는다. 조언 자체의 판정은 위쪽 s > a + c 가 한다.
+        print(
+            "\n  -> 판정 없음(c + p 기준). 이 로그는 조언을 켜고 쟀다."
+            " 조언의 이득 판정은 위의 s > a + c 를 보라."
+        )
+    elif timed_out_tasks and c_range is not None:
         # 판정을 내지 않는다. 빠진 비용이 위쪽으로 열려 있으면 구간도 위쪽으로
         # 열려 있고, 닫힌 구간을 근거로 "유리하다/손해다" 를 말할 수 없다.
         print(

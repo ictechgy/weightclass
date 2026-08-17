@@ -116,6 +116,9 @@ class Advice(TypedDict, total=False):
     chars: int
     truncated: bool
     empty: bool
+    # 조언자가 0 이 아닌 코드로 끝났거나 타임아웃. 그때 stdout 은 조언이
+    # 아니라 오류 메시지이므로 쓰지 않는다.
+    route_failed: bool
 
 
 class Attempt(TypedDict, total=False):
@@ -817,23 +820,45 @@ def extract_tokens(stdout: str, stderr: str) -> int | None:
 # 지우는 이유는 그 텍스트가 벤더로 나가기 때문이다 — 자식의 테스트가 호스트의
 # 비밀을 찍었다면 그것이 그대로 전송된다.
 _SECRET_SHAPES = re.compile(
-    r"sk-[A-Za-z0-9_-]{16,}"
+    # 개인키는 **본문까지** 지운다. BEGIN 줄만 지우면 base64 몸통이 그대로
+    # 남아, 지웠다는 착각만 준다.
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*"
+    r"|sk-[A-Za-z0-9_-]{16,}"
     r"|gh[pousr]_[A-Za-z0-9]{20,}"
     r"|github_pat_[A-Za-z0-9_]{20,}"
-    r"|A[KS]IA[0-9A-Z]{16}"
+    r"|glpat-[A-Za-z0-9_-]{16,}"
+    r"|npm_[A-Za-z0-9]{30,}"
+    r"|AIza[0-9A-Za-z_-]{35}"
     r"|xox[baprs]-[A-Za-z0-9-]{10,}"
-    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    r"|A[KS]IA[0-9A-Z]{16}"
+    # AWS 비밀 액세스 키와 세션 토큰은 고정 접두사가 없다. Bedrock 을 쓰는
+    # 곳에서 가장 흔한 자격증명이므로 이름으로 잡는다.
+    r"|(?i:aws_secret_access_key|aws_session_token|aws_security_token)"
+    r"\s*[=:]\s*[\"']?[A-Za-z0-9/+=_-]{16,}"
+    # 환경을 통째로 찍는 실패 테스트가 흔하다. NAME=value 형태에서 이름이
+    # 비밀을 뜻하면 값을 지운다.
+    r"|(?i:[A-Z0-9_]*(?:secret|token|password|passwd|api_?key|private_?key|credential)"
+    r"[A-Z0-9_]*)\s*[=:]\s*[\"']?[^\s\"']{8,}"
+    # JWT
+    r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+    re.DOTALL,
 )
 VERIFY_EXCERPT_CHARS = 4000
 
 
 def verify_excerpt(output: str) -> str:
-    """조언자에게 보낼 검증 출력. 끝부분만, 자격증명 모양은 지우고."""
+    """조언자에게 보낼 검증 출력. 자격증명 모양을 지우고, 그 다음에 자른다.
+
+    순서가 중요하다. 먼저 자르면 경계에 걸친 자격증명이 앞부분(접두사)을
+    잃고 패턴에 안 걸린 채 남는다. 자식이 출력 길이를 조절할 수 있으므로
+    그 경계는 의도적으로 맞출 수 있는 것이다. 지운 뒤에 자른다.
+    """
+    cleaned = _SECRET_SHAPES.sub("[REDACTED]", output)
+    if len(cleaned) <= VERIFY_EXCERPT_CHARS:
+        return cleaned
     # 실패 이유는 대개 끝에 있다. 앞을 자르고 뒤를 남긴다.
-    tail = output[-VERIFY_EXCERPT_CHARS:]
-    if len(output) > VERIFY_EXCERPT_CHARS:
-        tail = "[...앞부분 생략...]\n" + tail
-    return _SECRET_SHAPES.sub("[REDACTED]", tail)
+    return "[...앞부분 생략...]\n" + cleaned[-VERIFY_EXCERPT_CHARS:]
 
 
 def run_verify(verify: Path, workspace: Path, home: Path) -> tuple[VerifyResult, str]:
@@ -1212,16 +1237,34 @@ def ask_advisor(
     work_root = registry.parent / ".work"
     work_root.mkdir(mode=0o700, exist_ok=True)
     workspace = Path(tempfile.mkdtemp(prefix="spec-advice-", dir=work_root))
-    register(registry, workspace, add=True)
+    # 등록을 try 밖에 두면, 여기서 실패했을 때 방금 만든 디렉터리가 추적도
+    # 정리도 되지 않은 채 남는다. 이 함수의 유일한 보증이 "언제나 지운다" 인데
+    # 그 앞에서 새는 것이다.
+    stranded = False
+    body = ""
     try:
+        register(registry, workspace, add=True)
         if grounded:
             clone_at(repo, commit, workspace)
         child, body = run_child(command, workspace, prompt, rates, allowed_env, home, prefer_prices)
     finally:
         # 언제나 지운다. 여기가 조언자와 executor 를 가르는 지점이다.
-        shutil.rmtree(workspace, ignore_errors=True)
-        register(registry, workspace, add=False)
-    text = str(body).strip()
+        try:
+            shutil.rmtree(workspace)
+        except OSError:
+            # ignore_errors 로 삼키면 안 된다. 못 지웠는데 등록까지 지우면
+            # --prune 도 모르게 되어 조언자가 남긴 것이 영구히 남는다.
+            # 지우지 못했으면 등록을 **남겨** 두고 사람에게 알린다.
+            stranded = workspace.exists()
+        if not stranded:
+            register(registry, workspace, add=False)
+    if stranded:
+        print(f"  경고: 조언자 작업공간을 지우지 못했다. --prune 으로 정리하라: {workspace}")
+    # 조언자가 정상 종료하지 않았으면 그 stdout 은 조언이 아니다. 인증 실패,
+    # 쿼터 초과, 타임아웃도 stdout 에 무언가를 쓰고, 그것을 그대로 과제에
+    # 붙이면 executor 가 오류 메시지를 지시로 읽는다.
+    failed = bool(child["timed_out"]) or child["exit_code"] != 0
+    text = "" if failed else str(body).strip()
     truncated = len(text) > ADVICE_MAX_CHARS
     if truncated:
         text = text[:ADVICE_MAX_CHARS]
@@ -1230,8 +1273,10 @@ def ask_advisor(
             "stage": stage,
             "child": child,
             "chars": len(text),
-            "truncated": truncated,
+            # 상한에 걸려 잘렸거나, 자식이 타임아웃으로 중간에 끊겼거나.
+            "truncated": truncated or bool(child["timed_out"]),
             "empty": not text,
+            "route_failed": failed,
         },
         text,
     )
@@ -1270,11 +1315,13 @@ def attempt(
     allowed_env: frozenset[str] | None,
     child_home: Path | None,
     prefer_prices: bool,
-) -> tuple[Attempt, str]:
+) -> tuple[Attempt, str, bytes]:
     """Clone, run one route, verify. The workspace survives only a pass.
 
-    반환의 두 번째 값은 검증 명령의 출력이다. 기록에는 넣지 않는다 — 조언
-    단계가 "왜 실패했는지" 를 알아야 해서 호출자에게만 건넨다.
+    반환의 두 번째와 세 번째 값은 검증 명령의 출력과 이 시도가 만든 패치다.
+    둘 다 기록에는 넣지 않는다 — 조언 단계가 "무엇을 만들었고 왜 실패했는지"
+    를 알아야 해서 호출자에게만 건넨다. 실패한 시도의 패치는 디스크에 쓰이지
+    않으므로 여기서 돌려주지 않으면 어디에도 없다.
     """
     # 작업공간은 산출물 디렉터리 바로 아래가 아니라 그 안의 .work 에 만든다.
     # 검증 스크립트의 cwd 가 인계 트리이므로 `..` 가 곧 산출물 디렉터리가 되면,
@@ -1391,12 +1438,12 @@ def attempt(
             record["failure_kind"] = "infrastructure"
             discard(registry, handover, out_dir)
             record["workspace"] = None
-            return record, verify_output
+            return record, verify_output, patch_bytes
         record["patch"] = str(patch)
     else:
         discard(registry, handover, out_dir)
         record["workspace"] = None
-    return record, verify_output
+    return record, verify_output, patch_bytes
 
 
 def main() -> int:
@@ -1424,7 +1471,11 @@ def main() -> int:
             "executable name matches neither) — everything else is dropped."
         ),
     )
-    for arm, flag in (("cheap", "--cheap-env"), ("expensive", "--expensive-env")):
+    for arm, flag in (
+        ("cheap", "--cheap-env"),
+        ("expensive", "--expensive-env"),
+        ("advisory", "--advisor-env"),
+    ):
         parser.add_argument(
             flag,
             action="append",
@@ -1447,7 +1498,11 @@ def main() -> int:
     # 물려받는다. 싼 경로는 실패할 것을 전제로 돌리는 쪽이므로, 그 실패가 채점
     # 기준이 되는 승급 경로에 스며드는 통로를 기본값으로 열어 둘 수 없다.
     # 같은 값을 두 번 적어 공유할 수는 있다 — 그때는 명령줄에 그렇게 보인다.
-    for arm, flag in (("cheap", "--cheap-home"), ("expensive", "--expensive-home")):
+    for arm, flag in (
+        ("cheap", "--cheap-home"),
+        ("expensive", "--expensive-home"),
+        ("advisory", "--advisor-home"),
+    ):
         parser.add_argument(
             flag,
             type=Path,
@@ -1642,7 +1697,11 @@ def main() -> int:
     # --child-env 는 두 arm 에 함께 들어간다. Bedrock 으로 붙는 승급 arm 을
     # 위해 AWS_* 를 넣으면 싼 Codex arm 도 그것을 받는다 — 벤더별로 좁힌
     # 이유가 바로 그것을 막으려는 것이었다. arm 별 플래그를 따로 둔다.
-    advisor_env = env_for(advisor_argv, arguments.child_env, "조언 경로") if advisor_argv else None
+    advisor_env = (
+        env_for(advisor_argv, arguments.child_env + arguments.advisor_env, "조언 경로")
+        if advisor_argv
+        else None
+    )
     cheap_env = env_for(cheap_argv, arguments.child_env + arguments.cheap_env, "싼 경로")
     expensive_env = env_for(
         expensive_argv, arguments.child_env + arguments.expensive_env, "승급 경로"
@@ -1688,6 +1747,7 @@ def main() -> int:
 
     cheap_home = home_for(arguments.cheap_home, "--cheap-home")
     expensive_home = home_for(arguments.expensive_home, "--expensive-home")
+    advisor_home = home_for(arguments.advisor_home, "--advisor-home")
     # 프록시 URL 은 http://user:pass@host 형태가 흔하고 그 userinfo 는 그대로
     # 자격증명이다. 자식에게 넘기지 않으면 네트워크가 끊기므로 넘기되, 그것이
     # 비밀을 넘기는 일이라는 사실은 알린다.
@@ -1752,23 +1812,32 @@ def main() -> int:
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)
     grounded = arguments.advisor_context == "repo"
 
-    def advise(stage: str, prompt: str) -> tuple[Advice, str]:
+    def advise(stage: str, prompt: str) -> tuple[Advice | None, str]:
         print(f"조언({stage}): {advisor_argv[0]} (인자 {len(advisor_argv) - 1}개)")
-        record, text = ask_advisor(
-            advisor_argv,
-            stage,
-            prompt,
-            repo,
-            commit,
-            registry,
-            rates.get("advisor"),
-            advisor_env,
-            None,
-            arguments.prefer_prices,
-            grounded,
-        )
+        try:
+            record, text = ask_advisor(
+                advisor_argv,
+                stage,
+                prompt,
+                repo,
+                commit,
+                registry,
+                rates.get("advisor"),
+                advisor_env,
+                advisor_home,
+                arguments.prefer_prices,
+                grounded,
+            )
+        except (RunFailure, OSError) as error:
+            # 조언은 있으면 좋은 것이지 없으면 과제를 못 재는 것이 아니다.
+            # attempt 는 예외를 기록으로 바꾸는데 여기만 위로 던지면, 조언자
+            # 하나가 없다는 이유로 로그 줄이 통째로 사라진다.
+            print(f"  조언 실패 — 조언 없이 계속한다: {_safe(str(error))}")
+            return None, ""
         note = " (잘림)" if record["truncated"] else ""
-        if record["empty"]:
+        if record["route_failed"]:
+            note = " — 조언자가 정상 종료하지 않아 버린다"
+        elif record["empty"]:
             note = " — 비어 있어 무시한다"
         print(f"  조언 {record['chars']}자{note} ({record['child']['seconds']}s)")
         return record, text
@@ -1777,10 +1846,13 @@ def main() -> int:
     first_advice: Advice | None = None
     cheap_task = task
     if arguments.advise_first:
-        first_advice, text = advise("first", task)
+        first_advice, text = advise(
+            "first",
+            f"{task}\n\nYou are advising another model that will do this work. {ADVICE_BRIEF}",
+        )
         cheap_task = compose_task(task, text)
 
-    cheap, cheap_verify_output = attempt(
+    cheap, cheap_verify_output, cheap_patch = attempt(
         "cheap",
         cheap_argv,
         repo,
@@ -1833,21 +1905,39 @@ def main() -> int:
     # 돌린다. 승급 한 번을 짧은 조언 한 번 + 싼 실행 한 번으로 바꾸는 것이므로,
     # 재시도가 s > a + c 만큼만 성공하면 이득이다.
     retry: Attempt | None = None
-    if not cheap["accepted"] and arguments.advise_on_failure:
+    # 인프라 실패(클론 실패, 벤더 CLI 가 변경 없이 죽음)는 검증까지 가지도
+    # 못했으므로 조언할 출력이 없다. 그때 "검증에 실패했다" 고 말하면
+    # 조언자에게 거짓을 주는 것이고, 그 조언은 아무 근거가 없다.
+    reached_verify = bool(cheap.get("verify")) and cheap.get("failure_kind") != "infrastructure"
+    if not cheap["accepted"] and arguments.advise_on_failure and reached_verify:
         excerpt = verify_excerpt(cheap_verify_output)
+        # 무엇을 만들었는지도 보여 준다. 검증 출력만으로는 무엇을 고쳐야
+        # 하는지 알기 어렵다. 패치도 자식이 쓴 텍스트이므로 같은 규칙으로
+        # 지우고 자른다.
+        # 실패한 시도의 패치는 디스크에 쓰이지 않는다. attempt 가 돌려준
+        # 바이트를 쓴다 — 그러지 않으면 이 분기는 언제나 비어 있다.
+        diff_excerpt = (
+            verify_excerpt(cheap_patch.decode("utf-8", errors="replace")) if cheap_patch else ""
+        )
+        produced = (
+            f"----- THE DIFF IT PRODUCED (untrusted) -----\n{diff_excerpt}\n----- END -----\n\n"
+            if diff_excerpt
+            else ""
+        )
         prompt = (
             f"{cheap_task}\n\n"
             "----- WHAT A FIRST ATTEMPT PRODUCED (untrusted output) -----\n"
             f"The attempt failed its verification command. Its output follows.\n\n"
             f"{excerpt}\n"
             "----- END -----\n\n"
+            f"{produced}"
             "Explain what went wrong and what to do differently. "
             f"{ADVICE_BRIEF}"
         )
         failure_advice, text = advise("failure", prompt)
         record["advice_failure"] = failure_advice
         if text:
-            retry, _ = attempt(
+            retry, _, _ = attempt(
                 "retry",
                 cheap_argv,
                 repo,
@@ -1874,7 +1964,7 @@ def main() -> int:
     if needs_escalation:
         print(f"승급: {expensive_argv[0]} (인자 {len(expensive_argv) - 1}개)")
         record["escalated"] = True
-        expensive, _ = attempt(
+        expensive, _, _ = attempt(
             "expensive",
             expensive_argv,
             repo,

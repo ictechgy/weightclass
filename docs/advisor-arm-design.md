@@ -114,9 +114,10 @@ expected cost = c + p·(a + c + (1 − s))        pays when   s > a + c
 **Shape B's condition does not contain `p`.** That matters more than it looks:
 the decision can be made from the failed runs alone, which makes the
 pre-registration cleaner and the sample requirement smaller. At `c ≈ 0.31` and
-`a ≈ 0.1`, an advised retry that succeeds **40% of the time** already pays. It
-replaces a full expensive run with one short advisory call plus one more cheap
-run, so the saving per rescued task is large and obvious.
+`a ≈ 0.1` the break-even is `s > 0.41`, so an advised retry must rescue rather
+more than two failures in five. It replaces a full expensive run with one short
+advisory call plus one more cheap run, so the saving per rescued task is large —
+but the bar rises fast with `a`, and at `a ≈ c ≈ 0.31` it is already `s > 0.62`.
 
 ## The awkward fact about Shape A
 
