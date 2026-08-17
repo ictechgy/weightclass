@@ -713,10 +713,14 @@ def test_crlf_key_is_redacted() -> None:
 
 
 def test_content_array_envelope_is_joined() -> None:
-    """content 배열은 조각을 이어야 본문이 된다. 첫 조각만 쓰면 나머지가 사라진다."""
+    """content 배열은 조각을 이어야 본문이 된다.
+
+    구분자를 넣지 않는다. 조각 경계에 걸친 자격증명의 앵커가 갈라지면
+    리댁션이 그것을 못 잡는다 — 읽기 좋음보다 그쪽이 무겁다.
+    """
     module = load_runner()
-    envelope = '{"content":[{"text":"first"},{"text":"second"}]}'
-    assert module.advice_text(envelope, ["claude", "--output-format", "json"]) == "first\nsecond"
+    envelope = '{"content":[{"text":"first "},{"text":"second"}]}'
+    assert module.advice_text(envelope, ["claude", "--output-format", "json"]) == "first second"
 
 
 @pytest.mark.parametrize("layers", [51, 200, 400, 1000], ids=lambda n: f"{n}layer")
