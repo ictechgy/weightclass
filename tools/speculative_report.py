@@ -264,6 +264,12 @@ def main() -> int:
             return None
         return cost if math.isfinite(cost) and cost >= 0 else None
 
+    def timed_out_attempt(attempt: object) -> bool:
+        if not isinstance(attempt, dict):
+            return False
+        child = attempt.get("child")
+        return isinstance(child, dict) and bool(child.get("timed_out"))
+
     def cost_origin(attempt: object) -> str | None:
         """벤더가 알려준 청구액인가, 우리 요금표로 환산한 값인가.
 
@@ -687,6 +693,11 @@ def main() -> int:
                 advice = record.get(key)
                 if not isinstance(advice, dict):
                     return None
+                # 중간에 죽은 호출의 사용량은 부분값이다. run_child 가 그것을
+                # 건져 두므로 값이 있는 것처럼 보이지만, 그것으로 "전부 가격이
+                # 있다" 를 만족시키면 판정이 부분값 위에 선다.
+                if timed_out_attempt(advice):
+                    return None
                 return cost_of(advice)
 
             # 시작 전 조언은 **모든** 과제에서, 실패 후 조언은 실패한 과제에서만
@@ -786,6 +797,7 @@ def main() -> int:
                         value
                         for r in usable
                         if isinstance(r.get("retry"), dict)
+                        and not timed_out_attempt(r.get("retry"))
                         and (value := cost_of(r.get("retry"))) is not None
                         and value > 0
                     ]

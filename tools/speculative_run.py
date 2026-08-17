@@ -867,11 +867,28 @@ _HOST_SECRET_NAMES = re.compile(
 # 넘긴다 — 그러면 자식이 그것을 찍을 수 있고, 이름 기반 필터는 "PROXY" 를
 # 비밀로 보지 않아 그대로 조언자에게 간다.
 _PROXY_NAMES = re.compile(r"(?i)^(https?|all)_proxy$")
+
+
 # 스킴이 없는 형태(user:pass@host)도 curl, wget, pip 가 받아들이고 사내
 # 프록시 설정에서 흔하다. 스킴을 요구하면 그 형태가 통째로 빠져나간다.
-# 비밀번호에 @ 가 들어 있으면(특수문자 정책에서 흔하다) 첫 @ 에서 끊는
-# 방식은 앞부분만 잡는다. 마지막 @ 까지 탐욕적으로 가되 공백은 넘지 않는다.
-_URL_USERINFO = re.compile(r"(?:://|^)([^/\s:@]+):(\S+)@")
+def split_userinfo(value: str) -> tuple[str, str] | None:
+    """프록시 URL 에서 (사용자, 비밀번호). 정규식 하나로는 못 가른다.
+
+    `(?:://|^)` 로 쓰면 스킴이 있는 URL 에서 `^` 대안이 위치 0 에 먼저 걸려
+    스킴을 사용자 이름으로 잡는다. 비밀번호에 `@` 가 들어갈 수 있어 마지막
+    `@` 를 기준으로 삼아야 하는 것도 정규식만으로는 지저분하다.
+    """
+    authority = value.split("://", 1)[-1].strip()
+    if "@" not in authority:
+        return None
+    # 비밀번호에 @ 가 있을 수 있으므로 **마지막** @ 를 경계로 본다.
+    userinfo, _, host = authority.rpartition("@")
+    if not userinfo or not host or any(ch.isspace() for ch in userinfo):
+        return None
+    user, separator, password = userinfo.partition(":")
+    if not separator or not user or not password:
+        return None
+    return user, password
 
 
 # "-----BEGIN PGP PRIVATE KEY BLOCK-----" 처럼 마커가 KEY 로 끝나지 않는
@@ -883,7 +900,8 @@ _PEM_END_RE = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY[A-Z0-9 ]*-----")
 # 통째로 지우는 것을 막는다.
 PEM_MAX_SPAN = 12000
 # 마커 뒤 이만큼을 보고 진짜 키 블록인지 이름만 언급한 것인지 가른다.
-PEM_LOOKAHEAD = 200
+# 접두사와 헤더 줄이 앞을 채우면 200자로는 본문에 닿지 못한다.
+PEM_LOOKAHEAD = 400
 _PEM_BODY_RUN = re.compile(r"[A-Za-z0-9+/=]{12,}")
 # PEM 헤더 줄: `Proc-Type: 4,ENCRYPTED` 처럼 이름과 값이 콜론으로 갈린다.
 _PEM_HEADER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s")
@@ -903,9 +921,49 @@ def looks_like_key_block(text: str, after: int) -> bool:
     조언자가 봐야 할 바로 그 내용이다.
     """
     window = text[after : after + PEM_LOOKAHEAD]
-    if _PEM_HEADER_LINE.search(window.lstrip()):
+    if _PEM_BODY_RUN.search(window):
         return True
-    return bool(_PEM_BODY_RUN.search(window))
+    # 줄마다 접두사가 붙으면(diff 의 `+`, CI 의 `[INFO] `) 앞쪽 창이 헤더
+    # 줄로만 채워지고, 그 헤더도 접두사 때문에 앵커된 패턴에 안 걸린다.
+    # 그러면 진짜 키 블록이 "이름만 언급" 으로 분류되어 통째로 남는다.
+    for raw in window.splitlines():
+        line = raw.strip()
+        if _PEM_HEADER_LINE.match(line):
+            return True
+        if any(_PEM_HEADER_LINE.match(v) for v in _prefix_variants(line)):
+            return True
+    return False
+
+
+# 줄머리에 붙는 것들: diff 의 +/-, 파이프, 대괄호 태그, 로거 이름과 |,
+# ISO 타임스탬프. 하나씩 문자로 벗기면 "[INFO]" 처럼 문자로 시작하는 형태를
+# 못 벗겨, 접두사만 있는 줄이 내용으로 잡히고 거기서 주사가 멈춘다.
+_LOG_PREFIX = re.compile(
+    r"^(?:\s*(?:\[[^\]]*\]|\d[\d:.T+-]*Z?|[A-Za-z][A-Za-z0-9_.-]*\s*\|)\s*)+|^[+\->|\s]+"
+)
+
+
+def strip_log_prefix(line: str) -> str:
+    """줄머리 접두사를 벗긴 내용. 키 블록 안에서만 쓴다."""
+    return _LOG_PREFIX.sub("", line, count=1).strip()
+
+
+def _prefix_variants(line: str) -> list[str]:
+    """줄에서 접두사를 벗긴 후보들.
+
+    diff 는 `+`/`-` 를, CI 는 `[INFO] ` 나 `stdout | ` 나 타임스탬프를 붙인다.
+    마지막 공백 뒤 조각만 보면 `+Proc-Type: 4,ENCRYPTED` 에서 `4,ENCRYPTED`
+    가 나와 헤더로도 본문으로도 안 잡히고, 그러면 키 본문이 그대로 남는다.
+    """
+    variants = []
+    without_prefix = strip_log_prefix(line)
+    if without_prefix != line:
+        variants.append(without_prefix)
+    if " " in line:
+        variants.append(line.rsplit(" ", 1)[-1])
+    if " " in without_prefix:
+        variants.append(without_prefix.rsplit(" ", 1)[-1])
+    return [v for v in variants if v]
 
 
 def _looks_like_key_line(candidate: str) -> bool:
@@ -944,13 +1002,22 @@ def _key_body_end(text: str, body_at: int) -> int:
         # CI 출력은 줄마다 접두사가 붙는다("[INFO] ", "stdout | ", 타임스탬프).
         # 그것을 그대로 판정하면 공백 때문에 본문이 아니라고 보고 멈춰, 키가
         # 통째로 남는다. 마지막 공백 뒤 조각도 함께 본다.
-        tail = line.rsplit(" ", 1)[-1] if " " in line else ""
-        if tail and _looks_like_key_line(tail):
-            line = tail
-        if not line:
+        for candidate in _prefix_variants(line):
+            if _looks_like_key_line(candidate) or _PEM_HEADER_LINE.match(candidate):
+                line = candidate
+                break
+        # 접두사만 있는 줄(diff 의 "+" 하나, CI 의 "[INFO] ")은 빈 줄이다.
+        # 그것을 내용으로 보면 "짧은 마지막 줄" 규칙이 걸려 본문 앞에서
+        # 멈추고, 키가 그대로 남는다.
+        if not line or not strip_log_prefix(line):
             position = stop
             continue
         if _PEM_HEADER_LINE.match(line):
+            position = stop
+            consumed_content = True
+            continue
+        # 접두사를 벗기면 헤더인 경우도 여기서 받는다.
+        if any(_PEM_HEADER_LINE.match(v) for v in _prefix_variants(line)):
             position = stop
             consumed_content = True
             continue
@@ -986,7 +1053,9 @@ def _key_run_end(text: str, body_at: int) -> int:
     #
     # 줄 끝까지 지운다. 여기까지 온 것은 마커 뒤가 키 본문이라고 이미 판정한
     # 자리이므로, 한 줄을 통째로 잃는 것이 토큰을 반토막 내는 것보다 낫다.
-    newline = text.find("\n", body_at)
+    # body_at 이 바로 줄바꿈이면(표준 여러 줄 PEM 이 그렇다) find 가 body_at
+    # 을 돌려주어 전진하지 못한다. 한 글자 뒤에서 찾는다.
+    newline = text.find("\n", body_at + 1)
     return len(text) if newline < 0 else newline
 
 
@@ -1044,14 +1113,20 @@ def host_secret_values() -> list[str]:
         if _PROXY_NAMES.match(name):
             # URL 전체가 아니라 비밀번호만 지운다. 프록시 주소는 실패 진단에
             # 필요하고 비밀이 아니다.
-            userinfo = _URL_USERINFO.search(value)
+            userinfo = split_userinfo(value)
             if userinfo:
                 # 사용자 이름도 자격증명일 수 있다(토큰을 사용자 자리에 넣는
                 # 형태가 흔하다). 길이 하한을 두면 짧은 비밀번호가 빠져나가고,
                 # 짧은 값을 그대로 지우면 과잉이 된다 — 그래서 이름과 값을
                 # 붙인 형태로도 지운다.
-                user, password = userinfo.group(1), userinfo.group(2)
+                user, password = userinfo
+                # 문맥이 있는 형태는 길이와 무관하게 지운다. URL 안에 있으면
+                # 그것이 비밀번호라는 것이 확실하다.
                 values.append(f"{user}:{password}")
+                values.append(f":{password}@")
+                # 값만 단독으로 찍힌 경우는 길이가 짧으면 지우지 않는다.
+                # 짧은 비밀번호가 흔한 단어이면("test", "admin") 보고서 전체가
+                # 지워져 조언자가 아무것도 못 본다. 그 위험이 더 크다.
                 if len(password) >= 6:
                     values.append(password)
                 if len(user) >= 12:

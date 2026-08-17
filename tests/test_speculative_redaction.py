@@ -463,3 +463,64 @@ def test_private_key_inside_a_diff_is_redacted() -> None:
     )
     cleaned = module.verify_excerpt(text)
     assert not [line for line in lines if line in cleaned]
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["+", "[INFO] ", "stdout | ", "- ", "2026-08-17T10:00:00Z ", "  ", ""],
+    ids=["diff", "bracket", "pipe", "dash", "timestamp", "indent", "none"],
+)
+@pytest.mark.parametrize("encrypted", [False, True], ids=["plain", "encrypted"])
+def test_prefixed_keys_of_both_kinds(prefix: str, encrypted: bool) -> None:
+    """줄머리 접두사와 키 종류의 조합.
+
+    접두사만 있는 줄이 "짧은 마지막 줄" 로 잡혀 본문 앞에서 멈추면 키가
+    통째로 남는다. "[INFO]" 처럼 문자로 시작하는 접두사는 문자 단위로
+    벗겨지지 않아 그 함정에 정확히 걸렸다.
+    """
+    module = load_runner()
+    lines = pem_body()
+    header = ""
+    if encrypted:
+        header = (
+            f"{prefix}Proc-Type: 4,ENCRYPTED\n"
+            f"{prefix}DEK-Info: AES-128-CBC,0123456789ABCDEF\n"
+            f"{prefix}\n"
+        )
+    text = (
+        f"{prefix}{BEGIN}RSA {KEY}\n"
+        + header
+        + "\n".join(prefix + line for line in lines)
+        + f"\n{prefix}{END}RSA {KEY}"
+    )
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://alice:s3cr3tvalue@proxy:8080",
+        "bob:P@ssw0rd!x@corp:3128",
+        "https://carol:sh0rt@gw:443",
+    ],
+    ids=["schemed", "schemeless-at", "schemed-short"],
+)
+def test_proxy_password_forms(url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """정규식 하나로 URL 을 가르려던 시도가 스킴 있는 형태를 깨뜨렸다.
+
+    `(?:://|^)` 는 위치 0 의 `^` 대안이 먼저 걸려 스킴을 사용자 이름으로
+    잡는다. 그러면 진짜 비밀번호가 목록에 없다.
+    """
+    module = load_runner()
+    monkeypatch.setenv("HTTPS_PROXY", url)
+    parsed = module.split_userinfo(url)
+    assert parsed is not None
+    user, password = parsed
+    # URL 안에 있으면 길이와 무관하게 지운다.
+    assert password not in module.verify_excerpt(f"via {url} failed")
+    if len(password) >= 6:
+        # 값만 단독으로 찍혀도 지운다. 짧은 값은 흔한 단어와 부딪혀
+        # 보고서를 통째로 지울 위험이 더 크므로 문맥이 있을 때만 지운다.
+        assert password not in module.verify_excerpt(f"auth failed with {password}")
+    assert user in module.verify_excerpt(f"user {user} rejected") or len(user) >= 12
