@@ -854,9 +854,6 @@ _SECRET_SHAPES = re.compile(
     re.DOTALL,
 )
 VERIFY_EXCERPT_CHARS = 4000
-# 정규식을 돌릴 최대 길이. 발췌 길이보다 훨씬 크게 잡아, 최종 발췌에 들어갈
-# 자격증명은 언제나 창 안에 온전히 들어오게 한다.
-SCAN_WINDOW_CHARS = 64000
 
 
 _HOST_SECRET_NAMES = re.compile(
@@ -878,15 +875,24 @@ def split_userinfo(value: str) -> tuple[str, str] | None:
     스킴을 사용자 이름으로 잡는다. 비밀번호에 `@` 가 들어갈 수 있어 마지막
     `@` 를 기준으로 삼아야 하는 것도 정규식만으로는 지저분하다.
     """
-    authority = value.split("://", 1)[-1].strip()
-    if "@" not in authority:
+    rest = value.split("://", 1)[-1].strip()
+    # authority 는 경로/쿼리/프래그먼트 앞까지다. 그것을 안 자르면
+    # "?notify=ops@example.com" 의 @ 가 경계로 잡혀 비밀번호에 주소와 쿼리가
+    # 통째로 붙는다 — 그러면 진짜 비밀번호는 목록에 없다.
+    for boundary in ("/", "?", "#"):
+        rest = rest.split(boundary, 1)[0]
+    if "@" not in rest:
         return None
-    # 비밀번호에 @ 가 있을 수 있으므로 **마지막** @ 를 경계로 본다.
-    userinfo, _, host = authority.rpartition("@")
+    # 비밀번호에 @ 가 있을 수 있으므로 authority 안에서 **마지막** @ 를 본다.
+    userinfo, _, host = rest.rpartition("@")
     if not userinfo or not host or any(ch.isspace() for ch in userinfo):
         return None
     user, separator, password = userinfo.partition(":")
-    if not separator or not user or not password:
+    if not separator:
+        # 비밀번호 없이 토큰만 넣는 형태(https://TOKEN@host)가 흔하다.
+        # 여기서 None 을 돌려주면 그 토큰이 목록에 없어 그대로 나간다.
+        return userinfo, ""
+    if not user or not password:
         return None
     return user, password
 
@@ -945,7 +951,16 @@ _LOG_PREFIX = re.compile(
 
 def strip_log_prefix(line: str) -> str:
     """줄머리 접두사를 벗긴 내용. 키 블록 안에서만 쓴다."""
-    return _LOG_PREFIX.sub("", line, count=1).strip()
+    # 접두사는 겹쳐서 붙는다("+[INFO] ", "[INFO] +"). 한 번만 벗기면 남은
+    # 겹이 헤더 인식을 막아 키가 통째로 남는다. 더 벗겨지지 않을 때까지 반복.
+    previous = ""
+    current = line
+    for _ in range(6):
+        current = _LOG_PREFIX.sub("", current, count=1).strip()
+        if current == previous:
+            break
+        previous = current
+    return current
 
 
 def _prefix_variants(line: str) -> list[str]:
@@ -1034,8 +1049,14 @@ def _key_body_end(text: str, body_at: int) -> int:
         position = stop
         consumed_content = True
         if len(squeezed) < 24:
-            # 짧은 줄은 키의 마지막 줄일 수 있다. 받고 멈춘다.
-            break
+            # 짧은 줄은 키의 **마지막** 줄일 수 있다. 다만 16자 줄로 접힌
+            # 본문이나 로그가 다시 감싼 출력에서는 모든 줄이 짧고, 첫 줄에서
+            # 멈추면 나머지가 통째로 남는다. 다음 줄도 본문처럼 보이면 계속
+            # 간다 — 진짜 마지막 줄이면 다음 줄은 END 마커나 다른 내용이다.
+            following = text[position:].lstrip("\r\n")
+            head = following.split("\n", 1)[0] if following else ""
+            if not _looks_like_key_line(strip_log_prefix(head) or head):
+                break
     return position if consumed_content else body_at
 
 
@@ -1120,6 +1141,12 @@ def host_secret_values() -> list[str]:
                 # 짧은 값을 그대로 지우면 과잉이 된다 — 그래서 이름과 값을
                 # 붙인 형태로도 지운다.
                 user, password = userinfo
+                if not password:
+                    # 사용자 자리에 토큰만 있는 형태. 그 값 자체가 비밀이다.
+                    if len(user) >= 8:
+                        values.append(user)
+                    values.append(f"{user}@")
+                    continue
                 # 문맥이 있는 형태는 길이와 무관하게 지운다. URL 안에 있으면
                 # 그것이 비밀번호라는 것이 확실하다.
                 values.append(f"{user}:{password}")
@@ -1156,37 +1183,19 @@ def verify_excerpt(output: str) -> str:
     잃고 패턴에 안 걸린 채 남는다. 자식이 출력 길이를 조절할 수 있으므로
     그 경계는 의도적으로 맞출 수 있는 것이다. 지운 뒤에 자른다.
     """
-    # 정규식을 무한정 긴 문자열에 돌리지 않는다. 이 텍스트는 자식이 길이를
-    # 정할 수 있고, 어차피 마지막 VERIFY_EXCERPT_CHARS 만 보낸다.
+    # **먼저 전부 지우고, 그 다음에 자른다.** 라운드 1 부터 12 까지 이 함수의
+    # 유출 중 여러 건이 "자르는 행위" 에서 나왔다. 자르고 지우면 경계에 걸친
+    # 값이 앵커를 잃고, 지우기 전에 창을 잡아도 리댁션이 텍스트를 줄여 창
+    # 앞머리가 발췌 안으로 밀려든다. 줄 경계에 맞추고 짝 없는 END 를 지우는
+    # 보정들은 그 부류를 하나씩 막을 뿐 없애지 못했다.
     #
-    # 창을 먼저 잘라도 안전하다는 주장은 **조건부** 다. 리댁션이 텍스트를
-    # 줄이므로(PEM 하나가 수만 자를 열 자로 만든다) 창 앞머리가 최종 발췌
-    # 안으로 밀려들어올 수 있고, 그 앞머리에는 앵커를 잃은 조각이 있다.
-    # 그래서 창을 줄 경계에 맞추고, 짝 없는 END 마커 앞을 지운다.
-    window = output[-SCAN_WINDOW_CHARS:]
-    if len(output) > SCAN_WINDOW_CHARS:
-        # 창을 줄 경계에 맞춘다. NAME=value 나 접두사 기반 패턴은 한 줄
-        # 안에서만 성립하므로, 줄 중간에서 시작하면 앵커를 잃은 값의 뒷부분이
-        # 그대로 남는다.
-        newline = window.find("\n")
-        # 줄바꿈이 하나도 없으면(압축된 한 줄 출력) 버리지 않는다. 통째로
-        # 비우면 조언자가 아무것도 못 보고, 그것은 이 기능을 끄는 것과 같다.
-        # 앵커를 잃을 위험은 아래 정확 일치와 END 주사가 받는다.
-        if newline >= 0:
-            window = window[newline + 1 :]
-        # 줄 정렬로도 여러 줄에 걸친 PEM 은 못 막는다. 창이 키 본문 한가운데서
-        # 시작하면 BEGIN 이 밖에 있어 패턴이 아예 걸리지 않고, 본문 전체가
-        # 그대로 나간다. 짝 없는 END 가 보이면 창 시작부터 거기까지를 지운다.
-        first_end = window.find("-----END ")
-        first_begin = window.find("-----BEGIN ")
-        if first_end >= 0 and (first_begin < 0 or first_end < first_begin):
-            line_end = window.find("\n", first_end)
-            window = "[REDACTED]" + (window[line_end:] if line_end >= 0 else "")
-    window = redact_private_keys(window)
-    # 아는 값을 먼저 지운다. 모양으로 못 잡는 것을 잡는 유일한 방법이다.
+    # 자르지 않으면 그 부류가 통째로 사라진다. 비용은 잰다: 200KB 에 0.4초,
+    # PEM 주사는 선형이고 패턴들은 중첩 수량자가 없다.
+    cleaned = redact_private_keys(output)
+    # 아는 값을 지운다. 모양으로 못 잡는 것을 잡는 유일한 방법이다.
     for secret in host_secret_values():
-        window = window.replace(secret, "[REDACTED]")
-    cleaned = _SECRET_SHAPES.sub("[REDACTED]", window)
+        cleaned = cleaned.replace(secret, "[REDACTED]")
+    cleaned = _SECRET_SHAPES.sub("[REDACTED]", cleaned)
     if len(cleaned) <= VERIFY_EXCERPT_CHARS:
         return cleaned
     # 실패 이유는 대개 끝에 있다. 앞을 자르고 뒤를 남긴다.
@@ -1606,7 +1615,13 @@ def ask_advisor(
     # executor 가 조언 대신 우리 계측 데이터를 읽는다. 본문만 꺼낸다.
     # 지우고 나서 자른다. 순서가 반대면 8000자 경계에 걸친 값이 앵커를 잃고
     # 남는다 — 검증 출력에서 라운드 1 이 고친 것과 같은 실수다.
-    text = "" if failed else redact_text(advice_text(body, command))
+    # 봉투에서 본문을 못 꺼내면 원문이 그대로 온다. 거기서는 줄바꿈이
+    # `\n` 두 글자라, 줄 단위로 도는 블록 리댁터가 전체를 한 줄로 본다.
+    # 리댁션 전에 이스케이프를 실제 줄바꿈으로 되돌린다.
+    extracted = advice_text(body, command)
+    if wants_structured_output(command):
+        extracted = extracted.replace("\\r\\n", "\n").replace("\\n", "\n")
+    text = "" if failed else redact_text(extracted)
     truncated = len(text) > ADVICE_MAX_CHARS
     if truncated:
         text = text[:ADVICE_MAX_CHARS]

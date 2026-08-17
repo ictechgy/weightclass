@@ -704,11 +704,10 @@ def main() -> int:
             # 일어난다. 두 모집단의 비용을 한 평균으로 섞으면 그 값은 어느
             # 쪽의 비용도 아니다. 단계별로 따로 낸다.
             def advice_stats(key: str) -> tuple[float, float, int] | None:
-                values = [
-                    value
-                    for r in usable
-                    if (value := advice_cost(r, key)) is not None and value > 0
-                ]
+                # cost_of 는 0 을 관측값으로 받아들인다. 여기서 > 0 을
+                # 요구하면 구독 실행처럼 0 을 보고하는 경우가 "가격 없음" 이
+                # 되어, 전수 검사가 영원히 통과하지 못한다.
+                values = [value for r in usable if (value := advice_cost(r, key)) is not None]
                 if not values or not priced_pairs:
                     return None
                 expensive_mean_all = statistics.fmean(
@@ -733,9 +732,7 @@ def main() -> int:
 
             for key, label in (("advice_first", "시작 전"), ("advice_failure", "실패 후")):
                 attempts = advice_attempts(key)
-                priced = sum(
-                    1 for r in usable if (value := advice_cost(r, key)) is not None and value > 0
-                )
+                priced = sum(1 for r in usable if advice_cost(r, key) is not None)
                 if attempts and priced < attempts:
                     print(
                         f"  주의: {label} 조언 {attempts}건 중 {priced}건만 비용을 얻었다."
@@ -799,7 +796,6 @@ def main() -> int:
                         if isinstance(r.get("retry"), dict)
                         and not timed_out_attempt(r.get("retry"))
                         and (value := cost_of(r.get("retry"))) is not None
-                        and value > 0
                     ]
                     priced_retries = len(retry_costs)
                     all_retries = sum(1 for r in usable if isinstance(r.get("retry"), dict))
@@ -811,15 +807,19 @@ def main() -> int:
                     # 하나가 임의로 비쌌을 수 있고, 그것이 결론을 뒤집는다.
                     # 돈에 대한 단정적 판정에는 전수를 요구한다.
                     priced_enough = priced_retries == all_retries
+                    # a 와 r 의 분모는 승급 과제의 비싼 평균이다. 거기에
+                    # 타임아웃의 부분 사용량이 섞이면 분모가 작아져 두 비율이
+                    # 모두 커진다. 위쪽 c 판정은 그것 때문에 판정을 멈추는데,
+                    # 조언 분기가 그 금지를 우회하고 있었다.
+                    if timed_out_tasks:
+                        priced_enough = False
                     # 조언 비용도 마찬가지다. a 가 작은 부분집합에서 나오면
                     # s 와 같은 모집단이 아니다.
                     advice_attempted = sum(
                         1 for r in usable if isinstance(r.get("advice_failure"), dict)
                     )
                     advice_priced = sum(
-                        1
-                        for r in usable
-                        if (value := advice_cost(r, "advice_failure")) is not None and value > 0
+                        1 for r in usable if advice_cost(r, "advice_failure") is not None
                     )
                     if advice_priced != advice_attempted:
                         priced_enough = False
@@ -856,12 +856,19 @@ def main() -> int:
                         # r 을 쟀으면 그것을 쓴다. 못 쟀으면 c 로 대신하되
                         # 그것이 대입이라고 말한다.
                         if r_ratio is not None and not priced_enough:
-                            print(
-                                f"  조언 {advice_attempted}건 중 {advice_priced}건,"
-                                f" 재시도 {all_retries}건 중 {priced_retries}건만 비용이"
-                                " 있다. 값 없는 하나가 임의로 비쌌을 수 있으므로"
-                                " 판정하지 않는다."
-                            )
+                            if timed_out_tasks:
+                                print(
+                                    f"  과제 {timed_out_tasks}건이 타임아웃이라 비싼 경로"
+                                    " 평균이 부분값 위에 선다. a 와 r 이 그 평균으로"
+                                    " 나눈 값이므로 판정하지 않는다."
+                                )
+                            else:
+                                print(
+                                    f"  조언 {advice_attempted}건 중 {advice_priced}건,"
+                                    f" 재시도 {all_retries}건 중 {priced_retries}건만"
+                                    " 비용이 있다. 값 없는 하나가 임의로 비쌌을 수"
+                                    " 있으므로 판정하지 않는다."
+                                )
                         elif r_ratio is None:
                             # r 은 이 판정의 절반이다. 못 쟀는데 c 로 대신하고
                             # 판정까지 내면, 재지 않은 것을 잰 것처럼 보이게

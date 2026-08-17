@@ -207,11 +207,15 @@ def test_unrelated_end_banner_does_not_extend_the_span() -> None:
     assert lines[0] not in cleaned
 
 
-def test_credential_straddling_the_scan_window_is_redacted() -> None:
-    """창 경계에 걸린 자격증명이 앵커를 잃고 남으면 안 된다."""
+def test_credential_far_into_a_long_output_is_redacted() -> None:
+    """앞이 아무리 길어도 자격증명은 지워야 한다.
+
+    예전에는 정규식 비용을 줄이려고 뒤쪽 창만 훑었고, 그 자르는 행위가
+    앵커를 부수는 유출을 여러 라운드에 걸쳐 만들었다. 이제 자르지 않는다.
+    """
     module = load_runner()
     lines = pem_body(1400)
-    padding = "y" * (module.SCAN_WINDOW_CHARS + 5000)
+    padding = "y" * 120_000
     text = padding + f"{BEGIN}RSA {KEY}\n" + "\n".join(lines) + f"\n{END}RSA {KEY}\nFAILED tail"
     cleaned = module.verify_excerpt(text)
     assert not [line for line in lines if line in cleaned]
@@ -524,3 +528,58 @@ def test_proxy_password_forms(url: str, monkeypatch: pytest.MonkeyPatch) -> None
         # 보고서를 통째로 지울 위험이 더 크므로 문맥이 있을 때만 지운다.
         assert password not in module.verify_excerpt(f"auth failed with {password}")
     assert user in module.verify_excerpt(f"user {user} rejected") or len(user) >= 12
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["+[INFO] ", "[INFO] +", "2026-08-18T00:00:00Z [INFO] "],
+    ids=["diff-tag", "tag-diff", "ts-tag"],
+)
+def test_stacked_line_prefixes(prefix: str) -> None:
+    """접두사는 겹쳐서 붙는다. 한 겹만 벗기면 남은 겹이 헤더 인식을 막는다."""
+    module = load_runner()
+    lines = pem_body()
+    text = (
+        f"{prefix}{BEGIN}RSA {KEY}\n"
+        f"{prefix}Proc-Type: 4,ENCRYPTED\n{prefix}\n"
+        + "\n".join(prefix + line for line in lines)
+        + f"\n{prefix}{END}RSA {KEY}"
+    )
+    assert not [line for line in module.verify_excerpt(text).splitlines() if line.strip() in lines]
+
+
+def test_short_wrapped_key_lines() -> None:
+    """16자로 접힌 본문에서 첫 줄만 지우고 멈추면 나머지가 통째로 남는다."""
+    module = load_runner()
+    blob = base64.b64encode(b"\x01" * 1200).decode()
+    short = [blob[index : index + 16] for index in range(0, len(blob), 16)]
+    text = f"{BEGIN}RSA {KEY}\n" + "\n".join(short) + f"\n{END}RSA {KEY}"
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in short if line in cleaned]
+
+
+def test_proxy_url_with_path_and_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    """authority 를 안 자르면 쿼리의 @ 가 경계로 잡혀 비밀번호가 어긋난다."""
+    module = load_runner()
+    url = "http://alice:SuperSecretValue123@proxy.corp:8080/status?notify=ops@example.com"
+    monkeypatch.setenv("HTTPS_PROXY", url)
+    assert "SuperSecretValue123" not in module.verify_excerpt("auth SuperSecretValue123 failed")
+
+
+def test_proxy_url_with_token_and_no_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    """https://TOKEN@host 형태에서 토큰 자체가 비밀이다."""
+    module = load_runner()
+    monkeypatch.setenv("HTTP_PROXY", "http://BareTokenAAAAAAAAAAAA@proxy:3128")
+    assert "BareTokenAAAAAAAAAAAA" not in module.verify_excerpt("using BareTokenAAAAAAAAAAAA")
+
+
+def test_key_far_beyond_any_scan_window() -> None:
+    """창을 잘라 앵커를 잃던 부류. 이제 자르지 않고 전부 지운 뒤 발췌한다."""
+    module = load_runner()
+    lines = pem_body()
+    text = (
+        "y" * 100_000 + f"{BEGIN}RSA {KEY}\n" + "\n".join(lines) + f"\n{END}RSA {KEY}\nFAILED tail"
+    )
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+    assert "FAILED tail" in cleaned
