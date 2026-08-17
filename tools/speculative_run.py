@@ -45,6 +45,7 @@ into a quoting exercise; the whole point of this project is exact commands.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -57,6 +58,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
 
@@ -92,6 +94,11 @@ class Usage(TypedDict, total=False):
     total_tokens: int
     breakdown: dict[str, int]
     source: str
+    # 청구액의 출처. source 문자열에 섞어 두면 "claude-json+price-table" 이나
+    # "claude-json(2candidates)" 이 부분 문자열 검사에서 벤더 청구액으로
+    # 잘못 분류된다. 값은 "vendor"(벤더가 알려준 금액) 또는 "price-table"
+    # (우리 요금표로 환산) 둘 뿐이고, 세는 항목이 다르므로 섞어 나누면 안 된다.
+    cost_origin: str
     # 요금표가 값을 매기기로 한 필드 중 이 실행에 없던 것들. 없는 캐시 필드는
     # 진짜 0 이지만 CLI 가 필드 이름을 바꾼 경우와 구별되지 않으므로, 조용히
     # 절반짜리 비용을 내지 않도록 리포트가 볼 수 있게 남긴다.
@@ -445,7 +452,8 @@ def run_child(
     **It narrows variables, not the filesystem.** `HOME` survives, because the
     CLI finds its own credentials under it — blank it and nothing authenticates.
     So `~/.aws/credentials` and every other dotfile stay reachable no matter how
-    short the variable list is. `--child-home` points `HOME` somewhere else for
+    short the variable list is. `--cheap-home`/`--expensive-home` point `HOME`
+    somewhere else for
     anyone willing to stage the vendor's auth directory there; short of that,
     real isolation means a container, and this script does not pretend to
     provide one.
@@ -488,7 +496,11 @@ def run_child(
             try:
                 stdout, stderr = child.communicate(task, timeout=CHILD_TIMEOUT)
             except subprocess.TimeoutExpired:
-                _kill_group(child)
+                # kill 중에 자식이 스스로 끝나면 ProcessLookupError 가 난다.
+                # 정상적인 경합이므로 무시한다 — 그것 때문에 측정을 죽이면,
+                # 거의 끝난 실행이 결과 없이 사라진다.
+                with contextlib.suppress(ProcessLookupError):
+                    _kill_group(child)
                 try:
                     # 손자가 setsid 로 그룹을 빠져나갔거나 kill 이 막히면
                     # 파이프를 계속 붙들 수 있다. 무한정 기다리지 않는다.
@@ -506,16 +518,11 @@ def run_child(
             else:
                 timed_out = False
             code = child.returncode
-    except ProcessLookupError:
-        # kill 경로에서 자식이 이미 끝났을 때 나는 정상적인 경합이다. 거의
-        # 끝난 실행을 "시작하지 못했다" 로 바꿔 버리면 안 된다. 다시 던져
-        # 바깥에서 다루게 하지 않고, 아래 OSError 절이 삼키지 않도록 먼저
-        # 잡아 그대로 올린다.
-        raise
     except OSError as error:
         # Popen 은 ENOEXEC(셔뱅이 잘못된 래퍼), E2BIG, ENOMEM 에서 밋밋한
         # OSError 를 낸다. 하위형만 잡으면 그것들이 빠져나가 측정 실행 전체가
-        # 죽고 작업공간도 정리되지 않는다.
+        # 죽고 작업공간도 정리되지 않는다. 다만 kill 경로에서 나는
+        # ProcessLookupError 는 위에서 이미 삼켰으므로 여기 오지 않는다.
         raise RunFailure(f"could not start the route: {error}") from error
     if timed_out:
         # 시간이 다 됐어도 토큰은 이미 쓰였다. 부분 출력에서 건질 수 있으면
@@ -535,6 +542,7 @@ def run_child(
             if computed is not None:
                 partial["cost_usd"] = computed
                 partial["source"] = f"{partial.get('source', '?')}+price-table"
+                partial["cost_origin"] = "price-table"
         return {
             "exit_code": None,
             "timed_out": True,
@@ -552,6 +560,7 @@ def run_child(
         if computed is not None:
             usage["cost_usd"] = computed
             usage["source"] = f"{usage.get('source', '?')}+price-table"
+            usage["cost_origin"] = "price-table"
     return {
         "exit_code": code,
         "timed_out": False,
@@ -618,6 +627,7 @@ def _claude_usage(stdout: str) -> Usage | None:
     # --prices 검증이 같은 기준을 쓰므로 두 경로가 어긋나면 안 된다.
     if is_finite_nonnegative(cost) and isinstance(cost, (int, float)):
         usage["cost_usd"] = float(cost)
+        usage["cost_origin"] = "vendor"
     return usage if breakdown or "cost_usd" in usage else None
 
 
@@ -698,11 +708,18 @@ def extract_usage(stdout: str, stderr: str, executable: str | None = None) -> Us
     codex 실행의 출력에 claude 모양 한 줄이 섞이는 것만으로 그 줄이 채택된다.
     아는 쪽을 먼저 시도하고, 모를 때만 둘 다 본다.
     """
-    readers = (_claude_usage, _codex_usage)
+    readers: tuple[Callable[[str], Usage | None], ...] = (_claude_usage, _codex_usage)
     if executable:
         name = Path(executable).name.lower()
-        if "codex" in name and "claude" not in name:
-            readers = (_codex_usage, _claude_usage)
+        is_codex = "codex" in name
+        is_claude = "claude" in name
+        # 순서만 바꾸면 여전히 다른 벤더의 파서로 떨어진다. codex 실행의
+        # stdout 에 claude 모양 한 줄이 섞이는 것만으로 그 줄의 total_cost_usd
+        # 가 채택된다. 자식이 통제하는 값이다. 벤더를 알면 그 파서만 쓴다.
+        if is_codex and not is_claude:
+            readers = (_codex_usage,)
+        elif is_claude and not is_codex:
+            readers = (_claude_usage,)
     for reader in readers:
         usage = reader(stdout)
         if usage:
@@ -1428,7 +1445,7 @@ def main() -> int:
 
     if allowed_env is None:
         print("자식 환경: 전체 전달 (--child-env-all)")
-    else:
+    if allowed_env is not None:
         # arm 마다 벤더가 다르면 허용 목록도 다르다. 합집합으로 한 줄만 찍으면
         # 그 숫자는 어느 arm 에도 해당하지 않는다.
         present = set(os.environ)
@@ -1442,23 +1459,34 @@ def main() -> int:
                     f"자식 환경({arm}): {len(arm_names & present)}개 전달,"
                     f" {len(present - arm_names)}개 제외"
                 )
-        if cheap_home is None or expensive_home is None:
+
+    # HOME 진단은 --child-env-all 여부와 무관하다. 오히려 전부 전달할 때가
+    # 노출이 가장 큰데, 안쪽에 두면 그때만 조용해진다.
+    if cheap_home is None or expensive_home is None:
+        print(
+            "  HOME 은 그대로다. 변수만 좁혔을 뿐 ~/.aws/credentials 같은 파일은"
+            " 여전히 읽힌다. --cheap-home/--expensive-home 이나 컨테이너가 필요하다."
+        )
+    if cheap_home is not None and expensive_home is not None:
+        # 같은 경로만 보면 부족하다. 한쪽이 다른 쪽 **안에** 있으면 싼 자식이
+        # 승급 arm 의 HOME 에 직접 쓸 수 있어 더 나쁘다.
+        nested = (
+            cheap_home == expensive_home
+            or cheap_home.is_relative_to(expensive_home)
+            or expensive_home.is_relative_to(cheap_home)
+        )
+        if nested:
             print(
-                "  HOME 은 그대로다. 변수만 좁혔을 뿐 ~/.aws/credentials 같은 파일은"
-                " 여전히 읽힌다. --cheap-home/--expensive-home 이나 컨테이너가 필요하다."
+                "  주의: 두 arm 의 HOME 이 같거나 한쪽이 다른 쪽 안에 있다. 자식은"
+                " 거기에 쓸 수 있고, 쓰이는 것은 설정만이 아니다 — .bashrc 나 CLI"
+                " 훅처럼 **실행되는** 파일을 싼 경로가 남기면 승급 경로가 그것을"
+                " 물려받는다. 싼 경로의 실패를 채점하는 쪽이 그 실패에 오염된다."
             )
-        if cheap_home is not None and cheap_home == expensive_home:
-            print(
-                "  주의: 두 arm 이 같은 HOME 을 쓴다. 자식은 거기에 쓸 수 있고, 쓰이는"
-                " 것은 설정만이 아니다 — .bashrc 나 CLI 훅처럼 **실행되는** 파일을 싼"
-                " 경로가 남기면 승급 경로가 그것을 물려받는다. 싼 경로의 실패를"
-                " 채점하는 쪽이 그 실패에 오염된다."
-            )
-        # 자식이 쓴 것은 다음 실행에도 남는다. 실행 사이에 지우지 않으면 20개
-        # 과제가 서로 오염된다. 두 디렉터리를 모두 알린다 — 하나만 찍으면
-        # 나머지 하나는 안전하다는 뜻으로 읽힌다.
-        for home in dict.fromkeys(h for h in (cheap_home, expensive_home) if h is not None):
-            print(f"  HOME {home} 에 자식이 남긴 것은 다음 실행까지 간다")
+    # 자식이 쓴 것은 다음 실행에도 남는다. 실행 사이에 지우지 않으면 20개
+    # 과제가 서로 오염된다. 두 디렉터리를 모두 알린다 — 하나만 찍으면 나머지
+    # 하나는 안전하다는 뜻으로 읽힌다.
+    for home in dict.fromkeys(h for h in (cheap_home, expensive_home) if h is not None):
+        print(f"  HOME {home} 에 자식이 남긴 것은 다음 실행까지 간다")
 
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)
     cheap = attempt(

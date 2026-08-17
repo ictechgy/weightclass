@@ -291,17 +291,23 @@ the same task sits on both sides of the ratio.
 Two things about that number are easy to over-read, and the report now says both
 out loud rather than leaving them to the reader:
 
-- **It comes from the escalated tasks only.** Those are the tasks the cheap route
-  failed. If the cheap model tends to fail by giving up early, its cost on
-  exactly those tasks is systematically low, which drags `c` down and inflates
-  the saving. The cheap route ran on *every* task, so the report prints its
-  average cost over all tasks next to its average over escalated ones. If those
-  two differ much, `c` is not the ratio you want.
-- **It is an estimate from very few pairs.** Twenty tasks at a 20% failure rate
-  is four escalations. The report recomputes `c` with each pair left out in turn
-  and shows the range; the savings interval then varies `c` and `p` together
-  instead of treating `c` as exact. That interval is wider than the one you get
-  from `p` alone, and it is the honest one.
+- **Its numerator is a full census; its denominator is not.** `c + p` needs
+  cheap-cost-over-all-tasks divided by expensive-cost-over-all-tasks. The cheap
+  route ran on every task, so the numerator is measured outright. The expensive
+  route ran only where the cheap one failed, so the denominator is the escalated
+  tasks' average standing in for every task. **That imputation is the assumption
+  that remains,** and the report says so on its own line rather than burying it.
+  The paired escalated-only ratio is still printed as a secondary figure — task
+  difficulty cancels in it — but it is not the quantity the formula asks for, and
+  early versions of this report used it as if it were.
+- **The denominator comes from very few tasks.** Twenty tasks at a 20% failure
+  rate is four escalations. The report recomputes `c` with each escalation left
+  out in turn and reports a proper jackknife interval — standard error, not the
+  spread of the leave-one-out values, which shrinks as the sample grows and would
+  make you *more* confident with less evidence. Below about twenty pairs it uses
+  a t quantile rather than 1.96. The savings interval then varies `c` and `p`
+  together. Expect that interval to be wide; on four escalations it usually
+  crosses break-even, and "not yet" is the correct answer there.
 
 The decision:
 
