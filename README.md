@@ -70,6 +70,16 @@ It does not show effort never matters. It does show that nobody, including this
 router, should assert a saving without measuring it on their own workload —
 which is why every savings surface here abstains by default.
 
+Two proposals for what to do with the one lever that did survive — model grade,
+−69.02% cost at equal quality, rejected only for two mechanically detectable
+critical failures in 90 — are written up but **not implemented**:
+[`docs/speculative-cheap-route-design.md`](docs/speculative-cheap-route-design.md)
+runs the cheap route and escalates when a verify command fails, and
+[`docs/advisor-arm-design.md`](docs/advisor-arm-design.md) measures Anthropic's
+Advisor tool as a rival mechanism that buys expensive *guidance* instead of
+expensive *output*. Both require a number nobody has yet:
+[`docs/measuring-p-at-work.md`](docs/measuring-p-at-work.md) is how to get it.
+
 Raw tokens and estimated provider cost must be evaluated separately. The
 offline evaluation tools can score externally normalized aggregate evidence,
 but they never fetch prices or claim to reproduce a subscription bill.

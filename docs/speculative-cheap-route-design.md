@@ -282,6 +282,13 @@ Run it on real work. If `p` comes in under 20%, the saving is large enough to
 justify moving the boundary. If it comes in near 69%, the idea is dead and no
 implementation would have saved it.
 
+**And measure it against the rival.** Anthropic's Advisor tool targets the same
+saving by a different route — a cheap executor that asks an expensive model for
+guidance mid-generation, with no verify gate, no throwaway clone, and no boundary
+change. [`advisor-arm-design.md`](advisor-arm-design.md) sets that up as a third
+arm on the same tasks and the same `verify.sh`. If it wins, none of the machinery
+in this document needs to exist.
+
 ## What to measure if it is built
 
 The usage store already carries the counters. The mode should record, per task:
