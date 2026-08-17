@@ -83,7 +83,20 @@ PATTERNS = re.compile(
     # AKIA 는 영구 키, ASIA 는 임시 자격증명(STS). 둘 다 잡는다.
     rb"|A[KS]IA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|BEGIN [A-Z ]*PRIVATE KEY"
 )
-for path in pathlib.Path(".").rglob("*"):
+# rglob 은 읽을 수 없는 디렉터리를 조용히 건너뛴다. 못 본 곳을 "깨끗함" 으로
+# 넘기지 않도록 os.walk 로 순회하며 오류를 직접 받는다.
+def refuse(error):
+    print(f"unreadable directory, refusing to pass: {type(error).__name__}", file=sys.stderr)
+    sys.exit(1)
+
+paths = []
+for parent, _dirs, files in os.walk(".", onerror=refuse):
+    if ".git" in pathlib.Path(parent).parts:
+        continue
+    paths.append(pathlib.Path(parent))
+    paths.extend(pathlib.Path(parent, f) for f in files)
+
+for path in paths:
     if ".git" in path.parts:
         continue
     blobs = [os.fsencode(path)]          # 파일 이름 자체가 시크릿일 수 있다
@@ -187,15 +200,23 @@ That narrows variables, not the filesystem. The CLI finds its own credentials
 under `HOME`, so `~/.aws/credentials` stays readable however short the variable
 list is.
 
-`--child-home-stage .codex` closes most of that gap without any setup: the run
-builds a throwaway `HOME`, copies only the names you list into it, and points the
-child there. The CLI still finds its own auth; `~/.aws` and `~/.ssh` are simply
-not present. Copies, not symlinks — a link would let the child's writes flow back
-into your real home. Add `--child-home-stage .gitconfig` if the agent needs it.
+`--child-home <dir>` points the child at a HOME you prepared yourself — copy the
+vendor's auth directory in once, and the CLI authenticates while `~/.aws` and
+`~/.ssh` are simply not there.
 
-This is not a sandbox and the runner does not claim to be one. Nothing stops
-code from opening `/Users/you/.ssh/id_rsa` by absolute path. Against genuinely
-untrusted output, run the whole thing in a container.
+The runner deliberately does **not** build that directory for you. An earlier
+version did, and the copying logic produced a new security defect in each of
+five consecutive review rounds: credential copies left on disk, a staged HOME
+shared between the cheap and expensive routes so the first could poison the
+second, `..` traversal in the entry names, partial copies leaking when a copy
+failed midway, and cleanup that followed symlinks and chmod'd files outside the
+tree. Convenience code around secrets earns its complexity back in defects. You
+can stage a directory correctly once by hand; a tool doing it on every run has
+five ways to get it wrong.
+
+None of this is a sandbox. Nothing stops code from opening
+`/Users/you/.ssh/id_rsa` by absolute path. Against genuinely untrusted output,
+run the whole thing in a container.
 
 ### 5. Read the answer
 

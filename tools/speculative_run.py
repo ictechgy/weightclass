@@ -121,7 +121,7 @@ class Attempt(TypedDict, total=False):
 
 # 작업공간 이름의 접두사. mkdtemp 호출부와 삭제 허용 목록이 같은 상수를
 # 보게 해서, 한쪽만 바뀌면 --prune 이 조용히 아무것도 못 지우는 일을 막는다.
-WORKSPACE_PREFIXES = ("spec-cheap-", "spec-expensive-", "spec-home-", "spec-childhome-")
+WORKSPACE_PREFIXES = ("spec-cheap-", "spec-expensive-", "spec-home-")
 
 # 벤더 자식이 기본으로 보는 환경. 허용 목록이지 차단 목록이 아니다 — 모르는
 # 비밀은 차단 목록으로 막을 수 없고, 이 머신에 어떤 제공자의 키가 있는지
@@ -941,8 +941,15 @@ def _force_remove(path: Path) -> None:
     # 각 디렉터리의 실행 비트를 되돌린다.
     for parent, directories, _files in os.walk(path, topdown=True):
         for name in directories:
+            entry = Path(parent, name)
+            # 심링크는 건너뛴다. chmod 는 링크를 따라가므로, 자식이 워크스페이스
+            # 안에 ~/.ssh 를 가리키는 디렉터리 링크를 심어 두면 이 정리 코드가
+            # 트리 **밖**의 권한을 바꾼다. os.walk 는 링크로는 내려가지 않으니
+            # 건너뛰어도 지울 것을 놓치지 않는다.
+            if entry.is_symlink():
+                continue
             try:
-                Path(parent, name).chmod(0o700)
+                entry.chmod(0o700)
             except OSError:
                 pass
     shutil.rmtree(path)
@@ -1009,49 +1016,6 @@ def prune(registry: Path, out_dir: Path) -> int:
     return 0
 
 
-def stage_home(names: list[str], work_root: Path, registry: Path) -> Path:
-    """Build a throwaway HOME holding copies of the named entries.
-
-    One per attempt, never shared. A staged HOME is writable by the child, so
-    reusing it across the cheap and expensive routes would let the first agent
-    poison the CLI config, hooks, or auth that the second one then runs under —
-    which is exactly the escalation this design is supposed to be immune to.
-
-    Links are followed, unlike the patch capture: leaving a link in place would
-    point out of the throwaway directory and let the child's writes land back in
-    the real home.
-    """
-    real_home = Path(os.path.expanduser("~"))
-    home = Path(tempfile.mkdtemp(prefix="spec-childhome-", dir=work_root))
-    home.chmod(0o700)
-    # 복사를 시작하기 **전에** 등록한다. 중간에 실패해도 부분 복사본을 가리키는
-    # 참조가 남아 있어야 회수된다.
-    register(registry, home, add=True)
-    try:
-        for name in names:
-            # 이름을 그대로 이어 붙이면 ".." 나 절대 경로가 임시 HOME 밖을
-            # 가리킨다. 복사 **대상**이 밖으로 나가면 이 함수가 사용자의 파일을
-            # 덮어쓰는 도구가 된다. 양쪽 끝을 모두 확인한다.
-            source = (real_home / name).resolve()
-            target = (home / name).resolve()
-            if not source.is_relative_to(real_home.resolve()):
-                raise RunFailure(f"--child-home-stage escapes HOME: {name}")
-            if not target.is_relative_to(home.resolve()):
-                raise RunFailure(f"--child-home-stage escapes the staged HOME: {name}")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if source.is_dir():
-                shutil.copytree(source, target, symlinks=False)
-            else:
-                shutil.copy2(source, target, follow_symlinks=True)
-    except BaseException:
-        # 도중에 실패하면 여기까지 복사된 것을 이 함수가 치운다. 호출자는
-        # 반환값을 받지 못하므로 무엇을 지워야 하는지 알 수 없고, 그 부분이
-        # 하필 인증 파일일 수 있다.
-        discard(registry, home, work_root.parent)
-        raise
-    return home
-
-
 def attempt(
     name: str,
     command: list[str],
@@ -1065,7 +1029,6 @@ def attempt(
     rates: dict[str, float] | None,
     allowed_env: frozenset[str] | None,
     child_home: Path | None,
-    home_stage: list[str],
 ) -> Attempt:
     """Clone, run one route, verify. The workspace survives only a pass."""
     # 작업공간은 산출물 디렉터리 바로 아래가 아니라 그 안의 .work 에 만든다.
@@ -1095,18 +1058,7 @@ def attempt(
         clone_at(repo, commit, workspace)
         # 스테이징한 HOME 은 시도마다 새로 만든다. 공유하면 싼 경로가 남긴
         # 설정·훅·인증 상태를 비싼 경로가 물려받는다.
-        # stage_home 자체도 try 안에 둔다. 복사 도중 예외가 나면(권한, 끊어진
-        # 심링크, 소켓 파일) 부분 복사본이 남는데, 그 부분이 하필 인증 파일일
-        # 수 있다. 만들다 실패한 것도 지워져야 한다.
-        attempt_home: Path | None = None
-        try:
-            attempt_home = stage_home(home_stage, work_root, registry) if home_stage else child_home
-            record["child"] = run_child(command, workspace, task, rates, allowed_env, attempt_home)
-        finally:
-            # 자격증명 복사본이므로 자식이 어떻게 끝나든 지운다. 예외로 빠져
-            # 나가는 경로에서 남기면 비밀이 디스크에 흩어진 채 잊힌다.
-            if home_stage and attempt_home is not None:
-                discard(registry, attempt_home, out_dir)
+        record["child"] = run_child(command, workspace, task, rates, allowed_env, child_home)
         # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
         # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
         # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
@@ -1226,17 +1178,6 @@ def main() -> int:
         "--child-env-all",
         action="store_true",
         help="pass the entire environment to the vendor child, as older versions did",
-    )
-    parser.add_argument(
-        "--child-home-stage",
-        action="append",
-        default=[],
-        help=(
-            "name under your real HOME to copy into a throwaway HOME for the child "
-            "(repeatable, e.g. .codex or .gitconfig). Gives the CLI its credentials "
-            "without handing it ~/.aws or ~/.ssh. Still not a sandbox: the agent can "
-            "read absolute paths."
-        ),
     )
     parser.add_argument(
         "--child-home",
@@ -1380,23 +1321,9 @@ def main() -> int:
     # 진단은 두 arm 을 함께 본다. 하나만 찍으면 다른 쪽이 다른 벤더로 판별돼
     # 다른 목록을 받는데도 사용자는 알 수 없다.
     allowed_env = cheap_env if cheap_env is None else cheap_env | (expensive_env or frozenset())
-    if arguments.child_home and arguments.child_home_stage:
-        parser.error("use either --child-home or --child-home-stage, not both")
     child_home = arguments.child_home.expanduser().resolve() if arguments.child_home else None
     if child_home is not None and not child_home.is_dir():
         parser.error(f"--child-home is not a directory: {child_home}")
-    if arguments.child_home_stage:
-        real_home = Path(os.path.expanduser("~")).resolve()
-        for name in arguments.child_home_stage:
-            # 실행에 들어가기 전에 막는다. 자식을 띄운 뒤에 실패하면 사용자는
-            # "경로 실패" 만 보고, 그 실행 비용도 이미 나간 뒤다.
-            if Path(name).is_absolute() or ".." in Path(name).parts:
-                parser.error(f"--child-home-stage must be a plain name under HOME: {name}")
-            if not (real_home / name).resolve().is_relative_to(real_home):
-                parser.error(f"--child-home-stage escapes HOME: {name}")
-            if not (real_home / name).exists():
-                parser.error(f"--child-home-stage: no such entry under HOME: {name}")
-        print(f"자식 HOME: 시도마다 임시 디렉터리에 {len(arguments.child_home_stage)}개 항목 복사")
     # 프록시 URL 은 http://user:pass@host 형태가 흔하고 그 userinfo 는 그대로
     # 자격증명이다. 자식에게 넘기지 않으면 네트워크가 끊기므로 넘기되, 그것이
     # 비밀을 넘기는 일이라는 사실은 알린다.
@@ -1418,7 +1345,7 @@ def main() -> int:
     else:
         dropped = len(set(os.environ) - allowed_env)
         print(f"자식 환경: {len(allowed_env & set(os.environ))}개 전달, {dropped}개 제외")
-        if child_home is None and not arguments.child_home_stage:
+        if child_home is None:
             print(
                 "  HOME 은 그대로다. 변수만 좁혔을 뿐 ~/.aws/credentials 같은 파일은"
                 " 여전히 읽힌다. --child-home-stage 나 컨테이너가 필요하다."
@@ -1438,7 +1365,6 @@ def main() -> int:
         rates=rates.get("cheap"),
         allowed_env=cheap_env,
         child_home=child_home,
-        home_stage=arguments.child_home_stage,
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
@@ -1479,7 +1405,6 @@ def main() -> int:
             rates=rates.get("expensive"),
             allowed_env=expensive_env,
             child_home=child_home,
-            home_stage=arguments.child_home_stage,
         )
         record["expensive"] = expensive
         reason = (
