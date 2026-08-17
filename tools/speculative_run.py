@@ -434,6 +434,7 @@ def run_child(
     rates: dict[str, float] | None = None,
     allowed_env: frozenset[str] | None = None,
     home: Path | None = None,
+    prefer_prices: bool = False,
 ) -> ChildResult:
     """One vendor invocation. The task goes in on stdin and never into the log.
 
@@ -534,7 +535,7 @@ def run_child(
         # 시도하는 것은 다른 형태로 부르는 사용자를 위해서이고, 못 건진
         # 타임아웃은 cost_usd 없이 기록되어 리포트의 c 표본에서 빠진다.
         partial = extract_usage(stdout, stderr, command[0])
-        if partial is not None and "cost_usd" not in partial and rates:
+        if partial is not None and rates and (prefer_prices or "cost_usd" not in partial):
             # 정상 경로와 같은 요금 계산을 여기서도 한다. 빠뜨리면 비용을
             # 보고하지 않는 벤더의 타임아웃이 언제나 무비용으로 잡혀, 바로 위
             # 주석이 막으려던 편향이 그대로 남는다.
@@ -553,9 +554,11 @@ def run_child(
             "usage": dict(partial) if partial else None,
         }
     usage = extract_usage(stdout, stderr, command[0])
-    if usage is not None and "cost_usd" not in usage and rates:
-        # 벤더가 비용을 안 알려주는 경우에만 요금표로 계산한다. 벤더가 준
-        # 숫자가 있으면 그것이 언제나 우선이다 — 우리 요금표는 낡을 수 있다.
+    if usage is not None and rates and (prefer_prices or "cost_usd" not in usage):
+        # 기본은 벤더가 준 숫자가 이긴다 — 우리 요금표는 낡을 수 있다. 다만
+        # 두 벤더를 비교하려면 그 규칙이 걸림돌이 된다. Claude 는 캐시 읽기까지
+        # 포함한 달러를 주고 Codex 는 아무것도 안 주므로, 공통 기준은 사용자의
+        # 요금표뿐이다. --prefer-prices 는 그 기준을 강제한다.
         computed = price_from_tokens(usage, rates)
         if computed is not None:
             usage["cost_usd"] = computed
@@ -1104,6 +1107,7 @@ def attempt(
     rates: dict[str, float] | None,
     allowed_env: frozenset[str] | None,
     child_home: Path | None,
+    prefer_prices: bool,
 ) -> Attempt:
     """Clone, run one route, verify. The workspace survives only a pass."""
     # 작업공간은 산출물 디렉터리 바로 아래가 아니라 그 안의 .work 에 만든다.
@@ -1131,7 +1135,9 @@ def attempt(
     build_scaffolding: list[str] = []
     try:
         clone_at(repo, commit, workspace)
-        record["child"] = run_child(command, workspace, task, rates, allowed_env, child_home)
+        record["child"] = run_child(
+            command, workspace, task, rates, allowed_env, child_home, prefer_prices
+        )
         # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
         # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
         # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
@@ -1282,6 +1288,15 @@ def main() -> int:
             ),
         )
     parser.add_argument(
+        "--prefer-prices",
+        action="store_true",
+        help=(
+            "price every arm from --prices even when the vendor reports its own cost. "
+            "Needed to compare two vendors: Claude reports dollars that include cache "
+            "reads while Codex reports none, so the only common basis is your own table."
+        ),
+    )
+    parser.add_argument(
         "--prices",
         type=Path,
         help=(
@@ -1421,15 +1436,23 @@ def main() -> int:
     for switch, families in BACKEND_SWITCHES.items():
         if not os.environ.get(switch):
             continue
-        for arm, names in (("싼 경로", cheap_env), ("승급 경로", expensive_env)):
+        for arm, names, argv, flag in (
+            ("싼 경로", cheap_env, cheap_argv, "--cheap-env"),
+            ("승급 경로", expensive_env, expensive_argv, "--expensive-env"),
+        ):
             # --child-env-all(None) 이면 아무것도 안 떨궜으므로 경고할 것이 없다.
-            # --child-env 로 이미 넣어 준 이름도 여기 반영돼 있어야 한다.
+            # 이미 넣어 준 이름도 여기 반영돼 있어야 한다.
             if names is None or any(n.startswith(families) for n in names):
+                continue
+            # CLAUDE_CODE_USE_* 는 claude 에만 해당한다. codex arm 에 대고
+            # AWS 자격증명을 넣으라고 하면, 필요도 없는 곳에 비밀을 넣게 된다.
+            if "claude" not in Path(argv[0]).name.lower():
                 continue
             print(
                 f"  주의: {switch} 가 켜져 있는데 {arm} 의 허용 목록에"
                 f" {'/'.join(families)} 자격증명이 없다. 자식이 인증에 실패하면"
-                " 라우트 실패로 기록되어 p 가 오염된다. --child-env 로 넣어라."
+                f" 라우트 실패로 기록되어 p 가 오염된다. {flag} 로 넣어라 —"
+                " --child-env 는 양쪽 arm 에 다 들어가 다른 벤더에게도 준다."
             )
     # 진단은 두 arm 을 함께 본다. 하나만 찍으면 다른 쪽이 다른 벤더로 판별돼
     # 다른 목록을 받는데도 사용자는 알 수 없다.
@@ -1520,6 +1543,7 @@ def main() -> int:
         rates=rates.get("cheap"),
         allowed_env=cheap_env,
         child_home=cheap_home,
+        prefer_prices=arguments.prefer_prices,
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
@@ -1560,6 +1584,7 @@ def main() -> int:
             rates=rates.get("expensive"),
             allowed_env=expensive_env,
             child_home=expensive_home,
+            prefer_prices=arguments.prefer_prices,
         )
         record["expensive"] = expensive
         reason = (

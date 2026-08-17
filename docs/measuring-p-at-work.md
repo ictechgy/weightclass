@@ -17,10 +17,18 @@ subscription CLIs report none. Claude with `--output-format json` puts
 `total_cost_usd` at the root of its output — verified against the CLI, and real
 dollars under API-key billing.
 
-**Vendor comparison becomes meaningful.** Token counts are not comparable across
-vendors: Claude sums cache reads into its usage, Codex reports an opaque total.
-Dollars are the same unit everywhere. The vendor question that could not be
-answered on subscriptions can be answered here.
+**Vendor comparison becomes possible, on one condition.** Token counts are not
+comparable across vendors: Claude sums cache reads into its usage, Codex reports
+an opaque total. Dollars are closer to a common unit — but only when both sides
+are counted the same way. Claude's `total_cost_usd` is a bill that includes cache
+reads; Codex has no dollars at all, so its cost can only come from a table you
+supply. Dividing one by the other is not a cost ratio, and the report refuses to
+do it: it measures `c` only when every cost in the log comes from one source.
+
+To compare two vendors, put both arms on the same basis with `--prefer-prices`,
+which prices *every* arm from `--prices` even where the vendor reported its own
+cost. You then own the accuracy of the table for both sides, which is the honest
+price of the comparison.
 
 ## What each vendor will and will not tell you
 
@@ -183,8 +191,11 @@ them apart, so it records which priced fields were absent and the report says ho
 many runs were computed that way. **If that count is not zero, check the field
 names against the CLI's output before believing the cost.**
 
-Claude needs none of this — it reports its own cost, and a vendor-reported
-number always wins over the table, which can go stale.
+Claude needs none of this for a Claude-vs-Claude run — it reports its own cost,
+and a vendor-reported number wins over the table, which can go stale. For a
+*cross-vendor* run you need a Claude table too, plus `--prefer-prices` to make it
+apply; otherwise the two arms end up on different bases and `c` is not
+measured.
 
 ### 4. Run it
 

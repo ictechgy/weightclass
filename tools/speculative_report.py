@@ -265,12 +265,6 @@ def main() -> int:
         usage = child.get("usage")
         return isinstance(usage, dict) and bool(usage.get("priced_fields_missing"))
 
-    def timed_out(attempt: object) -> bool:
-        if not isinstance(attempt, dict):
-            return False
-        child = attempt.get("child")
-        return isinstance(child, dict) and bool(child.get("timed_out"))
-
     # c 는 (싼 비용 평균) / (비싼 비용 평균) 이다. **두 평균이 같은 기준으로
     # 걸러진 모집단에서 나와야 한다.** 예전에는 분자가 "비용이 있으면 무엇이든"
     # 이고 분모는 출처 검증까지 통과한 것만이라, 검증에서 뺀 실행의 싼 비용이
@@ -296,7 +290,18 @@ def main() -> int:
             origins.add(cost_origin(r.get("cheap")))
         if cost_of(r.get("expensive")):
             origins.add(cost_origin(r.get("expensive")))
+    # 세 경우를 구별한다. 출처가 실제로 섞였는가, 러너가 cost_origin 을 남기지
+    # 않은 옛 로그인가, 아니면 비용 자체가 하나도 없는가. 셋 다 c 를 못 재게
+    # 하지만 사용자가 할 일이 다르다.
     single_origin = len(origins) == 1 and None not in origins
+    if not origins:
+        origin_problem = "이 로그에는 비용이 하나도 없다"
+    elif origins == {None}:
+        origin_problem = "이 로그는 cost_origin 을 남기지 않는 옛 러너가 썼다"
+    else:
+        named = sorted(str(o) for o in origins if o is not None)
+        unknown = " (일부는 출처 미상)" if None in origins else ""
+        origin_problem = f"비용의 출처가 한 가지가 아니다 — 관측된 출처 {named}{unknown}"
 
     tasks: list[Task] = []
     escalated_total = 0
@@ -387,16 +392,20 @@ def main() -> int:
     }
 
     def t_quantile(df: int) -> float:
-        """자유도 df 의 95% t 분위수. 표에 없으면 바로 위 항목을 쓴다.
+        """자유도 df 의 95% t 분위수. 표에 없으면 **바로 아래** 항목을 쓴다.
 
-        표가 20 에서 끝나고 그 밖을 1.96 으로 떨어뜨리면, df=20 의 2.086 에서
-        df=21 의 1.96 으로 한 계단 뛴다. 실제 값은 2.080 이므로 그 자리에서만
-        구간이 갑자기 좁아진다. 보수적인 쪽(더 큰 배수)으로 올림한다.
+        t 는 df 가 커질수록 작아진다. 표에 없는 df 를 위쪽 항목으로 채우면 더
+        작은 배수를 골라 구간이 실제보다 좁아진다 — df=21 이 25 의 2.060 을
+        받는데 참값은 2.080 이다. 좁은 구간은 손익분기 판정을 뒤집을 수
+        있으므로 언제나 보수적인 쪽, 즉 아래 항목을 쓴다.
         """
+        best = 1.96
         for key in sorted(T_QUANTILE_95):
-            if df <= key:
-                return T_QUANTILE_95[key]
-        return 1.96
+            if key <= df:
+                best = T_QUANTILE_95[key]
+            else:
+                break
+        return max(best, 1.96) if df >= 1 else T_QUANTILE_95[1]
 
     def estimate_c(sample: list[Task]) -> float | None:
         """c = (싼 비용 평균) / (비싼 비용 평균). 두 평균은 같은 표본에서 나온다.
@@ -444,7 +453,8 @@ def main() -> int:
             return None
         # 자유도는 과제 수가 아니라 **실효 표본** 으로 정한다. 과제 20건에
         # 값 매겨진 승급이 3건이면 분모는 3건짜리다. 과제 수로 t 를 고르면
-        # 2.093 이 나오지만 실제로 흔들리는 표본은 3 이라 3.182 여야 한다.
+        # df=19 의 2.093 이 나오지만, 실제로 흔들리는 표본은 3 이므로 df=2 의
+        # 4.303 이어야 한다.
         effective = min(n, sum(1 for x in sample if x.expensive))
         margin = t_quantile(max(1, effective - 1)) * math.sqrt(variance)
         # 비용비는 음수가 될 수 없다. 위쪽은 자르지 않는다 — 싼 쪽이 더 비쌀
@@ -566,10 +576,7 @@ def main() -> int:
             f" {len(paired)}개뿐이라 실측값을 쓰기에 부족하다(최소 {MINIMUM_PAIRED}개)."
         )
     elif not single_origin:
-        print(
-            f"\n비용비 c = {c:.2f} — **가정값**이다. 이 로그의 비용이 한 출처가 아니다"
-            f" (관측된 출처 {sorted(str(o) for o in origins)})."
-        )
+        print(f"\n비용비 c = {c:.2f} — **가정값**이다. {origin_problem}.")
         print(
             "  벤더가 알려준 청구액과 요금표 환산값은 세는 항목이 다르다 — 전자는"
             " 캐시 읽기를 포함하고 후자는 표에 적은 필드만 센다. 섞인 값들의 평균은"
