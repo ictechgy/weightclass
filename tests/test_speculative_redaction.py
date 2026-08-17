@@ -924,3 +924,78 @@ def test_mixed_content_array_ignores_non_text_blocks():
     result = module._first_text(payload)
     assert "FILE_BODY_MARKER" not in result
     assert "bounded queue" in result
+
+
+# --- 라운드 19: 과잉 삭제, 이음매의 방향, 짧게 접힌 본문 -----------------------
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "AWS_SESSION_TOKEN: Optional[str] = None",
+        "AWS_SECRET_ACCESS_KEY = credentials.secret_key",
+        'AWS_SESSION_TOKEN = os.environ.get("AWS_SESSION_TOKEN")',
+        'API_KEY_HEADER = "X-Api-Key"',
+        'TOKEN_RE = re.compile(r"x")',
+        "self.api_key = config.api_key",
+        "aws_secret_access_key is not set in the environment",
+    ],
+)
+def test_source_lines_survive_redaction(source):
+    """이름이 비밀을 뜻해도 값이 코드면 지우지 않는다.
+
+    과잉 삭제는 유출만큼 나쁘다. 조언자가 봐야 할 것은 실패한 소스 줄이고,
+    그것을 지우면 이 기능의 존재 이유가 사라진다.
+    """
+    module = load_runner()
+    assert module.verify_excerpt(source) == source
+
+
+@pytest.mark.parametrize(
+    "line,token",
+    [
+        ("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "wJalr"),
+        ('"SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"', "wJalr"),
+        ("AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjEHIaCXVzLXdlc3QiRzBFAiEA", "IQoJb"),
+        ("api_key=abcdef1234567890abcdef", "abcdef1234"),
+        ("PASSWORD=correcthorsebattery", "correcthorse"),
+    ],
+)
+def test_real_credentials_are_still_redacted(line, token):
+    """소스 줄을 살리는 완화가 진짜 자격증명까지 통과시키면 안 된다."""
+    module = load_runner()
+    assert token not in module.verify_excerpt(line)
+
+
+def test_a_large_patch_does_not_evict_the_failure_signal():
+    """앞쪽을 자르므로 반드시 남아야 하는 조각이 마지막이어야 한다.
+
+    이 함수를 도입한 라운드에 순서가 반대였고, 8000자짜리 패치 하나가
+    검증 실패 이유를 통째로 밀어냈다.
+    """
+    module = load_runner()
+    block = module.untrusted_block("x" * 9000, "FAILED test_auth: assertion at line 42")
+    assert "FAILED test_auth" in block
+
+
+def test_the_stream_seam_is_safe_in_both_directions():
+    """어느 스트림에 앞부분을 둘지 자식이 고른다. 한 방향만 막으면 새어 나간다."""
+    module = load_runner()
+    joined = module.join_streams("KEY=SECRETVALUE1234567890AB", "AWS_SECRET_ACCESS_")
+    assert "SECRETVALUE1234" not in joined
+
+
+def test_ordinary_streams_are_joined_unchanged():
+    """이음매 방어가 평범한 출력을 훼손하면 안 된다."""
+    module = load_runner()
+    assert module.join_streams("out ok ", "err ok") == "out ok err ok"
+
+
+@pytest.mark.parametrize("width", [4, 8, 16, 40, 64])
+def test_key_bodies_folded_at_any_width_are_redacted(width):
+    """짧게 재접힌 본문은 어느 한 줄도 본문으로 안 보인다. 줄을 가로질러 센다."""
+    module = load_runner()
+    blob = base64.b64encode(b"\x01" * 1200).decode()
+    folded = "\n".join(blob[index : index + width] for index in range(0, len(blob), width))
+    pem = BEGIN + KEY + "\n" + folded + "\n" + END + KEY
+    assert blob[200:240] not in module.verify_excerpt(pem)

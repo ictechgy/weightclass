@@ -135,8 +135,14 @@ pre-registration cleaner and the sample requirement smaller. At `c ≈ 0.31` and
 `a ≈ 0.1` the break-even is `s > 0.41` when every advised failure retries at the
 first attempt's cost, and higher once `r > c`, which it normally is. A `q < 1`
 lowers the *threshold* but also caps `s` at `q`, so it does not make the arm
-easier to justify — `a` is paid on every advised failure whether or not a retry
-follows, while only the `q` fraction can be rescued. It replaces a full expensive run with one short
+easier to justify **when the retries are not chosen selectively** — `a` is paid
+on every advised failure whether or not a retry follows, while only the `q`
+fraction can be rescued. Selective retrying breaks that: if the runner skips the
+retries least likely to work, `q·r` falls faster than `s` does, and the arm can
+pass at a `q < 1` that it would fail at `q = 1`. This measurement retries every
+advised failure precisely so that `q` reflects the advisor's own behaviour
+rather than a policy layered on top of it — a selective policy is a different
+arm and needs its own pre-registration. It replaces a full expensive run with one short
 advisory call plus one more cheap run, so the saving per rescued task is large —
 but the bar rises fast with `a`, and at `a ≈ c ≈ 0.31` it is already `s > 0.62`.
 
@@ -244,8 +250,9 @@ Measure **two** configurations:
 2. **Shape A + Shape B** — the same pipeline with a plan prepended. Yields `a_A`,
    `c_A`, `p′`, and the primed failure stage `a_B′`, `q′`, `r′`, `s′`.
 
-Configuration 2 **is** A+B, so A+B is measured, not modelled. What nobody runs is
-**Shape A alone**, and that is the only figure to model:
+Configuration 2 **is** A+B, so A+B is measured. Shape A alone is measured too —
+its three terms all appear in a configuration-2 log, as the next paragraph
+explains. Nobody has to *run* Shape A alone to report it:
 
 ```
 A alone      = a_A + c_A + p′
@@ -260,16 +267,21 @@ and the rescue rate are all different quantities from their Shape-B-only
 counterparts. Reusing the unprimed symbols would silently assume the plan
 changes nothing about what happens after a failure.
 
-`a_A + c_A + p′` for Shape A alone is an extrapolation when it is read off a
-configuration-2 log. The reason is not that the equation drops terms — it drops
-them correctly, because Shape A alone does not run them. The reason is that the
-`p′` measured under configuration 2 is the failure rate of a cheap run whose
-prompt carries the plan **and** whose failures were about to be advised; nothing
-in that log says it is the same `p′` when the failure-stage advice is off. `c_A`
-is safe to carry across (the advised cheap run is identical in both), `p′` is
-not. Reporting it
-as a measurement would be exactly the error this project keeps catching in
-review. It is reported with the word "modelled" attached, or not at all.
+`a_A + c_A + p′` for Shape A alone **is measured**, not modelled. An earlier
+version of this document called it an extrapolation on the grounds that
+configuration 2's `p′` was observed on runs "whose failures were about to be
+advised". That reasoning is wrong, and it is worth recording why: Shape B runs
+strictly *after* the cheap run's verification, so it cannot change a failure
+rate that was already observed at that verification. Nothing about `a_A`, `c_A`
+or `p′` depends on what happens next. All three come straight out of a
+configuration-2 log.
+
+What the log does **not** give is `c` and `p` — the un-advised baseline. Those
+come from configuration 1. So the Shape A verdict needs both logs, but neither
+of its terms is modelled. The one assumption left is that the two
+configurations are comparable — same task set, same runner, same pricing source.
+That is a pre-registration requirement, not a modelling step, and the report
+refuses the verdict when it is violated.
 
 ## What to fix before spending any tokens
 

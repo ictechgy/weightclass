@@ -835,11 +835,24 @@ _SECRET_SHAPES = re.compile(
     # 거기서는 "SecretAccessKey": "..." 처럼 이름과 구분자 사이에 따옴표가
     # 있다. 그것을 빠뜨리면 Bedrock 을 쓰는 곳에서 가장 흔한 형태가 통째로
     # 빠져나간다.
-    # 이름이 비밀을 뜻하면 **값의 모양을 따지지 않는다.** 자격증명 문자만
-    # 훑으면 값에 낯선 문자 하나만 넣어도 빠져나간다. 이름이 신호이므로
-    # 줄 끝이나 닫는 따옴표까지 지운다.
+    # 이름이 비밀을 뜻하면 값의 모양을 거의 따지지 않는다 — 자격증명 문자만
+    # 훑으면 값에 낯선 문자 하나만 넣어도 빠져나간다. 다만 **소스 코드는
+    # 뺀다.** `AWS_SESSION_TOKEN: Optional[str] = None` 이나
+    # `AWS_SECRET_ACCESS_KEY = credentials.secret_key` 는 자격증명이 아니라
+    # 조언자가 봐야 할 코드다. 그것까지 지우면 무엇을 고칠지 알 수 없다.
+    # 값이 코드처럼 생겼으면(괄호·점·대괄호가 있거나 아는 키워드면) 넘긴다.
     r"|(?i:aws_?secret_?access_?key|aws_?session_?token|aws_?security_?token)"
-    r"[\"']?\s*[=:]\s*[^\r\n]{8,}"
+    r"[\"']?\s*[=:]\s*"
+    r"(?:"
+    # 따옴표 안의 값. 이 이름 뒤에 문자열 리터럴이 오면 자격증명이다 —
+    # 테스트 픽스처에 박힌 것이라도 지운다.
+    r"[\"'][^\"'\r\n]{12,}[\"']"
+    r"|"
+    # 따옴표 없는 값은 **자격증명처럼 생겨야** 한다. 숫자가 있고, 대문자나
+    # base64 기호가 있고, 스무 자 이상. `credentials.secret_key` 나
+    # `os.environ.get(...)` 이나 `Optional[str] = None` 은 여기 안 걸린다.
+    r"(?=[^\r\n]*[0-9])(?=[^\r\n]*[A-Z/+=])[A-Za-z0-9/+=_-]{20,}"
+    r")"
     # 환경을 통째로 찍는 실패 테스트가 흔하다. NAME=value 형태에서 이름이
     # 비밀을 뜻하면 값을 지운다.
     #
@@ -847,9 +860,12 @@ _SECRET_SHAPES = re.compile(
     # 함께 나오고, 거기에는 API_KEY_HEADER = "X-Api-Key" 나
     # TOKEN_RE = re.compile(...) 같은 평범한 코드가 있다. 그것까지 지우면
     # 조언자가 진단할 코드를 잃는다 — 이 기능의 존재 이유를 지우는 셈이다.
-    # 자격증명처럼 생긴 문자만, 12자 이상일 때만 지운다.
+    # 자격증명처럼 생긴 문자만, 12자 이상일 때만 지운다. 값에 **점을 허용하지
+    # 않는다** — 점이 들어간 값은 거의 언제나 코드다(`credentials.secret_key`,
+    # `os.environ.get(...)`, `re.compile(...)`). 자격증명 쪽에서 점이 나오는
+    # 형태(JWT, PEM)는 각각 전용 분기가 따로 있으므로 잃는 것이 없다.
     r"|(?i:[A-Z0-9_]{0,40}(?:secret|token|password|passwd|api_?key|private_?key|credential)"
-    r"[A-Z0-9_]{0,40})[\"']?\s*[=:]\s*[\"']?[^\s\r\n(){}<>,;\[\]]{12,}"
+    r"[A-Z0-9_]{0,40})[\"']?\s*[=:]\s*[\"']?[^\s\r\n.(){}<>,;\[\]]{12,}"
     # JWT
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     re.DOTALL,
@@ -953,6 +969,11 @@ PEM_LOOKAHEAD_LINES = 6
 # 마커 뒤에 올 수 있는 직렬화 부스러기 줄 수. `json.dumps(pem.splitlines())`
 # 는 마커 줄 뒤에 `",` 를 남긴다.
 PEM_NOISE_TOLERANCE = 2
+# 줄을 가로질러 누적한 base64 글자가 이만큼 이어지면 본문으로 본다. 한 줄
+# 짜리 판정은 짧게 재접힌 키를 놓친다.
+PEM_FOLDED_BODY_CHARS = 48
+# 그 줄 전체가 base64 글자인가. 산문은 공백과 문장부호 때문에 걸리지 않는다.
+_PEM_BODY_CHARS = re.compile(r"[A-Za-z0-9+/=]+")
 # 직렬화 잔해에만 나오는 글자들. 산문에는 이것만으로 된 줄이 없다.
 _NOISE_CHARS = frozenset('",[]{}\\ \t')
 
@@ -997,6 +1018,7 @@ def looks_like_key_block(text: str, after: int) -> bool:
     position = after
     skipped = 0
     noise = 0
+    folded = 0
     horizon = min(len(text), after + PEM_LOOKAHEAD_LINES * PEM_LOOKAHEAD_LINE_CHARS)
     for _ in range(PEM_LOOKAHEAD_LINES + PEM_LOOKAHEAD_LINES * 4):
         if position >= horizon:
@@ -1022,6 +1044,15 @@ def looks_like_key_block(text: str, after: int) -> bool:
                 continue
             if _PEM_HEADER_LINE.match(candidate) or _looks_like_key_line(candidate, minimum=8):
                 return True
+        # 짧은 줄로 재접힌 본문은 어느 한 줄도 본문으로 안 보인다. 네 자씩
+        # 접으면 줄마다 네 글자다. 줄을 **가로질러** 누적한다 — 산문은
+        # 공백과 문장부호가 있어 여기 안 걸린다.
+        if _PEM_BODY_CHARS.fullmatch(line):
+            folded += len(line)
+            if folded >= PEM_FOLDED_BODY_CHARS:
+                return True
+            continue
+        folded = 0
         # 줄 **안** 의 base64 연속도 본다. 본문과 END 마커가 한 물리적 줄에
         # 있으면 줄 전체에 공백이 있어 후보가 모두 탈락하지만, 그 줄에는
         # 키가 들어 있다.
@@ -1309,6 +1340,39 @@ def host_secret_values() -> list[str]:
     return sorted(set(values) | set(serialised), key=len, reverse=True)
 
 
+# 이음매에 걸친 자격증명을 잘라 낼 때 경계 양쪽에서 버리는 길이. 자격증명
+# 하나(PEM 본문 포함)가 통째로 들어가고도 남는 크기다.
+SEAM_WINDOW = 4096
+
+
+def join_streams(out: str, err: str) -> str:
+    """stdout 과 stderr 를 잇는다. **어느 순서로 이어도** 안전해야 한다.
+
+    구분자를 넣으면 안 된다 — 자식이 `-----BEGIN PRI` 를 stdout 에, 나머지를
+    stderr 에 써서 마커를 가를 수 있고, 그 사이의 줄바꿈이 회피로가 된다.
+
+    그런데 구분자만 없애면 한 방향만 막힌다. stdout 을 먼저 두면
+    `KEY=<값>` + `AWS_SECRET_ACCESS_` 순서가 되어 이름이 값 **뒤** 로 가고,
+    이름-값 패턴이 형성되지 않는다. 두 스트림에 무엇을 쓸지도, 어느 쪽에
+    앞부분을 둘지도 자식이 고른다.
+
+    그래서 두 순서를 모두 본다. 역순으로 이었을 때만 잡히는 것이 있으면 그
+    입력의 이음매는 믿을 수 없다는 뜻이므로, 경계 양쪽을 통째로 버린다.
+    잃는 것은 두 스트림이 만나는 자리의 로그 일부이고, 그것도 그런 입력에
+    한해서다.
+    """
+    forward = redact_text(out + err)
+    reverse = redact_text(err + out)
+    if len(reverse) >= len(forward):
+        # 역순에서 더 지워진 것이 없다. 정방향 결과가 그대로 안전하다.
+        return forward.strip()
+    kept_out = out[:-SEAM_WINDOW] if len(out) > SEAM_WINDOW else ""
+    kept_err = err[SEAM_WINDOW:] if len(err) > SEAM_WINDOW else ""
+    return (
+        redact_text(kept_out) + "\n[...두 스트림이 만나는 자리 생략...]\n" + redact_text(kept_err)
+    ).strip()
+
+
 def redact_text(text: str) -> str:
     """자르지 않고 지우기만 한다. 조언 본문처럼 길이를 따로 관리하는 곳에 쓴다."""
     cleaned = redact_private_keys(text)
@@ -1356,6 +1420,10 @@ def untrusted_block(*parts: str) -> str:
     텍스트지만 이어 붙이면 온전한 키다. 그래서 여기서는 구분자도 넣지
     않는다 — 구분자 자체가 앵커를 가르는 수단이 된다.
     """
+    # **뒤쪽이 살아남는다.** 잘라 내는 것은 앞쪽이므로, 반드시 남아야 하는
+    # 조각을 마지막에 넘겨라. 검증 실패 이유가 그것이다 — diff 를 먼저 두지
+    # 않으면 8000자짜리 패치 하나가 실패 신호를 통째로 밀어낸다. 이 함수를
+    # 도입한 라운드에 실제로 그렇게 됐다.
     return _tail(redact_text("".join(parts)), COMBINED_EXCERPT_CHARS)
 
 
@@ -1426,10 +1494,7 @@ def run_verify(verify: Path, workspace: Path, home: Path) -> tuple[VerifyResult,
         # 있다. 거기에 SIGKILL 을 보내면 사용자 머신의 무관한 프로세스를
         # 죽인다. 검증기가 백그라운드 프로세스를 띄우고 정상 종료하면 그것은
         # 살아남는다 — 남의 프로세스를 죽일 위험보다 그편이 낫다.
-    # **구분자 없이 잇는다.** 사이에 줄바꿈을 넣으면 자식이 `-----BEGIN PRI`
-    # 를 stdout 에, 나머지를 stderr 에 써서 마커를 갈라 리댁션을 피할 수 있다.
-    # 두 스트림의 경계 한 줄이 붙는 대신 그 회피로가 사라진다.
-    combined = (out + err).strip()
+    combined = join_streams(out, err)
     if timed_out:
         return {
             "passed": False,
@@ -2561,15 +2626,18 @@ def main() -> int:
         # 텍스트이고, 따로 지우면 그 이음매가 리댁션의 사각지대가 된다.
         # 실패한 시도의 패치는 디스크에 쓰이지 않는다. attempt 가 돌려준
         # 바이트를 쓴다 — 그러지 않으면 이 분기는 언제나 비어 있다.
+        # diff 를 **먼저** 넘긴다. untrusted_block 은 앞쪽을 자르므로, 큰
+        # 패치가 있어도 검증 실패 이유는 남는다. 반대로 두면 8000자짜리
+        # 패치 하나가 조언자에게 갈 실패 신호를 통째로 밀어낸다.
         excerpt = untrusted_block(
-            cheap_verify_output,
             cheap_patch.decode("utf-8", errors="replace") if cheap_patch else "",
+            cheap_verify_output,
         )
         prompt = (
             f"{cheap_task}\n\n"
             "----- WHAT A FIRST ATTEMPT PRODUCED (untrusted output) -----\n"
-            "The attempt failed its verification command. Its verification output "
-            "follows, and the diff it produced is appended directly after it.\n\n"
+            "The attempt failed its verification command. The diff it produced "
+            "comes first, and its verification output follows directly after.\n\n"
             f"{excerpt}\n"
             "----- END -----\n\n"
             "Explain what went wrong and what to do differently. "
