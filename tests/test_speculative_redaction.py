@@ -761,3 +761,46 @@ def test_proxy_token_with_empty_password_half(monkeypatch: pytest.MonkeyPatch) -
     module = load_runner()
     monkeypatch.setenv("HTTP_PROXY", "http://abctoken123:@proxy:3128")
     assert "abctoken123" not in module.verify_excerpt("proxy http://abctoken123:@proxy:3128")
+
+
+@pytest.mark.parametrize("blanks", [0, 6, 20, 100], ids=lambda n: f"{n}blank")
+def test_blank_lines_do_not_exhaust_the_gate_budget(blanks: int) -> None:
+    """빈 줄이 예산을 먹고 끝나면 게이트가 False 로 떨어져 키가 남는다.
+
+    라운드 16 이 문자 상한을 fail-closed 로 뒤집었는데, 줄 수 예산에는
+    같은 구멍이 남아 있었다.
+    """
+    module = load_runner()
+    lines = pem_body()
+    text = f"{BEGIN}RSA {KEY}\n" + "\n" * blanks + "\n".join(lines) + f"\n{END}RSA {KEY}"
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+
+
+def test_quoted_body_lines_are_redacted() -> None:
+    """탐침이 본 주사와 다른 정규화를 하면 첫 줄만 지우고 멈춘다."""
+    module = load_runner()
+    blob = base64.b64encode(b"\x01" * 1200).decode()
+    lines = [blob[index : index + 16] for index in range(0, len(blob), 16)]
+    text = f"{BEGIN}RSA {KEY}\n" + "\n".join(f'"{line}"' for line in lines) + f"\n{END}RSA {KEY}"
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+
+
+def test_content_fragments_join_without_breaking_an_anchor() -> None:
+    """구분자를 넣으면 조각 경계에 걸친 마커가 갈라져 안 잡힌다."""
+    module = load_runner()
+    envelope = (
+        '{"content":[{"text":"' + BEGIN + 'PRI"},'
+        '{"text":"VATE KEY-----\\nMIIEsecretmaterial\\n' + END + KEY + '"}]}'
+    )
+    body, extracted = module.advice_text_extracted(envelope, ["claude", "--output-format", "json"])
+    assert extracted
+    assert "MIIEsecretmaterial" not in module.redact_text(body)
+
+
+def test_message_stream_array_takes_the_last_element() -> None:
+    module = load_runner()
+    stream = '[{"type":"a","item":{"text":"first"}},{"type":"b","item":{"text":"last"}}]'
+    body, _ = module.advice_text_extracted(stream, ["claude", "--output-format", "json"])
+    assert body == "last"

@@ -44,6 +44,16 @@ def wilson(successes: int, total: int, z: float = 1.96) -> tuple[float, float]:
     return (max(0.0, centre - margin), min(1.0, centre + margin))
 
 
+def escalated_of(record: dict[str, object]) -> bool:
+    """이 과제가 승급했는가.
+
+    p 를 세는 쪽, 비용을 모으는 쪽, 요약을 찍는 쪽이 모두 이 하나를 쓴다.
+    각자 인라인으로 판정하면 러너가 빈 dict 나 오류 스텁을 남겼을 때 숫자가
+    서로 어긋나고, 어느 쪽이 맞는지 읽는 사람이 알 수 없다.
+    """
+    return isinstance(record.get("expensive"), dict)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", required=True, type=Path)
@@ -208,7 +218,9 @@ def main() -> int:
     )
     if rescued_total:
         print(f"    그중 조언 후 재시도로 구제: {rescued_total}")
-    print(f"  실제 승급        : {sum(1 for r in usable if isinstance(r.get('expensive'), dict))}")
+    # 승급 여부는 비용 루프와 **같은** 술어를 써야 한다. 여기만 다른 것을
+    # 쓰면 두 숫자가 어긋나고, 어느 쪽이 맞는지 읽는 사람이 알 수 없다.
+    print(f"  실제 승급        : {sum(1 for r in usable if escalated_of(r))}")
     print(f"  둘 다 실패       : {both_failed}")
     # 일부 기록만 시작 전 조언이면 그 비율은 p 도 p′ 도 아니다. 두 설정을
     # 섞어 놓고 한쪽 이름을 붙이면, 조언 없는 실행이 섞인 수를 단일 설정의
@@ -368,7 +380,7 @@ def main() -> int:
     for r in usable:
         # 승급 여부는 p 를 세는 쪽과 같은 술어로 판정한다. 러너가 빈 dict 나
         # 오류 스텁을 남기면 "승급 N건 중 M건" 문구가 실제와 어긋난다.
-        escalated = isinstance(r.get("expensive"), dict)
+        escalated = escalated_of(r)
         if escalated:
             escalated_total += 1
         if timed_out(r.get("cheap")) or timed_out(r.get("expensive")):
@@ -569,8 +581,10 @@ def main() -> int:
         )
         if zero_expensive:
             print(
-                f"  승급 {zero_expensive}건은 비싼 비용이 0 이라 분모에서 뺐다."
-                " 0 은 관측값이지만 비율의 분모로는 쓸 수 없다."
+                f"  승급 {zero_expensive}건은 비싼 비용이 0 이라 **과제별 비율**"
+                " 에서 뺐다. 0 으로는 나눌 수 없기 때문이다. 평균에는 그대로"
+                " 들어간다 — 빼면 평균이 커져 a 와 r 이 작아지고, 그것은 조언"
+                " 쪽에 유리한 방향이다."
             )
         if unpriced_escalations:
             # 방향을 말할 수 있는 것은 타임아웃뿐이다. 그 실행은 예산을 끝까지
@@ -734,7 +748,7 @@ def main() -> int:
                     return None
                 expensive_mean_all = statistics.fmean(observed_expensive_costs)
                 mean = statistics.fmean(values)
-                # a 도 표본에서 온 값이다. 점추정만 쓰면 s > a + c 판정이
+                # a 도 표본에서 온 값이다. 점추정만 쓰면 s > a + q·r 판정이
                 # 실제보다 확정적으로 보인다.
                 if len(values) > 1:
                     spread = 1.96 * statistics.stdev(values) / math.sqrt(len(values))
@@ -809,7 +823,7 @@ def main() -> int:
                     )
                     # 재시도는 최초 싼 실행과 같은 비용이 아니다. 과제에 조언이
                     # 붙어 프롬프트가 길고, 모델이 더 오래 돌 수도 있다. 이득
-                    # 조건은 s > a + c 가 아니라 s > a + r 이다.
+                    # 조건은 s > a + c 가 아니라 s > a + q·r 이다.
                     retry_costs = [
                         value
                         for r in usable
@@ -870,7 +884,7 @@ def main() -> int:
                             "  — 조언이 붙어 최초 싼 실행보다 비쌀 수 있다"
                         )
                     if a_ratio is not None and c_range is not None:
-                        # 이득 조건은 s > a + c. a 와 c 의 흔들림을 다 태운다.
+                        # 이득 조건은 s > a + q·r. 모든 항의 흔들림을 태운다.
                         # 조언이 비어 재시도조차 못 한 실패에는 r 이 들지 않는다.
                         # 모든 실패에 r 을 물리면 조언 경로가 실제보다 비싸
                         # 보인다. 재시도 시도율 q 를 곱한다.
@@ -974,8 +988,10 @@ def main() -> int:
         print("\n기대 비용: 아래 c + p 는 **조언 없는** 경로의 모형이다.")
         print(
             "  이 로그는 조언을 켜고 잰 것이므로 실제 비용 모형은 다르다"
-            " — 시작 전 조언은 a + c + p′, 실패 후 조언은 c + p·(a + q·r + 1 − s)"
-            "(r 은 조언이 붙은 재시도의 비용비로, 최초 싼 실행의 c 와 다르다)."
+            " — 시작 전 조언은 a + c_A + p′, 실패 후 조언은 c + p·(a + q·r + 1 − s)."
+            " c_A 와 r 은 각각 계획과 조언이 프롬프트에 붙은 실행의 비용비이고,"
+            " 조언 없는 c 와 다르다. 여기 찍힌 c 는 이 로그에서 잰 싼 실행의"
+            " 비용비이므로, 시작 전 조언을 켰다면 그것이 이미 c_A 다."
             " 두 설정을 나란히 재기 전에는 절감을 말하지 않는다."
         )
     if advisor_on:
@@ -1040,7 +1056,11 @@ def main() -> int:
     thin_denominator = (
         c_range is not None and escalated_total > 0 and len(paired) * 2 < escalated_total
     )
-    if advisor_on and timed_out_tasks:
+    failure_advice_on = any(
+        isinstance(rec.get("advisor"), dict) and (rec["advisor"] or {}).get("advise_on_failure")
+        for rec in usable
+    )
+    if advisor_on and timed_out_tasks and failure_advice_on:
         # 조언 분기가 타임아웃 경고를 가리면 안 된다. 빠진 비용이 위쪽으로
         # 열려 있다는 사실은 조언 판정에도 그대로 해당한다.
         print(
@@ -1050,7 +1070,7 @@ def main() -> int:
     elif advisor_on:
         # 조언이 켜진 로그에서는 c + p 기반 판정을 내지 않는다. 위에 그 식이
         # 이 실행의 모형이 아니라고 적어 놓고 그 식으로 판정하면 앞뒤가 맞지
-        # 않는다. 조언 자체의 판정은 위쪽 s > a + c 가 한다.
+        # 않는다. 조언 자체의 판정은 위쪽 s > a + q·r 이 한다.
         print(
             "\n  -> 판정 없음(c + p 기준). 이 로그는 조언을 켜고 쟀다."
             + (
@@ -1060,8 +1080,11 @@ def main() -> int:
                     and (rec["advisor"] or {}).get("advise_on_failure")
                     for rec in usable
                 )
-                else " 시작 전 조언만 켠 로그에는 그 판정이 없다 — a < p − p′ 를 보려면"
-                " 조언을 끄고 같은 과제를 한 번 더 재야 한다."
+                else " 시작 전 조언만 켠 로그에는 그 판정이 없다. 이득 조건은"
+                " a + (c_A − c) < p − p′ 이고, c_A 는 이 로그의 c, 나머지 셋은"
+                " 조언을 끄고 같은 과제를 한 번 더 재야 나온다 — a 를 p − p′ 와"
+                " 바로 비교하면 계획이 늘린 프롬프트 비용이 빠져 조언 쪽에"
+                " 유리하게 틀린다."
             )
         )
     elif timed_out_tasks and c_range is not None:

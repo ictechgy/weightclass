@@ -944,8 +944,9 @@ def looks_like_key_block(text: str, after: int) -> bool:
     # 자식이 출력 길이를 정하므로 그것은 공격 가능한 성질이다. 상한은 본문
     # 한 줄을 알아보기에 넉넉하다.
     position = after
+    skipped = 0
     horizon = min(len(text), after + PEM_LOOKAHEAD_LINES * PEM_LOOKAHEAD_LINE_CHARS)
-    for _ in range(PEM_LOOKAHEAD_LINES):
+    for _ in range(PEM_LOOKAHEAD_LINES + PEM_LOOKAHEAD_LINES * 4):
         if position >= horizon:
             # 예산 안에서 결론을 못 냈다. **키로 간주한다.** 성능을 위한
             # 상한이 유출을 만들면 안 된다 — 400겹짜리 접두사는 정상 로그가
@@ -957,6 +958,12 @@ def looks_like_key_block(text: str, after: int) -> bool:
         line = _ESCAPE_NOISE.sub("", text[position:stop]).strip().strip('"')
         position = stop
         if not line or not strip_log_prefix(line):
+            # 빈 줄은 판정을 미룰 뿐 예산을 써서는 안 된다. 예산을 쓰게 두면
+            # 빈 줄 여섯 개로 게이트를 빠져나가 키가 통째로 남는다 — 라운드
+            # 16 이 fail-closed 로 뒤집은 것과 같은 부류의 fail-open 이다.
+            skipped += 1
+            if skipped > PEM_LOOKAHEAD_LINES * 4:
+                return True
             continue
         for candidate in (line, *_prefix_variants(line)):
             if not candidate:
@@ -1089,7 +1096,10 @@ def _key_body_end(text: str, body_at: int) -> int:
                 probe = skip.end()
             nxt = _LINE_SEPARATOR.search(text, probe)
             head_end = nxt.start() if nxt else len(text)
-            head = _ESCAPE_NOISE.sub("", text[probe:head_end]).strip()
+            # 본 주사와 **같은** 정규화를 해야 한다. 본 주사는 따옴표까지
+            # 벗기는데 탐침이 안 벗기면, 따옴표로 감싼 본문에서 판정이 갈려
+            # 첫 줄만 지우고 멈춘다.
+            head = _ESCAPE_NOISE.sub("", text[probe:head_end]).strip().strip('"')
             following = [head, *_prefix_variants(head)]
             continues = any(
                 _looks_like_key_line(c, minimum=8) or _PEM_HEADER_LINE.match(c)
@@ -1732,16 +1742,24 @@ def _first_text(payload: object, depth: int = 0) -> str:
             if found:
                 return found
     elif isinstance(payload, list):
-        # 두 모양이 섞여 있다. 메시지 스트림(JSONL)은 마지막이 결과이고,
-        # content 배열은 조각을 **이어야** 본문이 된다. 조각이 여럿이면
-        # 잇고, 하나뿐이면 그것이 답이다.
+        # 두 모양이 섞여 있다. 메시지 스트림은 마지막이 결과이고, content
+        # 배열은 조각을 이어야 본문이 된다. 모양으로 가른다 — 원소가 전부
+        # 텍스트 블록이면 조각이고, 아니면 스트림이다.
+        text_blocks = all(
+            isinstance(value, dict)
+            and isinstance(value.get("text"), str)
+            and value.get("type", "text") == "text"
+            for value in payload
+        )
         pieces = [found for value in payload if (found := _first_text(value, depth + 1))]
         if not pieces:
             return ""
-        if len(pieces) == 1:
-            return pieces[0]
-        joined = "\n".join(pieces).strip()
-        return joined if joined else pieces[-1]
+        if not text_blocks:
+            return pieces[-1]
+        # 구분자를 넣으면 조각 경계에 걸친 자격증명의 앵커가 갈라진다 —
+        # "-----BEGIN PRI" + "VATE KEY-----" 가 그 사이의 줄바꿈 때문에
+        # 마커로 안 잡힌다. 그대로 잇는다.
+        return "".join(pieces)
     return ""
 
 

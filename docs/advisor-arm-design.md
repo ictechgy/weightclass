@@ -110,8 +110,10 @@ verify  ── pass → accept
                 └─ fail → escalate to the expensive route
 ```
 
-With `s` the probability that the advised retry passes, `r` the cost of that
-retry — **not** `c`, because the retry carries the advice in its prompt and so
+With `s` the fraction of **advised failures** that end up rescued — not the
+fraction of *attempted retries* that pass; advice can come back empty and then no
+retry happens at all, and those failures still count against `s` because they
+still escalate — `r` the cost of that retry — **not** `c`, because the retry carries the advice in its prompt and so
 costs more than the first attempt — and `q` the fraction of advised failures that
 actually produce a retry (advice can come back empty, or the advisor call can
 fail, and then nothing is retried and no retry cost is paid):
@@ -127,8 +129,10 @@ the wrong verdict against it.
 the decision can be made from the failed runs alone, which makes the
 pre-registration cleaner and the sample requirement smaller. At `c ≈ 0.31` and
 `a ≈ 0.1` the break-even is `s > 0.41` when every advised failure retries at the
-first attempt's cost — higher once `r > c`, which it normally is, and lower when
-`q < 1`. It replaces a full expensive run with one short
+first attempt's cost, and higher once `r > c`, which it normally is. A `q < 1`
+lowers the *threshold* but also caps `s` at `q`, so it does not make the arm
+easier to justify — `a` is paid on every advised failure whether or not a retry
+follows, while only the `q` fraction can be rescued. It replaces a full expensive run with one short
 advisory call plus one more cheap run, so the saving per rescued task is large —
 but the bar rises fast with `a`, and at `a ≈ c ≈ 0.31` it is already `s > 0.62`.
 
@@ -240,11 +244,13 @@ Configuration 2 **is** A+B, so A+B is measured, not modelled. What nobody runs i
 
 ```
 A alone      = a + c_A + p′
-A + B        = a + c_A + p′·(a + q′·r′ + (1 − s′))
+A + B        = a + c_A + p′·(a′ + q′·r′ + (1 − s′))
 ```
 
-Every term after the up-front advice is primed, because it is measured on a run
-whose prompt already contains the plan: the retry cost, the retry-attempt rate
+Every term after the up-front advice is primed — including the failure-stage
+advisor call itself, whose input is the already-advised task plus the failure
+artifacts and so costs `a′`, not `a` — because each is measured on a run whose
+prompt already contains the plan: the retry cost, the retry-attempt rate
 and the rescue rate are all different quantities from their Shape-B-only
 counterparts. Reusing the unprimed symbols would silently assume the plan
 changes nothing about what happens after a failure.
@@ -267,7 +273,11 @@ To pre-register:
 - **n**, and the early-stopping rule.
 - **The primary endpoint: cost per passing task.** Not a blind quality rating —
   see the ceiling above.
-- **The decision rule for Shape B**: `s > a + q·r`, evaluated on the *interval*
+- **The decision rule for Shape B**: `s > a + q·r` — and note this is the gate
+  for adding B to whatever is already running. On an A+B log it answers "is the
+  failure-stage advice worth it *given* the plan", not "is A+B worth it"; that
+  second question needs configuration 1 as its baseline. Evaluated on the
+  *interval*
   of every term, not the point estimates, and abstaining when the interval
   crosses. `r` is the measured cost of the advised retry and is normally above
   `c`, since the retry carries the advice in its prompt; `q` is the fraction of
