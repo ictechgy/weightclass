@@ -105,17 +105,19 @@ verify  ── pass → accept
                 └─ fail → escalate to the expensive route
 ```
 
-With `s` the probability that the advised retry passes:
+With `s` the probability that the advised retry passes and `r` the cost of that
+retry — **not** `c`, because the retry carries the advice in its prompt and so
+costs more than the first attempt:
 
 ```
-expected cost = c + p·(a + c + (1 − s))        pays when   s > a + c
+expected cost = c + p·(a + r + (1 − s))        pays when   s > a + r
 ```
 
 **Shape B's condition does not contain `p`.** That matters more than it looks:
 the decision can be made from the failed runs alone, which makes the
 pre-registration cleaner and the sample requirement smaller. At `c ≈ 0.31` and
-`a ≈ 0.1` the break-even is `s > 0.41`, so an advised retry must rescue rather
-more than two failures in five. It replaces a full expensive run with one short
+`a ≈ 0.1` the break-even is `s > 0.41` if the retry costs the same as the first
+attempt — and higher once `r > c`, which it normally is. It replaces a full expensive run with one short
 advisory call plus one more cheap run, so the saving per rescued task is large —
 but the bar rises fast with `a`, and at `a ≈ c ≈ 0.31` it is already `s > 0.62`.
 

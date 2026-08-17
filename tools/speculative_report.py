@@ -686,13 +686,16 @@ def main() -> int:
                 )
                 mean = statistics.fmean(values)
                 # a 도 표본에서 온 값이다. 점추정만 쓰면 s > a + c 판정이
-                # 실제보다 확정적으로 보인다. 표본이 둘 이상이면 흔들림을
-                # 표준오차로 낸다.
-                spread = (
-                    1.96 * statistics.stdev(values) / math.sqrt(len(values))
-                    if len(values) > 1
-                    else 0.0
-                )
+                # 실제보다 확정적으로 보인다.
+                if len(values) > 1:
+                    spread = 1.96 * statistics.stdev(values) / math.sqrt(len(values))
+                else:
+                    # 관측이 하나면 흔들림을 0 으로 두면 안 된다. 그것은
+                    # 한 번 봤다는 사실을 "정확히 안다" 로 바꾸는 것이다.
+                    # 그 값 자체를 폭으로 삼아 판정이 서지 않게 한다.
+                    spread = mean
+                # 분모도 표본이다. c 의 구간이 그 불확실성을 이미 담고 있으므로
+                # 여기서는 분자만 전파하되, 분모가 얇으면 그 사실을 알린다.
                 return (mean / expensive_mean_all, spread / expensive_mean_all, len(values))
 
             a_first = advice_stats("advice_first")
@@ -732,12 +735,39 @@ def main() -> int:
                         f"  조언 후 재시도 성공률 s = {s_hat:.1%}"
                         f"  95% CI [{s_lo:.1%}, {s_hi:.1%}]   ({rescued}/{len(advised_failures)})"
                     )
+                    # 재시도는 최초 싼 실행과 같은 비용이 아니다. 과제에 조언이
+                    # 붙어 프롬프트가 길고, 모델이 더 오래 돌 수도 있다. 이득
+                    # 조건은 s > a + c 가 아니라 s > a + r 이다.
+                    retry_costs = [
+                        value
+                        for r in usable
+                        if isinstance(r.get("retry"), dict)
+                        and (value := cost_of(r.get("retry"))) is not None
+                        and value > 0
+                    ]
+                    r_ratio = None
+                    if retry_costs and priced_pairs:
+                        expensive_mean_all = statistics.fmean(
+                            [x.expensive for x in priced_pairs if x.expensive]
+                        )
+                        r_ratio = statistics.fmean(retry_costs) / expensive_mean_all
+                        print(
+                            f"  재시도 1회 비용비 r = {r_ratio:.3f}  ({len(retry_costs)}회)"
+                            "  — 조언이 붙어 최초 싼 실행보다 비쌀 수 있다"
+                        )
                     if a_ratio is not None and c_range is not None:
                         # 이득 조건은 s > a + c. a 와 c 의 흔들림을 다 태운다.
-                        threshold_low = max(0.0, a_ratio - a_spread) + c_range[0]
-                        threshold_high = a_ratio + a_spread + c_range[1]
+                        # r 을 쟀으면 그것을 쓴다. 못 쟀으면 c 로 대신하되
+                        # 그것이 대입이라고 말한다.
+                        base_low, base_high = (
+                            (r_ratio, r_ratio) if r_ratio is not None else (c_range[0], c_range[1])
+                        )
+                        basis = "r" if r_ratio is not None else "c(대입)"
+                        threshold_low = max(0.0, a_ratio - a_spread) + base_low
+                        threshold_high = a_ratio + a_spread + base_high
+                        base_point = r_ratio if r_ratio is not None else c
                         print(
-                            f"  손익분기 s = a + c = {a_ratio + c:.3f}"
+                            f"  손익분기 s = a + {basis} = {a_ratio + base_point:.3f}"
                             f"  (구간 [{threshold_low:.3f}, {threshold_high:.3f}])"
                         )
                         if s_lo > threshold_high:
@@ -758,7 +788,8 @@ def main() -> int:
         print("\n기대 비용: 아래 c + p 는 **조언 없는** 경로의 모형이다.")
         print(
             "  이 로그는 조언을 켜고 잰 것이므로 실제 비용 모형은 다르다"
-            " — 시작 전 조언은 a + c + p′, 실패 후 조언은 c + p·(a + c + 1 − s)."
+            " — 시작 전 조언은 a + c + p′, 실패 후 조언은 c + p·(a + r + 1 − s)"
+            "(r 은 조언이 붙은 재시도의 비용비로, 최초 싼 실행의 c 와 다르다)."
             " 두 설정을 나란히 재기 전에는 절감을 말하지 않는다."
         )
     print("\n기대 비용 = c + p")
@@ -816,7 +847,7 @@ def main() -> int:
         # 않는다. 조언 자체의 판정은 위쪽 s > a + c 가 한다.
         print(
             "\n  -> 판정 없음(c + p 기준). 이 로그는 조언을 켜고 쟀다."
-            " 조언의 이득 판정은 위의 s > a + c 를 보라."
+            " 조언의 이득 판정은 위의 s > a + r 을 보라."
         )
     elif timed_out_tasks and c_range is not None:
         # 판정을 내지 않는다. 빠진 비용이 위쪽으로 열려 있으면 구간도 위쪽으로

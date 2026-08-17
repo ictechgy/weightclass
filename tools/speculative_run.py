@@ -821,9 +821,12 @@ def extract_tokens(stdout: str, stderr: str) -> int | None:
 # 비밀을 찍었다면 그것이 그대로 전송된다.
 _SECRET_SHAPES = re.compile(
     # 개인키는 **본문까지** 지운다. BEGIN 줄만 지우면 base64 몸통이 그대로
-    # 남아, 지웠다는 착각만 준다.
+    # 남아, 지웠다는 착각만 준다. 다만 END 가 없을 때 끝까지 지우면 반대로
+    # 과잉이 된다 — "expected -----BEGIN PRIVATE KEY----- but got EOF" 라는
+    # 오류 한 줄이 그 뒤 출력 전체를 없앤다. 그것이야말로 조언자가 봐야 할
+    # 실패 신호다. END 가 없으면 base64 로 이어지는 만큼만 지운다.
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----"
-    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\s*[A-Za-z0-9/+=]{20,})+"
     r"|sk-[A-Za-z0-9_-]{16,}"
     r"|gh[pousr]_[A-Za-z0-9]{20,}"
     r"|github_pat_[A-Za-z0-9_]{20,}"
@@ -834,17 +837,30 @@ _SECRET_SHAPES = re.compile(
     r"|A[KS]IA[0-9A-Z]{16}"
     # AWS 비밀 액세스 키와 세션 토큰은 고정 접두사가 없다. Bedrock 을 쓰는
     # 곳에서 가장 흔한 자격증명이므로 이름으로 잡는다.
-    r"|(?i:aws_secret_access_key|aws_session_token|aws_security_token)"
-    r"\s*[=:]\s*[\"']?[A-Za-z0-9/+=_-]{16,}"
+    # 이름 뒤의 닫는 따옴표를 허용해야 한다. AWS CLI 와 boto 는 JSON 을 찍고,
+    # 거기서는 "SecretAccessKey": "..." 처럼 이름과 구분자 사이에 따옴표가
+    # 있다. 그것을 빠뜨리면 Bedrock 을 쓰는 곳에서 가장 흔한 형태가 통째로
+    # 빠져나간다.
+    r"|(?i:aws_?secret_?access_?key|aws_?session_?token|aws_?security_?token)"
+    r"[\"']?\s*[=:]\s*[\"']?[A-Za-z0-9/+=_.~-]{16,}"
     # 환경을 통째로 찍는 실패 테스트가 흔하다. NAME=value 형태에서 이름이
     # 비밀을 뜻하면 값을 지운다.
-    r"|(?i:[A-Z0-9_]*(?:secret|token|password|passwd|api_?key|private_?key|credential)"
-    r"[A-Z0-9_]*)\s*[=:]\s*[\"']?[^\s\"']{8,}"
+    #
+    # 값의 모양을 좁게 잡는 것이 중요하다. 검증 출력에는 실패한 **소스 줄** 이
+    # 함께 나오고, 거기에는 API_KEY_HEADER = "X-Api-Key" 나
+    # TOKEN_RE = re.compile(...) 같은 평범한 코드가 있다. 그것까지 지우면
+    # 조언자가 진단할 코드를 잃는다 — 이 기능의 존재 이유를 지우는 셈이다.
+    # 자격증명처럼 생긴 문자만, 12자 이상일 때만 지운다.
+    r"|(?i:[A-Z0-9_]{0,40}(?:secret|token|password|passwd|api_?key|private_?key|credential)"
+    r"[A-Z0-9_]{0,40})[\"']?\s*[=:]\s*[\"']?[A-Za-z0-9/+=_.~-]{12,}"
     # JWT
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     re.DOTALL,
 )
 VERIFY_EXCERPT_CHARS = 4000
+# 정규식을 돌릴 최대 길이. 발췌 길이보다 훨씬 크게 잡아, 최종 발췌에 들어갈
+# 자격증명은 언제나 창 안에 온전히 들어오게 한다.
+SCAN_WINDOW_CHARS = 64000
 
 
 def verify_excerpt(output: str) -> str:
@@ -854,7 +870,13 @@ def verify_excerpt(output: str) -> str:
     잃고 패턴에 안 걸린 채 남는다. 자식이 출력 길이를 조절할 수 있으므로
     그 경계는 의도적으로 맞출 수 있는 것이다. 지운 뒤에 자른다.
     """
-    cleaned = _SECRET_SHAPES.sub("[REDACTED]", output)
+    # 정규식을 무한정 긴 문자열에 돌리지 않는다. 이 텍스트는 자식이 길이를
+    # 정할 수 있고, 어차피 마지막 VERIFY_EXCERPT_CHARS 만 보낸다. 넉넉한
+    # 창(그보다 열 배 이상)으로 먼저 줄인 뒤 지운다 — 그 창 안에서 잘린
+    # 자격증명은 최종 발췌에 들어가지도 않으므로, 라운드 1 이 고친 "자르고
+    # 지우면 경계에 걸친 것이 새어나간다" 는 문제가 다시 생기지 않는다.
+    window = output[-SCAN_WINDOW_CHARS:]
+    cleaned = _SECRET_SHAPES.sub("[REDACTED]", window)
     if len(cleaned) <= VERIFY_EXCERPT_CHARS:
         return cleaned
     # 실패 이유는 대개 끝에 있다. 앞을 자르고 뒤를 남긴다.
@@ -1255,7 +1277,12 @@ def ask_advisor(
             # ignore_errors 로 삼키면 안 된다. 못 지웠는데 등록까지 지우면
             # --prune 도 모르게 되어 조언자가 남긴 것이 영구히 남는다.
             # 지우지 못했으면 등록을 **남겨** 두고 사람에게 알린다.
-            stranded = workspace.exists()
+            #
+            # exists() 로 되묻지 않는다. 그 함수는 권한 오류에서도 False 를
+            # 주므로, 접근할 수 없게 만들어진 디렉터리가 "사라졌다" 로 잡힌다.
+            # 지우기가 실패했으면 남은 것으로 본다 — 틀려도 등록이 하나 더
+            # 남을 뿐이고, 반대로 틀리면 파일이 영구히 남는다.
+            stranded = True
         if not stranded:
             register(registry, workspace, add=False)
     if stranded:
@@ -1832,8 +1859,21 @@ def main() -> int:
             # 조언은 있으면 좋은 것이지 없으면 과제를 못 재는 것이 아니다.
             # attempt 는 예외를 기록으로 바꾸는데 여기만 위로 던지면, 조언자
             # 하나가 없다는 이유로 로그 줄이 통째로 사라진다.
+            #
+            # 다만 None 을 돌려주면 "조언을 시도하지 않음" 과 구별되지 않고,
+            # 리포트의 s 분모에서 이 실패가 조용히 빠진다. 시도했고 실패했다는
+            # 사실을 기록으로 남긴다.
             print(f"  조언 실패 — 조언 없이 계속한다: {_safe(str(error))}")
-            return None, ""
+            return (
+                {
+                    "stage": stage,
+                    "chars": 0,
+                    "truncated": False,
+                    "empty": True,
+                    "route_failed": True,
+                },
+                "",
+            )
         note = " (잘림)" if record["truncated"] else ""
         if record["route_failed"]:
             note = " — 조언자가 정상 종료하지 않아 버린다"
