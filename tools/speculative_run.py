@@ -45,8 +45,10 @@ into a quoting exercise; the whole point of this project is exact commands.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -56,6 +58,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
 
@@ -65,6 +68,9 @@ class ChildResult(TypedDict):
     timed_out: bool
     seconds: float
     tokens: int | None
+    # 벤더가 말해 주는 만큼의 사용량. cost_usd 가 있으면 그것이 유일하게
+    # 벤더 간 비교 가능한 수치다.
+    usage: dict[str, object] | None
 
 
 class VerifyResult(TypedDict):
@@ -72,6 +78,31 @@ class VerifyResult(TypedDict):
     exit_code: int | None
     timed_out: bool
     seconds: float
+
+
+class Usage(TypedDict, total=False):
+    """What one invocation consumed, as far as the vendor will say.
+
+    `cost_usd` is the number that matters and the only one comparable across
+    vendors. Claude reports it directly. Codex reports none, so it has to be
+    computed from token counts and a price table the caller supplies — which is
+    why `--prices` exists. Token counts are **not** comparable between vendors:
+    each counts caching differently.
+    """
+
+    cost_usd: float
+    total_tokens: int
+    breakdown: dict[str, int]
+    source: str
+    # 청구액의 출처. source 문자열에 섞어 두면 "claude-json+price-table" 이나
+    # "claude-json(2candidates)" 이 부분 문자열 검사에서 벤더 청구액으로
+    # 잘못 분류된다. 값은 "vendor"(벤더가 알려준 금액) 또는 "price-table"
+    # (우리 요금표로 환산) 둘 뿐이고, 세는 항목이 다르므로 섞어 나누면 안 된다.
+    cost_origin: str
+    # 요금표가 값을 매기기로 한 필드 중 이 실행에 없던 것들. 없는 캐시 필드는
+    # 진짜 0 이지만 CLI 가 필드 이름을 바꾼 경우와 구별되지 않으므로, 조용히
+    # 절반짜리 비용을 내지 않도록 리포트가 볼 수 있게 남긴다.
+    priced_fields_missing: str
 
 
 class Attempt(TypedDict, total=False):
@@ -102,6 +133,93 @@ class Attempt(TypedDict, total=False):
 # 작업공간 이름의 접두사. mkdtemp 호출부와 삭제 허용 목록이 같은 상수를
 # 보게 해서, 한쪽만 바뀌면 --prune 이 조용히 아무것도 못 지우는 일을 막는다.
 WORKSPACE_PREFIXES = ("spec-cheap-", "spec-expensive-", "spec-home-")
+
+# 벤더 자식이 기본으로 보는 환경. 허용 목록이지 차단 목록이 아니다 — 모르는
+# 비밀은 차단 목록으로 막을 수 없고, 이 머신에 어떤 제공자의 키가 있는지
+# 우리는 모른다.
+#
+# 에이전트 CLI 가 동작하는 데 필요한 것과, 그 CLI 자신의 자격증명만 남긴다.
+# Codex 실행이 ANTHROPIC_API_KEY 를 볼 이유는 없지만 둘을 구별할 방법이
+# 없으므로 양쪽 벤더의 접두사를 모두 통과시킨다. AWS, GitHub, 데이터베이스,
+# 사내 시스템의 자격증명은 어느 쪽도 필요로 하지 않으므로 떨군다.
+CHILD_ENV_NAMES = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TERM",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        # 사내 프록시와 사설 CA 뒤에서 돌아가는 경우가 흔하다. 이것들이 없으면
+        # 인증이 아니라 네트워크가 먼저 끊긴다.
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        # curl 과 Node 계열이 참조한다. 이것만 설정된 사내 환경이 흔하고,
+        # 빠지면 인증이 아니라 네트워크에서 먼저 끊긴다.
+        "ALL_PROXY",
+        "all_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        # XDG_ 접두사 전체는 너무 넓다(XDG_RUNTIME_DIR 등). 설정 경로 셋만 둔다.
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+    }
+)
+# 어떤 실행 파일이 어떤 접두사를 필요로 하는가. Codex 실행이 ANTHROPIC_API_KEY
+# 를 볼 이유가 없고, 그 반대도 마찬가지다.
+VENDOR_ENV_PREFIXES = {
+    "codex": ("OPENAI_", "CODEX_"),
+    "claude": ("ANTHROPIC_", "CLAUDE_"),
+}
+# 실행 파일 이름으로 벤더를 못 알아보면 양쪽을 다 준다. 모르는 CLI 의 인증을
+# 우리가 끊어 버리는 것보다는 낫고, 그때도 AWS 나 GitHub 키는 여전히 빠진다.
+CHILD_ENV_PREFIXES = ("ANTHROPIC_", "OPENAI_", "CLAUDE_", "CODEX_")
+
+# HOME 을 바꿔도 이것들이 남아 있으면 CLI 가 실제 홈을 먼저 본다. 접미사로
+# 훑지 않는 이유는 JAVA_HOME 처럼 홈과 무관한 이름이 같은 모양이기 때문이다.
+HOME_REDIRECTING_ENV = (
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+    "CODEX_HOME",
+    "CLAUDE_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_CONFIG_DIR",
+    "OPENAI_CONFIG_DIR",
+)
+
+
+def default_child_env(executable: str | None = None) -> frozenset[str]:
+    """Names the vendor child keeps when `--child-env-all` is not given.
+
+    When the executable names a vendor we recognise, only that vendor's
+    prefixes come through — a Codex run has no business reading an Anthropic
+    key. An unrecognised CLI gets both rather than none, because guessing wrong
+    in that direction breaks authentication instead of leaking anything new.
+    """
+    prefixes: tuple[str, ...] = CHILD_ENV_PREFIXES
+    if executable:
+        for vendor, vendor_prefixes in VENDOR_ENV_PREFIXES.items():
+            if vendor in Path(executable).name.lower():
+                prefixes = vendor_prefixes
+                break
+    return frozenset(
+        name for name in os.environ if name in CHILD_ENV_NAMES or name.startswith(prefixes)
+    )
+
 
 # 에이전트 런타임이 작업 트리에 흘리는 디렉터리들. 이름으로 아는 수밖에 없다.
 # 자식이 만든 점-디렉터리를 전부 버리면 .github 나 .vscode 를 새로 추가하는
@@ -239,27 +357,136 @@ def clone_at(repo: Path, commit: str, destination: Path) -> None:
     run_git(["remote", "remove", "origin"], destination)
 
 
-def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
+def is_finite_nonnegative(value: object) -> bool:
+    """유한하고 0 이상인 수인가. bool 과 임의 정밀도 정수까지 함께 막는다.
+
+    `math.isfinite` 는 float 로 변환할 수 없는 큰 정수에서 무한대를 돌려주지
+    않고 OverflowError 로 죽는다. 신뢰할 수 없는 JSON 이 `10**400` 을 담고
+    있으면 측정 실행 전체가 그 자리에서 멈춘다. 검사 함수가 검사 대상 때문에
+    죽으면 안 되므로 여기서 잡는다.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
+
+
+def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
+    """Turn a token breakdown into dollars using caller-supplied rates.
+
+    Only needed for vendors that report no cost. Codex is one: its `--json`
+    output carries token counts and no USD anywhere, and the model id is not in
+    the events either — so the rates have to be named from the invocation side.
+
+    Rates are USD per million tokens, keyed by the token field they price, and
+    **the table drives the sum** — a field the vendor reports but the table does
+    not name is deliberately skipped, not an error.
+
+    That direction matters because vendor breakdowns overlap. Codex reports
+    `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`,
+    `output_tokens`, and `reasoning_output_tokens`. A probe observed
+    `cached_input_tokens` (93,952) sitting *below* `input_tokens` (100,507) on
+    the same run — which is what a breakout looks like, not a separate line
+    item — so pricing all five would double-count. That is evidence, not proof:
+    naming the disjoint subset stays the caller's job, because only they can
+    check the answer against a real invoice.
+
+    A field the table prices but this run does not report counts as zero, not as
+    an error: a run that touched no cache genuinely has no cached tokens, and
+    failing there would silently drop the whole run from the cost sample. A rate
+    that matches *nothing* across the breakdown is a different matter — that is a
+    typo, and it produces None rather than a plausible-looking partial number.
+    """
+    breakdown = usage.get("breakdown") or {}
+    if not breakdown or not rates:
+        return None
+    matched = [field for field in rates if field in breakdown]
+    if not matched:
+        return None
+    priced = 0.0
+    for field, rate in rates.items():
+        count = breakdown.get(field, 0)
+        if not is_finite_nonnegative(count):
+            # 신뢰할 수 없는 JSON 의 토큰 수를 그대로 곱하면 OverflowError 가
+            # 난다. 값 하나가 이상하다고 실행을 죽이지 말고 비용을 포기한다.
+            return None
+        priced += count * rate / 1_000_000
+    # 벤더가 준 비용과 --prices 요율은 유한성과 부호를 확인하는데 계산 결과만
+    # 확인하지 않으면 기준이 어긋난다.
+    if not is_finite_nonnegative(priced):
+        return None
+    if len(matched) < len(rates):
+        # 값을 매기기로 한 필드 중 일부만 나타났다. 없는 캐시 필드는 실제로 0
+        # 이지만, CLI 가 output_tokens 를 다른 이름으로 바꾼 경우에도 똑같이
+        # 보인다. 그때는 절반짜리 비용이 그럴듯한 얼굴로 c 에 들어간다.
+        # 조용히 넘기지 않고 어떤 필드가 없었는지 남긴다.
+        missing = ",".join(sorted(set(rates) - set(matched)))
+        usage["priced_fields_missing"] = missing
+    return priced
+
+
+def run_child(
+    command: list[str],
+    workspace: Path,
+    task: str,
+    rates: dict[str, float] | None = None,
+    allowed_env: frozenset[str] | None = None,
+    home: Path | None = None,
+    prefer_prices: bool = False,
+) -> ChildResult:
     """One vendor invocation. The task goes in on stdin and never into the log.
 
-    Unlike `run_verify`, this inherits the full environment on purpose. The
-    child here **is** the agent CLI the user chose, and it needs its own
-    credentials — scrubbing `HOME` would leave it unable to authenticate and
-    the script unable to do anything at all. Running it exposes exactly what
-    running `codex exec` by hand already exposes; this script adds nothing.
+    The child **is** the agent CLI the user chose, so it keeps its own
+    credentials — take those away and it cannot authenticate at all. What it does
+    not keep, by default, is everything else: a task is untrusted input, and an
+    agent with shell access reads whatever its environment holds. There is no
+    reason a coding run should see `AWS_SECRET_ACCESS_KEY` or a database URL.
 
-    The verifier is a different trust level and is treated differently. It runs
-    code the *agent wrote*, which nobody chose and nobody reviewed, so it gets a
-    scrubbed environment and an empty `HOME`.
+    `CHILD_ENV_NAMES`/`CHILD_ENV_PREFIXES` is the default allowlist. `--child-env`
+    adds names to it; `--child-env-all` restores the old pass-everything
+    behaviour for anyone whose setup needs a variable the list does not know
+    about. The run prints how many names it dropped, so a CLI that suddenly
+    cannot authenticate points at its own cause.
+
+    **It narrows variables, not the filesystem.** `HOME` survives, because the
+    CLI finds its own credentials under it — blank it and nothing authenticates.
+    So `~/.aws/credentials` and every other dotfile stay reachable no matter how
+    short the variable list is. `--cheap-home`/`--expensive-home` point `HOME`
+    somewhere else for
+    anyone willing to stage the vendor's auth directory there; short of that,
+    real isolation means a container, and this script does not pretend to
+    provide one.
+
+    The verifier is a different trust level again and is always scrubbed. It
+    runs code the *agent wrote*, which nobody chose and nobody reviewed.
     """
     started = time.monotonic()
     # 자체 프로세스 그룹에서 돌린다. subprocess 의 타임아웃은 직계 자식만
     # 죽이므로, 벤더 CLI 가 띄운 손자들은 "타임아웃" 을 보고한 뒤에도 계속
     # 돌며 작업공간에 쓴다 — 곧 지울 디렉터리에.
+    environment = (
+        {name: value for name, value in os.environ.items() if name in allowed_env}
+        if allowed_env is not None
+        else None
+    )
+    if home is not None:
+        environment = dict(environment if environment is not None else os.environ)
+        environment["HOME"] = str(home)
+        # HOME 하나만 바꾸면 격리가 반만 된다. XDG_CONFIG_HOME 이나 CODEX_HOME
+        # 같은 변수가 여전히 실제 홈을 가리키면 CLI 는 그쪽을 먼저 본다.
+        # 홈 위치를 다시 지목하는 변수는 전부 떨군다 — 남겨서 얻을 것이 없다.
+        # 접미사로 훑으면 JAVA_HOME, ANDROID_HOME 처럼 사용자 홈과 무관한
+        # 툴체인 경로까지 지워 빌드가 깨진다. 홈을 다시 지목하는 것으로 아는
+        # 이름만 명시한다.
+        for name in HOME_REDIRECTING_ENV:
+            environment.pop(name, None)
     try:
         with subprocess.Popen(
             command,
             cwd=workspace,
+            env=environment,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -270,13 +497,21 @@ def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
             try:
                 stdout, stderr = child.communicate(task, timeout=CHILD_TIMEOUT)
             except subprocess.TimeoutExpired:
-                _kill_group(child)
+                # kill 중에 자식이 스스로 끝나면 ProcessLookupError 가 난다.
+                # 정상적인 경합이므로 무시한다 — 그것 때문에 측정을 죽이면,
+                # 거의 끝난 실행이 결과 없이 사라진다.
+                with contextlib.suppress(ProcessLookupError):
+                    _kill_group(child)
                 try:
                     # 손자가 setsid 로 그룹을 빠져나갔거나 kill 이 막히면
                     # 파이프를 계속 붙들 수 있다. 무한정 기다리지 않는다.
-                    child.communicate(timeout=30)
+                    stdout, stderr = child.communicate(timeout=30)
                 except subprocess.TimeoutExpired:
                     child.kill()
+                    # 여기까지 오면 파이프에서 읽어낼 방법이 없다. 빈 문자열은
+                    # "출력이 없었다" 가 아니라 "읽지 못했다" 라는 뜻이고,
+                    # 그래서 이 실행의 토큰은 기록되지 않는다.
+                    stdout, stderr = "", ""
                 # 타임아웃 여부만 들고 나가 반환은 블록 밖에서 한다. 반환
                 # 지점을 한 곳에 모으기 위한 것이지 __exit__ 을 피하려는 것이
                 # 아니다 — with 안에서 return 해도 __exit__ 는 똑같이 실행된다.
@@ -285,30 +520,266 @@ def run_child(command: list[str], workspace: Path, task: str) -> ChildResult:
                 timed_out = False
             code = child.returncode
     except OSError as error:
+        # Popen 은 ENOEXEC(셔뱅이 잘못된 래퍼), E2BIG, ENOMEM 에서 밋밋한
+        # OSError 를 낸다. 하위형만 잡으면 그것들이 빠져나가 측정 실행 전체가
+        # 죽고 작업공간도 정리되지 않는다. 다만 kill 경로에서 나는
+        # ProcessLookupError 는 위에서 이미 삼켰으므로 여기 오지 않는다.
         raise RunFailure(f"could not start the route: {error}") from error
     if timed_out:
+        # 시간이 다 됐어도 토큰은 이미 쓰였다. 부분 출력에서 건질 수 있으면
+        # 건진다 — 비용에서 빼면 싼 경로가 실제보다 좋아 보인다.
+        #
+        # 다만 문서가 권하는 두 호출 형태에서는 대개 아무것도 못 건진다.
+        # codex --json 의 turn.completed 도, claude --output-format json 의
+        # 결과 객체도 마지막에만 나오므로 중간에 죽은 실행에는 없다. 그래도
+        # 시도하는 것은 다른 형태로 부르는 사용자를 위해서이고, 못 건진
+        # 타임아웃은 cost_usd 없이 기록되어 리포트의 c 표본에서 빠진다.
+        partial = extract_usage(stdout, stderr, command[0], wants_structured_output(command))
+        if partial is not None and prefer_prices and not rates:
+            # 정상 경로와 같은 fail-closed 규칙. 타임아웃에서만 벤더 숫자를
+            # 남기면, 그 arm 만 다른 기준이 되는 것을 여기서 허용하게 된다.
+            partial.pop("cost_usd", None)
+            partial.pop("cost_origin", None)
+        if partial is not None and rates and (prefer_prices or "cost_usd" not in partial):
+            # 정상 경로와 같은 요금 계산을 여기서도 한다. 빠뜨리면 비용을
+            # 보고하지 않는 벤더의 타임아웃이 언제나 무비용으로 잡혀, 바로 위
+            # 주석이 막으려던 편향이 그대로 남는다.
+            computed = price_from_tokens(partial, rates)
+            if computed is not None:
+                partial["cost_usd"] = computed
+                partial["source"] = f"{partial.get('source', '?')}+price-table"
+                partial["cost_origin"] = "price-table"
+            elif prefer_prices:
+                partial.pop("cost_usd", None)
+                partial.pop("cost_origin", None)
         return {
             "exit_code": None,
             "timed_out": True,
-            "seconds": CHILD_TIMEOUT,
-            "tokens": None,
+            # 상수를 쓰면 kill 과 drain 에 든 최대 30초가 빠진다. 타임아웃은
+            # 싼 arm 에 몰리므로 시간 기준 비교가 싼 쪽에 유리해진다.
+            "seconds": round(time.monotonic() - started, 1),
+            "tokens": partial.get("total_tokens") if partial else None,
+            "usage": dict(partial) if partial else None,
         }
+    structured = wants_structured_output(command)
+    usage = extract_usage(stdout, stderr, command[0], structured)
+    if usage is not None and prefer_prices and not rates:
+        # 공통 기준을 약속해 놓고 표가 없어 지키지 못했다. 벤더 숫자를 그대로
+        # 두면 사용자는 양쪽이 같은 기준이라고 믿는다. 비용을 버린다 —
+        # 리포트는 "비용 없음" 을 c 표본에서 빼므로, 틀린 c 보다 낫다.
+        usage.pop("cost_usd", None)
+        usage.pop("cost_origin", None)
+    if usage is not None and rates and (prefer_prices or "cost_usd" not in usage):
+        # 기본은 벤더가 준 숫자가 이긴다 — 우리 요금표는 낡을 수 있다. 다만
+        # 두 벤더를 비교하려면 그 규칙이 걸림돌이 된다. Claude 는 캐시 읽기까지
+        # 포함한 달러를 주고 Codex 는 아무것도 안 주므로, 공통 기준은 사용자의
+        # 요금표뿐이다. --prefer-prices 는 그 기준을 강제한다.
+        computed = price_from_tokens(usage, rates)
+        if computed is not None:
+            usage["cost_usd"] = computed
+            usage["source"] = f"{usage.get('source', '?')}+price-table"
+            usage["cost_origin"] = "price-table"
+        elif prefer_prices:
+            # 표로 값을 매기지 못했는데 벤더 숫자를 남기면, 이 arm 만 다른
+            # 기준이 된다. 그것이 정확히 --prefer-prices 가 막으려던 일이다.
+            usage.pop("cost_usd", None)
+            usage.pop("cost_origin", None)
     return {
         "exit_code": code,
         "timed_out": False,
         "seconds": round(time.monotonic() - started, 1),
-        "tokens": extract_tokens(stdout, stderr),
+        "tokens": usage.get("total_tokens") if usage else None,
+        "usage": dict(usage) if usage else None,
     }
 
 
-def extract_tokens(stdout: str, stderr: str) -> int | None:
-    """Best-effort token count from whichever vendor produced the output.
+def _claude_usage(stdout: str) -> Usage | None:
+    """Claude with `--output-format json` writes one JSON object to stdout.
 
-    Codex prints a cumulative `tokens used` on stderr. Claude, with
-    `--output-format json`, reports a usage object. These two numbers are **not
-    comparable to each other** — Claude's includes cache reads and Codex's is
-    opaque — so never divide one by the other. Within one vendor they are fine.
+    Verified against the CLI: `total_cost_usd` sits at the root and is real
+    dollars under API-key billing. There is a second copy under
+    `modelUsage.<model id>.costUSD`, but those keys are dynamic and contain
+    brackets (`claude-opus-5[1m]`), so the root field is the one to read.
     """
+    # stdout 전체를 한 번에 파싱하면 CLI 경고나 node deprecation 한 줄만 섞여도
+    # 실패한다. 그러면 비용이 통째로 사라지고 리포트는 "비용을 못 얻었다" 만
+    # 말한다. 줄 단위로도 찾아본다.
+    payload: object = None
+    seen = 0
+    # 한 줄짜리 JSON 이면 stdout 전체와 그 유일한 줄이 같은 텍스트다. 중복을
+    # 세면 정상 실행마다 "후보 2개" 경고가 떠서, 진짜 후보가 둘인 경우와
+    # 구별되지 않는다. 경고가 언제나 켜져 있으면 경고가 아니다.
+    checked: set[str] = set()
+    for candidate in (stdout, *stdout.splitlines()):
+        text = candidate.strip()
+        if not text.startswith("{") or text in checked:
+            continue
+        checked.add(text)
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(parsed, dict) and (
+            "total_cost_usd" in parsed or parsed.get("type") == "result"
+        ):
+            # 첫 번째에서 멈추지 않는다. 결과 객체는 마지막에 오고, 그 앞에
+            # 같은 모양의 객체가 있다면 스트리밍 중간값이거나 자식이 찍은
+            # 값이다. 먼저 나온 것을 쓰면 더 싼 숫자를 고르는 쪽으로 편향된다.
+            payload = parsed
+            seen += 1
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("usage")
+    usage_fields = raw if isinstance(raw, dict) else {}
+    breakdown: dict[str, int] = {}
+    for field in _CLAUDE_USAGE_FIELDS:
+        value = usage_fields.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            breakdown[field] = value
+    cost = payload.get("total_cost_usd")
+    # 후보가 둘 이상이면 어느 것이 진짜인지 우리가 정할 수 없다. 값은 쓰되
+    # 출처에 남겨, 리포트가 그 실행을 의심할 수 있게 한다.
+    usage: Usage = {
+        "breakdown": breakdown,
+        "source": "claude-json" if seen <= 1 else f"claude-json({seen}candidates)",
+    }
+    if breakdown:
+        usage["total_tokens"] = sum(breakdown.values())
+    # bool 은 int 의 하위형이라 isinstance 를 그냥 통과한다. true 가 1.0 달러로,
+    # 토큰 필드의 true 가 1 토큰으로 기록되는 것을 막는다. 음수도 거른다 —
+    # --prices 검증이 같은 기준을 쓰므로 두 경로가 어긋나면 안 된다.
+    if is_finite_nonnegative(cost) and isinstance(cost, (int, float)):
+        usage["cost_usd"] = float(cost)
+        usage["cost_origin"] = "vendor"
+    return usage if breakdown or "cost_usd" in usage else None
+
+
+def _codex_usage(stdout: str) -> Usage | None:
+    """Codex with `--json` writes JSONL; the totals ride on `turn.completed`.
+
+    Verified against the CLI: no USD figure appears anywhere in that output, and
+    **stderr is empty in `--json` mode**, so the older `tokens used` scrape
+    finds nothing once the flag is on. Scan for the event type rather than
+    assuming it is the last line.
+    """
+    fields = (
+        "input_tokens",
+        "cached_input_tokens",
+        "cache_write_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+    )
+    # 실측: 여러 단계를 요구하는 과제(파일 생성 -> 읽기 -> 파생 파일 생성)로
+    # 돌려도 `codex exec` 는 turn.completed 를 **한 번만** 낸다. 한 호출이 곧
+    # 한 턴이고, 내부의 도구 호출 횟수와는 무관하다. 이 스크립트는 항상 태스크
+    # 하나를 stdin 으로 넘기므로 실제로는 언제나 단일 이벤트다.
+    #
+    # 그래도 합산해 둔다. 대화형 세션처럼 여러 턴이 나오는 형태로 벤더가
+    # 바뀌면 첫 이벤트만 읽는 쪽이 조용히 비용을 낮게 잡기 때문이다. 이벤트가
+    # 둘 이상이면 source 에 남겨 사람이 증분/누적을 확인할 수 있게 한다.
+    totals: dict[str, int] = {}
+    seen = False
+    turns = 0
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+            continue
+        raw = event.get("usage")
+        if not isinstance(raw, dict):
+            continue
+        parsed_any = False
+        for field in fields:
+            value = raw.get(field)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                totals[field] = totals.get(field, 0) + value
+                seen = True
+                parsed_any = True
+        # 알려진 필드를 하나도 못 읽은 이벤트는 세지 않는다. 벤더가 필드 이름을
+        # 바꾸면 턴 수만 늘어 다중 턴 경고가 잘못 뜬다.
+        if parsed_any:
+            turns += 1
+    if not seen:
+        return None
+    # 이벤트가 여러 개면 델타인지 누적인지가 결과를 바꾼다. 프로브는 단일 턴만
+    # 봐서 확인하지 못했고, 같은 벤더의 stderr 채널은 누적이었다. 개수를 남겨
+    # 1 을 넘으면 사람이 확인할 수 있게 한다. c 는 비율이므로 양쪽 arm 이 같은
+    # 방식으로 틀리면 대체로 상쇄된다.
+
+    # cached_input_tokens 와 reasoning_output_tokens 가 각각 input/output 의
+    # 내역인지 별도 항목인지는 프로브로 확인되지 않았다. 이중 계산을 피해
+    # 총계는 input + output 만으로 낸다.
+    total = totals.get("input_tokens", 0) + totals.get("output_tokens", 0)
+    # 턴 수는 토큰이 아니므로 breakdown 밖에 둔다. 안에 두면 누가 breakdown 을
+    # 합산했을 때 턴 수가 토큰에 섞인다.
+    return {
+        "breakdown": totals,
+        "total_tokens": total,
+        "source": f"codex-json({turns}turn)" if turns > 1 else "codex-json",
+    }
+
+
+def wants_structured_output(command: list[str]) -> bool:
+    """이 호출이 구조화된 사용량 출력을 요청했는가.
+
+    요청하지 않았다면 stdout 은 모델이 쓴 산문이다. 거기 있는 JSON 모양의
+    줄은 벤더가 아니라 **모델** 이 찍은 것이고, 그것을 청구액으로 읽으면
+    자식이 c 를 마음대로 정한다. 플래그가 없으면 구조화 파서를 아예 돌리지
+    않고 stderr 누적 토큰만 긁는다.
+    """
+    # argv 를 이어 붙여 부분 문자열로 찾으면, 다른 플래그의 **값** 안에 있는
+    # 같은 글자가 걸린다. --append-system-prompt "... --output-format json ..."
+    # 하나로 구조화 파서가 켜지고, 그러면 자식의 산문에서 비용을 읽는다 —
+    # 이 함수가 막으려던 바로 그 일이다. 토큰 위치로 판정한다.
+    for index, token in enumerate(command):
+        if token in ("--json", "--output-format=json"):
+            return True
+        if token == "--output-format" and command[index + 1 : index + 2] == ["json"]:
+            return True
+    return False
+
+
+def extract_usage(
+    stdout: str, stderr: str, executable: str | None = None, structured: bool = True
+) -> Usage | None:
+    """Best-effort usage from whichever vendor produced the output.
+
+    벤더는 실행 파일 이름으로 확실히 알 수 있다. stdout 모양으로 추측하면,
+    codex 실행의 출력에 claude 모양 한 줄이 섞이는 것만으로 그 줄이 채택된다.
+    아는 쪽만 쓰고, 모르면 아예 쓰지 않는다 — 모르는 실행 파일의 stdout 은
+    자식이 무엇이든 찍을 수 있는 곳이다.
+    """
+    readers: tuple[Callable[[str], Usage | None], ...] = ()
+    if structured and executable:
+        name = Path(executable).name.lower()
+        is_codex = "codex" in name
+        is_claude = "claude" in name
+        # 순서만 바꾸면 여전히 다른 벤더의 파서로 떨어진다. codex 실행의
+        # stdout 에 claude 모양 한 줄이 섞이는 것만으로 그 줄의 total_cost_usd
+        # 가 채택된다. 자식이 통제하는 값이다. 벤더를 알면 그 파서만 쓴다.
+        if is_codex and not is_claude:
+            readers = (_codex_usage,)
+        elif is_claude and not is_codex:
+            readers = (_claude_usage,)
+    for reader in readers:
+        usage = reader(stdout)
+        if usage:
+            return usage
+    # 구형 경로: --json 없이 돌린 codex 는 stderr 에 누적 토큰만 찍는다.
+    total = extract_tokens(stdout, stderr)
+    # `if total` 이면 진짜 0 토큰이 결측으로 바뀐다. 0 은 관측된 값이다.
+    if total is None:
+        return None
+    return {"total_tokens": total, "breakdown": {}, "source": "stderr-scrape"}
+
+
+def extract_tokens(stdout: str, stderr: str) -> int | None:
+    """The old cumulative-token scrape, kept for runs made without `--json`."""
     matches = _CODEX_TOKENS.findall(stderr) or _CODEX_TOKENS.findall(stdout)
     if matches:
         return int(matches[-1].replace(",", ""))
@@ -597,6 +1068,9 @@ def discard(registry: Path, workspace: Path, out_dir: Path) -> None:
     try:
         shutil.rmtree(target)
     except OSError as error:
+        # 권한을 고쳐서 재시도하지 않는다. 경로 기반 chmod 는 심링크를 따라가고
+        # 검사와 사용 사이에 갈아끼울 틈이 있어, 자식이 트리 밖의 권한을 바꾸게
+        # 만들 수 있다. 지우지 못한 것은 등록에 남겨 사람이 보게 하는 편이 낫다.
         print(f"작업공간을 지우지 못했다, 등록에 남긴다: {target} ({error})", file=sys.stderr)
         return
     register(registry, workspace, add=False)
@@ -673,6 +1147,10 @@ def attempt(
     out_dir: Path,
     registry: Path,
     scaffolding: frozenset[str],
+    rates: dict[str, float] | None,
+    allowed_env: frozenset[str] | None,
+    child_home: Path | None,
+    prefer_prices: bool,
 ) -> Attempt:
     """Clone, run one route, verify. The workspace survives only a pass."""
     # 작업공간은 산출물 디렉터리 바로 아래가 아니라 그 안의 .work 에 만든다.
@@ -700,7 +1178,9 @@ def attempt(
     build_scaffolding: list[str] = []
     try:
         clone_at(repo, commit, workspace)
-        record["child"] = run_child(command, workspace, task)
+        record["child"] = run_child(
+            command, workspace, task, rates, allowed_env, child_home, prefer_prices
+        )
         # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
         # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
         # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
@@ -806,6 +1286,68 @@ def main() -> int:
     parser.add_argument("--verify", type=Path, help="executable; exit code is the verdict")
     parser.add_argument("--label", default="", help="free-text tag recorded with the run")
     parser.add_argument(
+        "--child-env",
+        action="append",
+        default=[],
+        help=(
+            "extra environment variable the vendor child may see (repeatable). "
+            "By default it gets PATH/HOME/locale/proxy plus its own vendor's namespace "
+            "(OPENAI_*/CODEX_* for codex, ANTHROPIC_*/CLAUDE_* for claude, both when the "
+            "executable name matches neither) — everything else is dropped."
+        ),
+    )
+    for arm, flag in (("cheap", "--cheap-env"), ("expensive", "--expensive-env")):
+        parser.add_argument(
+            flag,
+            action="append",
+            default=[],
+            metavar="NAME",
+            help=(
+                f"extra environment variable name for the {arm} route only. Use this "
+                "instead of --child-env when only one arm needs a credential family — "
+                "--child-env hands the name to both arms, which defeats the per-vendor "
+                "narrowing."
+            ),
+        )
+    parser.add_argument(
+        "--child-env-all",
+        action="store_true",
+        help="pass the entire environment to the vendor child, as older versions did",
+    )
+    # HOME 은 arm 마다 따로 받는다. 하나를 두 arm 이 공유하면 싼 경로가 거기에
+    # .bashrc 나 CLI 훅처럼 **실행되는** 파일을 남길 수 있고, 승급 경로가 그것을
+    # 물려받는다. 싼 경로는 실패할 것을 전제로 돌리는 쪽이므로, 그 실패가 채점
+    # 기준이 되는 승급 경로에 스며드는 통로를 기본값으로 열어 둘 수 없다.
+    # 같은 값을 두 번 적어 공유할 수는 있다 — 그때는 명령줄에 그렇게 보인다.
+    for arm, flag in (("cheap", "--cheap-home"), ("expensive", "--expensive-home")):
+        parser.add_argument(
+            flag,
+            type=Path,
+            help=(
+                f"HOME for the {arm} route's vendor child. --child-env narrows variables "
+                "but not the filesystem, and the CLI reads its credentials from HOME, so "
+                "dotfiles stay reachable unless you point it elsewhere and stage the "
+                "vendor's auth there."
+            ),
+        )
+    parser.add_argument(
+        "--prefer-prices",
+        action="store_true",
+        help=(
+            "price every arm from --prices even when the vendor reports its own cost. "
+            "Needed to compare two vendors: Claude reports dollars that include cache "
+            "reads while Codex reports none, so the only common basis is your own table."
+        ),
+    )
+    parser.add_argument(
+        "--prices",
+        type=Path,
+        help=(
+            "JSON file with USD-per-million-token rates, for vendors that report no cost "
+            '(Codex). Shape: {"cheap": {"input_tokens": 0.25, ...}, "expensive": {...}}'
+        ),
+    )
+    parser.add_argument(
         "--exclude-dir",
         action="append",
         default=[],
@@ -875,6 +1417,170 @@ def main() -> int:
     print(f"기준 커밋 {commit[:12]}  저장소 {repo}")
     print(f"싼 경로: {cheap_argv[0]} (인자 {len(cheap_argv) - 1}개)")
 
+    rates: dict[str, dict[str, float]] = {}
+    if arguments.prices:
+        try:
+            loaded = json.loads(arguments.prices.expanduser().read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            parser.error(f"--prices is not readable JSON: {error}")
+        if not isinstance(loaded, dict):
+            parser.error("--prices must be a JSON object keyed by 'cheap' and 'expensive'")
+        unknown = set(loaded) - {"cheap", "expensive"}
+        if unknown:
+            # 오타난 키를 조용히 무시하면 그 arm 의 요금표가 비어 비용이 전혀
+            # 계산되지 않고, 사용자는 리포트에서 "비용을 못 얻었다" 만 본다.
+            parser.error(f"--prices has unknown keys: {', '.join(sorted(unknown))}")
+        for arm in ("cheap", "expensive"):
+            table = loaded.get(arm)
+            if table is None:
+                continue
+            if not isinstance(table, dict):
+                parser.error(f"--prices['{arm}'] must be an object of token field rates")
+            if not table:
+                # 빈 표는 all() 이 True 라 통과한 뒤 그 arm 을 조용히 무요금으로
+                # 만든다. 키를 적어 두고 값을 비운 것은 실수일 가능성이 높다.
+                parser.error(f"--prices['{arm}'] is empty; remove the key or fill it in")
+            # bool 은 int 의 하위형이고, json.loads 는 기본으로 NaN/Infinity 를
+            # 허용한다. 둘 다 그럴듯한 비용을 만들어 낸다. 임의 정밀도 정수는
+            # 검사 자체를 OverflowError 로 죽이므로 헬퍼 안에서 잡는다.
+            if not all(is_finite_nonnegative(v) for v in table.values()):
+                parser.error(
+                    f"--prices['{arm}'] must map token field names to finite, non-negative numbers"
+                )
+            rates[arm] = {k: float(v) for k, v in table.items()}
+
+    if arguments.prefer_prices and not rates:
+        parser.error("--prefer-prices needs --prices; there is no table to price from")
+
+    # 기본이 허용 목록이다. 모르는 비밀은 차단 목록으로 막을 수 없다.
+    # arm 마다 실행 파일이 다르므로 허용 목록도 arm 마다 만든다.
+    def env_for(argv: list[str], extra: list[str], arm: str) -> frozenset[str] | None:
+        if arguments.child_env_all:
+            return None
+        name = Path(argv[0]).name.lower()
+        if not any(vendor in name for vendor in VENDOR_ENV_PREFIXES):
+            print(
+                f"  주의: {arm} 의 '{Path(argv[0]).name}' 에서 벤더를 알아보지 못해 양쪽"
+                " 벤더의 키를 모두 전달한다. --child-env 로 좁힐 수 있다."
+            )
+        return default_child_env(argv[0]) | frozenset(extra)
+
+    # 벤더별로 좁히면 Bedrock/Vertex 로 붙는 claude 가 인증에 필요한
+    # AWS_*/GOOGLE_* 을 잃는다. 그러면 자식은 "라우트 실패" 로 기록되고 p 가
+    # 인증 실패로 오염된다. 실패한 뒤 로그를 뒤지게 두지 않고 미리 알린다.
+    BACKEND_SWITCHES = {
+        "CLAUDE_CODE_USE_BEDROCK": ("AWS_", "AWS_PROFILE"),
+        "CLAUDE_CODE_USE_VERTEX": ("GOOGLE_", "CLOUDSDK_"),
+    }
+    # --child-env 는 두 arm 에 함께 들어간다. Bedrock 으로 붙는 승급 arm 을
+    # 위해 AWS_* 를 넣으면 싼 Codex arm 도 그것을 받는다 — 벤더별로 좁힌
+    # 이유가 바로 그것을 막으려는 것이었다. arm 별 플래그를 따로 둔다.
+    cheap_env = env_for(cheap_argv, arguments.child_env + arguments.cheap_env, "싼 경로")
+    expensive_env = env_for(
+        expensive_argv, arguments.child_env + arguments.expensive_env, "승급 경로"
+    )
+    for switch, families in BACKEND_SWITCHES.items():
+        if not os.environ.get(switch):
+            continue
+        for arm, names, argv, flag in (
+            ("싼 경로", cheap_env, cheap_argv, "--cheap-env"),
+            ("승급 경로", expensive_env, expensive_argv, "--expensive-env"),
+        ):
+            # --child-env-all(None) 이면 아무것도 안 떨궜으므로 경고할 것이 없다.
+            # 이미 넣어 준 이름도 여기 반영돼 있어야 한다.
+            if names is None or any(n.startswith(families) for n in names):
+                continue
+            # CLAUDE_CODE_USE_* 는 claude 에만 해당하므로 codex arm 에 대고
+            # AWS 자격증명을 넣으라고 하면 필요도 없는 곳에 비밀을 넣게 된다.
+            # 다만 "claude 가 아닌 것" 과 "무엇인지 모르는 것" 은 다르다.
+            # 래퍼 스크립트나 이름을 바꾼 런처는 벤더 미상으로 양쪽 접두사를
+            # 다 받으므로 CLAUDE_CODE_USE_* 도 받는다 — 그쪽이야말로 인증
+            # 실패가 p 를 오염시킬 자리다. 확실히 다른 벤더일 때만 건너뛴다.
+            name = Path(argv[0]).name.lower()
+            other_vendors = {v for v in VENDOR_ENV_PREFIXES if v != "claude"}
+            if any(v in name for v in other_vendors) and "claude" not in name:
+                continue
+            print(
+                f"  주의: {switch} 가 켜져 있는데 {arm} 의 허용 목록에"
+                f" {'/'.join(families)} 자격증명이 없다. 자식이 인증에 실패하면"
+                f" 라우트 실패로 기록되어 p 가 오염된다. {flag} 로 넣어라 —"
+                " --child-env 는 양쪽 arm 에 다 들어가 다른 벤더에게도 준다."
+            )
+    # 진단은 두 arm 을 함께 본다. 하나만 찍으면 다른 쪽이 다른 벤더로 판별돼
+    # 다른 목록을 받는데도 사용자는 알 수 없다.
+    allowed_env = cheap_env if cheap_env is None else cheap_env | (expensive_env or frozenset())
+
+    def home_for(value: Path | None, flag: str) -> Path | None:
+        if value is None:
+            return None
+        resolved = value.expanduser().resolve()
+        if not resolved.is_dir():
+            parser.error(f"{flag} is not a directory: {resolved}")
+        return resolved
+
+    cheap_home = home_for(arguments.cheap_home, "--cheap-home")
+    expensive_home = home_for(arguments.expensive_home, "--expensive-home")
+    # 프록시 URL 은 http://user:pass@host 형태가 흔하고 그 userinfo 는 그대로
+    # 자격증명이다. 자식에게 넘기지 않으면 네트워크가 끊기므로 넘기되, 그것이
+    # 비밀을 넘기는 일이라는 사실은 알린다.
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        value = os.environ.get(name, "")
+        if "@" in value and (allowed_env is None or name in allowed_env):
+            print(f"  주의: {name} 에 자격증명이 들어 있고 자식에게 전달된다")
+            break
+
+    if allowed_env is None:
+        print("자식 환경: 전체 전달 (--child-env-all)")
+    if allowed_env is not None:
+        # arm 마다 벤더가 다르면 허용 목록도 다르다. 합집합으로 한 줄만 찍으면
+        # 그 숫자는 어느 arm 에도 해당하지 않는다.
+        present = set(os.environ)
+        if cheap_env == expensive_env:
+            kept = len(allowed_env & present)
+            print(f"자식 환경: {kept}개 전달, {len(present - allowed_env)}개 제외")
+        else:
+            for arm, names in (("싼 경로", cheap_env), ("승급 경로", expensive_env)):
+                arm_names = names or frozenset()
+                print(
+                    f"자식 환경({arm}): {len(arm_names & present)}개 전달,"
+                    f" {len(present - arm_names)}개 제외"
+                )
+
+    # HOME 진단은 --child-env-all 여부와 무관하다. 오히려 전부 전달할 때가
+    # 노출이 가장 큰데, 안쪽에 두면 그때만 조용해진다.
+    if cheap_home is None or expensive_home is None:
+        print(
+            "  HOME 은 그대로다. 변수만 좁혔을 뿐 ~/.aws/credentials 같은 파일은"
+            " 여전히 읽힌다. --cheap-home/--expensive-home 이나 컨테이너가 필요하다."
+        )
+    if cheap_home is not None and expensive_home is not None:
+        # 같은 경로만 보면 부족하다. 한쪽이 다른 쪽 **안에** 있으면 싼 자식이
+        # 승급 arm 의 HOME 에 직접 쓸 수 있어 더 나쁘다.
+        nested = (
+            cheap_home == expensive_home
+            or cheap_home.is_relative_to(expensive_home)
+            or expensive_home.is_relative_to(cheap_home)
+        )
+        if nested:
+            print(
+                "  주의: 두 arm 의 HOME 이 같거나 한쪽이 다른 쪽 안에 있다. 자식은"
+                " 거기에 쓸 수 있고, 쓰이는 것은 설정만이 아니다 — .bashrc 나 CLI"
+                " 훅처럼 **실행되는** 파일을 싼 경로가 남기면 승급 경로가 그것을"
+                " 물려받는다. 싼 경로의 실패를 채점하는 쪽이 그 실패에 오염된다."
+            )
+    # 자식이 쓴 것은 다음 실행에도 남는다. 실행 사이에 지우지 않으면 20개
+    # 과제가 서로 오염된다. 두 디렉터리를 모두 알린다 — 하나만 찍으면 나머지
+    # 하나는 안전하다는 뜻으로 읽힌다.
+    for home in dict.fromkeys(h for h in (cheap_home, expensive_home) if h is not None):
+        print(f"  HOME {home} 에 자식이 남긴 것은 다음 실행까지 간다")
+
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)
     cheap = attempt(
         "cheap",
@@ -886,6 +1592,10 @@ def main() -> int:
         arguments.out_dir,
         registry,
         scaffolding=frozenset(scaffolding),
+        rates=rates.get("cheap"),
+        allowed_env=cheap_env,
+        child_home=cheap_home,
+        prefer_prices=arguments.prefer_prices,
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
@@ -923,6 +1633,10 @@ def main() -> int:
             arguments.out_dir,
             registry,
             scaffolding=frozenset(scaffolding),
+            rates=rates.get("expensive"),
+            allowed_env=expensive_env,
+            child_home=expensive_home,
+            prefer_prices=arguments.prefer_prices,
         )
         record["expensive"] = expensive
         reason = (
