@@ -228,6 +228,12 @@ If a CLI suddenly cannot authenticate, that count is the first place to look:
 add the missing name with `--child-env NAME`, or fall back to `--child-env-all`
 to pass everything as older versions did.
 
+**`--child-env` hands the name to both arms.** When only one of them needs a
+credential family — an expensive Claude route reaching Bedrock needs `AWS_*`, and
+a cheap Codex route has no business seeing it — use `--cheap-env` or
+`--expensive-env` instead, or the per-vendor narrowing you just relied on is
+undone by hand.
+
 That narrows variables, not the filesystem. The CLI finds its own credentials
 under `HOME`, so `~/.aws/credentials` stays readable however short the variable
 list is.
@@ -304,13 +310,24 @@ out loud rather than leaving them to the reader:
   difficulty cancels in it — but it is not the quantity the formula asks for, and
   early versions of this report used it as if it were.
 - **The denominator comes from very few tasks.** Twenty tasks at a 20% failure
-  rate is four escalations. The report recomputes `c` with each escalation left
-  out in turn and reports a proper jackknife interval — standard error, not the
-  spread of the leave-one-out values, which shrinks as the sample grows and would
-  make you *more* confident with less evidence. Below about twenty pairs it uses
-  a t quantile rather than 1.96. The savings interval then varies `c` and `p`
-  together. Expect that interval to be wide; on four escalations it usually
-  crosses break-even, and "not yet" is the correct answer there.
+  rate is four escalations. The report recomputes `c` with each **task** left out
+  in turn — whole tasks, because an escalated task contributes to both sides and
+  deleting only its expensive cost would throw away the numerator's variability —
+  and reports a proper jackknife interval. That is a standard error, not the
+  spread of the leave-one-out values; the spread shrinks as the sample grows and
+  would make you *more* confident with less evidence. The t multiplier is chosen
+  from the **effective** sample, meaning the count of priced escalations rather
+  than the task count, so twenty tasks with three escalations still gets the
+  three-observation multiplier. The savings interval then varies `c` and `p`
+  together. Expect it to be wide; on four escalations it usually crosses
+  break-even, and "not yet" is the correct answer there.
+
+`c` is only measured when **every cost in the log comes from one source.** A
+vendor-reported bill and a price-table conversion count different things, so an
+average mixing them is an average of nothing. If the log mixes them — one arm on
+Claude and the other on Codex, or a `--prices` table that covers only one arm —
+the report says so, names the sources it saw, and falls back to the assumed
+value rather than dividing them.
 
 The decision:
 

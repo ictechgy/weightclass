@@ -1247,6 +1247,19 @@ def main() -> int:
             "executable name matches neither) — everything else is dropped."
         ),
     )
+    for arm, flag in (("cheap", "--cheap-env"), ("expensive", "--expensive-env")):
+        parser.add_argument(
+            flag,
+            action="append",
+            default=[],
+            metavar="NAME",
+            help=(
+                f"extra environment variable name for the {arm} route only. Use this "
+                "instead of --child-env when only one arm needs a credential family — "
+                "--child-env hands the name to both arms, which defeats the per-vendor "
+                "narrowing."
+            ),
+        )
     parser.add_argument(
         "--child-env-all",
         action="store_true",
@@ -1380,16 +1393,16 @@ def main() -> int:
 
     # 기본이 허용 목록이다. 모르는 비밀은 차단 목록으로 막을 수 없다.
     # arm 마다 실행 파일이 다르므로 허용 목록도 arm 마다 만든다.
-    def env_for(argv: list[str]) -> frozenset[str] | None:
+    def env_for(argv: list[str], extra: list[str], arm: str) -> frozenset[str] | None:
         if arguments.child_env_all:
             return None
         name = Path(argv[0]).name.lower()
         if not any(vendor in name for vendor in VENDOR_ENV_PREFIXES):
             print(
-                f"  주의: '{Path(argv[0]).name}' 에서 벤더를 알아보지 못해 양쪽 벤더의"
-                " 키를 모두 전달한다. --child-env 로 좁힐 수 있다."
+                f"  주의: {arm} 의 '{Path(argv[0]).name}' 에서 벤더를 알아보지 못해 양쪽"
+                " 벤더의 키를 모두 전달한다. --child-env 로 좁힐 수 있다."
             )
-        return default_child_env(argv[0]) | frozenset(arguments.child_env)
+        return default_child_env(argv[0]) | frozenset(extra)
 
     # 벤더별로 좁히면 Bedrock/Vertex 로 붙는 claude 가 인증에 필요한
     # AWS_*/GOOGLE_* 을 잃는다. 그러면 자식은 "라우트 실패" 로 기록되고 p 가
@@ -1398,8 +1411,13 @@ def main() -> int:
         "CLAUDE_CODE_USE_BEDROCK": ("AWS_", "AWS_PROFILE"),
         "CLAUDE_CODE_USE_VERTEX": ("GOOGLE_", "CLOUDSDK_"),
     }
-    cheap_env = env_for(cheap_argv)
-    expensive_env = env_for(expensive_argv)
+    # --child-env 는 두 arm 에 함께 들어간다. Bedrock 으로 붙는 승급 arm 을
+    # 위해 AWS_* 를 넣으면 싼 Codex arm 도 그것을 받는다 — 벤더별로 좁힌
+    # 이유가 바로 그것을 막으려는 것이었다. arm 별 플래그를 따로 둔다.
+    cheap_env = env_for(cheap_argv, arguments.child_env + arguments.cheap_env, "싼 경로")
+    expensive_env = env_for(
+        expensive_argv, arguments.child_env + arguments.expensive_env, "승급 경로"
+    )
     for switch, families in BACKEND_SWITCHES.items():
         if not os.environ.get(switch):
             continue

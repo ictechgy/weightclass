@@ -286,40 +286,38 @@ def main() -> int:
         expensive: float | None
         escalated: bool
 
+    # c 는 두 평균의 비다. **표본 전체가 한 출처여야 한다.** 쌍 단위로만
+    # 확인하면 부족하다 — 어떤 과제는 벤더 청구액, 어떤 과제는 요금표
+    # 환산값인 채로 분자 평균에 함께 들어가면, 그 평균은 무엇의 평균도
+    # 아니다. 앞선 라운드는 쌍만 검사하고 분자는 그대로 뒀다.
+    origins: set[str | None] = set()
+    for r in usable:
+        if cost_of(r.get("cheap")):
+            origins.add(cost_origin(r.get("cheap")))
+        if cost_of(r.get("expensive")):
+            origins.add(cost_origin(r.get("expensive")))
+    single_origin = len(origins) == 1 and None not in origins
+
     tasks: list[Task] = []
     escalated_total = 0
-    timeout_dropped = 0
-    mixed_provenance = 0
     unusable_cheap = 0
+    unpriced_escalations = 0
     for r in usable:
         # 승급 여부는 p 를 세는 쪽과 같은 술어로 판정한다. 러너가 빈 dict 나
         # 오류 스텁을 남기면 "승급 N건 중 M건" 문구가 실제와 어긋난다.
         escalated = isinstance(r.get("expensive"), dict)
         if escalated:
             escalated_total += 1
-        cheap_cost = cost_of(r.get("cheap"))
+        cheap_cost = cost_of(r.get("cheap")) if single_origin else None
         if not cheap_cost:
             # 0 도 여기서 뺀다. 싼 쪽 0 은 c 를 끌어내려 "거의 공짜" 라는
             # 결론을 만드는데, 실제로는 요금표가 비었거나 사용량을 못 읽은
-            # 경우가 대부분이다.
+            # 경우가 대부분이다. cost_of 는 타임아웃에도 None 을 준다.
             unusable_cheap += 1
             continue
         expensive_cost = cost_of(r.get("expensive")) if escalated else None
-        if escalated and expensive_cost:
-            if timed_out(r.get("cheap")) or timed_out(r.get("expensive")):
-                timeout_dropped += 1
-                expensive_cost = None
-            else:
-                # 벤더가 알려준 청구액과 우리 요금표로 환산한 값은 정의가
-                # 다르다. Claude 의 total_cost_usd 는 캐시 읽기까지 포함하고,
-                # 요금표 환산은 표에 적은 필드만 센다. 그 둘을 나눈 값을 c 라고
-                # 부르면 안 된다.
-                cheap_origin = cost_origin(r.get("cheap"))
-                expensive_origin = cost_origin(r.get("expensive"))
-                if cheap_origin != expensive_origin or cheap_origin is None:
-                    mixed_provenance += 1
-                    expensive_cost = None
-        elif escalated:
+        if escalated and not expensive_cost:
+            unpriced_escalations += 1
             expensive_cost = None
         tasks.append(Task(cheap_cost, expensive_cost, escalated))
 
@@ -440,11 +438,15 @@ def main() -> int:
         mean = statistics.fmean(leave_one_out)
         variance = (n - 1) / n * sum((v - mean) ** 2 for v in leave_one_out)
         if variance <= 0:
-            # 모든 쌍의 비율이 같으면 흔들림이 0 으로 나온다. 그것은 c 가
-            # 정확하다는 뜻이 아니라 표본이 그 질문에 답하지 못한다는 뜻이다.
-            # 구간을 주지 않는다.
+            # 한 건씩 뺀 추정치가 전부 같으면 흔들림이 0 으로 나온다. 그것은
+            # c 가 정확하다는 뜻이 아니라 이 표본이 그 질문에 답하지 못한다는
+            # 뜻이다. 구간을 주지 않는다.
             return None
-        margin = t_quantile(n - 1) * math.sqrt(variance)
+        # 자유도는 과제 수가 아니라 **실효 표본** 으로 정한다. 과제 20건에
+        # 값 매겨진 승급이 3건이면 분모는 3건짜리다. 과제 수로 t 를 고르면
+        # 2.093 이 나오지만 실제로 흔들리는 표본은 3 이라 3.182 여야 한다.
+        effective = min(n, sum(1 for x in sample if x.expensive))
+        margin = t_quantile(max(1, effective - 1)) * math.sqrt(variance)
         # 비용비는 음수가 될 수 없다. 위쪽은 자르지 않는다 — 싼 쪽이 더 비쌀
         # 수 있고, 그 사실이 결론이어야 한다.
         return (max(0.0, estimate - margin), estimate + margin)
@@ -471,48 +473,29 @@ def main() -> int:
             "  분모는 대입값이다. 비싼 경로는 승급된 과제에서만 돌았으므로, 승급하지"
             " 않은 과제에서 그것이 얼마였을지는 잰 적이 없다."
         )
-        if unusable_cheap:
-            # 분자를 "전수" 라고 부르면 안 되는 이유. 빠진 과제는 무작위가
-            # 아니다 — 타임아웃은 예산을 끝까지 태운 가장 비싼 싼 실행이고,
-            # 그런 실행일수록 승급으로 이어진다.
-            print(
-                f"  과제 {unusable_cheap}건은 싼 비용을 읽지 못해(타임아웃이거나"
-                " 사용량이 없음) 분자에서 빠졌다. 그런 실행은 대개 가장 비싼"
-                " 싼 실행이므로, 빠지면 c 가 낮아지고 절감이 부풀려진다."
-            )
+
         paired_ratio = sum(x.cheap for x in priced_pairs) / expensive_total
         print(
             f"  참고: 승급 과제만 짝지은 비율은 {paired_ratio:.3f} 다. 이 값은 과제"
             " 난이도가 상쇄된다는 장점이 있지만 c + p 식이 요구하는 값은 아니다."
         )
-        missing = escalated_total - len(paired) - timeout_dropped - mixed_provenance
-        if timeout_dropped:
+        if unpriced_escalations:
             print(
-                f"  승급 {timeout_dropped}건은 어느 한쪽이 타임아웃이라 빠졌다. 그 실행은"
-                " 예산을 끝까지 태운 가장 비싼 실행이므로, 빼면 c 가 낮아지는 쪽으로"
-                " 치우친다 — 즉 절감이 과대 보고된다."
-            )
-        if missing > 0:
-            print(f"  승급 {missing}건은 비용이 없거나 0 이라 빠졌다.")
-        if mixed_provenance:
-            print(
-                f"  승급 {mixed_provenance}건은 양쪽 비용의 출처가 다르거나 알 수 없어"
-                " 분모에서 뺐다. 벤더가 알려준 청구액과 요금표 환산값은 세는 항목이"
-                " 다르므로(전자는 캐시 읽기를 포함, 후자는 표에 적은 필드만) 그 비율은"
-                " c 가 아니다. cost_origin 이 없는 옛 로그도 여기 들어간다."
+                f"  승급 {unpriced_escalations}건은 비싼 비용을 얻지 못해(타임아웃이거나"
+                " 비용이 없거나 0) 분모에서 빠졌다. 타임아웃난 실행은 예산을 끝까지"
+                " 태운 가장 비싼 실행이므로, 그것이 빠지면 분모가 작아져 c 가 커지는"
+                " 쪽으로 치우친다."
             )
         # 요금표가 값을 매기기로 한 필드 중 일부가 그 실행에 없었다면, 없는
         # 캐시 필드일 수도 있지만 CLI 가 필드 이름을 바꾼 것일 수도 있다.
         # 후자면 절반짜리 비용이 그대로 c 에 들어간다.
-        # 이 블록은 c 이야기다. c 에 들어가지 않는 비승급 실행까지 세면
-        # "필드 이름을 확인하라" 는 지시가 엉뚱한 곳을 가리킨다.
-        # arm 별로 세면 양쪽이 다 부분 계산된 승급 하나가 2 로 잡혀, 출력된
-        # 건수가 승급 건수를 넘는다. 과제 단위로 센다.
+        # 새 추정량에서는 비승급 실행의 싼 비용도 분자로 들어간다. 승급만
+        # 세면 분자의 절반짜리 비용을 놓친다. arm 별이 아니라 과제 단위로
+        # 세는 것은 양쪽이 다 부분 계산된 과제가 2 로 잡히지 않게 하기 위해서다.
         partial_priced = sum(
             1
             for r in usable
-            if isinstance(r.get("expensive"), dict)
-            and any(has_missing_prices(r.get(arm)) for arm in ("cheap", "expensive"))
+            if any(has_missing_prices(r.get(arm)) for arm in ("cheap", "expensive"))
         )
         if partial_priced:
             print(
@@ -582,11 +565,34 @@ def main() -> int:
             f"\n비용비 c = {c:.2f} — **가정값**이다. 양쪽 비용을 얻은 승급 과제가"
             f" {len(paired)}개뿐이라 실측값을 쓰기에 부족하다(최소 {MINIMUM_PAIRED}개)."
         )
+    elif not single_origin:
+        print(
+            f"\n비용비 c = {c:.2f} — **가정값**이다. 이 로그의 비용이 한 출처가 아니다"
+            f" (관측된 출처 {sorted(str(o) for o in origins)})."
+        )
+        print(
+            "  벤더가 알려준 청구액과 요금표 환산값은 세는 항목이 다르다 — 전자는"
+            " 캐시 읽기를 포함하고 후자는 표에 적은 필드만 센다. 섞인 값들의 평균은"
+            " 무엇의 평균도 아니므로 c 를 재지 않는다. 한 설정당 하나의 --out-dir 을"
+            " 쓰고, Codex 쪽은 --prices 를 빠짐없이 주어야 한다."
+        )
     else:
         print(f"\n비용비 c = {c:.2f} — **가정값**이다. 승급 과제에서 양쪽 비용을 모두 얻지 못했다.")
         print(
             "  Claude 는 --output-format json 이면 total_cost_usd 를 준다."
             " Codex 는 USD 를 주지 않으므로 --prices 로 요금표를 넘겨야 한다."
+        )
+
+    # 출처가 섞여 통째로 뺀 경우는 위에서 이미 그렇게 말했다. 여기서 다시
+    # "타임아웃이거나 사용량이 없음" 이라고 하면 원인을 잘못 짚게 된다.
+    if unusable_cheap and single_origin:
+        # 분자를 "전수" 라고 부르면 안 되는 이유. 빠진 과제는 무작위가 아니다 —
+        # 타임아웃은 예산을 끝까지 태운 가장 비싼 싼 실행이고, 그런 실행일수록
+        # 승급으로 이어진다. 표본이 적어 c 를 못 잰 로그에서도 알려야 한다.
+        print(
+            f"  과제 {unusable_cheap}건은 싼 비용을 읽지 못해(타임아웃이거나 사용량이"
+            " 없음) 분자에서 빠졌다. 그런 실행은 대개 가장 비싼 싼"
+            " 실행이므로, 빠지면 c 가 낮아지고 절감이 부풀려진다."
         )
 
     print("\n기대 비용 = c + p")
@@ -634,7 +640,12 @@ def main() -> int:
     if c_range is None:
         # c 를 재지 못했으면 판정하지 않는다. 남의 벤치마크에서 온 0.31 로
         # "유리하다" 를 찍으면, 재지 않은 것을 잰 것처럼 보이게 된다.
-        if measured_c is None:
+        if not single_origin:
+            print(
+                "\n  -> 판정 없음. 비용의 출처가 섞여 c 를 재지 않았다."
+                " 위에 적은 대로 설정을 나누고 다시 재야 한다."
+            )
+        elif measured_c is None:
             print(
                 "\n  -> 판정 없음. c 를 이 표본에서 재지 못해 가정값을 썼다."
                 " 양쪽 비용이 있는 승급 과제를 더 모아야 한다."
