@@ -1751,15 +1751,17 @@ def _first_text(payload: object, depth: int = 0) -> str:
             and value.get("type", "text") == "text"
             for value in payload
         )
+        if text_blocks:
+            # 구분자를 넣으면 조각 경계에 걸친 자격증명의 앵커가 갈라진다 —
+            # "-----BEGIN PRI" + "VATE KEY-----" 가 그 사이의 줄바꿈 때문에
+            # 마커로 안 잡힌다. 그리고 조각마다 strip 하면 사이의 공백이
+            # 사라져 단어가 붙는다. 원문 그대로 잇는다.
+            raw = "".join(
+                value["text"] for value in payload if isinstance(value, dict) and value.get("text")
+            )
+            return raw.strip()
         pieces = [found for value in payload if (found := _first_text(value, depth + 1))]
-        if not pieces:
-            return ""
-        if not text_blocks:
-            return pieces[-1]
-        # 구분자를 넣으면 조각 경계에 걸친 자격증명의 앵커가 갈라진다 —
-        # "-----BEGIN PRI" + "VATE KEY-----" 가 그 사이의 줄바꿈 때문에
-        # 마커로 안 잡힌다. 그대로 잇는다.
-        return "".join(pieces)
+        return pieces[-1] if pieces else ""
     return ""
 
 
