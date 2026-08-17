@@ -833,6 +833,11 @@ def main() -> int:
                     # 조언 분기가 그 금지를 우회하고 있었다.
                     if timed_out_tasks:
                         priced_enough = False
+                    # 타임아웃만 막으면 부족하다. 보통의 미가격 승급도 분모
+                    # 에서 빠지므로, 남은 비싼 비용 평균이 승급 전체를
+                    # 대표하지 않는다. a 와 r 이 모두 그 평균으로 나눈 값이다.
+                    if unpriced_escalations or zero_expensive:
+                        priced_enough = False
                     # 조언 비용도 마찬가지다. a 가 작은 부분집합에서 나오면
                     # s 와 같은 모집단이 아니다.
                     advice_attempted = sum(
@@ -874,11 +879,12 @@ def main() -> int:
                         # r 을 쟀으면 그것을 쓴다. 못 쟀으면 c 로 대신하되
                         # 그것이 대입이라고 말한다.
                         if r_ratio is not None and not priced_enough:
-                            if timed_out_tasks:
+                            if timed_out_tasks or unpriced_escalations or zero_expensive:
                                 print(
-                                    f"  과제 {timed_out_tasks}건이 타임아웃이라 비싼 경로"
-                                    " 평균이 부분값 위에 선다. a 와 r 이 그 평균으로"
-                                    " 나눈 값이므로 판정하지 않는다."
+                                    f"  승급 {unpriced_escalations + zero_expensive}건의 비싼"
+                                    f" 비용이 없거나 0 이고 과제 {timed_out_tasks}건이"
+                                    " 타임아웃이다. 비싼 경로 평균이 승급 전체를"
+                                    " 대표하지 않으므로 판정하지 않는다."
                                 )
                             else:
                                 print(
@@ -1034,7 +1040,14 @@ def main() -> int:
     thin_denominator = (
         c_range is not None and escalated_total > 0 and len(paired) * 2 < escalated_total
     )
-    if advisor_on:
+    if advisor_on and timed_out_tasks:
+        # 조언 분기가 타임아웃 경고를 가리면 안 된다. 빠진 비용이 위쪽으로
+        # 열려 있다는 사실은 조언 판정에도 그대로 해당한다.
+        print(
+            f"\n  -> 판정 없음. 과제 {timed_out_tasks}건이 타임아웃이라 그 비용을"
+            " 모른다. 위의 조언 판정도 같은 이유로 보류됐다."
+        )
+    elif advisor_on:
         # 조언이 켜진 로그에서는 c + p 기반 판정을 내지 않는다. 위에 그 식이
         # 이 실행의 모형이 아니라고 적어 놓고 그 식으로 판정하면 앞뒤가 맞지
         # 않는다. 조언 자체의 판정은 위쪽 s > a + c 가 한다.

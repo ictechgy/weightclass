@@ -947,7 +947,11 @@ def looks_like_key_block(text: str, after: int) -> bool:
     horizon = min(len(text), after + PEM_LOOKAHEAD_LINES * PEM_LOOKAHEAD_LINE_CHARS)
     for _ in range(PEM_LOOKAHEAD_LINES):
         if position >= horizon:
-            break
+            # 예산 안에서 결론을 못 냈다. **키로 간주한다.** 성능을 위한
+            # 상한이 유출을 만들면 안 된다 — 400겹짜리 접두사는 정상 로그가
+            # 아니지만 자식이 만들 수 있고, 그때 과잉 삭제는 한 블록이지만
+            # fail-open 은 키 하나다.
+            return position < len(text)
         separator = _LINE_SEPARATOR.search(text, position, horizon)
         stop = separator.end() if separator else horizon
         line = _ESCAPE_NOISE.sub("", text[position:stop]).strip().strip('"')
@@ -1076,11 +1080,16 @@ def _key_body_end(text: str, body_at: int) -> int:
             #
             # 본 주사와 **같은** 구분자를 써야 한다. 물리적 줄바꿈만 보면
             # 직렬화된 키에서 뒤 전체가 한 줄로 잡혀 판정이 실패한다.
-            rest = text[position:]
-            skip = _LINE_SEPARATOR.match(rest)
-            rest = rest[skip.end() :] if skip else rest
-            nxt = _LINE_SEPARATOR.search(rest)
-            head = _ESCAPE_NOISE.sub("", rest[: nxt.start()] if nxt else rest).strip()
+            # 슬라이스로 복사하면 짧은 줄마다 남은 텍스트 전체가 복사되어
+            # 이차 시간이 된다. 접힌 본문에서는 모든 줄이 짧고, 그 길이는
+            # 자식이 정한다. 오프셋으로만 다룬다.
+            probe = position
+            skip = _LINE_SEPARATOR.match(text, probe)
+            if skip is not None:
+                probe = skip.end()
+            nxt = _LINE_SEPARATOR.search(text, probe)
+            head_end = nxt.start() if nxt else len(text)
+            head = _ESCAPE_NOISE.sub("", text[probe:head_end]).strip()
             following = [head, *_prefix_variants(head)]
             continues = any(
                 _looks_like_key_line(c, minimum=8) or _PEM_HEADER_LINE.match(c)
@@ -1158,7 +1167,9 @@ def redact_private_keys(text: str) -> str:
             if resumed > body_end:
                 body_end = resumed
         closing = _PEM_END_RE.search(text, body_at, min(body_end + 200, body_at + PEM_MAX_SPAN))
-        index = max(closing.end() if closing else body_end, body_at + 1)
+        # END 가 주사로 정한 본문 끝보다 **앞** 에 있으면, 그것을 그대로 쓰면
+        # 이미 키로 판정한 뒷부분이 그대로 나간다. 뒤로만 간다.
+        index = max(closing.end() if closing else body_end, body_end, body_at + 1)
         out.append("[REDACTED]")
 
 
@@ -1187,9 +1198,12 @@ def host_secret_values() -> list[str]:
                 user, password = userinfo
                 if not password:
                     # 사용자 자리에 토큰만 있는 형태. 그 값 자체가 비밀이다.
+                    # 문맥 형태는 두 가지다 — 콜론이 아예 없는 TOKEN@host 와
+                    # 콜론만 있는 TOKEN:@host. 하나만 넣으면 다른 쪽이 샌다.
                     if len(user) >= 8:
                         values.append(user)
                     values.append(f"{user}@")
+                    values.append(f"{user}:@")
                     continue
                 # 문맥이 있는 형태는 길이와 무관하게 지운다. URL 안에 있으면
                 # 그것이 비밀번호라는 것이 확실하다.
@@ -1674,11 +1688,11 @@ def ask_advisor(
     # 앵커를 부순다 — 값 안에 `\n` 두 글자가 있는 비밀이 두 조각으로
     # 갈리면 어느 쪽도 목록과 맞지 않는다. 줄 구분자 패턴이 이스케이프된
     # 줄바꿈을 이미 줄로 보므로 정규화가 필요 없다.
-    extracted = advice_text(body, command)
+    extracted, extracted_ok = advice_text_extracted(body, command)
     # 구조화 출력을 요청했는데 본문을 못 꺼냈다면 남은 것은 봉투다. 그것을
     # 과제에 붙이면 executor 가 조언 대신 계측 데이터를 읽고, 리댁션도
     # 인코딩된 텍스트와 디코딩된 값을 비교하게 되어 어긋난다. 조언을 버린다.
-    envelope_only = wants_structured_output(command) and extracted.strip().startswith(("{", "["))
+    envelope_only = not extracted_ok
     if envelope_only:
         print("  조언 봉투에서 본문을 꺼내지 못해 이번 조언은 쓰지 않는다")
     text = "" if failed or envelope_only else redact_text(extracted)
@@ -1729,6 +1743,30 @@ def _first_text(payload: object, depth: int = 0) -> str:
         joined = "\n".join(pieces).strip()
         return joined if joined else pieces[-1]
     return ""
+
+
+def advice_text_extracted(stdout: str, command: list[str]) -> tuple[str, bool]:
+    """조언 본문과 **봉투에서 꺼내는 데 성공했는지**.
+
+    성공 여부를 첫 글자로 되추정하면 안 된다. `{"result":"[1] Inspect ..."}`
+    처럼 정당한 조언이 `[` 로 시작하면 봉투로 오인해 버려진다. 아는 쪽이
+    직접 알려 준다.
+    """
+    text = stdout.strip()
+    if not wants_structured_output(command) or not text:
+        return text, True
+    for candidate in (text, *reversed(text.splitlines())):
+        stripped = candidate.strip()
+        if not stripped.startswith(("{", "[")):
+            continue
+        try:
+            parsed = json.loads(stripped)
+        except (ValueError, TypeError):
+            continue
+        found = _first_text(parsed)
+        if found:
+            return found, True
+    return text, False
 
 
 def advice_text(stdout: str, command: list[str]) -> str:
@@ -2316,9 +2354,19 @@ def main() -> int:
             # 리포트의 s 분모에서 이 실패가 조용히 빠진다. 시도했고 실패했다는
             # 사실을 기록으로 남긴다.
             print(f"  조언 실패 — 조언 없이 계속한다: {_safe(str(error))}")
+            # child 를 빠뜨리면 이 기록만 모양이 다르고, 성공 경로 바로
+            # 아래에서 record["child"]["seconds"] 를 읽는다. 세 라운드 연속
+            # 지적된 자리다. 자식이 돌지 못했다는 사실을 담은 child 를 넣는다.
             return (
                 {
                     "stage": stage,
+                    "child": {
+                        "exit_code": None,
+                        "timed_out": False,
+                        "seconds": 0.0,
+                        "tokens": None,
+                        "usage": None,
+                    },
                     "chars": 0,
                     "truncated": False,
                     "empty": True,

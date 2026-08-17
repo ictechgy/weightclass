@@ -81,12 +81,17 @@ verify  ── pass → accept
         └─ fail → escalate to the expensive route
 ```
 
-Let one full expensive run cost `1`, the cheap route `c`, one advisor call `a`,
-and let `p` be the cheap route's failure rate without advice and `p′` with it.
+Let one full expensive run cost `1`, the un-advised cheap route `c`, one advisor
+call `a`, and let `p` be the cheap route's failure rate without advice and `p′`
+with it. The advised cheap run is **not** `c`: it carries the plan in its prompt,
+so give it its own symbol `c_A`, for the same reason Shape B's retry gets `r`.
 
 ```
-expected cost = a + c + p′        pays when   a < p − p′
+expected cost = a + c_A + p′        pays when   a + (c_A − c) < p − p′
 ```
+
+Writing `c` where `c_A` belongs understates the arm by exactly the prompt the
+advice adds, and that error runs in the arm's favour.
 
 ### Shape B — advice only after a failure
 
@@ -225,22 +230,30 @@ tokens. It does not have to cost that.
 Measure **two** configurations:
 
 1. **baseline + Shape B** — cheap → verify → (advisor → retry → verify) → escalate.
-   Yields `c`, `p`, `a`, and `s` in one pass, because the un-advised cheap run and
-   its verify result are the first stage of the same pipeline.
-2. **Shape A + Shape B** — the same pipeline with a plan prepended. Yields `p′`,
-   and a second estimate of `a` and `s` under advice.
+   Yields `c`, `p`, `a`, `q`, `r` and `s` in one pass, because the un-advised cheap
+   run and its verify result are the first stage of the same pipeline.
+2. **Shape A + Shape B** — the same pipeline with a plan prepended. Yields `c_A`,
+   `p′`, and the primed `a`, `q′`, `r′`, `s′`.
 
-Then **model** the two configurations nobody ran, and label them as modelled:
+Configuration 2 **is** A+B, so A+B is measured, not modelled. What nobody runs is
+**Shape A alone**, and that is the only figure to model:
 
 ```
-A alone      = a + c + p′
-A + B        = a + c + p′·(a + q·r + (1 − s′))
+A alone      = a + c_A + p′
+A + B        = a + c_A + p′·(a + q′·r′ + (1 − s′))
 ```
 
-`s′` — the advised-retry success rate *after* an up-front plan — is not the same
-quantity as `s`, so the combined figure is an extrapolation. Reporting it as a
-measurement would be exactly the error this project keeps catching in review. It
-is reported with the word "modelled" attached, or not at all.
+Every term after the up-front advice is primed, because it is measured on a run
+whose prompt already contains the plan: the retry cost, the retry-attempt rate
+and the rescue rate are all different quantities from their Shape-B-only
+counterparts. Reusing the unprimed symbols would silently assume the plan
+changes nothing about what happens after a failure.
+
+`a + c_A + p′` for Shape A alone drops the failure-stage terms that configuration
+2 actually ran, so it is an extrapolation: it assumes the up-front plan's effect
+on `p′` is unchanged when the failure-stage advice is switched off. Reporting it
+as a measurement would be exactly the error this project keeps catching in
+review. It is reported with the word "modelled" attached, or not at all.
 
 ## What to fix before spending any tokens
 
@@ -259,9 +272,10 @@ To pre-register:
   crosses. `r` is the measured cost of the advised retry and is normally above
   `c`, since the retry carries the advice in its prompt; `q` is the fraction of
   advised failures that produced a retry at all.
-- **The decision rule for Shape A**: a named margin on `p − p′`, plus the explicit
-  statement that a null result means "no measurable effect on failures" and not
-  "no effect on quality".
+- **The decision rule for Shape A**: a named margin on `p − p′` **against
+  `a + (c_A − c)`**, not against `a` alone, plus the explicit statement that a
+  null result means "no measurable effect on failures" and not "no effect on
+  quality".
 - **The minimum number of failures** needed before `s` is reported at all. `s`
   comes only from failed runs; twenty tasks at a 20% failure rate is four.
 - **What invalidates the run**, e.g. mixed advisor configurations in one log.

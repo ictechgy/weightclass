@@ -717,3 +717,47 @@ def test_content_array_envelope_is_joined() -> None:
     module = load_runner()
     envelope = '{"content":[{"text":"first"},{"text":"second"}]}'
     assert module.advice_text(envelope, ["claude", "--output-format", "json"]) == "first\nsecond"
+
+
+@pytest.mark.parametrize("layers", [51, 200, 400, 1000], ids=lambda n: f"{n}layer")
+def test_gate_fails_closed_when_its_budget_runs_out(layers: int) -> None:
+    """성능을 위한 상한이 유출을 만들면 안 된다.
+
+    라운드 15 가 넣은 3072자 상한이 400겹 접두사에서 본문을 창 밖으로
+    밀어내 키가 통째로 나갔다. 예산 안에서 결론을 못 내면 키로 간주한다.
+    """
+    module = load_runner()
+    prefix = "+[INFO] " * layers
+    lines = pem_body()
+    text = (
+        f"{prefix}{BEGIN}RSA {KEY}\n"
+        + "\n".join(prefix + line for line in lines)
+        + f"\n{prefix}{END}RSA {KEY}"
+    )
+    cleaned = module.verify_excerpt(text)
+    assert not [line for line in lines if line in cleaned]
+
+
+def test_advice_starting_with_a_bracket_is_not_mistaken_for_an_envelope() -> None:
+    """추출 성공 여부를 첫 글자로 되추정하면 정당한 조언이 버려진다."""
+    module = load_runner()
+    body, extracted = module.advice_text_extracted(
+        '{"result":"[1] Inspect the parser"}', ["claude", "--output-format", "json"]
+    )
+    assert extracted
+    assert body == "[1] Inspect the parser"
+
+
+def test_unknown_envelope_shape_is_reported_as_not_extracted() -> None:
+    module = load_runner()
+    _, extracted = module.advice_text_extracted(
+        '{"unknown_shape": 42}', ["claude", "--output-format", "json"]
+    )
+    assert not extracted
+
+
+def test_proxy_token_with_empty_password_half(monkeypatch: pytest.MonkeyPatch) -> None:
+    """http://TOKEN:@host 형태의 문맥 문자열은 TOKEN@ 가 아니라 TOKEN:@ 다."""
+    module = load_runner()
+    monkeypatch.setenv("HTTP_PROXY", "http://abctoken123:@proxy:3128")
+    assert "abctoken123" not in module.verify_excerpt("proxy http://abctoken123:@proxy:3128")
