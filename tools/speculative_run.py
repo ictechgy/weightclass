@@ -506,9 +506,16 @@ def run_child(
             else:
                 timed_out = False
             code = child.returncode
-    except FileNotFoundError as error:
-        raise RunFailure(f"could not start the route: {error}") from error
-    except PermissionError as error:
+    except ProcessLookupError:
+        # kill 경로에서 자식이 이미 끝났을 때 나는 정상적인 경합이다. 거의
+        # 끝난 실행을 "시작하지 못했다" 로 바꿔 버리면 안 된다. 다시 던져
+        # 바깥에서 다루게 하지 않고, 아래 OSError 절이 삼키지 않도록 먼저
+        # 잡아 그대로 올린다.
+        raise
+    except OSError as error:
+        # Popen 은 ENOEXEC(셔뱅이 잘못된 래퍼), E2BIG, ENOMEM 에서 밋밋한
+        # OSError 를 낸다. 하위형만 잡으면 그것들이 빠져나가 측정 실행 전체가
+        # 죽고 작업공간도 정리되지 않는다.
         raise RunFailure(f"could not start the route: {error}") from error
     if timed_out:
         # 시간이 다 됐어도 토큰은 이미 쓰였다. 부분 출력에서 건질 수 있으면
@@ -519,7 +526,7 @@ def run_child(
         # 결과 객체도 마지막에만 나오므로 중간에 죽은 실행에는 없다. 그래도
         # 시도하는 것은 다른 형태로 부르는 사용자를 위해서이고, 못 건진
         # 타임아웃은 cost_usd 없이 기록되어 리포트의 c 표본에서 빠진다.
-        partial = extract_usage(stdout, stderr)
+        partial = extract_usage(stdout, stderr, command[0])
         if partial is not None and "cost_usd" not in partial and rates:
             # 정상 경로와 같은 요금 계산을 여기서도 한다. 빠뜨리면 비용을
             # 보고하지 않는 벤더의 타임아웃이 언제나 무비용으로 잡혀, 바로 위
@@ -537,7 +544,7 @@ def run_child(
             "tokens": partial.get("total_tokens") if partial else None,
             "usage": dict(partial) if partial else None,
         }
-    usage = extract_usage(stdout, stderr)
+    usage = extract_usage(stdout, stderr, command[0])
     if usage is not None and "cost_usd" not in usage and rates:
         # 벤더가 비용을 안 알려주는 경우에만 요금표로 계산한다. 벤더가 준
         # 숫자가 있으면 그것이 언제나 우선이다 — 우리 요금표는 낡을 수 있다.
@@ -567,10 +574,15 @@ def _claude_usage(stdout: str) -> Usage | None:
     # 말한다. 줄 단위로도 찾아본다.
     payload: object = None
     seen = 0
+    # 한 줄짜리 JSON 이면 stdout 전체와 그 유일한 줄이 같은 텍스트다. 중복을
+    # 세면 정상 실행마다 "후보 2개" 경고가 떠서, 진짜 후보가 둘인 경우와
+    # 구별되지 않는다. 경고가 언제나 켜져 있으면 경고가 아니다.
+    checked: set[str] = set()
     for candidate in (stdout, *stdout.splitlines()):
         text = candidate.strip()
-        if not text.startswith("{"):
+        if not text.startswith("{") or text in checked:
             continue
+        checked.add(text)
         try:
             parsed = json.loads(text)
         except (ValueError, TypeError):
@@ -679,9 +691,19 @@ def _codex_usage(stdout: str) -> Usage | None:
     }
 
 
-def extract_usage(stdout: str, stderr: str) -> Usage | None:
-    """Best-effort usage from whichever vendor produced the output."""
-    for reader in (_claude_usage, _codex_usage):
+def extract_usage(stdout: str, stderr: str, executable: str | None = None) -> Usage | None:
+    """Best-effort usage from whichever vendor produced the output.
+
+    벤더는 실행 파일 이름으로 확실히 알 수 있다. stdout 모양으로 추측하면,
+    codex 실행의 출력에 claude 모양 한 줄이 섞이는 것만으로 그 줄이 채택된다.
+    아는 쪽을 먼저 시도하고, 모를 때만 둘 다 본다.
+    """
+    readers = (_claude_usage, _codex_usage)
+    if executable:
+        name = Path(executable).name.lower()
+        if "codex" in name and "claude" not in name:
+            readers = (_codex_usage, _claude_usage)
+    for reader in readers:
         usage = reader(stdout)
         if usage:
             return usage
@@ -1359,18 +1381,21 @@ def main() -> int:
         "CLAUDE_CODE_USE_BEDROCK": ("AWS_", "AWS_PROFILE"),
         "CLAUDE_CODE_USE_VERTEX": ("GOOGLE_", "CLOUDSDK_"),
     }
-    for switch, families in BACKEND_SWITCHES.items():
-        if os.environ.get(switch) and not any(
-            name.startswith(families) for name in default_child_env(cheap_argv[0])
-        ):
-            print(
-                f"  주의: {switch} 가 켜져 있는데 {'/'.join(families)} 자격증명이"
-                " 좁히기에서 빠졌다. 자식이 인증에 실패하면 라우트 실패로 기록되어"
-                " p 가 오염된다. --child-env 로 필요한 이름을 넣어라."
-            )
-
     cheap_env = env_for(cheap_argv)
     expensive_env = env_for(expensive_argv)
+    for switch, families in BACKEND_SWITCHES.items():
+        if not os.environ.get(switch):
+            continue
+        for arm, names in (("싼 경로", cheap_env), ("승급 경로", expensive_env)):
+            # --child-env-all(None) 이면 아무것도 안 떨궜으므로 경고할 것이 없다.
+            # --child-env 로 이미 넣어 준 이름도 여기 반영돼 있어야 한다.
+            if names is None or any(n.startswith(families) for n in names):
+                continue
+            print(
+                f"  주의: {switch} 가 켜져 있는데 {arm} 의 허용 목록에"
+                f" {'/'.join(families)} 자격증명이 없다. 자식이 인증에 실패하면"
+                " 라우트 실패로 기록되어 p 가 오염된다. --child-env 로 넣어라."
+            )
     # 진단은 두 arm 을 함께 본다. 하나만 찍으면 다른 쪽이 다른 벤더로 판별돼
     # 다른 목록을 받는데도 사용자는 알 수 없다.
     allowed_env = cheap_env if cheap_env is None else cheap_env | (expensive_env or frozenset())
@@ -1429,12 +1454,11 @@ def main() -> int:
                 " 경로가 남기면 승급 경로가 그것을 물려받는다. 싼 경로의 실패를"
                 " 채점하는 쪽이 그 실패에 오염된다."
             )
-        for home in (cheap_home, expensive_home):
-            if home is not None:
-                # 자식이 쓴 것은 다음 실행에도 남는다. 실행 사이에 지우지
-                # 않으면 20개 과제가 서로 오염된다.
-                print(f"  HOME {home} 에 자식이 남긴 것은 다음 실행까지 간다")
-                break
+        # 자식이 쓴 것은 다음 실행에도 남는다. 실행 사이에 지우지 않으면 20개
+        # 과제가 서로 오염된다. 두 디렉터리를 모두 알린다 — 하나만 찍으면
+        # 나머지 하나는 안전하다는 뜻으로 읽힌다.
+        for home in dict.fromkeys(h for h in (cheap_home, expensive_home) if h is not None):
+            print(f"  HOME {home} 에 자식이 남긴 것은 다음 실행까지 간다")
 
     scaffolding = AGENT_SCAFFOLDING | set(arguments.exclude_dir)
     cheap = attempt(

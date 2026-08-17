@@ -225,7 +225,12 @@ def main() -> int:
         # 절감률을 만들어 내는 것을 막는다.
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
-        cost = float(value)
+        try:
+            cost = float(value)
+        except OverflowError:
+            # 손상된 JSONL 의 임의 정밀도 정수는 float 변환에서 죽는다.
+            # 리포트가 로그 한 줄 때문에 멈추면 안 된다.
+            return None
         return cost if math.isfinite(cost) and cost >= 0 else None
 
     def cost_source(attempt: object) -> str | None:
@@ -266,6 +271,7 @@ def main() -> int:
     # 전수로 알 수 있고, c 의 분자가 그 전수와 얼마나 다른지 확인할 수 있다.
     cheap_all: list[float] = []
     cheap_escalated: list[float] = []
+    cheap_passing: list[float] = []
     for r in usable:
         cheap_cost = cost_of(r.get("cheap"))
         expensive_cost = cost_of(r.get("expensive"))
@@ -273,6 +279,8 @@ def main() -> int:
             cheap_all.append(cheap_cost)
             if isinstance(r.get("expensive"), dict):
                 cheap_escalated.append(cheap_cost)
+            else:
+                cheap_passing.append(cheap_cost)
         if isinstance(r.get("expensive"), dict) and (
             timed_out(r.get("cheap")) or timed_out(r.get("expensive"))
         ):
@@ -291,7 +299,10 @@ def main() -> int:
             cheap_source = cost_source(r.get("cheap")) or "?"
             expensive_source = cost_source(r.get("expensive")) or "?"
             if ("claude-json" in cheap_source) != ("claude-json" in expensive_source):
+                # 경고만 하고 그 쌍을 그대로 c 에 넣으면, 비교할 수 없다고
+                # 말한 숫자로 결론을 낸 것이 된다. 표본에서 뺀다.
                 mixed_provenance += 1
+                continue
             paired.append(cheap_cost / expensive_cost)
             pair_costs.append((cheap_cost, expensive_cost))
             cheap_total += cheap_cost
@@ -324,20 +335,36 @@ def main() -> int:
             " 누적인지 확인되지 않아 그 실행의 토큰은 과대 집계일 수 있다."
         )
 
-    # c 의 흔들림 폭. 한 건씩 빼고 다시 계산해(jackknife) 표본 하나가 값을
-    # 얼마나 움직이는지 본다. 3~6건짜리 표본에서 이 폭은 대개 p 의 CI 보다
-    # 크고, 그것을 감추면 절감 구간이 실제보다 좁아 보인다.
     def jackknife(costs: list[tuple[float, float]]) -> tuple[float, float] | None:
+        """c 의 95% 구간. 한 건씩 빼고 다시 계산해(jackknife) 표준오차를 구한다.
+
+        빼고 계산한 값들의 **최소/최대**를 구간이라고 부르면 안 된다. 한 건을
+        뺀 추정치는 원래 추정치에서 대략 1/n 만큼만 움직이므로, 그 폭은 표본이
+        늘수록 **좁아진다** — 불확실성은 반대로 가는데. 그래서 표본이 많을수록
+        더 확신하는 것처럼 보이는 잘못된 구간이 나온다. jackknife 표준오차는
+        sqrt((n-1)/n * Σ(θ_i - θ̄)^2) 이고 여기에는 (n-1) 배가 들어간다.
+        """
         if len(costs) < 2:
             return None
         cheap_sum = sum(x for x, _ in costs)
         expensive_sum = sum(y for _, y in costs)
-        values = []
+        if expensive_sum <= 0:
+            return None
+        estimate = cheap_sum / expensive_sum
+        leave_one_out = []
         for x, y in costs:
-            rest_expensive = expensive_sum - y
-            if rest_expensive > 0:
-                values.append((cheap_sum - x) / rest_expensive)
-        return (min(values), max(values)) if values else None
+            rest = expensive_sum - y
+            if rest > 0:
+                leave_one_out.append((cheap_sum - x) / rest)
+        n = len(leave_one_out)
+        if n < 2:
+            return None
+        mean = statistics.fmean(leave_one_out)
+        variance = (n - 1) / n * sum((v - mean) ** 2 for v in leave_one_out)
+        margin = 1.96 * math.sqrt(variance)
+        # 비용비는 음수가 될 수 없다. 위쪽은 자르지 않는다 — 싼 쪽이 더 비쌀
+        # 수 있고, 그 사실이 결론이어야 한다.
+        return (max(0.0, estimate - margin), estimate + margin)
 
     c_range: tuple[float, float] | None = None
     if len(paired) >= MINIMUM_PAIRED:
@@ -361,15 +388,22 @@ def main() -> int:
             print(f"  승급 {missing}건은 비용이 없거나 0 이라 빠졌다.")
         if mixed_provenance:
             print(
-                f"  주의: {mixed_provenance}건은 한쪽이 벤더가 알려준 청구액이고 다른 쪽은"
-                " 요금표 환산값이다. 두 숫자는 세는 항목이 다르므로(벤더 청구액은 캐시"
-                " 읽기를 포함, 요금표는 적은 필드만) 그 비율은 c 가 아니다."
+                f"  {mixed_provenance}건은 한쪽이 벤더가 알려준 청구액이고 다른 쪽은"
+                " 요금표 환산값이라 **표본에서 뺐다**. 두 숫자는 세는 항목이 다르므로"
+                "(벤더 청구액은 캐시 읽기를 포함, 요금표는 적은 필드만) 그 비율은"
+                " c 가 아니다."
             )
         # 요금표가 값을 매기기로 한 필드 중 일부가 그 실행에 없었다면, 없는
         # 캐시 필드일 수도 있지만 CLI 가 필드 이름을 바꾼 것일 수도 있다.
         # 후자면 절반짜리 비용이 그대로 c 에 들어간다.
+        # 이 블록은 c 이야기다. c 에 들어가지 않는 비승급 실행까지 세면
+        # "필드 이름을 확인하라" 는 지시가 엉뚱한 곳을 가리킨다.
         partial_priced = sum(
-            1 for r in usable for arm in ("cheap", "expensive") if has_missing_prices(r.get(arm))
+            1
+            for r in usable
+            if isinstance(r.get("expensive"), dict)
+            for arm in ("cheap", "expensive")
+            if has_missing_prices(r.get(arm))
         )
         if partial_priced:
             print(
@@ -386,30 +420,39 @@ def main() -> int:
         c_range = jackknife(pair_costs)
         if c_range is not None:
             print(
-                f"  한 건씩 빼고 다시 계산하면 c 는 [{c_range[0]:.3f}, {c_range[1]:.3f}]"
-                f" 사이에서 움직인다 (표본 {len(pair_costs)}건)."
+                f"  c 의 95% 구간 [{c_range[0]:.3f}, {c_range[1]:.3f}]"
+                f" (jackknife, 표본 {len(pair_costs)}건)"
             )
         # 승급 부분집합 편향. 싼 경로는 모든 과제에서 돌았으므로 전수와 비교할
         # 수 있다. 싼 모델이 일찍 포기해서 실패하는 흔한 양상이면 승급 과제의
         # 싼 비용이 체계적으로 낮고, 그러면 c 가 과소 추정된다.
-        if len(cheap_escalated) >= 2 and len(cheap_all) > len(cheap_escalated):
-            all_mean = statistics.fmean(cheap_all)
+        # 승급 과제를 **전체** 와 비교하면 전체가 승급 과제를 포함하므로 차이가
+        # (1-p) 만큼 희석된다. 승급하지 않은 과제와 직접 비교해야 편향의 크기가
+        # 그대로 보인다.
+        if len(cheap_escalated) >= 2 and len(cheap_passing) >= 2:
+            passing_mean = statistics.fmean(cheap_passing)
             escalated_mean = statistics.fmean(cheap_escalated)
             print(
-                f"  싼 경로 과제당 평균 비용: 전체 {all_mean:.4f} /"
+                f"  싼 경로 과제당 평균 비용: 승급 안 한 과제 {passing_mean:.4f} /"
                 f" 승급된 과제 {escalated_mean:.4f}"
             )
-            if all_mean > 0 and abs(escalated_mean - all_mean) / all_mean > 0.2:
-                direction = "낮다" if escalated_mean < all_mean else "높다"
+            if passing_mean > 0 and abs(escalated_mean - passing_mean) / passing_mean > 0.2:
+                low = escalated_mean < passing_mean
                 print(
-                    f"    승급 과제의 싼 비용이 전체 평균보다 {direction}. c 의 분자는"
-                    " 승급 과제에서만 나오므로 c 가 그만큼"
-                    f" {'과소' if escalated_mean < all_mean else '과대'} 추정된다."
+                    f"    승급 과제의 싼 비용이 그렇지 않은 과제보다"
+                    f" {'낮다' if low else '높다'}. c 의 분자는 승급 과제에서만"
+                    f" 나오므로 c 가 그만큼 {'과소' if low else '과대'} 추정된다."
                 )
         print(
             "  이 c 는 승급이 일어난 과제, 즉 싼 경로가 실패한 부분집합에서만 나온다."
             " 그 과제들이 더 길거나 어려웠다면 전체를 대표하지 않는다."
         )
+        if measured >= 1:
+            print(
+                "  주의: 싼 경로가 승급 경로보다 비쌌다(c >= 1). 손익분기가 음수가"
+                " 되므로 아래 절감 수치는 의미가 없다. 라우트 지정이나 요금표를"
+                " 먼저 확인해야 한다."
+            )
         if given_cost_ratio and abs(measured - c) > 0.05:
             print(f"  주의: --cost-ratio 로 준 {c:.2f} 와 다르다. 아래 계산은 실측값을 쓴다.")
         c = measured
@@ -427,6 +470,26 @@ def main() -> int:
 
     print("\n기대 비용 = c + p")
     print(f"  기대 비용 {c + p:.2f}  ->  절감 {1 - (c + p):.1%}")
+    # 이 식은 두 가지를 전제한다. 하나는 싼 비용비가 승급 과제와 그렇지 않은
+    # 과제에서 같다는 것, 다른 하나는 비싼 경로의 과제당 비용이 양쪽에서 같다는
+    # 것이다. 뒤의 것은 확인할 방법이 없다 — 비싼 경로는 승급된 과제에서만
+    # 돌았다. 앞의 것은 싼 비용을 전수로 알기 때문에 확인할 수 있다.
+    if cheap_all and cheap_escalated and len(cheap_all) > len(cheap_escalated):
+        realized = sum(cheap_all) + expensive_total
+        expensive_mean = expensive_total / len(paired) if paired else 0.0
+        # 승급하지 않은 과제의 비싼 비용은 잰 적이 없다. 승급 과제의 평균으로
+        # 메꾸되, 그것이 대입값이라는 사실을 숨기지 않는다.
+        counterfactual = expensive_mean * len(cheap_all)
+        if counterfactual > 0:
+            print(
+                f"\n  대조: 실제로 쓴 돈 {realized:.4f} 대 전부 비싼 경로로 돌렸을 때"
+                f" {counterfactual:.4f}  ->  절감 {1 - realized / counterfactual:.1%}"
+            )
+            print(
+                f"    단 승급하지 않은 {len(cheap_all) - len(cheap_escalated)}건의 비싼"
+                " 비용은 잰 적이 없어 승급 과제 평균으로 메꿨다. 그 과제들이 더"
+                " 쉬웠다면 이 절감은 과대 평가다."
+            )
     # c 를 확정값으로 두고 p 만 흔들면 구간이 실제보다 좁다. c 도 표본에서
     # 추정한 값이므로 둘의 흔들림을 함께 태운다. 결론을 내릴 때 쓰는 구간은
     # 언제나 이 넓은 쪽이다.
@@ -438,7 +501,14 @@ def main() -> int:
     print(f"  가장 불리한 끝 (c={c_hi:.3f}, p={hi:.1%}): 절감 {1 - worst:.1%}")
     print(f"  손익분기 p = {1 - c:.1%}  (c 가 {c_hi:.3f} 이면 {1 - c_hi:.1%})")
 
-    if worst < 1:
+    if c_range is None:
+        # c 를 재지 못했으면 판정하지 않는다. 남의 벤치마크에서 온 0.31 로
+        # "유리하다" 를 찍으면, 재지 않은 것을 잰 것처럼 보이게 된다.
+        print(
+            "\n  -> 판정 없음. c 를 이 표본에서 재지 못해 가정값을 썼다."
+            " 양쪽 비용이 있는 승급 과제를 더 모아야 한다."
+        )
+    elif worst < 1:
         print("\n  -> 구간 전체가 손익분기 아래다. 싼 경로 우선이 이 표본에서 유리하다.")
     elif best > 1:
         print("\n  -> 구간 전체가 손익분기 위다. 싼 경로 우선은 손해다.")

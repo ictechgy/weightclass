@@ -258,9 +258,25 @@ tree. Convenience code around secrets earns its complexity back in defects. You
 can stage a directory correctly once by hand; a tool doing it on every run has
 five ways to get it wrong.
 
-None of this is a sandbox. Nothing stops code from opening
-`/Users/you/.ssh/id_rsa` by absolute path. Against genuinely untrusted output,
-run the whole thing in a container.
+None of this is a sandbox, and two specific holes are worth naming rather than
+leaving to the word "sandbox".
+
+**A detached child outlives the run.** The vendor CLI starts in its own process
+group and a timeout kills that group, but a grandchild that calls `setsid` leaves
+the group and survives. The runner then builds the "untouched" clone and runs the
+verify command on the same host, so a surviving process can watch for those
+directories and edit them between the copy and the check. Nothing in a
+single-host harness closes that.
+
+**The verify command runs the agent's code with your privileges.** That is the
+step's whole purpose, so it cannot be avoided. Clearing the environment and
+pointing `HOME` at a scratch directory does not stop code from finding your real
+home through the password database or opening `/Users/you/.ssh/id_rsa` by
+absolute path.
+
+Against genuinely untrusted output, run the whole thing in a container. The
+runner deliberately does not try to build that jail, because a half-built sandbox
+invites more trust than it earns.
 
 ### 5. Read the answer
 
