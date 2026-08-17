@@ -901,8 +901,16 @@ def _key_body_end(text: str, body_at: int) -> int:
     position = body_at
     limit = min(len(text), body_at + PEM_MAX_SPAN)
     while position < limit:
-        newline = text.find("\n", position)
-        stop = limit if newline < 0 or newline >= limit else newline + 1
+        # JSON 에 직렬화된 키는 물리적 줄바꿈이 없다. `\n` 두 글자가 구분자다.
+        # 그것을 줄로 보지 않으면 키 전체가 한 줄이 되고, 그 안의 END 마커에
+        # 있는 공백 때문에 본문이 아니라고 판정되어 키가 통째로 남는다.
+        candidates = [x for x in (text.find("\n", position), text.find("\\n", position)) if x >= 0]
+        if not candidates:
+            stop = limit
+        else:
+            nearest = min(candidates)
+            width = 1 if text[nearest] == "\n" else 2
+            stop = limit if nearest >= limit else nearest + width
         line = text[position:stop].strip().strip('"').replace("\\n", "").replace("\\", "")
         if not line:
             position = stop

@@ -698,6 +698,20 @@ def main() -> int:
                 # 여기서는 분자만 전파하되, 분모가 얇으면 그 사실을 알린다.
                 return (mean / expensive_mean_all, spread / expensive_mean_all, len(values))
 
+            def advice_attempts(key: str) -> int:
+                return sum(1 for r in usable if isinstance(r.get(key), dict))
+
+            for key, label in (("advice_first", "시작 전"), ("advice_failure", "실패 후")):
+                attempts = advice_attempts(key)
+                priced = sum(
+                    1 for r in usable if (value := advice_cost(r, key)) is not None and value > 0
+                )
+                if attempts and priced < attempts:
+                    print(
+                        f"  주의: {label} 조언 {attempts}건 중 {priced}건만 비용을 얻었다."
+                        " a 는 그 일부에서만 나온다."
+                    )
+
             a_first = advice_stats("advice_first")
             a_failure = advice_stats("advice_failure")
             for label, stats in (("시작 전", a_first), ("실패 후", a_failure)):
@@ -756,6 +770,14 @@ def main() -> int:
                         and (value := cost_of(r.get("retry"))) is not None
                         and value > 0
                     ]
+                    priced_retries = len(retry_costs)
+                    all_retries = sum(1 for r in usable if isinstance(r.get("retry"), dict))
+                    if all_retries and priced_retries < all_retries:
+                        print(
+                            f"  주의: 재시도 {all_retries}건 중 {priced_retries}건만 비용을"
+                            " 얻었다. s 와 q 는 전부를 세는데 r 은 그 일부에서만 나오므로,"
+                            " 두 수가 같은 모집단이 아니다."
+                        )
                     r_ratio = None
                     r_spread = 0.0
                     if retry_costs and priced_pairs:
@@ -799,16 +821,23 @@ def main() -> int:
                             )
                             bound_high = a_ratio + a_spread + (r_ratio + r_spread) * q_hi
                             # a 와 r 은 같은 분모(승급 과제의 비싼 평균)로 나눈
-                            # 값이고 그 분모도 표본이다. c 의 구간이 그
-                            # 불확실성을 재 놓았으므로 그 비율만큼 넓힌다.
-                            # 폭이 0 이면 곱해도 0 이라 중심의 비율로 최소 폭을
-                            # 준다 — 관측이 적을수록 구간은 넓어야 한다.
-                            if c > 0 and c_range is not None:
-                                widen = max(c_range[1] / c, c / max(c_range[0], 1e-9))
+                            # 값이고 그 분모도 표본이다. c 의 구간을 빌려 쓰면
+                            # 안 된다 — 싼 비용과 비싼 비용이 같은 비율로
+                            # 움직이면 c 의 구간은 좁은데 분모는 여전히
+                            # 흔들린다. 분모의 표준오차를 직접 낸다.
+                            expensive_values = [x.expensive for x in priced_pairs if x.expensive]
+                            if len(expensive_values) > 1:
+                                mean_e = statistics.fmean(expensive_values)
+                                se_e = statistics.stdev(expensive_values) / math.sqrt(
+                                    len(expensive_values)
+                                )
+                                # 분모가 흔들리면 비율은 반대로 흔들린다.
+                                widen = (mean_e + 1.96 * se_e) / max(mean_e - 1.96 * se_e, 1e-9)
+                                widen = min(max(widen, 1.0), 20.0)
                                 centre = (bound_low + bound_high) / 2
-                                half = max((bound_high - bound_low) / 2, centre * (widen - 1))
-                                bound_low = max(0.0, centre - half * widen)
-                                bound_high = centre + half * widen
+                                half = max((bound_high - bound_low) / 2, centre * (widen - 1) / 2)
+                                bound_low = max(0.0, centre - half)
+                                bound_high = centre + half
                             basis = f"{q:.2f}·r" if q < 1 else "r"
                             print(
                                 f"  손익분기 s = a + {basis} = {a_ratio + r_ratio * q:.3f}"
