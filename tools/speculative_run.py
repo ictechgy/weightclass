@@ -458,6 +458,9 @@ def run_child(
                     stdout, stderr = child.communicate(timeout=30)
                 except subprocess.TimeoutExpired:
                     child.kill()
+                    # 여기까지 오면 파이프에서 읽어낼 방법이 없다. 빈 문자열은
+                    # "출력이 없었다" 가 아니라 "읽지 못했다" 라는 뜻이고,
+                    # 그래서 이 실행의 토큰은 기록되지 않는다.
                     stdout, stderr = "", ""
                 # 타임아웃 여부만 들고 나가 반환은 블록 밖에서 한다. 반환
                 # 지점을 한 곳에 모으기 위한 것이지 __exit__ 을 피하려는 것이
@@ -909,11 +912,40 @@ def discard(registry: Path, workspace: Path, out_dir: Path) -> None:
         print(f"작업공간을 확인할 수 없어 등록에 남긴다: {workspace}", file=sys.stderr)
         return
     try:
-        shutil.rmtree(target)
+        _force_remove(target)
     except OSError as error:
         print(f"작업공간을 지우지 못했다, 등록에 남긴다: {target} ({error})", file=sys.stderr)
         return
     register(registry, workspace, add=False)
+
+
+def _force_remove(path: Path) -> None:
+    """Delete a tree even when something in it is unreadable.
+
+    A staged HOME holds copies of real credentials, and an agent's workspace can
+    hold anything the agent chose to create. Either may contain a directory with
+    its execute bit cleared, which stops `rmtree` from descending. Leaving
+    secrets on disk because of a permission bit is the wrong trade: restore the
+    bits first, then delete.
+
+    Walking the tree beforehand is used rather than an `onexc` hook because the
+    hook fires per failed operation and cannot re-descend into a directory whose
+    listing already failed.
+    """
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
+    # 반드시 하향식이다. 상향식으로 돌면 잠긴 디렉터리 안으로 내려가지 못해
+    # 그 아래는 손도 대지 못한 채 rmtree 가 다시 막힌다. 내려가기 **전에**
+    # 각 디렉터리의 실행 비트를 되돌린다.
+    for parent, directories, _files in os.walk(path, topdown=True):
+        for name in directories:
+            try:
+                Path(parent, name).chmod(0o700)
+            except OSError:
+                pass
+    shutil.rmtree(path)
 
 
 def resolved_own_workspace(candidate: Path, out_dir: Path) -> Path | None:
@@ -963,7 +995,7 @@ def prune(registry: Path, out_dir: Path) -> int:
             kept.append(line)
             continue
         try:
-            shutil.rmtree(target)
+            _force_remove(target)
         except OSError as error:
             print(f"삭제 실패, 등록에 남긴다: {target} ({error})")
             kept.append(line)
@@ -992,22 +1024,31 @@ def stage_home(names: list[str], work_root: Path, registry: Path) -> Path:
     real_home = Path(os.path.expanduser("~"))
     home = Path(tempfile.mkdtemp(prefix="spec-childhome-", dir=work_root))
     home.chmod(0o700)
+    # 복사를 시작하기 **전에** 등록한다. 중간에 실패해도 부분 복사본을 가리키는
+    # 참조가 남아 있어야 회수된다.
     register(registry, home, add=True)
-    for name in names:
-        # 이름을 그대로 이어 붙이면 ".." 나 절대 경로가 임시 HOME 밖을
-        # 가리킨다. 복사 **대상**이 밖으로 나가면 이 함수가 사용자의 파일을
-        # 덮어쓰는 도구가 된다. 양쪽 끝을 모두 확인한다.
-        source = (real_home / name).resolve()
-        target = (home / name).resolve()
-        if not source.is_relative_to(real_home.resolve()):
-            raise RunFailure(f"--child-home-stage escapes HOME: {name}")
-        if not target.is_relative_to(home.resolve()):
-            raise RunFailure(f"--child-home-stage escapes the staged HOME: {name}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if source.is_dir():
-            shutil.copytree(source, target, symlinks=False)
-        else:
-            shutil.copy2(source, target, follow_symlinks=True)
+    try:
+        for name in names:
+            # 이름을 그대로 이어 붙이면 ".." 나 절대 경로가 임시 HOME 밖을
+            # 가리킨다. 복사 **대상**이 밖으로 나가면 이 함수가 사용자의 파일을
+            # 덮어쓰는 도구가 된다. 양쪽 끝을 모두 확인한다.
+            source = (real_home / name).resolve()
+            target = (home / name).resolve()
+            if not source.is_relative_to(real_home.resolve()):
+                raise RunFailure(f"--child-home-stage escapes HOME: {name}")
+            if not target.is_relative_to(home.resolve()):
+                raise RunFailure(f"--child-home-stage escapes the staged HOME: {name}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(source, target, symlinks=False)
+            else:
+                shutil.copy2(source, target, follow_symlinks=True)
+    except BaseException:
+        # 도중에 실패하면 여기까지 복사된 것을 이 함수가 치운다. 호출자는
+        # 반환값을 받지 못하므로 무엇을 지워야 하는지 알 수 없고, 그 부분이
+        # 하필 인증 파일일 수 있다.
+        discard(registry, home, work_root.parent)
+        raise
     return home
 
 
@@ -1054,8 +1095,12 @@ def attempt(
         clone_at(repo, commit, workspace)
         # 스테이징한 HOME 은 시도마다 새로 만든다. 공유하면 싼 경로가 남긴
         # 설정·훅·인증 상태를 비싼 경로가 물려받는다.
-        attempt_home = stage_home(home_stage, work_root, registry) if home_stage else child_home
+        # stage_home 자체도 try 안에 둔다. 복사 도중 예외가 나면(권한, 끊어진
+        # 심링크, 소켓 파일) 부분 복사본이 남는데, 그 부분이 하필 인증 파일일
+        # 수 있다. 만들다 실패한 것도 지워져야 한다.
+        attempt_home: Path | None = None
         try:
+            attempt_home = stage_home(home_stage, work_root, registry) if home_stage else child_home
             record["child"] = run_child(command, workspace, task, rates, allowed_env, attempt_home)
         finally:
             # 자격증명 복사본이므로 자식이 어떻게 끝나든 지운다. 예외로 빠져
@@ -1332,7 +1377,9 @@ def main() -> int:
 
     cheap_env = env_for(cheap_argv)
     expensive_env = env_for(expensive_argv)
-    allowed_env = cheap_env
+    # 진단은 두 arm 을 함께 본다. 하나만 찍으면 다른 쪽이 다른 벤더로 판별돼
+    # 다른 목록을 받는데도 사용자는 알 수 없다.
+    allowed_env = cheap_env if cheap_env is None else cheap_env | (expensive_env or frozenset())
     if arguments.child_home and arguments.child_home_stage:
         parser.error("use either --child-home or --child-home-stage, not both")
     child_home = arguments.child_home.expanduser().resolve() if arguments.child_home else None

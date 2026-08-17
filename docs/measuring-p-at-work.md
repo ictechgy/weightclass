@@ -171,11 +171,13 @@ tools/speculative_run.py \
 One task per invocation. Around twenty real tasks gives a usable interval.
 
 **The child gets a narrowed environment by default.** It keeps PATH, HOME,
-locale, proxy and CA settings, and anything named `ANTHROPIC_*`, `OPENAI_*`,
-`CLAUDE_*`, or `CODEX_*` — the vendor CLIs need their own credentials. Everything
-else is dropped, so an AWS secret or a database URL sitting in your shell does
-not reach an agent processing an untrusted task. The run prints how many names it
-kept and dropped.
+locale, proxy and CA settings, plus **its own vendor's** namespace: a `codex`
+executable sees `OPENAI_*` and `CODEX_*` but not `ANTHROPIC_*`, and vice versa.
+An executable whose name matches neither gets both — breaking an unknown CLI's
+authentication is worse than the exposure, and the run says so when it happens.
+Everything else is dropped, so an AWS secret or a database URL sitting in your
+shell does not reach an agent processing an untrusted task. The run prints how
+many names it kept and dropped.
 
 If a CLI suddenly cannot authenticate, that count is the first place to look:
 add the missing name with `--child-env NAME`, or fall back to `--child-env-all`
