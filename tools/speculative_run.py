@@ -380,7 +380,10 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
     priced = 0.0
     for field, rate in rates.items():
         priced += breakdown.get(field, 0) * rate / 1_000_000
-    return priced
+    # 벤더가 준 비용과 --prices 요율은 유한성과 부호를 확인하는데 계산 결과만
+    # 확인하지 않으면 기준이 어긋난다. 아주 큰 토큰 수는 곱셈에서 무한대가 될
+    # 수 있다.
+    return priced if math.isfinite(priced) and priced >= 0 else None
 
 
 def run_child(

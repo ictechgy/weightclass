@@ -202,6 +202,11 @@ def main() -> int:
         child = attempt.get("child")
         if not isinstance(child, dict):
             return None
+        if child.get("timed_out"):
+            # 중간에 죽인 실행의 사용량은 부분값이다. 그것을 c 표본에 넣으면
+            # 싼 경로의 비용이 실제보다 낮게 잡혀 절감이 부풀려진다. 비용을
+            # 모르는 것으로 처리해 표본에서 빠지게 한다.
+            return None
         usage = child.get("usage")
         if not isinstance(usage, dict):
             return None

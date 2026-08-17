@@ -90,10 +90,13 @@ def refuse(error):
     sys.exit(1)
 
 paths = []
-for parent, _dirs, files in os.walk(".", onerror=refuse):
+for parent, dirs, files in os.walk(".", onerror=refuse):
     if ".git" in pathlib.Path(parent).parts:
         continue
     paths.append(pathlib.Path(parent))
+    # os.walk 는 심링크 디렉터리로 내려가지 않으므로 dirs 를 버리면 그 링크는
+    # 한 번도 검사되지 않는다. 링크 자체는 경로명과 타깃을 봐야 한다.
+    paths.extend(pathlib.Path(parent, d) for d in dirs)
     paths.extend(pathlib.Path(parent, f) for f in files)
 
 for path in paths:
