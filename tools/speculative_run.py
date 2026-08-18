@@ -1256,10 +1256,15 @@ def _is_credential_shaped(value: str) -> bool:
     두 질문이 지금은 같은 답을 내더라도, 한쪽을 고칠 때 다른 쪽이 함께
     움직이면 안 된다 — 이 파일에서 가장 자주 재발한 결함이 그 형태였다.
     """
-    return any(character.isdigit() for character in value) or (
-        any(character.isupper() for character in value)
-        and any(character.islower() for character in value)
+    # 숫자 **하나만** 있어도 참이면, 이음매가 만든 가짜 자격증명(`123456789012`)
+    # 이 출력 전체에서 지워진다 — 그 값이 진단에도 나오면 그것까지 사라진다.
+    # 자격증명은 글자와 숫자가 섞이거나 대소문자가 섞인다.
+    letters = any(character.isalpha() for character in value)
+    digits = any(character.isdigit() for character in value)
+    mixed_case = any(character.isupper() for character in value) and any(
+        character.islower() for character in value
     )
+    return (letters and digits) or mixed_case
 
 
 def _looks_like_base64(text: str) -> bool:
@@ -2065,12 +2070,16 @@ _PPK_HEADER = re.compile(
 )
 
 
-# YAML 블록 스칼라의 머리: `password: |`, `api_key: >2-` 등.
+# YAML 블록 스칼라의 머리: `password: |`, `api-key: >2-` 등.
+# 이름의 구분자는 밑줄과 하이픈 둘 다다 — `api_key` 만 보면 `api-key` 가 샌다.
 _BLOCK_SCALAR = re.compile(
-    r"(?i)^(?P<indent>[ \t]*)(?P<name>[A-Z0-9_]{0,40}"
-    r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
-    r"[A-Z0-9_]{0,40})[ \t]*:[ \t]*[|>](?P<hint>(?:[0-9][-+]?|[-+][0-9]?)?)[ \t]*$"
+    r"(?i)^(?P<indent>[ ]*)(?P<name>[A-Z0-9_-]{0,40}"
+    r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
+    r"[A-Z0-9_-]{0,40})[ \t]*:[ \t]*[|>](?P<hint>(?:[0-9][-+]?|[-+][0-9]?)?)[ \t]*$"
 )
+# 지시자로 받아들일 범위. YAML 은 1~9 만 허용한다 — `|0` 은 유효하지 않은데,
+# 그 수를 그대로 믿으면 필요한 들여쓰기가 0 이 되어 뒤의 모든 줄을 먹는다.
+BLOCK_SCALAR_HINT_RANGE = range(1, 10)
 
 
 def redact_block_scalars(text: str) -> str:
@@ -2079,12 +2088,10 @@ def redact_block_scalars(text: str) -> str:
     **정규식으로 하지 않는다.** 본문의 범위는 들여쓰기를 세어야 정해지고,
     명시 지시자(`|2`)가 있으면 그 수만큼을 요구해야 한다 — 정규식은 수를 셀
     수 없어서, 지시자를 무시한 판이 한 칸만 들여쓴 진단 줄을 본문으로 먹었다.
-    이 파일에서 정규식으로 옮긴 판정은 매번 양쪽으로 틀렸고, 코드로 옮긴
-    판정(PPK, userinfo)은 그러지 않았다.
 
-    규칙은 YAML 그대로다. 본문은 키보다 더 들여쓴 줄까지이고, 지시자가 있으면
-    그 수만큼 더 들여쓴 줄까지다. 빈 줄은 본문 안에 있을 수 있으므로 판정을
-    미룬다.
+    줄의 정규화는 **쌍둥이와 같아야 한다.** redact_ppk_bodies 와 _key_body_end
+    가 이스케이프 부스러기를 걷고 로그 접두사를 벗기는데 여기만 안 하면,
+    JSON 에 직렬화된 로그에서 머리가 안 잡혀 본문이 통째로 나간다.
     """
     if ":" not in text:
         return text
@@ -2094,30 +2101,46 @@ def redact_block_scalars(text: str) -> str:
     while position < len(text):
         separator = _LINE_SEPARATOR.search(text, position)
         stop = separator.end() if separator else len(text)
-        head = _BLOCK_SCALAR.match(text[position:stop].rstrip("\r\n"))
+        head = _BLOCK_SCALAR.match(_block_scalar_line(text[position:stop]))
         if head is None:
             position = stop
             continue
         hint = "".join(character for character in head.group("hint") if character.isdigit())
-        needed = len(head.group("indent")) + (int(hint) if hint else 1)
+        extra = int(hint) if hint and int(hint) in BLOCK_SCALAR_HINT_RANGE else 1
+        needed = len(head.group("indent")) + extra
         body_from = stop
         cursor = stop
         while cursor < len(text):
             following = _LINE_SEPARATOR.search(text, cursor)
             line_end = following.end() if following else len(text)
-            line = text[cursor:line_end].rstrip("\r\n")
-            if line.strip() and len(line) - len(line.lstrip(" \t")) < needed:
+            line = _block_scalar_line(text[cursor:line_end])
+            # **탭은 들여쓰기가 아니다.** YAML 이 금지한다. 탭으로 시작하는
+            # 줄을 본문으로 세면 그 뒤의 진단이 함께 지워진다.
+            if line.strip() and (line[:1] == "\t" or len(line) - len(line.lstrip(" ")) < needed):
                 break
             cursor = line_end
             if following is None:
                 break
         if cursor > body_from:
             out.append(text[kept:body_from])
-            out.append("[REDACTED]\n")
+            # 원문에 없던 줄바꿈을 넣지 않는다. 본문이 파일 끝에서 끝나면
+            # 뒤에 줄바꿈이 없다.
+            out.append("[REDACTED]\n" if cursor < len(text) else "[REDACTED]")
             kept = cursor
         position = cursor if cursor > body_from else stop
     out.append(text[kept:])
     return "".join(out)
+
+
+def _block_scalar_line(raw: str) -> str:
+    """한 줄에서 직렬화 부스러기만 걷는다.
+
+    **로그 접두사는 벗기지 않는다.** `strip_log_prefix` 는 `이름: ` 도
+    접두사로 보므로 `password: |` 가 `|` 가 되어 머리 자체를 못 알아본다.
+    그리고 들여쓰기를 세는 함수라 접두사를 벗기면 그 수가 달라진다 —
+    쌍둥이와 같은 정규화를 쓰는 것보다 이 함수의 계약이 우선이다.
+    """
+    return _ESCAPE_NOISE.sub("", raw).rstrip("\r\n")
 
 
 def redact_ppk_bodies(text: str) -> str:

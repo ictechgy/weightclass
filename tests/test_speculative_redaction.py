@@ -1932,9 +1932,9 @@ def test_an_undercounted_private_lines_declaration_still_removes_the_body():
 @pytest.mark.parametrize(
     "out,err,gone",
     [
-        # 숫자만으로 된 값 — 주석은 "숫자가 있거나" 인데 코드는 두 종류를
-        # 요구해, 이 형태가 이음매에서만 지워지고 중복이 남았다.
-        ("123456789012 bare duplicate 123456789012", "API_TOKEN=", "123456789012"),
+        # 글자와 숫자가 섞인 값. 숫자**만** 으로 된 값은 이제 전역 삭제
+        # 대상이 아니다 — 아래 테스트가 그 이유를 적는다.
+        ("abc123def456 bare duplicate abc123def456", "API_TOKEN=", "abc123def456"),
         # 따옴표는 값이 아니다. 함께 지우면 따옴표 없는 중복이 남는다.
         ('"AbCdEfGhIjKlMn" bare duplicate AbCdEfGhIjKlMn', "PASSWORD=", "AbCdEfGhIjKlMn"),
     ],
@@ -2304,3 +2304,55 @@ def test_a_block_scalar_keeps_a_sibling_diagnostic_line():
     cleaned = module.verify_excerpt(text)
     assert "orchidcoppervelvet" not in cleaned
     assert "AssertionError: expected 1, got 2" in cleaned
+
+
+def test_a_digits_only_seam_value_is_not_erased_output_wide():
+    """이음매는 **가짜** 자격증명도 만든다.
+
+    `API_TOKEN=` 뒤에 숫자열이 붙으면 문법상 자격증명이지만, 그 숫자열이
+    실제로는 진단에 쓰인 수일 수 있다. 숫자 하나만 있어도 전역 삭제하면
+    `assert retry_after == 123456789012` 같은 줄이 함께 사라진다.
+    자격증명은 글자와 숫자가 섞이거나 대소문자가 섞인다.
+    """
+    module = load_runner()
+    joined = module.join_streams("123456789012\nassert retry_after == 123456789012", "API_TOKEN=")
+    assert "assert retry_after == 123456789012" in joined
+
+
+@pytest.mark.parametrize(
+    "text,kept",
+    [
+        # `|0` 은 유효하지 않은 지시자다. 그 수를 믿으면 필요한 들여쓰기가
+        # 0 이 되어 뒤의 모든 줄을 먹는다.
+        ("password: |0\nFAILED test\nTraceback", "FAILED test"),
+        # 탭은 YAML 이 들여쓰기로 금지한다.
+        (
+            "password: |\n  correct_horse_battery\n\tTraceback: worker failed\n"
+            "AssertionError: boom",
+            "Traceback: worker failed",
+        ),
+    ],
+)
+def test_child_controlled_numbers_do_not_widen_the_block(text, kept):
+    """지시자도 들여쓰기도 자식이 쓴다. 그 수를 그대로 믿으면 진단이 지워진다."""
+    module = load_runner()
+    assert kept in module.verify_excerpt(text)
+
+
+def test_a_hyphenated_key_name_is_recognised():
+    """이름의 구분자는 밑줄과 하이픈 둘 다다. `api_key` 만 보면 `api-key` 가 샌다."""
+    module = load_runner()
+    assert "orchidcoppervelvet" not in module.redact_text("api-key: |\n  orchidcoppervelvet")
+
+
+def test_a_block_scalar_at_end_of_input_adds_no_newline():
+    """원문에 없던 줄바꿈을 넣지 않는다."""
+    module = load_runner()
+    assert not module.verify_excerpt("password: |\n  s3cr3tvalue").endswith("\n")
+
+
+def test_a_serialised_block_scalar_head_is_recognised():
+    """본문은 이스케이프된 줄바꿈을 순회하는데 머리만 물리적 줄바꿈을 보면 샌다."""
+    module = load_runner()
+    text = "password: |\\n  correct_horse_battery\\nnext: failure"
+    assert "correct_horse_battery" not in module.verify_excerpt(text)
