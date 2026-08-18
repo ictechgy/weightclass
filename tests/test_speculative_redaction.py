@@ -2177,3 +2177,50 @@ def test_an_ordinary_block_scalar_survives():
     module = load_runner()
     text = "description: |\n  a short note"
     assert module.verify_excerpt(text) == text
+
+
+# --- 라운드 37: 분석과 출력을 가르고, 들여쓰기를 역참조로 --------------------
+
+
+def test_a_first_pass_marker_does_not_disable_seam_recovery():
+    """지운 조각에는 `[REDACTED]` 표식이 들어 있다.
+
+    `removed_spans` 는 원문에 그 표식이 있으면 되짚기를 포기하므로, 조각을
+    먼저 지우도록 바꾼 순간 그 포기가 **언제나** 일어나 정상 출력이 통째로
+    버려졌다. 출력은 지운 조각에서, 분석은 원문에서 한다.
+    """
+    module = load_runner()
+    joined = module.join_streams(
+        "Cobalt7SilverAnchor bare API_TOKEN=Zz9Yy8Xx7Ww6Vv5",
+        "\nAWS_SECRET_ACCESS_KEY=Aa1Bb2Cc3Dd4Ee5",
+    )
+    assert "Cobalt7SilverAnchor" not in joined
+
+
+def test_a_block_scalar_stops_at_the_key_indentation():
+    """본문은 **키보다 더 들여쓴 줄** 까지다.
+
+    들여쓰기를 역참조로 잡지 않으면 뒤따르는 들여쓴 줄을 전부 먹어, 같은
+    깊이의 진단 줄이 함께 지워진다.
+    """
+    module = load_runner()
+    text = "  password: |\n    orchidcoppervelvet\n  AssertionError: expected 1, got 2"
+    cleaned = module.verify_excerpt(text)
+    assert "orchidcoppervelvet" not in cleaned
+    assert "AssertionError: expected 1, got 2" in cleaned
+
+
+@pytest.mark.parametrize(
+    "text,token",
+    [
+        # 명시 들여쓰기 지시자
+        ("password: |2\n  cobalt7silveranchor", "cobalt7silveranchor"),
+        # chomping
+        ("api_token: >-\n  abc123def456ghi789", "abc123def456ghi789"),
+        ("api_key: |+\n  Zz9Yy8Xx7Ww6Vv5Uu4", "Zz9Yy8Xx7Ww6Vv5Uu4"),
+    ],
+)
+def test_block_scalar_indicators_are_recognised(text, token):
+    """YAML 은 `|2`, `|-`, `>+` 같은 지시자를 붙일 수 있다."""
+    module = load_runner()
+    assert token not in module.redact_text(text)

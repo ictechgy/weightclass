@@ -717,7 +717,8 @@ def main() -> int:
         print(
             f"\n실측 비용비 {cost_symbol} = {measured:.3f}"
             f"  (싼 경로 과제당 평균 {statistics.fmean(cheap_all):.4f} — {len(cheap_all)}건 —"
-            f" 을 승급 {len(paired)}건의 비싼 경로 평균 {expensive_mean:.4f} 로 나눈 값)"
+            f" 을 승급 {len(observed_expensive_costs)}건의 비싼 경로 평균"
+            f" {expensive_mean:.4f} 로 나눈 값)"
         )
         print(
             "  분모는 대입값이다. 비싼 경로는 승급된 과제에서만 돌았으므로, 승급하지"
@@ -1349,7 +1350,7 @@ def main() -> int:
     # 한 숫자를 두 곳이 반대로 부르게 된다 — 틀린 것은 c 가 아니라 **모형** 이다.
     if not advisor_on:
         aside = "  "
-    elif shape_a_measured and c_range is not None:
+    elif shape_a_measured and c_range is not None and not timed_out_tasks:
         # c 를 못 잰 로그에서는 c_A 라고 부를 것도 없다. 아래 사다리가
         # "c_A 도 없으므로" 라고 말하는데 여기서 c_A 를 쓰면 앞뒤가 어긋난다.
         aside = "  (c_A 로 세운 조언 없는 모형이다 — 이 로그의 모형이 아니다) "
@@ -1438,6 +1439,12 @@ def main() -> int:
                     # **계산부와 같은 술어를 쓴다.** 요청 여부로 프라임을
                     # 고르면, 계획이 실제로 안 붙은 로그에 A+B 식을 가리키게
                     # 된다 — 위쪽 계산은 프라임 없이 찍고 여기만 프라임이다.
+                    # **혼합을 먼저 본다.** shape_a_measured 를 먼저 보면,
+                    # 섞인 표본도 계획이 한 번은 붙었으므로 첫 가지에 흡수돼
+                    # 혼합 가지가 도달 불가가 된다.
+                    if mixed_application
+                    else " 계획 적용이 섞여 이 로그의 c 도 실패율도 단일 모양의"
+                    " 값이 아니다. 그 건을 빼고 다시 모아야 c_A 와 p′ 를 낼 수 있다."
                     if shape_a_measured
                     # 계획 적용이 섞이면 위쪽에서 a, q, r, s 를 아예 안
                     # 냈다. 그런데 여기서 "위의 판정을 보라" 고 하면 없는
