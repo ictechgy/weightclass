@@ -55,7 +55,13 @@ def main() -> int:
 
 
 def report(work: pathlib.Path) -> int:
-    """항등 사본에서 테스트를 돌리고 살아남은 이름을 낸다."""
+    """항등 사본에서 테스트를 돌리고 살아남은 **노드 ID** 를 낸다.
+
+    파라미터 ID(`[4]`, `[8]`)를 지우면 안 된다. 한 파라미터가 실패하면 그
+    이름 전체가 "검사된 것" 으로 보이지만, 나머지 파라미터는 프로브가 입력에
+    없어 공허하게 통과하고 있을 수 있다 — 라운드 24 의 결함이 정확히 그
+    형태였고, 이 도구의 첫 판이 같은 실수를 했다.
+    """
     run = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider", TESTS],
         capture_output=True,
@@ -63,9 +69,9 @@ def report(work: pathlib.Path) -> int:
         cwd=work,
     )
     failed = {
-        line.split("::")[1].split("[")[0]
+        line.split(" ", 1)[1].strip()
         for line in run.stdout.splitlines()
-        if line.startswith("FAILED")
+        if line.startswith("FAILED ")
     }
     collected = subprocess.run(
         [
@@ -83,9 +89,7 @@ def report(work: pathlib.Path) -> int:
         text=True,
         cwd=work,
     )
-    every = {
-        line.split("::")[1].split("[")[0] for line in collected.stdout.splitlines() if "::" in line
-    }
+    every = {line.strip() for line in collected.stdout.splitlines() if "::" in line}
     if not every:
         print("테스트를 수집하지 못했다.", file=sys.stderr)
         return 1
@@ -94,10 +98,20 @@ def report(work: pathlib.Path) -> int:
         f"리댁션을 항등으로 바꿨을 때:"
         f" {len(every) - len(survivors)}개 실패, {len(survivors)}개 통과"
     )
-    print("\n통과한 것들 — 각각 어느 방향을 보는 테스트인지 확인하라:")
+    partial = sorted(
+        {name.split("[")[0] for name in survivors} & {name.split("[")[0] for name in failed}
+    )
+    if partial:
+        print("\n**부분적으로 공허한 테스트** — 같은 이름의 다른 파라미터는 실패했다:")
+        for name in partial:
+            cases = sorted(node for node in survivors if node.split("[")[0] == name)
+            print(f"    {name}")
+            for node in cases:
+                print(f"      통과: {node.split('::')[-1]}")
+    print("\n항등 리댁션에서도 통과한 것 — 각각 어느 방향을 보는지 확인하라:")
     print("  (보존 테스트와 봉투 파싱 단위 테스트는 여기 나오는 것이 정상이다)")
-    for name in survivors:
-        print(f"    {name}")
+    for node in survivors:
+        print(f"    {node.split('::')[-1]}")
     return 0
 
 

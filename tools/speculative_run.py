@@ -45,6 +45,8 @@ into a quoting exercise; the whole point of this project is exact commands.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import contextlib
 import hashlib
 import json
@@ -940,8 +942,24 @@ _SECRET_SHAPES = re.compile(
 # 목록에 넣을 최소 길이. 이보다 짧으면 흔한 문자열일 가능성이 커서, 지우는
 # 이득보다 보고서를 알아볼 수 없게 만드는 손해가 크다.
 MINIMUM_SECRET_CHARS = 6
-# 이음매 조각을 **전역** 으로 지울 최소 길이. 짧으면 평범한 낱말이 걸린다.
-GLOBAL_REPLACE_CHARS = 16
+# 이음매 조각을 **전역** 으로 지울 최소 길이.
+GLOBAL_REPLACE_CHARS = 12
+
+
+def _looks_like_secret_fragment(piece: str) -> bool:
+    """이 조각이 자격증명의 **값** 쪽인가.
+
+    값 쪽은 자격증명 문자로만 이뤄지고 글자 종류가 섞인다. 이름 쪽
+    (`API_TOKEN=`)은 등호나 콜론을 달고 있고, 진단 낱말(`FAILED`)은 한
+    종류로만 이뤄진다.
+    """
+    if len(piece) < GLOBAL_REPLACE_CHARS:
+        return False
+    if not _PEM_BODY_CHARS.fullmatch(piece.replace("-", "").replace("_", "")):
+        return False
+    return _looks_like_base64(piece)
+
+
 # 인코딩을 몇 겹까지 합성해 볼지. 실제 로그에서 두 겹을 넘는 일은 드물지만,
 # 셋으로 두면 조합이 열다섯 개로 끝나므로 넉넉히 잡아도 비용이 없다.
 ENCODING_DEPTH = 3
@@ -1048,6 +1066,9 @@ PEM_NOISE_TOLERANCE = 2
 # 줄을 가로질러 누적한 base64 글자가 이만큼 이어지면 본문으로 본다. 한 줄
 # 짜리 판정은 짧게 재접힌 키를 놓친다.
 PEM_FOLDED_BODY_CHARS = 48
+# DER 이 아닌 형식(PGP armor)은 태그로 가릴 수 없다. 그때는 양으로 본다 —
+# 마커 쌍 사이에 이만큼의 base64 가 들어 있는 진단 로그는 현실적이지 않다.
+PEM_ARMOURED_BODY_CHARS = 200
 
 
 # 직렬화가 조각의 양 끝에 남기는 글자들.
@@ -1060,43 +1081,70 @@ _SERIALISATION_EDGE = " \t\r\n\"',"
 def _between_markers_is_body(content: str) -> bool:
     """BEGIN 과 END 사이의 내용이 키 본문인가.
 
-    두 가지를 본다. **양** 이 충분해야 하고(짧으면 마커를 나란히 언급한
-    산문이다), 조각들의 **길이가 고르거나 하나뿐** 이어야 한다. 접기는 길이가
-    같은 줄을 만들고, 산문은 길이가 제각각인 낱말을 만든다.
+    **모양을 재지 않는다.** 앞선 판은 조각 길이의 균일함을 봤는데, 그것은
+    양쪽으로 틀렸다 — 같은 낱말이 여덟 번 이어진 진단 로그를 키로 오인했고,
+    줄 길이가 들쭉날쭉한 진짜 키를 놓쳤다. 구분자 주변 공백으로 코드와
+    자격증명을 가르려던 것과 같은 부류의 실수다.
 
-    글자 종류는 여기서 보지 않는다. 마커 쌍이 있다는 것 자체가 강한 신호이고,
-    반복 바이트로 만든 키의 본문은 한 종류로만 이뤄질 수 있다.
+    대신 **내용이 실제로 무엇인지** 본다.
 
-    정규화는 **본 주사와 같아야** 한다. 접두사와 직렬화 부스러기를 안 걷으면
-    `[INFO] AQEB` 가 두 조각으로 세어져 길이가 고르지 않다고 판정된다.
+    1. base64 로 풀리는가. 안 풀리면 본문이 아니다.
+    2. 푼 결과가 DER SEQUENCE(0x30)로 시작하는가. PKCS#1 과 PKCS#8 개인키는
+       언제나 그렇다. 이것이 가장 확실한 신호다.
+    3. 그렇지 않아도 **양이 많으면** 본문으로 본다. PGP armor 처럼 DER 이
+       아닌 형식이 있고, 마커 쌍 사이에 수백 자가 들어 있는 진단 로그는
+       현실적이지 않다.
     """
-    tokens: list[str] = []
+    material = _base64_material(content)
+    if not material:
+        return False
+    decoded = _decode_base64(material)
+    if decoded is None:
+        return False
+    if decoded[:1] == b"\x30":
+        return True
+    return len(material) >= PEM_ARMOURED_BODY_CHARS
+
+
+def _base64_material(content: str) -> str:
+    """마커 사이에서 본문일 수 있는 글자만 모은다.
+
+    접두사와 직렬화 부스러기를 걷는 방식은 본 주사와 같아야 한다.
+    """
+    pieces: list[str] = []
     position = 0
     while position < len(content):
         separator = _LINE_SEPARATOR.search(content, position)
         stop = separator.end() if separator else len(content)
-        # 따옴표와 쉼표를 **한 번에** 벗긴다. 차례로 벗기면 `"AQEB...",` 에서
-        # 앞 따옴표만 떨어지고 뒤의 `",` 가 남아 조각이 본문으로 안 보인다 —
-        # JSON 배열로 직렬화된 키가 그 형태다.
         line = _ESCAPE_NOISE.sub("", content[position:stop]).strip(_SERIALISATION_EDGE)
         position = stop
-        # 접두사 제거 **전후로** 벗긴다. `"[INFO] AQEB",` 는 바깥 따옴표를
-        # 먼저 벗겨야 접두사가 보이고, 접두사를 벗긴 뒤에도 뒤쪽 부스러기가
-        # 남을 수 있다.
         stripped = strip_log_prefix(line).strip(_SERIALISATION_EDGE)
         if not stripped:
             continue
-        tokens.extend(piece for piece in stripped.split() if piece)
-    if not tokens:
-        return False
-    material = sum(len(token) for token in tokens if _PEM_BODY_CHARS.fullmatch(token))
-    if material < PEM_FOLDED_BODY_CHARS:
-        return False
-    if len(tokens) == 1:
-        return True
-    # 마지막 조각은 짧을 수 있다(본문의 끝). 그것 말고는 길이가 같아야 한다.
-    lengths = {len(token) for token in tokens[:-1]}
-    return len(lengths) == 1 and len(tokens[-1]) <= max(lengths)
+        # PGP armor 의 체크섬 줄(`=abcd`)은 본문이 아니다.
+        if stripped.startswith("=") and len(stripped) <= 6:
+            continue
+        for token in stripped.split():
+            if _PEM_BODY_CHARS.fullmatch(token):
+                pieces.append(token)
+            elif _PEM_HEADER_LINE.match(stripped) or ":" in token:
+                # 헤더 줄(`Version: GnuPG v2`)은 건너뛴다.
+                continue
+            else:
+                # 본문도 헤더도 아닌 조각이 섞여 있다. 산문이다.
+                return ""
+    return "".join(pieces)
+
+
+def _decode_base64(material: str) -> bytes | None:
+    """base64 로 풀어 본다. 안 풀리면 None."""
+    padded = material[: len(material) // 4 * 4]
+    if len(padded) < 4:
+        return None
+    try:
+        return base64.b64decode(padded, validate=True)
+    except (ValueError, binascii.Error):
+        return None
 
 
 def _looks_like_base64(text: str) -> bool:
@@ -1643,10 +1691,14 @@ def join_streams(out: str, err: str) -> str:
         for piece, at_head in ((out_piece, True), (err_piece, False)):
             if not piece:
                 continue
-            # 전역 치환의 하한은 **자격증명 길이 하한** 이어야 한다. 여섯
-            # 자로는 `FAILED` 같은 평범한 진단 텍스트가 걸려 출력 전체에서
-            # 지워진다. 그보다 짧은 조각은 이음매 자리에서만 지운다.
-            if len(piece) >= GLOBAL_REPLACE_CHARS:
+            # 전역 치환의 기준은 길이가 아니라 **그 조각이 자격증명의 값 쪽
+            # 인지** 다. 길이로 가르면 양쪽이 부딪힌다 — 낮으면 `FAILED` 가
+            # 걸려 출력 전체에서 지워지고, 높으면 열두 자짜리 중복 값이
+            # 남는다.
+            #
+            # 값 쪽 조각은 자격증명 문자로만 이뤄져 있고 낱말이 아니다.
+            # 이름 쪽 조각(`API_TOKEN=`, `FAILED`)은 그렇지 않다.
+            if _looks_like_secret_fragment(piece):
                 forward = forward.replace(piece, "[REDACTED]")
             elif at_head and forward.startswith(piece):
                 forward = "[REDACTED]" + forward[len(piece) :]
@@ -1759,9 +1811,14 @@ def redact_host_secrets(text: str) -> str:
             cleaned = cleaned.replace(form, "[REDACTED]")
         # 퍼센트 이스케이프는 **하나하나** 대소문자를 고를 수 있다
         # (`%2f...%3F`). 형태를 열거하면 조합이 2^n 이므로 정규식으로 본다.
-        pattern = _percent_pattern(secret)
-        if pattern is not None:
-            cleaned = pattern.sub("[REDACTED]", cleaned)
+        #
+        # **합성 형태에도 적용한다.** JSON 으로 감싼 뒤 퍼센트 인코딩한
+        # 형태는 그 자체가 퍼센트 이스케이프를 담으므로, 원문에만 걸면
+        # 대소문자가 섞인 그 형태가 빠져나간다.
+        for base in {secret, *_encoded_forms(secret)}:
+            pattern = _percent_pattern(base)
+            if pattern is not None:
+                cleaned = pattern.sub("[REDACTED]", cleaned)
     return cleaned
 
 

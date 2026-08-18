@@ -835,7 +835,14 @@ def main() -> int:
                 # a 도 표본에서 온 값이다. 점추정만 쓰면 s > a + q·r 판정이
                 # 실제보다 확정적으로 보인다.
                 if len(values) > 1:
-                    spread = 1.96 * statistics.stdev(values) / math.sqrt(len(values))
+                    # 소표본에는 정규분위수가 아니라 t 를 쓴다. c 구간은
+                    # 이미 그렇게 하는데 여기만 고정 1.96 이면, 관측 세 건짜리
+                    # 분모에서 구간이 좁게 나와 조언에 유리하게 틀린다.
+                    spread = (
+                        t_quantile(len(values) - 1)
+                        * statistics.stdev(values)
+                        / math.sqrt(len(values))
+                    )
                 else:
                     # 관측이 하나면 흔들림을 0 으로 두면 안 된다. 그것은
                     # 한 번 봤다는 사실을 "정확히 안다" 로 바꾸는 것이다.
@@ -867,241 +874,268 @@ def main() -> int:
                     " 계획이 붙은 실행만 남기거나, 안 붙은 실행을 빼고 다시 모아야 한다."
                 )
                 return 0
-            a_first = advice_stats("advice_first")
-            a_failure = advice_stats("advice_failure")
-            # 두 조언 호출은 입력이 달라 비용도 다르다. 둘 다 `a` 로 찍으면
-            # 읽는 쪽이 섞는다. 설계 문서의 기호를 그대로 쓴다 — 시작 전은
-            # a_A, 실패 후는 a_B(계획을 받은 뒤면 a_B′).
-            for symbol, label, stats in (
-                ("a_A", "시작 전", a_first),
-                (f"a_B{'′' if primed else ''}", "실패 후", a_failure),
-            ):
-                if stats is None:
-                    continue
-                ratio, spread, count = stats
-                band = f" ± {spread:.3f}" if spread else ""
-                print(f"  {label} 조언 1회 비용비 {symbol} = {ratio:.3f}{band}  ({count}회)")
-            a_ratio = a_failure[0] if a_failure else None
-            a_spread = a_failure[1] if a_failure else 0.0
-            if a_ratio is None:
-                print("  실패 후 조언 비용을 얻지 못해 a 를 내지 못한다.")
-
-            # s 는 실패한 실행에서만 나온다. 재시도가 기록된 건만 센다.
-            # 분모는 "재시도가 기록된 건" 이 아니라 "조언을 받은 실패" 다.
-            # 조언이 비어 재시도조차 못 한 건은 비용은 쓰고 승급했는데 분모에서
-            # 빠져, s 가 위로 치우친다.
-            advised_failures = [r for r in usable if isinstance(r.get("advice_failure"), dict)]
-            if primed and config.get("advise_on_failure"):
+            if mixed_application:
+                # 아래 수들(a, q, r, s)은 계획을 받은 실패와 못 받은 실패를 한 수로
+                # 뭉갠 값이다. 판정만 막고 수를 찍으면 그 수가 그대로 쓰인다 —
+                # 경고는 읽히지 않고 숫자는 인용된다.
+                #
+                # 다만 **함수를 끝내지는 않는다.** 앞선 판은 여기서 return 했고,
+                # 그러면 뒤따르는 타임아웃 판정 보류와 얇은 분모 경고가 통째로
+                # 사라졌다. 조언 구간만 건너뛴다.
                 print(
-                    "  주의: 시작 전 조언과 실패 후 조언이 함께 켜져 있다. 여기 s′ 는"
-                    " 계획을 받은 뒤의 재시도 성공률이므로, 실패 후 조언만 켠 설정의"
-                    " s 와 같은 값이 아니다. 두 설정의 수를 섞어 쓰면 안 된다."
+                    "  계획 적용이 섞여 있어 a, q, r, s 를 내지 않는다."
+                    " 계획이 붙은 실행만 남기거나, 안 붙은 실행을 빼고 다시 모아야 한다."
+                    " 위에 찍힌 비용비도 두 모집단이 섞인 값이므로 c 로도 c_A 로도"
+                    " 쓸 수 없다."
                 )
-            if config.get("advise_on_failure"):
-                rescued = sum(
-                    1
-                    for r in advised_failures
-                    if isinstance(r.get("retry"), dict) and (r["retry"] or {}).get("accepted")
-                )
-                no_retry = sum(1 for r in advised_failures if not isinstance(r.get("retry"), dict))
-                if advised_failures:
-                    s_lo, s_hi = wilson(rescued, len(advised_failures))
-                    s_hat = rescued / len(advised_failures)
-                    if no_retry:
-                        print(
-                            f"  조언 {no_retry}건은 비어 있거나 조언자가 실패해 재시도조차"
-                            " 못 했다. 비용은 썼고 승급했으므로 분모에 남긴다."
-                        )
-                        print(
-                            "    그 건들은 재시도 비용을 쓰지 않았으므로 손익분기에는"
-                            " 재시도 시도율 q 를 곱한 q·r 을 쓴다."
-                        )
+            else:
+                a_first = advice_stats("advice_first")
+                a_failure = advice_stats("advice_failure")
+                # 두 조언 호출은 입력이 달라 비용도 다르다. 둘 다 `a` 로 찍으면
+                # 읽는 쪽이 섞는다. 설계 문서의 기호를 그대로 쓴다 — 시작 전은
+                # a_A, 실패 후는 a_B(계획을 받은 뒤면 a_B′).
+                for symbol, label, stats in (
+                    ("a_A", "시작 전", a_first),
+                    (f"a_B{'′' if primed else ''}", "실패 후", a_failure),
+                ):
+                    if stats is None:
+                        continue
+                    ratio, spread, count = stats
+                    band = f" ± {spread:.3f}" if spread else ""
+                    print(f"  {label} 조언 1회 비용비 {symbol} = {ratio:.3f}{band}  ({count}회)")
+                a_ratio = a_failure[0] if a_failure else None
+                a_spread = a_failure[1] if a_failure else 0.0
+                if a_ratio is None:
+                    print("  실패 후 조언 비용을 얻지 못해 a 를 내지 못한다.")
+
+                # s 는 실패한 실행에서만 나온다. 재시도가 기록된 건만 센다.
+                # 분모는 "재시도가 기록된 건" 이 아니라 "조언을 받은 실패" 다.
+                # 조언이 비어 재시도조차 못 한 건은 비용은 쓰고 승급했는데 분모에서
+                # 빠져, s 가 위로 치우친다.
+                advised_failures = [r for r in usable if isinstance(r.get("advice_failure"), dict)]
+                if primed and config.get("advise_on_failure"):
                     print(
-                        f"  조언 후 재시도 성공률 {'s′' if primed else 's'}"
-                        f" = {s_hat:.1%}"
-                        f"  95% CI [{s_lo:.1%}, {s_hi:.1%}]   ({rescued}/{len(advised_failures)})"
+                        "  주의: 시작 전 조언과 실패 후 조언이 함께 켜져 있다. 여기 s′ 는"
+                        " 계획을 받은 뒤의 재시도 성공률이므로, 실패 후 조언만 켠 설정의"
+                        " s 와 같은 값이 아니다. 두 설정의 수를 섞어 쓰면 안 된다."
                     )
-                    # 재시도는 최초 싼 실행과 같은 비용이 아니다. 과제에 조언이
-                    # 붙어 프롬프트가 길고, 모델이 더 오래 돌 수도 있다. 이득
-                    # 조건은 s > a + c 가 아니라 s > a + q·r 이다.
-                    retry_costs = [
-                        value
-                        for r in usable
-                        if isinstance(r.get("retry"), dict)
-                        and not timed_out(r.get("retry"))
-                        and (value := cost_of(r.get("retry"))) is not None
-                    ]
-                    priced_retries = len(retry_costs)
-                    all_retries = sum(1 for r in usable if isinstance(r.get("retry"), dict))
-                    # 값이 빠진 비율이 크면 경고로 끝낼 일이 아니다. a 와 r 은
-                    # 값이 있는 것만 보고 s 와 q 는 전부를 세므로, 두 수가 같은
-                    # 모집단이 아니게 된다. 빠진 비용이 얼마였을지 모르므로
-                    # 방향도 모른다 — 넓히는 것으로 메울 수 없다.
-                    # 절반이면 충분하다는 기준은 너무 헐겁다. 값이 없는 재시도
-                    # 하나가 임의로 비쌌을 수 있고, 그것이 결론을 뒤집는다.
-                    # 돈에 대한 단정적 판정에는 전수를 요구한다.
-                    priced_enough = priced_retries == all_retries
-                    # a 와 r 의 분모는 승급 과제의 비싼 평균이다. 거기에
-                    # 타임아웃의 부분 사용량이 섞이면 분모가 작아져 두 비율이
-                    # 모두 커진다. 위쪽 c 판정은 그것 때문에 판정을 멈추는데,
-                    # 조언 분기가 그 금지를 우회하고 있었다.
-                    if timed_out_tasks:
-                        priced_enough = False
-                    # 타임아웃만 막으면 부족하다. 보통의 미가격 승급도 분모
-                    # 에서 빠지므로, 남은 비싼 비용 평균이 승급 전체를
-                    # 대표하지 않는다. a 와 r 이 모두 그 평균으로 나눈 값이다.
-                    # a 와 r 의 분모는 all_expensive_costs 다. 그것이 승급
-                    # 전체를 대표하는지는 **그 분모의 카운터** 로 본다. c 쪽
-                    # 카운터를 빌려 쓰면, 싼 비용이 없어 c 의 루프에서 먼저
-                    # 빠진 승급이 어느 카운터에도 안 잡혀 게이트가 눈이 먼다.
-                    if expensive_missing:
-                        priced_enough = False
-                    # 조언 비용도 마찬가지다. a 가 작은 부분집합에서 나오면
-                    # s 와 같은 모집단이 아니다.
-                    advice_attempted = sum(
-                        1 for r in usable if isinstance(r.get("advice_failure"), dict)
+                if config.get("advise_on_failure"):
+                    rescued = sum(
+                        1
+                        for r in advised_failures
+                        if isinstance(r.get("retry"), dict) and (r["retry"] or {}).get("accepted")
                     )
-                    advice_priced = sum(
-                        1 for r in usable if advice_cost(r, "advice_failure") is not None
+                    no_retry = sum(
+                        1 for r in advised_failures if not isinstance(r.get("retry"), dict)
                     )
-                    if advice_priced != advice_attempted:
-                        priced_enough = False
-                    if all_retries and priced_retries < all_retries:
-                        print(
-                            f"  주의: 재시도 {all_retries}건 중 {priced_retries}건만 비용을"
-                            " 얻었다. s 와 q 는 전부를 세는데 r 은 그 일부에서만 나오므로,"
-                            " 두 수가 같은 모집단이 아니다."
-                        )
-                    r_ratio = None
-                    r_spread = 0.0
-                    retry_denominator = (
-                        statistics.fmean(all_expensive_costs) if all_expensive_costs else 0.0
-                    )
-                    if retry_costs and retry_denominator > 0:
-                        expensive_mean_all = statistics.fmean(all_expensive_costs)
-                        r_mean = statistics.fmean(retry_costs)
-                        r_ratio = r_mean / expensive_mean_all
-                        r_spread = (
-                            1.96 * statistics.stdev(retry_costs) / math.sqrt(len(retry_costs))
-                            if len(retry_costs) > 1
-                            else r_mean
-                        ) / expensive_mean_all
-                        print(
-                            f"  재시도 1회 비용비 r{'′' if primed else ''}"
-                            f" = {r_ratio:.3f}  ({len(retry_costs)}회)"
-                            "  — 조언이 붙어 최초 싼 실행보다 비쌀 수 있다"
-                        )
-                    if a_ratio is not None and c_range is not None:
-                        # 이득 조건은 s > a + q·r. 모든 항의 흔들림을 태운다.
-                        # 조언이 비어 재시도조차 못 한 실패에는 r 이 들지 않는다.
-                        # 모든 실패에 r 을 물리면 조언 경로가 실제보다 비싸
-                        # 보인다. 재시도 시도율 q 를 곱한다.
-                        attempted = len(advised_failures) - no_retry
-                        q = attempted / len(advised_failures) if advised_failures else 1.0
-                        # r 을 쟀으면 그것을 쓴다. 못 쟀으면 c 로 대신하되
-                        # 그것이 대입이라고 말한다.
-                        if r_ratio is not None and not priced_enough:
-                            if timed_out_tasks or expensive_missing:
-                                print(
-                                    f"  승급 {expensive_missing}건의 비싼"
-                                    f" 비용이 없거나 0 이고 과제 {timed_out_tasks}건이"
-                                    " 타임아웃이다. 비싼 경로 평균이 승급 전체를"
-                                    " 대표하지 않으므로 판정하지 않는다."
-                                )
-                            else:
-                                print(
-                                    f"  조언 {advice_attempted}건 중 {advice_priced}건,"
-                                    f" 재시도 {all_retries}건 중 {priced_retries}건만"
-                                    " 비용이 있다. 값 없는 하나가 임의로 비쌌을 수"
-                                    " 있으므로 판정하지 않는다."
-                                )
-                        elif r_ratio is None:
-                            # r 은 이 판정의 절반이다. 못 쟀는데 c 로 대신하고
-                            # 판정까지 내면, 재지 않은 것을 잰 것처럼 보이게
-                            # 된다. 조언이 붙은 재시도는 c 보다 비싸므로 그
-                            # 대입은 언제나 조언 쪽에 유리하다.
+                    if advised_failures:
+                        s_lo, s_hi = wilson(rescued, len(advised_failures))
+                        s_hat = rescued / len(advised_failures)
+                        if no_retry:
                             print(
-                                "  재시도 비용을 얻지 못해 손익분기를 내지 않는다."
-                                " c 로 대신하면 조언 쪽에 유리한 방향으로만 틀린다."
+                                f"  조언 {no_retry}건은 비어 있거나 조언자가 실패해 재시도조차"
+                                " 못 했다. 비용은 썼고 승급했으므로 분모에 남긴다."
                             )
-                        else:
-                            # q 도 표본이다. 시도율의 Wilson 구간을 r 에 태운다.
-                            q_lo, q_hi = wilson(attempted, len(advised_failures))
-                            bound_low = max(0.0, a_ratio - a_spread) + max(
-                                0.0, (r_ratio - r_spread) * q_lo
+                            print(
+                                "    그 건들은 재시도 비용을 쓰지 않았으므로 손익분기에는"
+                                " 재시도 시도율 q 를 곱한 q·r 을 쓴다."
                             )
-                            bound_high = a_ratio + a_spread + (r_ratio + r_spread) * q_hi
-                            # a 와 r 은 같은 분모(승급 과제의 비싼 평균)로 나눈
-                            # 값이고 그 분모도 표본이다. c 의 구간을 빌려 쓰면
-                            # 안 된다 — 싼 비용과 비싼 비용이 같은 비율로
-                            # 움직이면 c 의 구간은 좁은데 분모는 여전히
-                            # 흔들린다. 분모의 표준오차를 직접 낸다.
-                            expensive_values = all_expensive_costs
-                            if len(expensive_values) <= 1:
-                                # 분모가 한 관측뿐이면 그 평균을 정확히 아는
-                                # 값처럼 쓰게 된다. lower_e <= 0 에서 판정을
-                                # 막는 것과 같은 이유로 여기서도 막는다.
-                                print(
-                                    "  승급 과제의 비싼 비용 관측이 하나뿐이라 분모의"
-                                    " 흔들림을 낼 수 없다. 판정하지 않는다."
-                                )
-                                bound_low, bound_high = 0.0, float("inf")
-                            else:
-                                mean_e = statistics.fmean(expensive_values)
-                                se_e = statistics.stdev(expensive_values) / math.sqrt(
-                                    len(expensive_values)
-                                )
-                                # 분모가 흔들리면 비율은 반대로 흔들린다.
-                                lower_e = mean_e - 1.96 * se_e
-                                upper_e = mean_e + 1.96 * se_e
-                                if lower_e <= 0:
-                                    # 분모의 구간이 0 을 지나면 비율의 상한이
-                                    # 없다. 상한을 지어내지 않고 판정을 막는다.
+                        print(
+                            f"  조언 후 재시도 성공률 {'s′' if primed else 's'}"
+                            f" = {s_hat:.1%}"
+                            f"  95% CI [{s_lo:.1%}, {s_hi:.1%}]"
+                            f"   ({rescued}/{len(advised_failures)})"
+                        )
+                        # 재시도는 최초 싼 실행과 같은 비용이 아니다. 과제에 조언이
+                        # 붙어 프롬프트가 길고, 모델이 더 오래 돌 수도 있다. 이득
+                        # 조건은 s > a + c 가 아니라 s > a + q·r 이다.
+                        retry_costs = [
+                            value
+                            for r in usable
+                            if isinstance(r.get("retry"), dict)
+                            and not timed_out(r.get("retry"))
+                            and (value := cost_of(r.get("retry"))) is not None
+                        ]
+                        priced_retries = len(retry_costs)
+                        all_retries = sum(1 for r in usable if isinstance(r.get("retry"), dict))
+                        # 값이 빠진 비율이 크면 경고로 끝낼 일이 아니다. a 와 r 은
+                        # 값이 있는 것만 보고 s 와 q 는 전부를 세므로, 두 수가 같은
+                        # 모집단이 아니게 된다. 빠진 비용이 얼마였을지 모르므로
+                        # 방향도 모른다 — 넓히는 것으로 메울 수 없다.
+                        # 절반이면 충분하다는 기준은 너무 헐겁다. 값이 없는 재시도
+                        # 하나가 임의로 비쌌을 수 있고, 그것이 결론을 뒤집는다.
+                        # 돈에 대한 단정적 판정에는 전수를 요구한다.
+                        priced_enough = priced_retries == all_retries
+                        # a 와 r 의 분모는 승급 과제의 비싼 평균이다. 거기에
+                        # 타임아웃의 부분 사용량이 섞이면 분모가 작아져 두 비율이
+                        # 모두 커진다. 위쪽 c 판정은 그것 때문에 판정을 멈추는데,
+                        # 조언 분기가 그 금지를 우회하고 있었다.
+                        if timed_out_tasks:
+                            priced_enough = False
+                        # 타임아웃만 막으면 부족하다. 보통의 미가격 승급도 분모
+                        # 에서 빠지므로, 남은 비싼 비용 평균이 승급 전체를
+                        # 대표하지 않는다. a 와 r 이 모두 그 평균으로 나눈 값이다.
+                        # a 와 r 의 분모는 all_expensive_costs 다. 그것이 승급
+                        # 전체를 대표하는지는 **그 분모의 카운터** 로 본다. c 쪽
+                        # 카운터를 빌려 쓰면, 싼 비용이 없어 c 의 루프에서 먼저
+                        # 빠진 승급이 어느 카운터에도 안 잡혀 게이트가 눈이 먼다.
+                        if expensive_missing:
+                            priced_enough = False
+                        # 조언 비용도 마찬가지다. a 가 작은 부분집합에서 나오면
+                        # s 와 같은 모집단이 아니다.
+                        advice_attempted = sum(
+                            1 for r in usable if isinstance(r.get("advice_failure"), dict)
+                        )
+                        advice_priced = sum(
+                            1 for r in usable if advice_cost(r, "advice_failure") is not None
+                        )
+                        if advice_priced != advice_attempted:
+                            priced_enough = False
+                        if all_retries and priced_retries < all_retries:
+                            print(
+                                f"  주의: 재시도 {all_retries}건 중 {priced_retries}건만 비용을"
+                                " 얻었다. s 와 q 는 전부를 세는데 r 은 그 일부에서만 나오므로,"
+                                " 두 수가 같은 모집단이 아니다."
+                            )
+                        r_ratio = None
+                        r_spread = 0.0
+                        retry_denominator = (
+                            statistics.fmean(all_expensive_costs) if all_expensive_costs else 0.0
+                        )
+                        if retry_costs and retry_denominator > 0:
+                            expensive_mean_all = statistics.fmean(all_expensive_costs)
+                            r_mean = statistics.fmean(retry_costs)
+                            r_ratio = r_mean / expensive_mean_all
+                            r_spread = (
+                                t_quantile(len(retry_costs) - 1)
+                                * statistics.stdev(retry_costs)
+                                / math.sqrt(len(retry_costs))
+                                if len(retry_costs) > 1
+                                else r_mean
+                            ) / expensive_mean_all
+                            print(
+                                f"  재시도 1회 비용비 r{'′' if primed else ''}"
+                                f" = {r_ratio:.3f}  ({len(retry_costs)}회)"
+                                "  — 조언이 붙어 최초 싼 실행보다 비쌀 수 있다"
+                            )
+                        if a_ratio is not None and c_range is not None:
+                            # 이득 조건은 s > a + q·r. 모든 항의 흔들림을 태운다.
+                            # 조언이 비어 재시도조차 못 한 실패에는 r 이 들지 않는다.
+                            # 모든 실패에 r 을 물리면 조언 경로가 실제보다 비싸
+                            # 보인다. 재시도 시도율 q 를 곱한다.
+                            attempted = len(advised_failures) - no_retry
+                            q = attempted / len(advised_failures) if advised_failures else 1.0
+                            # r 을 쟀으면 그것을 쓴다. 못 쟀으면 c 로 대신하되
+                            # 그것이 대입이라고 말한다.
+                            if r_ratio is not None and not priced_enough:
+                                if timed_out_tasks or expensive_missing:
                                     print(
-                                        "  승급 과제의 비싼 비용 평균이 0 을 배제하지"
-                                        " 못한다. a 와 r 의 상한이 없으므로 판정하지"
-                                        " 않는다."
+                                        f"  승급 {expensive_missing}건의 비싼"
+                                        f" 비용이 없거나 0 이고 과제 {timed_out_tasks}건이"
+                                        " 타임아웃이다. 비싼 경로 평균이 승급 전체를"
+                                        " 대표하지 않으므로 판정하지 않는다."
+                                    )
+                                else:
+                                    print(
+                                        f"  조언 {advice_attempted}건 중 {advice_priced}건,"
+                                        f" 재시도 {all_retries}건 중 {priced_retries}건만"
+                                        " 비용이 있다. 값 없는 하나가 임의로 비쌌을 수"
+                                        " 있으므로 판정하지 않는다."
+                                    )
+                            elif r_ratio is None:
+                                # r 은 이 판정의 절반이다. 못 쟀는데 c 로 대신하고
+                                # 판정까지 내면, 재지 않은 것을 잰 것처럼 보이게
+                                # 된다. 조언이 붙은 재시도는 c 보다 비싸므로 그
+                                # 대입은 언제나 조언 쪽에 유리하다.
+                                print(
+                                    "  재시도 비용을 얻지 못해 손익분기를 내지 않는다."
+                                    " c 로 대신하면 조언 쪽에 유리한 방향으로만 틀린다."
+                                )
+                            else:
+                                # q 도 표본이다. 시도율의 Wilson 구간을 r 에 태운다.
+                                q_lo, q_hi = wilson(attempted, len(advised_failures))
+                                bound_low = max(0.0, a_ratio - a_spread) + max(
+                                    0.0, (r_ratio - r_spread) * q_lo
+                                )
+                                bound_high = a_ratio + a_spread + (r_ratio + r_spread) * q_hi
+                                # a 와 r 은 같은 분모(승급 과제의 비싼 평균)로 나눈
+                                # 값이고 그 분모도 표본이다. c 의 구간을 빌려 쓰면
+                                # 안 된다 — 싼 비용과 비싼 비용이 같은 비율로
+                                # 움직이면 c 의 구간은 좁은데 분모는 여전히
+                                # 흔들린다. 분모의 표준오차를 직접 낸다.
+                                expensive_values = all_expensive_costs
+                                if len(expensive_values) <= 1:
+                                    # 분모가 한 관측뿐이면 그 평균을 정확히 아는
+                                    # 값처럼 쓰게 된다. lower_e <= 0 에서 판정을
+                                    # 막는 것과 같은 이유로 여기서도 막는다.
+                                    print(
+                                        "  승급 과제의 비싼 비용 관측이 하나뿐이라 분모의"
+                                        " 흔들림을 낼 수 없다. 판정하지 않는다."
                                     )
                                     bound_low, bound_high = 0.0, float("inf")
                                 else:
-                                    # 비율 구간은 **끝점** 으로 낸다. 반폭을
-                                    # 더하면 분자와 분모가 동시에 불리한 조합을
-                                    # 덜 덮는다. a 와 r 은 mean_e 로 나눈 값이
-                                    # 므로, 다른 분모를 가정하려면 그 비율을
-                                    # 되돌려 곱한다.
-                                    bound_low = bound_low * mean_e / upper_e
-                                    bound_high = bound_high * mean_e / lower_e
-                            # A+B 로그에서는 **네 기호가 모두** 프라임이다.
-                            # 실패 단계 조언 비용, 시도율, 재시도 비용, 구제율이
-                            # 전부 계획을 받은 뒤에 측정된 값이다. s′ 만 찍고
-                            # 나머지를 안 찍으면 읽는 쪽이 B 단독의 수와 섞는다.
-                            mark = "′" if primed else ""
-                            basis = f"{q:.2f}·r{mark}" if q < 1 else f"r{mark}"
-                            print(
-                                f"  손익분기 s{mark} = a_B{mark} + {basis}"
-                                f" = {a_ratio + r_ratio * q:.3f}"
-                                f"  (구간 [{bound_low:.3f}, {bound_high:.3f}])"
-                            )
-                            if mixed_application:
-                                # 계획을 받은 실패와 못 받은 실패가 한 수에
-                                # 들어가 있다. 위에서 경고만 하고 여기서
-                                # 판정을 내면 그 경고가 아무 일도 안 한다.
+                                    mean_e = statistics.fmean(expensive_values)
+                                    se_e = statistics.stdev(expensive_values) / math.sqrt(
+                                        len(expensive_values)
+                                    )
+                                    # 분모가 흔들리면 비율은 반대로 흔들린다.
+                                    # 분모의 관측이 서넛일 때가 흔하다.
+                                    critical = t_quantile(len(expensive_values) - 1)
+                                    lower_e = mean_e - critical * se_e
+                                    upper_e = mean_e + critical * se_e
+                                    if lower_e <= 0:
+                                        # 분모의 구간이 0 을 지나면 비율의 상한이
+                                        # 없다. 상한을 지어내지 않고 판정을 막는다.
+                                        print(
+                                            "  승급 과제의 비싼 비용 평균이 0 을 배제하지"
+                                            " 못한다. a 와 r 의 상한이 없으므로 판정하지"
+                                            " 않는다."
+                                        )
+                                        bound_low, bound_high = 0.0, float("inf")
+                                    else:
+                                        # 비율 구간은 **끝점** 으로 낸다. 반폭을
+                                        # 더하면 분자와 분모가 동시에 불리한 조합을
+                                        # 덜 덮는다. a 와 r 은 mean_e 로 나눈 값이
+                                        # 므로, 다른 분모를 가정하려면 그 비율을
+                                        # 되돌려 곱한다.
+                                        bound_low = bound_low * mean_e / upper_e
+                                        bound_high = bound_high * mean_e / lower_e
+                                # A+B 로그에서는 **네 기호가 모두** 프라임이다.
+                                # 실패 단계 조언 비용, 시도율, 재시도 비용, 구제율이
+                                # 전부 계획을 받은 뒤에 측정된 값이다. s′ 만 찍고
+                                # 나머지를 안 찍으면 읽는 쪽이 B 단독의 수와 섞는다.
+                                mark = "′" if primed else ""
+                                basis = f"{q:.2f}·r{mark}" if q < 1 else f"r{mark}"
                                 print(
-                                    "  -> 판정 없음. 계획 적용이 섞인 모집단이라"
-                                    " s 가 어느 설정의 값인지 말할 수 없다."
+                                    f"  손익분기 s{mark} = a_B{mark} + {basis}"
+                                    f" = {a_ratio + r_ratio * q:.3f}"
+                                    f"  (구간 [{bound_low:.3f}, {bound_high:.3f}])"
                                 )
-                            elif s_lo > bound_high:
-                                print(
-                                    "  -> 구간 전체가 손익분기 위다. 실패 후 조언이 승급보다 싸다."
-                                )
-                            elif s_hi < bound_low:
-                                print("  -> 구간 전체가 손익분기 아래다. 그냥 승급하는 편이 낫다.")
-                            else:
-                                print("  -> 구간이 손익분기를 가로지른다. 아직 결론 낼 수 없다.")
+                                if mixed_application:
+                                    # 계획을 받은 실패와 못 받은 실패가 한 수에
+                                    # 들어가 있다. 위에서 경고만 하고 여기서
+                                    # 판정을 내면 그 경고가 아무 일도 안 한다.
+                                    print(
+                                        "  -> 판정 없음. 계획 적용이 섞인 모집단이라"
+                                        " s 가 어느 설정의 값인지 말할 수 없다."
+                                    )
+                                elif s_lo > bound_high:
+                                    print(
+                                        "  -> 구간 전체가 손익분기 위다."
+                                        " 실패 후 조언이 승급보다 싸다."
+                                    )
+                                elif s_hi < bound_low:
+                                    print(
+                                        "  -> 구간 전체가 손익분기 아래다. 그냥 승급하는 편이 낫다."
+                                    )
+                                else:
+                                    print(
+                                        "  -> 구간이 손익분기를 가로지른다. 아직 결론 낼 수 없다."
+                                    )
+                        else:
+                            print("  a 나 c 를 재지 못해 판정하지 않는다.")
                     else:
-                        print("  a 나 c 를 재지 못해 판정하지 않는다.")
-                else:
-                    print("  아직 조언을 받은 실패가 없어 s 를 낼 수 없다.")
+                        print("  아직 조언을 받은 실패가 없어 s 를 낼 수 없다.")
 
     # 조언이 켜져 있으면 c + p 는 이 실행의 비용 모형이 아니다. 그것을
     # "기대 비용" 이라 찍고 절감까지 내면, 조언 없는 설정의 숫자를 조언 있는

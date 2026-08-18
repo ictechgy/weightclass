@@ -991,16 +991,6 @@ def test_ordinary_streams_are_joined_unchanged():
     assert module.join_streams("out ok ", "err ok") == "out ok err ok"
 
 
-@pytest.mark.parametrize("width", [4, 8, 16, 40, 64])
-def test_key_bodies_folded_at_any_width_are_redacted(width):
-    """짧게 재접힌 본문은 어느 한 줄도 본문으로 안 보인다. 줄을 가로질러 센다."""
-    module = load_runner()
-    blob = base64.b64encode(b"\x01" * 1200).decode()
-    folded = "\n".join(blob[index : index + width] for index in range(0, len(blob), width))
-    pem = BEGIN + KEY + "\n" + folded + "\n" + END + KEY
-    assert blob[200:240] not in module.verify_excerpt(pem)
-
-
 # --- 라운드 20: 창의 방향, 판정 술어, 코드와 자격증명의 경계 -------------------
 
 
@@ -1514,3 +1504,100 @@ def test_alignment_prefers_the_latest_position(monkeypatch):
     module = load_runner()
     joined = module.join_streams("START_TAIL_END_SECRET_123TAIL_END", "prefixABCDEF_")
     assert "START_TAIL_END_SECRET_123" not in joined
+
+
+# --- 라운드 26: 휴리스틱을 버리고 내용을 본다 ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "text,kept",
+    [
+        (
+            "expected "
+            + BEGIN
+            + KEY
+            + "\n"
+            + "FAILED\n" * 8
+            + END
+            + KEY
+            + " in fixture\nTraceback",
+            "FAILED",
+        ),
+        (
+            BEGIN + KEY + "\n" + "FAILED\n" * 8 + END + KEY + "\nTRACE\nline 42",
+            "FAILED",
+        ),
+    ],
+)
+def test_repeated_failure_words_between_markers_are_not_a_key(text, kept):
+    """마커 쌍 사이를 **모양** 으로 판정하면 양쪽으로 틀린다.
+
+    조각 길이의 균일함을 보던 앞선 판은 같은 낱말이 여덟 번 이어진 진단
+    로그를 키로 오인했고, 줄 길이가 들쭉날쭉한 진짜 키를 놓쳤다. 대신
+    내용이 실제로 무엇인지 본다 — base64 로 풀리는가, 푼 결과가 DER
+    SEQUENCE 로 시작하는가.
+    """
+    module = load_runner()
+    assert kept in module.verify_excerpt(text)
+
+
+def test_a_variably_folded_key_is_redacted():
+    """줄 길이가 고르지 않아도 DER 로 풀리면 키다."""
+    module = load_runner()
+    body = base64.b64encode(b"\x30\x82" + hashlib.shake_256(b"var").digest(400)).decode()
+    ragged = []
+    index = 0
+    for width in (1, 2, 1, 3, 5, 8, 13, 21, 34):
+        ragged.append(body[index : index + width])
+        index += width
+    ragged.append(body[index:])
+    pem = BEGIN + KEY + "\n" + "\n".join(ragged) + "\n" + END + KEY
+    cleaned = module.verify_excerpt(pem)
+    assert body[50:90] not in cleaned
+
+
+def test_pgp_armoured_private_keys_are_redacted():
+    """PGP armor 는 DER 이 아니다. 양으로 본다 — 마커 쌍 사이의 수백 자."""
+    module = load_runner()
+    body = base64.b64encode(hashlib.shake_256(b"pgp").digest(300)).decode()
+    armour = (
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: GnuPG v2\n\n"
+        + body
+        + "\n=abcd\n-----END PGP PRIVATE KEY BLOCK-----\nFAILED: signature mismatch"
+    )
+    cleaned = module.verify_excerpt(armour)
+    assert body[:40] not in cleaned
+    # 반대 방향: 뒤따르는 실패 신호는 남아야 한다.
+    assert "FAILED: signature mismatch" in cleaned
+
+
+def test_a_duplicated_seam_credential_is_removed_everywhere():
+    """전역 치환의 기준은 길이가 아니라 그 조각이 값 쪽인지다.
+
+    길이로 가르면 양쪽이 부딪힌다 — 낮으면 `FAILED` 가 출력 전체에서
+    지워지고, 높으면 열두 자짜리 중복 값이 남는다.
+    """
+    module = load_runner()
+    joined = module.join_streams("A1B2C3D4E5F6G7H bare duplicate A1B2C3D4E5F6G7H", "API_TOKEN=")
+    assert "A1B2C3D4E5F6G7H" not in joined
+
+
+def test_a_short_diagnostic_word_is_not_replaced_globally():
+    """같은 규칙이 반대 방향도 지켜야 한다."""
+    module = load_runner()
+    joined = module.join_streams("API_TOKEN=A1B2C3D4E5F6G7H8\nFAILED test_auth", "FAILED")
+    assert "FAILED test_auth" in joined
+
+
+def test_composed_encodings_also_get_case_insensitive_matching(monkeypatch):
+    """JSON 으로 감싼 뒤 퍼센트 인코딩한 형태도 이스케이프 대소문자를 고를 수 있다."""
+    import re as regex
+    import urllib.parse
+
+    secret = 'Abcd"efgh/ijklmnop1234'
+    monkeypatch.setenv("SOME_API_KEY", secret)
+    module = load_runner()
+    escaped = json.dumps(secret)[1:-1]
+    encoded = urllib.parse.quote(escaped, safe="")
+    lowered = regex.sub(r"%[0-9A-Fa-f]{2}", lambda match: match.group(0).lower(), encoded)
+    assert lowered not in module.verify_excerpt(f"value {lowered} end")
