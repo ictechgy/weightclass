@@ -872,11 +872,24 @@ _SECRET_SHAPES = re.compile(
     r"|(?i:[A-Z0-9_]{0,40}(?:secret|token|password|passwd|api_?key|private_?key|credential)"
     r"[A-Z0-9_]{0,40})"
     r"(?:"
+    # (a) 구분자에 공백이 전혀 없다 — 환경 덤프와 .env 형식. 값의 모양을
+    #     따지지 않는다. 사람이 쓴 코드가 이렇게 붙여 쓰는 일은 드물다.
     r"[\"']?[=:][\"']?[^\s\r\n(){}<>,;\[\]]{12,}"
     r"|"
+    # (b) 따옴표 안의 값. 공백이 어느 쪽에 있든 자격증명이다.
     r"[\"']?\s*[=:]\s*[\"'][^\"'\r\n]{12,}[\"']"
     r"|"
-    r"[\"']?\s+[=:]\s+(?=[^\r\n]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}"
+    # (c) 공백이 **한쪽에만** 있는 형태를 포함해 나머지 전부. YAML 의
+    #     `password: value` 와 dotenv 의 `PASSWORD = value` 가 여기다.
+    #     앞선 판은 양쪽 공백만 다뤄 YAML 을 통째로 흘렸다. 대신 값이
+    #     자격증명처럼 생겨야 한다 — 숫자가 있거나(c1), 점 없이 열여섯 자
+    #     이상이거나(c2).
+    r"[\"']?\s*[=:]\s*"
+    r"(?:"
+    r"(?=[^\s\r\n(){}<>,;\[\]]*[0-9])[^\s\r\n(){}<>,;\[\]]{12,}"
+    r"|"
+    r"[^\s\r\n.(){}<>,;\[\]]{16,}"
+    r")"
     r")"
     # JWT
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
@@ -885,6 +898,10 @@ _SECRET_SHAPES = re.compile(
 # 목록에 넣을 최소 길이. 이보다 짧으면 흔한 문자열일 가능성이 커서, 지우는
 # 이득보다 보고서를 알아볼 수 없게 만드는 손해가 크다.
 MINIMUM_SECRET_CHARS = 6
+# 텍스트를 몇 겹까지 풀어 볼지. 실제 로그에서 두 겹을 넘는 일은 드물지만,
+# 깊이를 값 쪽에 두면 조합마다 항목이 늘고 텍스트 쪽에 두면 상수 하나로 끝난다.
+UNWRAP_DEPTH = 4
+_JSON_ESCAPE = re.compile(r'\\[nrtbf"\\/u]')
 VERIFY_EXCERPT_CHARS = 4000
 # 검증 출력과 diff 를 한 덩어리로 보낼 때의 상한. 두 몫을 합친 크기다.
 COMBINED_EXCERPT_CHARS = 8000
@@ -1363,57 +1380,102 @@ def host_secret_values() -> list[str]:
     return sorted(set(values) | set(serialised), key=len, reverse=True)
 
 
-# 이음매에 걸친 자격증명을 잘라 낼 때 경계 양쪽에서 버리는 길이. 자격증명
-# 하나(PEM 본문 포함)가 통째로 들어가고도 남는 크기다.
-SEAM_WINDOW = 4096
-
-
 def join_streams(out: str, err: str) -> str:
     """stdout 과 stderr 를 잇는다. **어느 순서로 이어도** 안전해야 한다.
 
     구분자를 넣으면 안 된다 — 자식이 `-----BEGIN PRI` 를 stdout 에, 나머지를
     stderr 에 써서 마커를 가를 수 있고, 그 사이의 줄바꿈이 회피로가 된다.
 
-    그런데 구분자만 없애면 한 방향만 막힌다. stdout 을 먼저 두면
-    `KEY=<값>` + `AWS_SECRET_ACCESS_` 순서가 되어 이름이 값 **뒤** 로 가고,
-    이름-값 패턴이 형성되지 않는다. 두 스트림에 무엇을 쓸지도, 어느 쪽에
-    앞부분을 둘지도 자식이 고른다.
+    구분자만 없애면 한 방향만 막힌다. stdout 을 먼저 두면 `KEY=<값>` +
+    `AWS_SECRET_ACCESS_` 순서가 되어 이름이 값 **뒤** 로 가고, 이름-값 패턴이
+    형성되지 않는다. 두 스트림에 무엇을 쓸지도, 어느 쪽에 앞부분을 둘지도
+    자식이 고른다.
 
-    그래서 두 순서를 모두 본다. 역순으로 이었을 때만 잡히는 것이 있으면 그
-    입력의 이음매는 믿을 수 없다는 뜻이므로, 경계 양쪽을 통째로 버린다.
-    잃는 것은 두 스트림이 만나는 자리의 로그 일부이고, 그것도 그런 입력에
-    한해서다.
+    그래서 두 순서를 모두 지어 보고, **역순에서만 잡히는 것이 있으면 역순
+    결과를 내보낸다.** 내용은 같고 순서만 다르다.
+
+    앞선 판은 경계 부근을 고정 4096자씩 버렸다. 그 창은 언제나 틀린 크기다 —
+    작으면 긴 PEM 본문과 긴 세션 토큰을 놓치고, 크면 멀쩡한 검증 출력을
+    통째로 버린다. 조각이 한 스트림의 머리부터 수천 자에 걸칠 수 있으므로
+    어떤 고정값도 맞지 않는다. 순서를 바꾸면 창이 필요 없다.
+
+    남는 한계는 이 함수의 것이 아니다. 값이 한 스트림 안에 통째로 있고
+    이름만 갈린 경우, 어느 순서로 이어도 그 값은 이름 없는 문자열로 남는다 —
+    모양 기반 리댁션이 이름 없는 base64 를 못 잡는다는 원래의 한계다.
     """
     forward = redact_text(out + err)
     # **길이로 판정하지 않는다.** 두 순서가 서로 다른 자격증명을 같은 길이만큼
     # 지우면 길이는 같은데 잡은 것은 다르다. "따로 지운 것과 이어서 지운 것이
     # 다른가" 를 직접 묻는다 — 다르면 그 이음매에서만 형성되는 것이 있다.
-    if redact_text(err + out) == redact_text(err) + redact_text(out):
+    reverse = redact_text(err + out)
+    if reverse == redact_text(err) + redact_text(out):
         return forward.strip()
-    # 역순 이음매를 이루는 조각은 **err 의 꼬리와 out 의 머리** 다. 그 둘을
-    # 버린다. 앞선 판에서는 반대쪽(out 의 꼬리, err 의 머리)을 버려, 검출을
-    # 유발한 두 조각이 고스란히 살아남았다.
-    #
-    # 스트림이 창보다 짧으면 통째로 버린다. 조각이 창 안에 다 들어간다는
-    # 보장이 없으면 남기는 쪽이 위험하다.
-    kept_err = err[:-SEAM_WINDOW] if len(err) > SEAM_WINDOW else ""
-    kept_out = out[SEAM_WINDOW:] if len(out) > SEAM_WINDOW else ""
-    if not kept_out and not kept_err:
-        # 양쪽 다 창보다 짧다. 이 자리에서 자격증명이 형성된다는 것은
-        # **그 값이 한쪽 스트림 안에 통째로 들어 있다** 는 뜻이다 — 갈라진
-        # 것은 이름 쪽이다. 그러니 순서를 바꿔 다시 지어도 값은 그대로 남는다.
-        # 남길 방법이 없으므로 버린다. 조언자는 diff 로 진단해야 한다.
-        return "[...검증 출력 전체 생략: 두 스트림 경계에서 자격증명이 형성됨...]"
-    return (
-        redact_text(kept_out) + "\n[...두 스트림이 만나는 자리 생략...]\n" + redact_text(kept_err)
-    ).strip()
+    # 역순 이음매에서 자격증명이 형성된다. 역순 결과에는 그것이 지워져 있고,
+    # 정방향 이음매를 이루던 두 조각(out 의 꼬리, err 의 머리)은 이제 양 끝에
+    # 떨어져 있어 형성되지 않는다.
+    return reverse.strip()
+
+
+def redact_host_secrets(text: str) -> str:
+    """아는 값을 지운다. **표현을 열거하지 않고 텍스트를 정규화한다.**
+
+    앞선 판은 값에서 파생 표현(JSON 한 겹, 두 겹, 퍼센트 복호)을 만들어
+    목록에 넣었다. 그 방식은 깊이가 언제나 임의적이다 — 세 겹 직렬화나
+    두 번 인코딩은 목록에 없고, 새 조합이 나올 때마다 항목이 하나씩 는다.
+
+    방향을 뒤집는다. 원문 값 하나만 두고, **텍스트 쪽** 을 한 겹씩 풀면서
+    같은 자리를 본다. 겹의 수는 텍스트가 정한다.
+    """
+    secrets = host_secret_values()
+    if not secrets:
+        return text
+    cleaned = text
+    for secret in secrets:
+        cleaned = cleaned.replace(secret, "[REDACTED]")
+    # 텍스트를 한 겹씩 푼다. 푼 결과에서 값이 보이면 **원문 텍스트에서** 그
+    # 자리에 해당하는 인코딩된 형태를 찾아 지운다. 인코딩된 형태는 그때그때
+    # 만들어 쓰므로 목록이 늘지 않는다.
+    layer = cleaned
+    for _ in range(UNWRAP_DEPTH):
+        unwrapped = _unwrap_once(layer)
+        if unwrapped == layer:
+            break
+        layer = unwrapped
+        for secret in secrets:
+            if secret not in layer:
+                continue
+            # 이 겹에서 보였다. 그 겹까지의 인코딩 형태를 다시 만들어 지운다.
+            for form in _rewrap_forms(secret):
+                cleaned = cleaned.replace(form, "[REDACTED]")
+    return cleaned
+
+
+def _unwrap_once(text: str) -> str:
+    """JSON 이스케이프 한 겹과 퍼센트 인코딩 한 겹을 푼다."""
+    try:
+        unescaped = json.loads(f'"{text}"') if _JSON_ESCAPE.search(text) else text
+    except ValueError:
+        unescaped = text.replace("\\\\", "\\")
+    if "%" in unescaped:
+        unescaped = urllib.parse.unquote(unescaped)
+    return str(unescaped)
+
+
+def _rewrap_forms(secret: str) -> list[str]:
+    """값을 다시 감싼 형태들. 겹마다 하나씩."""
+    forms = []
+    current = secret
+    for _ in range(UNWRAP_DEPTH):
+        current = json.dumps(current)[1:-1]
+        forms.append(current)
+        forms.append(urllib.parse.quote(secret, safe=""))
+    return [form for form in forms if form and form != secret]
 
 
 def redact_text(text: str) -> str:
     """자르지 않고 지우기만 한다. 조언 본문처럼 길이를 따로 관리하는 곳에 쓴다."""
     cleaned = redact_private_keys(text)
-    for secret in host_secret_values():
-        cleaned = cleaned.replace(secret, "[REDACTED]")
+    cleaned = redact_host_secrets(cleaned)
     return _SECRET_SHAPES.sub("[REDACTED]", cleaned)
 
 
@@ -1434,8 +1496,7 @@ def verify_excerpt(output: str) -> str:
     # PEM 주사는 선형이고 패턴들은 중첩 수량자가 없다.
     cleaned = redact_private_keys(output)
     # 아는 값을 지운다. 모양으로 못 잡는 것을 잡는 유일한 방법이다.
-    for secret in host_secret_values():
-        cleaned = cleaned.replace(secret, "[REDACTED]")
+    cleaned = redact_host_secrets(cleaned)
     cleaned = _SECRET_SHAPES.sub("[REDACTED]", cleaned)
     return _tail(cleaned, VERIFY_EXCERPT_CHARS)
 
@@ -2592,6 +2653,11 @@ def main() -> int:
     # Shape A. 조언은 과제에 붙고, 그 뒤 모든 싼 실행이 그것을 함께 받는다.
     first_advice: Advice | None = None
     cheap_task = task
+    # **설정이 아니라 실제로 붙었는지를 기록한다.** 조언이 비거나 조언 경로가
+    # 죽으면 위의 `if text:` 가 계획을 안 붙이는데, 레코드가 설정값을 그대로
+    # 쓰면 계획 없이 돈 실행이 Shape A 표본으로 들어간다. 그러면 보고서는
+    # 섞인 실패율을 p′ 라 부르고 섞인 비용을 c_A 라 부른다.
+    plan_applied = False
     if arguments.advise_first:
         first_advice, text = advise(
             "first",
@@ -2603,6 +2669,7 @@ def main() -> int:
         # 실패율이므로, 조언이 아무 효과가 없다는 결론이 조용히 만들어진다.
         if text:
             cheap_task = compose_task(task, text)
+            plan_applied = True
 
     cheap, cheap_verify_output, cheap_patch = attempt(
         "cheap",
@@ -2644,7 +2711,10 @@ def main() -> int:
         # 섞이면 s 도 p 도 무엇의 값인지 알 수 없게 된다.
         "advisor": {
             "route": _route_identity(advisor_argv) if advisor_argv else None,
-            "advise_first": bool(arguments.advise_first),
+            # 요청과 실제를 나눠 남긴다. 보고서의 동질성 검사는 실제 쪽을
+            # 봐야 하고, 요청 쪽은 "조언을 켰는데 왜 안 붙었나" 를 묻는 데 쓴다.
+            "advise_first": plan_applied,
+            "advise_first_requested": bool(arguments.advise_first),
             "advise_on_failure": bool(arguments.advise_on_failure),
             "context": arguments.advisor_context,
         },

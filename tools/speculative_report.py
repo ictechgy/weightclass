@@ -114,6 +114,17 @@ def main() -> int:
     # 인프라 실패(클론 불가, 복사 오류, 자식 기동 실패)는 싼 경로의 품질과
     # 무관하다. p 에 섞으면 도구 고장이 "싼 모델이 나쁘다" 로 둔갑한다.
     # attempt 는 그런 경우 error 를 남기되 "made no change" 만은 진짜 결과다.
+    def reached_verify(record: dict[str, object]) -> bool:
+        """싼 경로가 검증까지 갔는가. 조언이 닿을 수 있었던 실행인지의 술어다.
+
+        러너의 `reached_verify` 와 같은 판정이어야 한다. 한쪽만 고치면
+        조언의 분자와 분모가 다른 집합을 세게 된다.
+        """
+        cheap = record.get("cheap")
+        if not isinstance(cheap, dict):
+            return False
+        return bool(cheap.get("verify")) and cheap.get("failure_kind") != "infrastructure"
+
     def is_infrastructure_failure(record: dict[str, object]) -> bool:
         # p 는 **싼 경로** 의 실패율이므로 싼 경로만 본다. 승급이 도구 고장
         # 으로 죽었다고 해서 그 앞의 싼 경로 실패까지 버리면, 관측된 진짜
@@ -395,8 +406,18 @@ def main() -> int:
         # 모으면 a 와 r 의 분모가 "싼 비용도 얻은 승급" 이라는 부분집합이 되고,
         # 그 부분집합이 승급 전체를 대표한다는 근거는 어디에도 없다.
         if escalated:
+            # **조언이 닿을 수 있었던 승급만 센다.** 검증까지 못 간 인프라
+            # 실패는 러너가 조언을 건너뛰고 바로 승급하므로 Shape B 의 대상이
+            # 아니다. 그 비용이 a 와 r 의 분모에 섞이면, B 와 무관한 실행의
+            # 비용이 B 의 판정을 양방향으로 흔든다.
             standalone_expensive = cost_of(r.get("expensive"))
-            if standalone_expensive is None or standalone_expensive <= 0:
+            if not reached_verify(r):
+                pass
+            elif standalone_expensive is None:
+                # **0 은 빼지 않는다.** c 의 분모가 이번에 0 을 포함하도록
+                # 고쳐졌다. 같은 술어("승급 과제의 비싼 비용 평균")를 두 코드
+                # 경로가 다른 모집단으로 판정하면 안 된다 — 0 을 빼면 평균이
+                # 커져 a 와 r 이 작아지고 조언 쪽에 유리하게 틀린다.
                 expensive_missing += 1
             else:
                 all_expensive_costs.append(standalone_expensive)
@@ -1084,6 +1105,22 @@ def main() -> int:
     thin_denominator = (
         c_range is not None and escalated_total > 0 and len(paired) * 2 < escalated_total
     )
+    # 요청은 됐는데 실제로는 안 붙은 실행. 러너가 빈 조언을 안 붙이므로
+    # 생긴다. 이런 건이 섞이면 p′ 도 c_A 도 두 모집단의 평균이 된다.
+    plan_requested_not_applied = sum(
+        1
+        for rec in usable
+        if isinstance(rec.get("advisor"), dict)
+        and (rec["advisor"] or {}).get("advise_first_requested")
+        and not (rec["advisor"] or {}).get("advise_first")
+    )
+    if plan_requested_not_applied:
+        print(
+            f"\n  경고: 과제 {plan_requested_not_applied}건은 시작 전 조언을 요청했지만"
+            " 조언이 비거나 실패해 계획이 붙지 않았다. 그 실행은 Shape A 표본이"
+            " 아니다 — p′ 와 c_A 를 이 로그에서 뽑으면 계획을 받은 실행과 못 받은"
+            " 실행이 섞인다. 그 건을 빼고 다시 모아야 한다."
+        )
     advise_first_on = any(
         isinstance(rec.get("advisor"), dict) and (rec["advisor"] or {}).get("advise_first")
         for rec in usable

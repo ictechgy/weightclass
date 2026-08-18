@@ -1067,3 +1067,78 @@ def test_short_decoded_forms_do_not_enter_the_redaction_list(monkeypatch):
     monkeypatch.setenv("SOME_TOKEN", "%2F%2F%2F%2F%2F%2F")
     module = load_runner()
     assert "////" in module.verify_excerpt("path a////b and c////d")
+
+
+# --- 라운드 21: 창의 제거, 한쪽 공백, 표현의 깊이 -----------------------------
+
+
+@pytest.mark.parametrize(
+    "out,err,secret",
+    [
+        # 짧은 스트림
+        ("KEY=SECRETVALUE1234567890AB", "AWS_SECRET_ACCESS_", "SECRETVALUE1234"),
+        # 조각이 한 스트림의 머리부터 수천 자에 걸치는 경우 — 고정 창으로는 못 잡는다
+        ("KEN=" + "A1" * 3000, "y" * 100 + "API_TO", "A1" * 40),
+    ],
+)
+def test_the_reverse_seam_needs_no_window(out, err, secret):
+    """창은 언제나 틀린 크기다. 순서를 바꾸면 창이 필요 없다."""
+    module = load_runner()
+    assert secret not in module.join_streams(out, err)
+
+
+def test_the_reverse_seam_keeps_the_failure_signal():
+    """이음매 대응이 검증 출력을 통째로 버리면 조언자가 진단할 것이 없다."""
+    module = load_runner()
+    joined = module.join_streams("KEN=A1B2C3D4E5F6G7\nFAILED test_auth", "API_TO")
+    assert "FAILED test_auth" in joined
+
+
+def test_a_long_key_split_across_streams_is_redacted():
+    """긴 PEM 본문이 한 스트림의 머리에 통째로 있어도 잡아야 한다."""
+    module = load_runner()
+    blob = base64.b64encode(b"\x01" * 6000).decode()
+    out = "VATE KEY-----\n" + blob + "\n" + END + KEY
+    joined = module.join_streams(out, "x" * 100 + BEGIN + "PRI")
+    assert blob[3000:3040] not in joined
+
+
+@pytest.mark.parametrize(
+    "line,token",
+    [
+        # YAML — 콜론 **뒤에만** 공백이 있다. 앞선 판은 양쪽 공백만 다뤘다.
+        ("database_password: Tr0ub4dorHorseBattery", "Tr0ub4dor"),
+        ("api_token: abcdef1234567890", "abcdef1234"),
+        ("password: correcthorsebattery", "correcthorse"),
+        # dotenv 와 환경 덤프
+        ("PASSWORD=correct.horse.battery", "correct.horse"),
+        ("API_TOKEN = abc123def456ghi789", "abc123def"),
+    ],
+)
+def test_one_sided_spacing_is_covered(line, token):
+    """설정 파일은 구분자 한쪽에만 공백을 둔다. 그 형식이 가장 흔하다."""
+    module = load_runner()
+    assert token not in module.verify_excerpt(line)
+
+
+@pytest.mark.parametrize("depth", [1, 2, 3])
+def test_known_secrets_survive_any_serialisation_depth(monkeypatch, depth):
+    """표현을 열거하면 깊이가 임의적이다. 텍스트를 풀어 가며 본다."""
+    secret = 'wJalr"XUtnFEMI\\K7MDENGbPxRfiCYEX'
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", secret)
+    module = load_runner()
+    wrapped = secret
+    for _ in range(depth):
+        wrapped = json.dumps(wrapped)[1:-1]
+    assert wrapped not in module.verify_excerpt(f"payload {wrapped} end")
+
+
+def test_percent_encoded_known_secret_is_redacted(monkeypatch):
+    """퍼센트 인코딩도 한 겹이다."""
+    import urllib.parse
+
+    secret = "wJalrXUtnFEMIK7MDENGbPxRfiCYEX"
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", secret)
+    module = load_runner()
+    encoded = urllib.parse.quote(secret, safe="")
+    assert encoded not in module.verify_excerpt(f"payload {encoded} end")
