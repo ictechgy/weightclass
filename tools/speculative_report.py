@@ -34,6 +34,15 @@ def _safe(text: str, limit: int = 200) -> str:
     return cleaned[:limit] + ("…" if len(cleaned) > limit else "")
 
 
+# 지문에 넣을 **설정** 키. 블랙리스트(제외 목록)로 두면 레코드에 과제별
+# 값이 하나만 추가돼도 모든 지문이 달라져, 단일 설정 로그가 "혼합" 으로
+# 잡힌다. 화이트리스트가 그 사고를 막는다.
+ADVISOR_CONFIG_KEYS = frozenset({"route", "advise_first", "advise_on_failure", "context"})
+# s 를 판정하려면 이만큼의 조언받은 실패가 있어야 한다. 세 건짜리 표본으로도
+# Wilson 하한이 손익분기를 넘을 수 있고, 그것을 "유리하다" 로 찍으면 안 된다.
+MINIMUM_ADVISED_FAILURES = 12
+
+
 def wilson(successes: int, total: int, z: float = 1.96) -> tuple[float, float]:
     if total == 0:
         return (0.0, 0.0)
@@ -257,7 +266,7 @@ def main() -> int:
             {
                 key: value
                 for key, value in (r.get("advisor") or {}).items()
-                if key != "advise_first_applied"
+                if key in ADVISOR_CONFIG_KEYS
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -653,8 +662,9 @@ def main() -> int:
         # 고쳐지고, 그러면 구간이 점추정과 다른 값을 중심으로 잡힌다.
         measured = point
         median_ratio = statistics.median(paired)
+        cost_symbol = "c_A" if shape_a_measured else "c"
         print(
-            f"\n실측 비용비 c = {measured:.3f}"
+            f"\n실측 비용비 {cost_symbol} = {measured:.3f}"
             f"  (싼 경로 과제당 평균 {statistics.fmean(cheap_all):.4f} — {len(cheap_all)}건 —"
             f" 을 승급 {len(paired)}건의 비싼 경로 평균 {expensive_mean:.4f} 로 나눈 값)"
         )
@@ -804,7 +814,7 @@ def main() -> int:
             {
                 key: value
                 for key, value in (r.get("advisor") or {}).items()
-                if key != "advise_first_applied"
+                if key in ADVISOR_CONFIG_KEYS
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -1147,7 +1157,15 @@ def main() -> int:
                                 # 않는다 — 위쪽 `if mixed_application:` 이
                                 # 조언 구간 전체를 건너뛴다. 여기서 그것을
                                 # 다시 검사하면 언제나 거짓인 분기가 된다.
-                                if s_lo > bound_high:
+                                if len(advised_failures) < MINIMUM_ADVISED_FAILURES:
+                                    print(
+                                        f"  -> 판정 없음. 조언받은 실패가"
+                                        f" {len(advised_failures)}건뿐이다"
+                                        f" (최소 {MINIMUM_ADVISED_FAILURES}건)."
+                                        " 이 표본으로는 구간이 넓어도 좁아도"
+                                        " 근거가 되지 못한다."
+                                    )
+                                elif s_lo > bound_high:
                                     print(
                                         "  -> 구간 전체가 손익분기 위다."
                                         " 실패 후 조언이 승급보다 싸다."
@@ -1289,14 +1307,6 @@ def main() -> int:
             " 아니다 — p′ 와 c_A 를 이 로그에서 뽑으면 계획을 받은 실행과 못 받은"
             " 실행이 섞인다. 그 건을 빼고 다시 모아야 한다."
         )
-    # **요청** 쪽을 본다. 조언이 전부 비었거나 실패해도 그 호출 비용은 이미
-    # 지불했다. 실제 적용 여부로 이 깃발을 세우면, 그런 로그에서 조언 비용
-    # 구간이 통째로 건너뛰어지고 조언 없는 c + p 판정이 나간다 — 지불한
-    # 비용이 어느 항에도 안 들어가므로 결론이 조언 쪽에 유리하게 틀린다.
-    advise_first_on = any(
-        isinstance(rec.get("advisor"), dict) and (rec["advisor"] or {}).get("advise_first")
-        for rec in usable
-    )
     failure_advice_on = any(
         isinstance(rec.get("advisor"), dict) and (rec["advisor"] or {}).get("advise_on_failure")
         for rec in usable
@@ -1341,9 +1351,12 @@ def main() -> int:
             + (
                 (
                     " 실패 후 조언을 **더 붙일지** 의 한계 판정은 위의"
-                    " s′ > a′ + q′·r′ 을 보라(q′ 는 재시도 시도율). 시작 전"
+                    " s′ > a_B′ + q′·r′ 을 보라(q′ 는 재시도 시도율). 시작 전"
                     " 조언까지 포함한 전체 이득은 그 식이 답하지 않는다."
-                    if advise_first_on
+                    # **계산부와 같은 술어를 쓴다.** 요청 여부로 프라임을
+                    # 고르면, 계획이 실제로 안 붙은 로그에 A+B 식을 가리키게
+                    # 된다 — 위쪽 계산은 프라임 없이 찍고 여기만 프라임이다.
+                    if shape_a_measured
                     else " 조언의 이득 판정은 위의 s > a + q·r 을 보라(q 는 재시도 시도율)."
                 )
                 if failure_advice_on

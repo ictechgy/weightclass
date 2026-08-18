@@ -48,7 +48,6 @@ import argparse
 import base64
 import binascii
 import contextlib
-import functools
 import hashlib
 import json
 import math
@@ -1074,6 +1073,9 @@ KEY_FORMAT_MAGICS = (
 # 표식이 하나도 없을 때 요구하는 본문 양. 진단 로그가 마커 쌍 사이에 이만큼의
 # base64 를 담는 일은 없다.
 PEM_BULK_BODY_CHARS = 400
+# `Private-Lines:` 가 선언할 수 있는 줄 수의 상한. 자식이 큰 수를 적어
+# 출력 전체를 지우게 만드는 것을 막는다.
+PPK_MAX_BODY_LINES = 200
 
 
 # 직렬화가 조각의 양 끝에 남기는 글자들.
@@ -1110,10 +1112,14 @@ def _between_markers_is_body(content: str) -> bool:
     # 길이를 안 보면 `MAAA`(0x30 0x00 0x00)처럼 세 바이트짜리 진단 문자열이
     # 키로 잡힌다. DER 만 보면 OpenSSH 형식(`openssh-key-v1\0` 로 시작)이
     # 통째로 샌다 — ssh-keygen 의 기본 출력이 그것이다.
-    if len(decoded) >= PEM_MINIMUM_KEY_BYTES and any(
-        decoded.startswith(magic) for magic in KEY_FORMAT_MAGICS
-    ):
-        return True
+    if len(decoded) >= PEM_MINIMUM_KEY_BYTES:
+        if decoded[:1] == b"\x30":
+            # DER 은 길이 필드까지 봐야 한다. 태그 한 바이트만 보면
+            # `MAAA`(0x30 0x00 0x00)를 서른 번 이어 붙인 진단 로그가 키가 된다.
+            if _der_length_is_sane(decoded):
+                return True
+        elif any(decoded.startswith(magic) for magic in KEY_FORMAT_MAGICS[1:]):
+            return True
     # DER 이 아닌 진짜 키가 있다. PGP armor 는 **체크섬 줄** 이 표식이고,
     # 암호화된 PEM 은 본문이 암호문이라 0x30 으로 시작하지 않는 대신
     # `Proc-Type:` 헤더를 단다.
@@ -1161,6 +1167,10 @@ def _base64_material(content: str) -> tuple[str, bool, bool]:
             value = value.strip()
             # base64 한 묶음(4자)이면 본문 조각으로 센다. 여덟 자를 요구했더니
             # 네 자씩 쪼개 헤더로 위장한 본문이 통째로 빠져나갔다.
+            #
+            # 다만 **이름이 아는 헤더가 아니면** 값이 본문답게 생겨야 한다.
+            # 그러지 않으면 `AssertionError: MAAA` 가 서른 번 이어진 진단
+            # 로그가 본문으로 세어져 실패 증거가 통째로 지워진다.
             if _PEM_BODY_CHARS.fullmatch(value) and len(value) >= 4:
                 pieces.append(value)
                 continue
@@ -1175,6 +1185,27 @@ def _base64_material(content: str) -> tuple[str, bool, bool]:
                 # 본문도 헤더도 아닌 조각이 섞여 있다. 산문이다.
                 return "", False, False
     return "".join(pieces), armoured, headered
+
+
+def _der_length_is_sane(decoded: bytes) -> bool:
+    """DER SEQUENCE 의 길이 필드가 실제 길이와 맞는가.
+
+    개인키는 길이가 127 을 넘으므로 장형(0x81/0x82/0x83)을 쓴다. 단형이면
+    그 값이 남은 바이트 수와 맞아야 한다. 이 검사가 없으면 태그 바이트만
+    우연히 맞는 아무 문자열이나 키로 잡힌다.
+    """
+    if len(decoded) < 3:
+        return False
+    first = decoded[1]
+    if first & 0x80:
+        count = first & 0x7F
+        if not 1 <= count <= 4 or len(decoded) < 2 + count:
+            return False
+        length = int.from_bytes(decoded[2 : 2 + count], "big")
+        # 남은 바이트가 선언된 길이를 담을 수 있어야 한다. base64 패딩 때문에
+        # 몇 바이트 남을 수 있으므로 정확히 같기를 요구하지 않는다.
+        return length > 0 and len(decoded) >= 2 + count + length - 3
+    return first > 0 and len(decoded) >= 2 + first - 2
 
 
 def _decode_base64(material: str) -> bytes | None:
@@ -1430,7 +1461,12 @@ def key_line_kind(line: str, candidates: list[str], strict: bool = True) -> str:
     if _ANY_HEADER_LINE.match(line):
         value = line.partition(":")[2].strip()
         if _PEM_BODY_CHARS.fullmatch(value) and len(value) >= (16 if strict else 4):
-            return "body"
+            # 게이트 쪽(strict)에서는 값이 본문답게 생겨야 한다. 길이만 보면
+            # `AssertionError: MAAAAAA…` 가 게이트를 열어 실패 증거가 지워진다.
+            # 주사 쪽(strict=False)은 더 관대해야 한다 — 게이트가 연 블록은
+            # 반드시 소비해야 하기 때문이다.
+            if not strict or _looks_like_base64(value):
+                return "body"
     # 본문과 END 마커가 한 물리적 줄에 있으면 줄에 공백이 있어 위 판정이
     # 전부 탈락한다. 그 줄에는 키가 들어 있다. **END 마커가 함께 있을
     # 때만** 줄 안의 긴 연속을 본다 — 마커 없이 연속만 보던 앞선 규칙은
@@ -1791,10 +1827,22 @@ def join_streams(out: str, err: str) -> str:
             # 조각째 지우면 `=` 같은 앞머리가 붙어 있어, 같은 값이 앞머리 없이
             # 다른 곳에 있으면 그것이 남는다.
             value_text = span[value_at:]
-            forward = forward.replace(value_text, "[REDACTED]")
-            leftover = out_piece[: len(out_piece) - len(value_text)]
-            if leftover and forward.startswith(leftover):
-                forward = "[REDACTED]" + forward[len(leftover) :]
+            # **전역으로 지울지의 기준을 여기서 고정한다.** 이 자리는 세
+            # 라운드 동안 두 방향을 왕복했다 — 전역으로 지우면
+            # `authentication_failure` 같은 소스 앵커가 출력 전체에서
+            # 사라지고, 자리에서만 지우면 같은 값의 맨몸 중복이 남는다.
+            #
+            # 자격증명처럼 생긴 값만 전역으로 지운다: 숫자가 있거나 대소문자가
+            # 섞여 있고 열두 자 이상. 그렇지 않은 값(순소문자 낱말 조합)의
+            # 맨몸 중복은 **이름 없이** 남는데, 그것은 이 리댁터의 원래
+            # 한계(이름 없는 문자열은 못 잡는다)와 같은 것이고, 소스를 지우는
+            # 쪽보다 낫다.
+            if len(value_text) >= MINIMUM_SECRET_CHARS * 2 and _looks_like_base64(value_text):
+                forward = forward.replace(value_text, "[REDACTED]")
+            elif forward.startswith(out_piece):
+                forward = "[REDACTED]" + forward[len(out_piece) :]
+            else:
+                forward = forward.replace(value_text, "[REDACTED]", 1)
         elif out_piece and forward.startswith(out_piece):
             # 구분자가 없거나 값이 이음매를 가로지른다. 그 값은 이 자리에만
             # 있으므로 자리 치환으로 충분하다.
@@ -1885,12 +1933,15 @@ def _align_tail(original: str, tail: str, lower: int) -> int | None:
         at = candidate + 1
 
 
-@functools.lru_cache(maxsize=1)
 def known_secret_forms() -> frozenset[str]:
     """정확 일치로 등록된 값과 그 인코딩 형태 전부.
 
     이음매 복구에서 "이 구간이 우리가 아는 값인가" 를 묻는 데 쓴다. 아는
     값이면 그 안의 구분자는 이름-값 경계가 아니라 값의 일부다.
+
+    **캐시하지 않는다.** 환경을 한 번 읽어 붙잡아 두면, 자식을 띄우기 전과
+    후에 환경이 달라졌을 때 낡은 목록으로 판정하게 된다. 이 함수는 이음매가
+    걸린 드문 경우에만 불린다.
     """
     forms: set[str] = set()
     for secret in host_secret_values():
@@ -1982,9 +2033,51 @@ def _percent_forms(value: str) -> tuple[str, str]:
     return upper, lower
 
 
+# PuTTY 의 개인키 파일에는 PEM 마커가 없다. `Private-Lines: N` 뒤의 N 줄이
+# 본문이고, 그 형식을 아는 사람만 알아본다 — 마커만 보는 주사에는 안 걸린다.
+_PPK_PRIVATE = re.compile(r"(?im)^[ \t]*Private-Lines:[ \t]*(\d{1,4})[ \t]*$")
+
+
+def redact_ppk_bodies(text: str) -> str:
+    """PuTTY 개인키(.ppk)의 본문을 지운다.
+
+    `Private-Lines: N` 은 뒤이어 오는 N 줄이 개인키 본문이라고 스스로
+    선언한다. 그 선언을 그대로 쓴다 — 모양을 짐작할 필요가 없다.
+    """
+    if "Private-Lines:" not in text:
+        return text
+    out: list[str] = []
+    index = 0
+    for match in _PPK_PRIVATE.finditer(text):
+        declared = int(match.group(1))
+        if not 1 <= declared <= PPK_MAX_BODY_LINES:
+            continue
+        out.append(text[index : match.end()])
+        position = match.end()
+        # 헤더 자신의 줄바꿈을 먼저 넘긴다. 안 넘기면 그것을 본문 첫 줄로
+        # 세어 선언된 줄 수보다 한 줄 적게 지운다.
+        header_break = _LINE_SEPARATOR.match(text, position)
+        if header_break is not None:
+            position = header_break.end()
+        removed = 0
+        while removed < declared and position < len(text):
+            separator = _LINE_SEPARATOR.search(text, position)
+            if separator is None:
+                position = len(text)
+                removed += 1
+                break
+            position = separator.end()
+            removed += 1
+        out.append("\n[REDACTED]\n" if position < len(text) else "\n[REDACTED]")
+        index = position
+    out.append(text[index:])
+    return "".join(out)
+
+
 def redact_text(text: str) -> str:
     """자르지 않고 지우기만 한다. 조언 본문처럼 길이를 따로 관리하는 곳에 쓴다."""
     cleaned = redact_private_keys(text)
+    cleaned = redact_ppk_bodies(cleaned)
     cleaned = redact_host_secrets(cleaned)
     return _SECRET_SHAPES.sub("[REDACTED]", cleaned)
 
@@ -2005,6 +2098,7 @@ def verify_excerpt(output: str) -> str:
     # 자르지 않으면 그 부류가 통째로 사라진다. 비용은 잰다: 200KB 에 0.4초,
     # PEM 주사는 선형이고 패턴들은 중첩 수량자가 없다.
     cleaned = redact_private_keys(output)
+    cleaned = redact_ppk_bodies(cleaned)
     # 아는 값을 지운다. 모양으로 못 잡는 것을 잡는 유일한 방법이다.
     cleaned = redact_host_secrets(cleaned)
     cleaned = _SECRET_SHAPES.sub("[REDACTED]", cleaned)

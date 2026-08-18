@@ -1653,26 +1653,27 @@ def test_quantity_alone_does_not_make_a_key(text, kept):
 @pytest.mark.parametrize(
     "out,err,gone",
     [
-        # 점이 든 값
+        # 숫자가 든 값 — 자격증명 모양이다
         (
-            "correct.horse.battery bare duplicate correct.horse.battery",
+            "A1b2C3d4E5f6G7h8 bare duplicate A1b2C3d4E5f6G7h8",
             "PASSWORD=",
-            "correct.horse.battery",
+            "A1b2C3d4E5f6G7h8",
         ),
-        # 한 글자 종류로만 된 값
         (
-            "abcdefghijklmnop bare duplicate abcdefghijklmnop",
+            "Xy9Zw8Vu7Ts6Rq5P bare duplicate Xy9Zw8Vu7Ts6Rq5P",
             "API_TOKEN=",
-            "abcdefghijklmnop",
+            "Xy9Zw8Vu7Ts6Rq5P",
         ),
     ],
 )
 def test_the_value_side_of_a_seam_is_removed_everywhere(out, err, gone):
-    """어느 조각이 값인지는 **모양이 아니라 위치** 가 말해 준다.
+    """이음매에서 배운 값을 **다른 자리에서도** 지운다.
 
-    역순 이음매는 `err 의 꼬리` + `out 의 머리` 로 이름-값을 만든다. 모양으로
-    가르려던 두 판은 양쪽으로 틀렸다 — 길이 기준은 열두 자짜리 중복을 놓쳤고,
-    글자 종류 기준은 한 종류로 된 값을 놓쳤다.
+    다만 이름 없는 자리의 중복은 자격증명 모양일 때만 지운다. 순소문자
+    낱말 조합(`authentication_failure`)은 소스 앵커와 구별할 수 없고, 그것을
+    전역으로 지우면 조언자가 무엇이 실패했는지 못 본다. 이름이 붙은 자리는
+    문법이 이미 잡으므로, 남는 것은 이름 없는 문자열뿐이다 — 이 리댁터의
+    원래 한계와 같은 것이다.
     """
     module = load_runner()
     assert gone not in module.join_streams(out, err)
@@ -1795,7 +1796,8 @@ def test_four_character_chunks_behind_a_colon_prefix_are_body():
     마커만 지워지고 본문이 남는다.
     """
     module = load_runner()
-    chunks = ["MC4C", "AQAw", "BQYD", "K2Vw", "BCIE", "IAAB", "AgME", "BQYH"] * 12
+    blob = base64.b64encode(b"\x30\x82" + hashlib.shake_256(b"chunks").digest(400)).decode()
+    chunks = [blob[index : index + 4] for index in range(0, len(blob), 4)]
     pem = (
         BEGIN
         + KEY
@@ -1805,7 +1807,8 @@ def test_four_character_chunks_behind_a_colon_prefix_are_body():
         + END
         + KEY
     )
-    assert "PrivateBody: MC4C" not in module.verify_excerpt(pem)
+    cleaned = module.verify_excerpt(pem)
+    assert not [chunk for chunk in chunks if "PrivateBody: " + chunk in cleaned]
 
 
 def test_the_seam_removes_the_value_text_not_the_fragment():
@@ -1824,3 +1827,72 @@ def test_a_separator_inside_a_known_secret_is_not_a_name_boundary(monkeypatch):
     module = load_runner()
     joined = module.join_streams("FAILED test_auth\nsource FAILED remains", "SOME_TOKEN=prefix:")
     assert "source FAILED remains" in joined
+
+
+# --- 라운드 30: PPK, DER 길이, 이음매 전역 삭제의 경계 ------------------------
+
+
+def test_putty_private_key_bodies_are_redacted():
+    """PuTTY 형식에는 PEM 마커가 없다. `Private-Lines: N` 이 스스로 선언한다."""
+    module = load_runner()
+    ppk = (
+        "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nComment: demo\n"
+        "Public-Lines: 1\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\n"
+        "Private-Lines: 2\nYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=\n"
+        "MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3A=\nPrivate-MAC: 0011\nFAILED keep this"
+    )
+    cleaned = module.verify_excerpt(ppk)
+    assert "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=" not in cleaned
+    assert "MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3A=" not in cleaned
+    # 공개 부분과 뒤따르는 실패 신호는 남아야 한다.
+    assert "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=" in cleaned
+    assert "FAILED keep this" in cleaned
+
+
+def test_a_huge_private_lines_count_does_not_erase_the_output():
+    """선언된 줄 수는 자식이 정한다. 상한이 없으면 출력 전체를 지우게 만든다."""
+    module = load_runner()
+    text = "Private-Lines: 9999\nkeep\nthis\ntext"
+    assert module.verify_excerpt(text) == text
+
+
+@pytest.mark.parametrize(
+    "text,kept",
+    [
+        (
+            BEGIN + KEY + "\n" + "AssertionError: MAAA\n" * 30 + END + KEY + "\nTRACE",
+            "AssertionError",
+        ),
+        (BEGIN + KEY + "\nAssertionError: M" + "A" * 63 + "\n" + END + KEY, "AssertionError"),
+    ],
+)
+def test_der_needs_a_sane_length_field(text, kept):
+    """태그 한 바이트만 보면 `MAAA`(0x30 0x00 0x00)가 키가 된다.
+
+    개인키는 길이가 127 을 넘으므로 DER 장형 길이를 쓴다. 그 필드까지 봐야
+    진단 문자열과 갈린다.
+    """
+    module = load_runner()
+    assert kept in module.verify_excerpt(text)
+
+
+def test_an_unnamed_word_duplicate_is_not_erased_globally():
+    """이음매에서 배운 값이 순소문자 낱말이면 이름 없는 자리는 건드리지 않는다.
+
+    `authentication_failure` 는 소스 앵커와 구별할 수 없다. 전역으로 지우면
+    조언자가 무엇이 실패했는지 못 본다 — 이 자리는 세 라운드 동안 두 방향을
+    왕복했고, 여기서 방향을 고정한다.
+    """
+    module = load_runner()
+    joined = module.join_streams(
+        "authentication_failure\nsource authentication_failure remains", "API_TOKEN="
+    )
+    assert "source authentication_failure remains" in joined
+
+
+def test_known_secret_forms_are_not_cached_across_environment_changes(monkeypatch):
+    """환경을 한 번 읽어 붙잡으면 자식을 띄운 뒤의 변화를 못 따라간다."""
+    module = load_runner()
+    module.known_secret_forms()
+    monkeypatch.setenv("SOME_TOKEN", "prefix:FAILEDvalue")
+    assert "prefix:FAILEDvalue" in module.known_secret_forms()
