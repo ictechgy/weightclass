@@ -271,8 +271,10 @@ def main() -> int:
             sort_keys=True,
             ensure_ascii=False,
         )
+        # **advisor 블록이 없는 레코드도 지문을 낸다.** 빼면 조언을 끄고 돈
+        # 실행이 "설정 없음" 으로 사라져, 조언 로그와 비조언 로그가 섞인
+        # 것을 단일 설정으로 본다.
         for r in usable
-        if isinstance(r.get("advisor"), dict)
     }
     # 설정 순수성은 계획 적용과 **다른 질문** 이다. 한 변수에 합치면
     # "계획이 붙었는가" 의 답을 잃는다. 따로 둔다.
@@ -404,7 +406,11 @@ def main() -> int:
     # 판정에 쓰이는 비용은 전부 같은 출처여야 한다.
     for r in usable:
         for key in ("cheap", "expensive", "advice_first", "advice_failure", "retry"):
-            if cost_of(r.get(key)):
+            # **`is not None` 이다.** truthiness 로 걸면 비용 0 인 단계가
+            # 통째로 빠진다 — 구독 로그에서는 그것이 대부분이고, 같은 파일이
+            # 다른 곳에서는 0 을 관측값으로 취급한다. 한 술어를 두 경로가
+            # 다르게 판정하는 자리가 된다.
+            if cost_of(r.get(key)) is not None:
                 origins.add(cost_origin(r.get(key)))
     # 세 경우를 구별한다. 출처가 실제로 섞였는가, 러너가 cost_origin 을 남기지
     # 않은 옛 로그인가, 아니면 비용 자체가 하나도 없는가. 셋 다 c 를 못 재게
@@ -677,9 +683,13 @@ def main() -> int:
         # 세 경우다. 계획이 전부 붙고 설정이 하나면 c_A, 조언을 아예 안 켰으면
         # c, 그 사이(적용이 섞였거나 설정이 섞였거나)는 **어느 이름도 아니다** —
         # 두 모집단의 평균에 단일 모양의 이름을 붙이면 그 수가 그대로 인용된다.
+        # 계획이 붙은 실행이 **하나도 없으면** 이 로그의 싼 실행은 계획 없이
+        # 돈 것이므로 그 비용비는 c 다. 실패 후 조언만 켠 로그(B 전용)가
+        # 그렇다 — 조언이 검증 뒤에 오므로 싼 실행의 비용을 바꾸지 않는다.
+        # 앞선 판은 `advisor_on` 만 보고 그런 로그를 "혼합" 으로 몰았다.
         if shape_a_measured:
             cost_symbol = "c_A"
-        elif not advisor_on:
+        elif True not in first_flags:
             cost_symbol = "c"
         else:
             cost_symbol = "비용비(모집단 혼합 — c 도 c_A 도 아니다)"

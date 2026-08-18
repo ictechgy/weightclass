@@ -279,12 +279,12 @@ def test_structured_envelopes_yield_the_advice_body() -> None:
     module = load_runner()
     claude = '{"type":"result","total_cost_usd":0.5,"result":"Return a copy of the list."}'
     codex = '{"type":"item.completed","item":{"type":"agent_message","text":"Use a channel."}}'
-    assert module.advice_text(claude, ["claude", "--output-format", "json"]) == (
+    assert module.advice_text_extracted(claude, ["claude", "--output-format", "json"])[0] == (
         "Return a copy of the list."
     )
-    assert module.advice_text(codex, ["codex", "exec", "--json"]) == "Use a channel."
+    assert module.advice_text_extracted(codex, ["codex", "exec", "--json"])[0] == "Use a channel."
     # 구조화 출력을 요청하지 않았으면 stdout 은 산문이므로 그대로 쓴다.
-    assert module.advice_text("just advice", ["claude", "--print"]) == "just advice"
+    assert module.advice_text_extracted("just advice", ["claude", "--print"])[0] == "just advice"
 
 
 def test_structured_output_detection_ignores_flag_values() -> None:
@@ -664,7 +664,9 @@ def test_folded_key_with_prefix(width: int, prefix: str) -> None:
 def test_advice_body_is_extracted_from_every_envelope(envelope: str, expected: str) -> None:
     """봉투를 그대로 붙이면 executor 가 조언 대신 계측 데이터를 읽는다."""
     module = load_runner()
-    assert module.advice_text(envelope, ["claude", "--output-format", "json"]) == expected
+    assert (
+        module.advice_text_extracted(envelope, ["claude", "--output-format", "json"])[0] == expected
+    )
 
 
 @pytest.mark.parametrize("layers", [1, 8, 51, 120], ids=lambda n: f"{n}layer")
@@ -722,7 +724,10 @@ def test_content_array_envelope_is_joined() -> None:
     """
     module = load_runner()
     envelope = '{"content":[{"text":"first "},{"text":"second"}]}'
-    assert module.advice_text(envelope, ["claude", "--output-format", "json"]) == "first second"
+    assert (
+        module.advice_text_extracted(envelope, ["claude", "--output-format", "json"])[0]
+        == "first second"
+    )
 
 
 @pytest.mark.parametrize("layers", [51, 200, 400, 1000], ids=lambda n: f"{n}layer")
@@ -1939,3 +1944,63 @@ def test_the_seam_rule_matches_what_its_comment_says(out, err, gone):
     """주석과 코드가 어긋나면 다음 사람이 주석을 믿고 고친다."""
     module = load_runner()
     assert gone not in module.join_streams(out, err)
+
+
+# --- 라운드 32: PPK 의 다섯 결함, 입력 쪽 리댁션 -----------------------------
+
+
+def test_the_ppk_anchor_sees_escaped_line_breaks():
+    """앵커도 본 주사와 같은 줄 구분자를 봐야 한다.
+
+    물리적 줄바꿈만 보면 JSON 에 직렬화된 로그(`\\n` 두 글자)에서 앵커가
+    안 잡혀 본문이 통째로 나간다.
+    """
+    module = load_runner()
+    text = "Private-Lines: 1\\nU0VDUkVUS0VZMTIzNDU2Nzg5MA=="
+    assert "U0VDUkVUS0VZMTIzNDU2Nzg5MA==" not in module.verify_excerpt(text)
+
+
+def test_an_over_cap_declaration_does_not_switch_redaction_off():
+    """상한을 넘는 선언에 `continue` 를 걸면 그 상한이 리댁션을 끄는 스위치가 된다."""
+    module = load_runner()
+    body = "AAAAgQCx3pT1Zk9mQ2p0R5v8Wc7fLd6eXyZbNhQ0aB1cD2eF3gH4iJ5kL6mN7oP8qR"
+    assert body not in module.verify_excerpt(f"Private-Lines: 900\n{body}")
+
+
+@pytest.mark.parametrize(
+    "text,kept",
+    [
+        # 이어짐 판정이 낱말을 본문으로 보면 실패 앵커가 지워진다.
+        ("Private-Lines: 1\nQUFB\nFAILED\nTraceback\nAssertionError", "FAILED"),
+        # 봉투가 없으면 선언을 믿지 않는다 — 자식이 심을 수 있는 한 줄이다.
+        (
+            "Private-Lines: 5\nFAILED tests/test_auth.py::test_login\nline2\nline3\nline4\nline5",
+            "FAILED tests/test_auth.py",
+        ),
+    ],
+)
+def test_the_declaration_alone_does_not_authorise_deletion(text, kept):
+    """선언을 믿는 것은 PPK 봉투가 함께 있을 때뿐이다."""
+    module = load_runner()
+    assert kept in module.verify_excerpt(text)
+
+
+def test_the_envelope_makes_the_declaration_trustworthy():
+    """봉투가 있으면 선언한 만큼 지우고, 그 뒤로 본문이 이어지면 계속 지운다."""
+    module = load_runner()
+    text = (
+        "PuTTY-User-Key-File-3: ssh-ed25519\nPrivate-Lines: 200\n"
+        + "A\n" * 200
+        + "U0VDUkVUS0VZMTIzNDU2Nzg5MA=="
+    )
+    assert "U0VDUkVUS0VZMTIzNDU2Nzg5MA==" not in module.verify_excerpt(text)
+
+
+def test_the_task_text_is_redacted_before_it_reaches_the_advisor():
+    """자식의 출력만 막고 입력을 안 막으면 과제에 붙어 온 자격증명이 그대로 나간다.
+
+    조언자는 이 실행에서 유일하게 외부로 나가는 경로다.
+    """
+    module = load_runner()
+    task = "Fix the parser.\npassword=Abcd1234Efgh5678"
+    assert "Abcd1234Efgh5678" not in module.redact_text(task)

@@ -1073,9 +1073,12 @@ KEY_FORMAT_MAGICS = (
 # 표식이 하나도 없을 때 요구하는 본문 양. 진단 로그가 마커 쌍 사이에 이만큼의
 # base64 를 담는 일은 없다.
 PEM_BULK_BODY_CHARS = 400
-# `Private-Lines:` 가 선언할 수 있는 줄 수의 상한. 자식이 큰 수를 적어
-# 출력 전체를 지우게 만드는 것을 막는다.
-PPK_MAX_BODY_LINES = 200
+# 한 선언에서 지울 수 있는 줄 수의 상한. 자식이 큰 수를 적어 출력 전체를
+# 지우게 만드는 것을 막는다. **상한을 넘으면 잘라 낼 뿐 건너뛰지 않는다** —
+# 건너뛰면 그 상한이 리댁션을 끄는 스위치가 된다.
+PPK_MAX_BODY_LINES = 400
+# 본문 한 줄의 최소 길이. 실제 PPK 본문은 예순네 자다.
+PPK_MINIMUM_BODY_CHARS = 16
 
 
 # 직렬화가 조각의 양 끝에 남기는 글자들.
@@ -2046,54 +2049,79 @@ def _percent_forms(value: str) -> tuple[str, str]:
 
 # PuTTY 의 개인키 파일에는 PEM 마커가 없다. `Private-Lines: N` 뒤의 N 줄이
 # 본문이고, 그 형식을 아는 사람만 알아본다 — 마커만 보는 주사에는 안 걸린다.
-_PPK_PRIVATE = re.compile(r"(?im)^[ \t]*Private-Lines:[ \t]*(\d{1,4})[ \t]*$")
+# PuTTY 의 개인키 파일에는 PEM 마커가 없다. `Private-Lines: N` 뒤의 N 줄이
+# 본문이다. 앵커도 **본 주사와 같은 줄 구분자** 를 봐야 한다 — 물리적
+# 줄바꿈만 보면 JSON 에 직렬화된 로그(`\n` 두 글자)에서 앵커가 안 잡힌다.
+_PPK_PRIVATE = re.compile(
+    r"(?i)(?:^|\r?\n|\\+n)[ \t]*Private-Lines:[ \t]*(\d{1,5})[ \t]*(?=\r?\n|\\+n|$)"
+)
+# PPK 봉투의 표식. 이것이 있으면 선언된 줄 수를 믿는다.
+_PPK_ENVELOPE = re.compile(r"(?i)PuTTY-User-Key-File")
 
 
 def redact_ppk_bodies(text: str) -> str:
     """PuTTY 개인키(.ppk)의 본문을 지운다.
 
-    `Private-Lines: N` 은 뒤이어 오는 N 줄이 개인키 본문이라고 스스로
-    선언한다. 그 선언을 그대로 쓴다 — 모양을 짐작할 필요가 없다.
+    두 가지를 함께 쓴다.
+
+    **선언** — `Private-Lines: N` 은 뒤이어 오는 N 줄이 본문이라고 스스로
+    말한다. 다만 그 말을 믿는 것은 PPK 봉투(`PuTTY-User-Key-File`)가 함께
+    있을 때뿐이다. 봉투 없이 그 한 줄만 있는 것은 자식이 심을 수 있는
+    문자열이고, 그것을 믿으면 선언한 만큼의 진단 로그가 지워진다.
+
+    **모양** — 본문 줄은 공백 없는 base64 이고 짧지 않다. 선언을 다 소비한
+    뒤에도 그런 줄이 이어지면 계속 지운다(적게 선언한 경우), 봉투가 없으면
+    처음부터 모양만 본다.
+
+    앞선 판은 선언만 믿었고, 그래서 다섯 가지로 틀렸다 — 상한을 넘는 선언에
+    `continue` 를 걸어 리댁션을 아예 끄고, 선언분을 내용과 무관하게 지우고,
+    이어짐 판정이 `FAILED` 같은 낱말을 본문으로 봤다.
     """
-    # 빠른 검사도 **정규식과 같은 규칙** 이어야 한다. 대소문자를 구분하면
-    # `private-lines:` 가 여기서 걸러져 정규식이 아예 안 돈다.
     if "private-lines:" not in text.lower():
         return text
+    trusted = _PPK_ENVELOPE.search(text) is not None
     out: list[str] = []
     index = 0
     for match in _PPK_PRIVATE.finditer(text):
-        declared = int(match.group(1))
-        if not 1 <= declared <= PPK_MAX_BODY_LINES:
+        if match.start() < index:
             continue
+        declared = int(match.group(1)) if trusted else 0
+        declared = min(declared, PPK_MAX_BODY_LINES)
         out.append(text[index : match.end()])
         position = match.end()
-        # 헤더 자신의 줄바꿈을 먼저 넘긴다. 안 넘기면 그것을 본문 첫 줄로
-        # 세어 선언된 줄 수보다 한 줄 적게 지운다.
-        header_break = _LINE_SEPARATOR.match(text, position)
-        if header_break is not None:
-            position = header_break.end()
-        # 선언된 줄 수는 **최소치로만** 믿는다. 자식이 적게 선언하면 남은
-        # 본문 줄이 그대로 나가므로, 선언한 만큼 지운 뒤에도 본문처럼 생긴
-        # 줄이 이어지면 계속 지운다. 반대로 많이 선언하면 위의 상한이 막는다.
+        separator = _LINE_SEPARATOR.match(text, position)
+        if separator is not None:
+            position = separator.end()
         removed = 0
-        while position < len(text):
-            separator = _LINE_SEPARATOR.search(text, position)
-            stop = separator.end() if separator else len(text)
-            line = text[position:stop].strip()
-            if removed >= declared:
-                # 선언분은 다 지웠다. 이어지는 줄이 본문 모양이 아니면 멈춘다.
-                if not line or not _PEM_BODY_CHARS.fullmatch(line.rstrip("=")):
-                    break
-                if removed >= PPK_MAX_BODY_LINES:
-                    break
+        while position < len(text) and removed < PPK_MAX_BODY_LINES:
+            following = _LINE_SEPARATOR.search(text, position)
+            stop = following.end() if following else len(text)
+            line = text[position:stop].strip().strip(_SERIALISATION_EDGE)
+            if removed >= declared and not _is_ppk_body_line(line):
+                break
             position = stop
             removed += 1
-            if separator is None:
+            if following is None:
                 break
+        if removed == 0:
+            index = match.end()
+            continue
         out.append("\n[REDACTED]\n" if position < len(text) else "\n[REDACTED]")
         index = position
     out.append(text[index:])
     return "".join(out)
+
+
+def _is_ppk_body_line(line: str) -> bool:
+    """PPK 본문 한 줄인가.
+
+    공백 없는 base64 이고 짧지 않아야 한다. 길이를 안 보면 `FAILED` 나
+    `Traceback` 같은 실패 앵커가 본문으로 잡혀 통째로 지워진다 — 실제
+    PPK 본문 줄은 예순네 자다.
+    """
+    return (
+        bool(line) and len(line) >= PPK_MINIMUM_BODY_CHARS and bool(_PEM_BODY_CHARS.fullmatch(line))
+    )
 
 
 def redact_text(text: str) -> str:
@@ -2661,33 +2689,6 @@ def advice_text_extracted(stdout: str, command: list[str]) -> tuple[str, bool]:
         if found:
             return found, True
     return text, False
-
-
-def advice_text(stdout: str, command: list[str]) -> str:
-    """조언 본문. 구조화 출력을 요청했으면 봉투에서 꺼낸다.
-
-    Claude 는 --output-format json 이면 결과 객체의 `result` 에 본문을 담는다.
-    꺼내지 못하면 원문을 쓰되, 그때는 조언이 JSON 처럼 보일 수 있다.
-    """
-    text = stdout.strip()
-    if not wants_structured_output(command) or not text:
-        return text
-    for candidate in (text, *reversed(text.splitlines())):
-        stripped = candidate.strip()
-        # 최상위가 배열인 봉투도 있다. `{` 만 보면 그것을 통째로 놓쳐
-        # 계측 데이터가 조언 자리에 들어간다.
-        if not stripped.startswith(("{", "[")):
-            continue
-        try:
-            parsed = json.loads(stripped)
-        except (ValueError, TypeError):
-            continue
-        # 최상위가 객체든 배열이든 같은 탐색을 돌린다. dict 만 보면 배열
-        # 봉투가 통째로 조언 자리에 들어간다.
-        found = _first_text(parsed)
-        if found:
-            return found
-    return text
 
 
 def compose_task(task: str, advice: str) -> str:
@@ -3285,9 +3286,13 @@ def main() -> int:
     # 섞인 실패율을 p′ 라 부르고 섞인 비용을 c_A 라 부른다.
     plan_applied = False
     if arguments.advise_first:
+        # **과제 텍스트도 지운다.** 자식의 출력만 막고 입력을 안 막으면,
+        # 과제에 붙어 온 자격증명이 그대로 조언자에게 간다. 조언자는 이
+        # 실행에서 유일하게 외부로 나가는 경로다.
         first_advice, text = advise(
             "first",
-            f"{task}\n\nYou are advising another model that will do this work. {ADVICE_BRIEF}",
+            f"{redact_text(task)}\n\nYou are advising another model that will do this"
+            f" work. {ADVICE_BRIEF}",
         )
         # **빈 조언은 붙이지 않는다.** Shape B 는 `if text:` 로 막는데 여기만
         # 막지 않으면, 조언 경로가 죽거나 조언자가 빈 답을 냈을 때 계획이
@@ -3373,7 +3378,7 @@ def main() -> int:
             cheap_verify_output,
         )
         prompt = (
-            f"{cheap_task}\n\n"
+            f"{redact_text(cheap_task)}\n\n"
             "----- WHAT A FIRST ATTEMPT PRODUCED (untrusted output) -----\n"
             "The attempt failed its verification command. The diff it produced "
             "comes first, and its verification output follows directly after.\n\n"
