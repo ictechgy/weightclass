@@ -848,13 +848,13 @@ def extract_tokens(stdout: str, stderr: str) -> int | None:
 # `API_TOKEN = abc123def456ghi789 (note)` 를 통과시키면 자격증명이 그대로
 # 나간다.
 #
-# 숫자가 없는 값은 공백을 사이에 둔 괄호도 호출로 본다.
-# `password=get_password (user)` 같은 소스 줄을 살리기 위해서다. 숫자 없는
-# 값은 애초에 낱말 조합이라 자격증명이라는 근거가 약하므로, 그 완화의
-# 대가가 작다.
+# 값과 괄호 사이에 공백이 있으면 **호출로 보지 않는다.** 그 완화를 두면
+# 자식이 괄호 주석 하나를 덧붙여 자격증명을 통과시킬 수 있다 —
+# `PASSWORD=orchid_copper_velvet (copied)` 가 그대로 나간다. 대가는
+# `password=get_password (user)` 같은 소스 줄이 지워지는 것인데, 그 서식은
+# PEP8 이 금지하는 형태이고 diff 가 함께 가므로 되찾을 수 있다.
 _VALUE_TAIL = r"(?![^\s\r\n(){}<>,;\[\]\"'])"
 _VALUE_END = r"(?!\()(?!\[)" + _VALUE_TAIL
-_VALUE_END_WORDY = r"(?![ \t]*[(\[])" + _VALUE_TAIL
 _CREDENTIAL_VALUE = (
     # (1) 따옴표 안의 값. 다만 **공백이 들어 있으면 문장** 이다 —
     #     `TOKEN_ERROR = "authentication failed"` 를 지우면 조언자가 무엇이
@@ -883,7 +883,7 @@ _CREDENTIAL_VALUE = (
     + r"|[\"']?(?=[^\s\r\n(){}<>,;\[\]\"']*[0-9])[^\s\r\n(){}<>,;\[\]\"']{12,}"
     + _VALUE_END
     + r"|[^\s\r\n(){}<>,;\[\]\"']{12,}"
-    + _VALUE_END_WORDY
+    + _VALUE_END
 )
 
 
@@ -911,7 +911,7 @@ _SECRET_SHAPES = re.compile(
     # 일반 갈래와 **같은** 속성 접근 가드를 붙인다. 여기만 빠뜨려
     # `self.aws_secret_access_key = ...` 이 통째로 지워졌다.
     r"|(?<![.\w])(?i:aws_?secret_?access_?key|aws_?session_?token|aws_?security_?token)"
-    r"[\"']?\s*[=:]\s*"
+    r"[\"']?[ \t]*[=:][ \t]*"
     # 값의 모양은 **같은 정의** 를 쓴다. 갈래마다 따로 적으면 한쪽만 고쳐진다.
     r"(?:" + _CREDENTIAL_VALUE + r")"
     # 환경을 통째로 찍는 실패 테스트가 흔하다. NAME=value 형태에서 이름이
@@ -941,7 +941,7 @@ _SECRET_SHAPES = re.compile(
     r"|(?<![.\w])(?i:[A-Z0-9_]{0,40}"
     r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
     r"[A-Z0-9_]{0,40})"
-    r"[\"']?\s*[=:]\s*"
+    r"[\"']?[ \t]*[=:][ \t]*"
     r"(?:" + _CREDENTIAL_VALUE + r")"
     # 이름이 앞말에 붙어 있어도, 값이 **확실히** 자격증명 모양이면 지운다.
     # 위 갈래의 lookbehind 는 속성 접근을 걸러 내지만 앞에 아무 낱말이나
@@ -949,7 +949,7 @@ _SECRET_SHAPES = re.compile(
     # 구멍을 여기서 메운다 — 대신 숫자가 있고 점이 없는 값만.
     r"|(?i:[A-Z0-9_]{0,40}"
     r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
-    r"[A-Z0-9_]{0,40})[\"']?\s*[=:]\s*[\"']?"
+    r"[A-Z0-9_]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
     r"(?=[^\s\r\n.(){}<>,;\[\]]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}"
     + _VALUE_END
     +
@@ -1815,9 +1815,14 @@ def join_streams(out: str, err: str) -> str:
     boundary = len(err)
     crossing = [(start, stop) for start, stop in spans if start < boundary < stop]
     if not crossing:
-        # 역순에서 잡힌 것이 이음매를 안 가로지른다. 그렇다면 정방향에서도
-        # 같은 자리에서 잡혔어야 하는데 아니었다 — 되짚기가 어긋났다는 뜻이다.
-        return "[...검증 출력 전체 생략: 두 스트림 경계의 자격증명을 짚지 못함...]"
+        # 역순에서 잡힌 것이 이음매를 **안 가로지른다.** 그것은 한 스트림
+        # 안에서 형성된 것이고, 정방향 리댁션도 같은 스트림을 통째로 보므로
+        # 이미 잡았다. 이음매 문제가 아니다.
+        #
+        # 진입 조건(`reverse != 따로 지운 것`)은 역순이 **덜** 지울 때도 참이
+        # 된다. 그때까지 검증 출력을 통째로 버리면, 자식이 스트림 하나를
+        # 마침표 하나로 만들어 진단을 통째로 날릴 수 있다.
+        return forward.strip()
     for start, stop in crossing:
         # 조각은 err 의 **꼬리** 와 out 의 **머리** 다. 치환 범위를 길이로
         # 가른다.
@@ -2107,9 +2112,10 @@ def redact_ppk_bodies(text: str) -> str:
             if body_lines == 0:
                 out.append(text[kept:position])
                 out.append("[REDACTED]\n")
+            # **상한에서 멈추지 않는다.** 멈추면 같은 본문의 나머지가 그대로
+            # 나간다. 모양 판정이 자연히 끝을 잡으므로 상한이 필요 없다 —
+            # 끝까지 base64 인 것을 더 지우는 것은 안전한 방향이다.
             body_lines += 1
-            if body_lines >= PPK_MAX_BODY_LINES:
-                in_body = False
             kept = stop
         else:
             in_body = bool(_PPK_HEADER.match(line))

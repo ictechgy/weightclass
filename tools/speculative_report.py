@@ -1239,7 +1239,10 @@ def main() -> int:
             # 프라임 표기의 기준을 **한 곳** 으로 맞춘다. 위쪽 a_B/s/r 은
             # 실제 적용 여부를 쓰는데 여기만 다른 술어를 쓰면 한 보고서 안에서
             # 같은 프라임이 서로 다른 뜻이 된다.
-            label = "c + p′" if shape_a_measured else "c + p"
+            # 프라임은 **두 항 모두** 에 붙는다. 계획이 붙은 로그의 싼 비용은
+            # c 가 아니라 c_A 이고, 앞쪽 출력도 그렇게 부른다 — 여기서만 c 라
+            # 하면 한 숫자를 한 보고서가 두 이름으로 부르게 된다.
+            label = "c_A + p′" if shape_a_measured else "c + p"
         print(
             f"\n(참고) 이 로그의 {label} = {c + p:.2f}. 실제 모형과의 차이는 조언"
             " 비용만이 아니다 — 재시도가 구제해 승급하지 않은 과제도 이 식에는"
@@ -1333,7 +1336,9 @@ def main() -> int:
     # 한 숫자를 두 곳이 반대로 부르게 된다 — 틀린 것은 c 가 아니라 **모형** 이다.
     if not advisor_on:
         aside = "  "
-    elif shape_a_measured:
+    elif shape_a_measured and c_range is not None:
+        # c 를 못 잰 로그에서는 c_A 라고 부를 것도 없다. 아래 사다리가
+        # "c_A 도 없으므로" 라고 말하는데 여기서 c_A 를 쓰면 앞뒤가 어긋난다.
         aside = "  (c_A 로 세운 조언 없는 모형이다 — 이 로그의 모형이 아니다) "
     else:
         aside = "  (조언 없는 모형의 식이다 — 이 로그의 모형이 아니다) "
@@ -1384,7 +1389,14 @@ def main() -> int:
         # 빠뜨리면 재지 못한 c 를 c_A 라고 소개하게 된다.
         print(
             "\n  -> 판정 없음. 이 로그는 조언을 켜고 쟀지만 c 를 내지 못했다."
-            " c_A 도 없으므로 Shape A 손익식을 세울 수 없다."
+            + (
+                " c_A 도 없으므로 Shape A 손익식을 세울 수 없다."
+                if advice_first_on
+                # 실패 후 조언만 켠 로그에 Shape A 를 이유로 대면 안 된다 —
+                # 켜지도 않은 팔이다.
+                else " 실패 후 조언의 판정 s > a + q·r 에는 c 가 안 들어가므로"
+                " 그쪽은 위에서 따로 낸다."
+            )
         )
     elif advisor_on and timed_out_tasks:
         # 조언 분기가 타임아웃 경고를 가리면 안 된다. 빠진 비용이 위쪽으로
@@ -1425,6 +1437,13 @@ def main() -> int:
                     )
                 )
                 if failure_advice_on
+                # 계획 적용이 섞이면 시작 전 조언만 켠 로그에서도 그 사실을
+                # 먼저 말해야 한다. 앞선 판은 이 검사를 failure_advice_on
+                # 가지 안에만 두어, 섞인 표본에 Shape A 손익식을 그대로
+                # 제시했다.
+                else " 계획 적용이 섞여 이 로그의 c 도 실패율도 단일 모양의"
+                " 값이 아니다. 그 건을 빼고 다시 모아야 c_A 와 p′ 를 낼 수 있다."
+                if mixed_application
                 else (
                     (
                         " 시작 전 조언만 켠 로그에는 그 판정이 없다. 이득 조건은"

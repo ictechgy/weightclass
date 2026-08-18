@@ -1455,7 +1455,6 @@ def test_the_gate_and_the_walk_agree_on_folded_bodies(width):
         "credentials.aws_secret_access_key = credentials.secret_key",
         'API_TOKEN = application_config["api_token"]',
         'token = request.headers["Authorization"]',
-        "password=get_password (user)",
     ],
 )
 def test_indexing_and_spaced_calls_read_as_code(source):
@@ -2086,15 +2085,57 @@ def test_a_quoted_declaration_does_not_erase_prose():
     )
 
 
-def test_a_numeric_value_before_a_spaced_paren_is_still_redacted():
+@pytest.mark.parametrize(
+    "line,token",
+    [
+        ("API_TOKEN = abc123def456ghi789 (note)", "abc123def456ghi789"),
+        # 숫자 없는 값에도 같은 규칙이다. 완화를 남기면 자식이 괄호 주석
+        # 하나를 덧붙여 자격증명을 통과시킬 수 있다.
+        ("PASSWORD=orchid_copper_velvet (copied)", "orchid_copper_velvet"),
+    ],
+)
+def test_a_value_before_a_spaced_paren_is_still_redacted(line, token):
     """공백을 사이에 둔 괄호는 호출이 아니라 주석이다.
 
-    그것을 호출로 보면 `API_TOKEN = abc123def456ghi789 (note)` 가 그대로
-    나간다. 숫자 없는 값에만 그 완화를 준다 — 그쪽은 애초에 자격증명이라는
-    근거가 약하다.
+    호출로 보면 자식이 `(copied)` 한 마디를 덧붙이는 것만으로 값을 통과시킬
+    수 있다. 대가는 `password=get_password (user)` 같은 소스 줄이 지워지는
+    것인데, 그 서식은 PEP8 이 금지하는 형태이고 diff 가 함께 가므로 되찾을
+    수 있다 — 반대 방향은 되돌릴 수 없다.
     """
     module = load_runner()
-    assert "abc123def456ghi789" not in module.verify_excerpt(
-        "API_TOKEN = abc123def456ghi789 (note)"
-    )
-    assert module.verify_excerpt("password=get_password (user)") == "password=get_password (user)"
+    assert token not in module.verify_excerpt(line)
+
+
+# --- 라운드 35: 진입 조건과 동치성 --------------------------------------------
+
+
+def test_the_seam_arm_is_entered_only_when_the_seam_is_the_cause():
+    """진입 조건이 "이음매에서 형성됐다" 와 동치가 아니었다.
+
+    `reverse != 따로 지운 것` 은 역순이 **덜** 지울 때도 참이다. 그때까지
+    검증 출력을 통째로 버리면, 자식이 스트림 하나를 마침표 하나로 만들어
+    진단을 통째로 날릴 수 있다. 가로지르는 구간이 있을 때만 복구한다.
+    """
+    module = load_runner()
+    joined = module.join_streams("PASSWORD=orchid_copper_velvet\nAssertionError: boom", ".")
+    assert "AssertionError: boom" in joined
+    assert "orchid_copper_velvet" not in joined
+
+
+def test_the_name_value_separator_stays_on_one_line():
+    """값의 끝은 같은 줄로 못박아 놓고 시작은 안 그랬다.
+
+    `\\s` 는 줄바꿈을 포함하므로, 비밀 이름이 줄 끝에 있으면 다음 줄 첫
+    토큰이 값으로 잡혀 두 줄이 한 매치로 지워진다.
+    """
+    module = load_runner()
+    text = "DB_PASSWORD=\nnext_line_value_here"
+    assert module.verify_excerpt(text) == text
+
+
+def test_a_ppk_body_longer_than_the_old_cap_is_fully_redacted():
+    """상한에서 멈추면 같은 본문의 나머지가 그대로 나간다."""
+    module = load_runner()
+    body = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="
+    cleaned = module.verify_excerpt("Private-Lines: 401\n" + (body + "\n") * 401)
+    assert body not in cleaned
