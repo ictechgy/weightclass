@@ -835,7 +835,11 @@ def extract_tokens(stdout: str, stderr: str) -> int | None:
 # 지우지 말았어야 할 것을 절반만 지운, 가장 나쁜 결과다.
 # 값 뒤에 여는 괄호가 오면 호출이지 값이 아니다. 그 조건도 여기 함께 둔다 —
 # 따로 두면 갈래를 고칠 때 하나가 빠진다(실제로 빠뜨렸다).
-_VALUE_END = r"(?!\()(?![^\s\r\n(){}<>,;\[\]\"'])"
+# 값 뒤가 호출이나 색인이면 코드다. 파이썬은 이름과 여는 괄호 사이에 공백을
+# 허용하고, 대괄호 색인도 값이 아니라 표현식이다.
+# `\s*` 가 아니라 `[ \t]*` 다. 줄바꿈을 넘으면 다음 줄이 대괄호로 시작할 때
+# 값이 색인으로 오인돼 지워지지 않는다.
+_VALUE_END = r"(?![ \t]*[(\[])(?![^\s\r\n(){}<>,;\[\]\"'])"
 _CREDENTIAL_VALUE = (
     # (1) 따옴표 안의 값. 다만 **공백이 들어 있으면 문장** 이다 —
     #     `TOKEN_ERROR = "authentication failed"` 를 지우면 조언자가 무엇이
@@ -884,7 +888,9 @@ _SECRET_SHAPES = re.compile(
     # `AWS_SECRET_ACCESS_KEY = credentials.secret_key` 는 자격증명이 아니라
     # 조언자가 봐야 할 코드다. 그것까지 지우면 무엇을 고칠지 알 수 없다.
     # 값이 코드처럼 생겼으면(괄호·점·대괄호가 있거나 아는 키워드면) 넘긴다.
-    r"|(?i:aws_?secret_?access_?key|aws_?session_?token|aws_?security_?token)"
+    # 일반 갈래와 **같은** 속성 접근 가드를 붙인다. 여기만 빠뜨려
+    # `self.aws_secret_access_key = ...` 이 통째로 지워졌다.
+    r"|(?<![.\w])(?i:aws_?secret_?access_?key|aws_?session_?token|aws_?security_?token)"
     r"[\"']?\s*[=:]\s*"
     # 값의 모양은 **같은 정의** 를 쓴다. 갈래마다 따로 적으면 한쪽만 고쳐진다.
     r"(?:" + _CREDENTIAL_VALUE + r")"
@@ -934,6 +940,8 @@ _SECRET_SHAPES = re.compile(
 # 목록에 넣을 최소 길이. 이보다 짧으면 흔한 문자열일 가능성이 커서, 지우는
 # 이득보다 보고서를 알아볼 수 없게 만드는 손해가 크다.
 MINIMUM_SECRET_CHARS = 6
+# 이음매 조각을 **전역** 으로 지울 최소 길이. 짧으면 평범한 낱말이 걸린다.
+GLOBAL_REPLACE_CHARS = 16
 # 인코딩을 몇 겹까지 합성해 볼지. 실제 로그에서 두 겹을 넘는 일은 드물지만,
 # 셋으로 두면 조합이 열다섯 개로 끝나므로 넉넉히 잡아도 비용이 없다.
 ENCODING_DEPTH = 3
@@ -1040,6 +1048,73 @@ PEM_NOISE_TOLERANCE = 2
 # 줄을 가로질러 누적한 base64 글자가 이만큼 이어지면 본문으로 본다. 한 줄
 # 짜리 판정은 짧게 재접힌 키를 놓친다.
 PEM_FOLDED_BODY_CHARS = 48
+
+
+# 직렬화가 조각의 양 끝에 남기는 글자들.
+# 직렬화가 조각의 양 끝에 남기는 글자들. **대괄호는 넣지 않는다** —
+# `[INFO] ` 같은 로그 접두사가 대괄호로 시작하므로, 여기서 벗기면
+# strip_log_prefix 가 그것을 접두사로 못 알아본다.
+_SERIALISATION_EDGE = " \t\r\n\"',"
+
+
+def _between_markers_is_body(content: str) -> bool:
+    """BEGIN 과 END 사이의 내용이 키 본문인가.
+
+    두 가지를 본다. **양** 이 충분해야 하고(짧으면 마커를 나란히 언급한
+    산문이다), 조각들의 **길이가 고르거나 하나뿐** 이어야 한다. 접기는 길이가
+    같은 줄을 만들고, 산문은 길이가 제각각인 낱말을 만든다.
+
+    글자 종류는 여기서 보지 않는다. 마커 쌍이 있다는 것 자체가 강한 신호이고,
+    반복 바이트로 만든 키의 본문은 한 종류로만 이뤄질 수 있다.
+
+    정규화는 **본 주사와 같아야** 한다. 접두사와 직렬화 부스러기를 안 걷으면
+    `[INFO] AQEB` 가 두 조각으로 세어져 길이가 고르지 않다고 판정된다.
+    """
+    tokens: list[str] = []
+    position = 0
+    while position < len(content):
+        separator = _LINE_SEPARATOR.search(content, position)
+        stop = separator.end() if separator else len(content)
+        # 따옴표와 쉼표를 **한 번에** 벗긴다. 차례로 벗기면 `"AQEB...",` 에서
+        # 앞 따옴표만 떨어지고 뒤의 `",` 가 남아 조각이 본문으로 안 보인다 —
+        # JSON 배열로 직렬화된 키가 그 형태다.
+        line = _ESCAPE_NOISE.sub("", content[position:stop]).strip(_SERIALISATION_EDGE)
+        position = stop
+        # 접두사 제거 **전후로** 벗긴다. `"[INFO] AQEB",` 는 바깥 따옴표를
+        # 먼저 벗겨야 접두사가 보이고, 접두사를 벗긴 뒤에도 뒤쪽 부스러기가
+        # 남을 수 있다.
+        stripped = strip_log_prefix(line).strip(_SERIALISATION_EDGE)
+        if not stripped:
+            continue
+        tokens.extend(piece for piece in stripped.split() if piece)
+    if not tokens:
+        return False
+    material = sum(len(token) for token in tokens if _PEM_BODY_CHARS.fullmatch(token))
+    if material < PEM_FOLDED_BODY_CHARS:
+        return False
+    if len(tokens) == 1:
+        return True
+    # 마지막 조각은 짧을 수 있다(본문의 끝). 그것 말고는 길이가 같아야 한다.
+    lengths = {len(token) for token in tokens[:-1]}
+    return len(lengths) == 1 and len(tokens[-1]) <= max(lengths)
+
+
+def _looks_like_base64(text: str) -> bool:
+    """무작위 바이트의 base64 처럼 생겼는가.
+
+    48자쯤이면 대소문자와 숫자가 섞인다. 한 종류만으로 이뤄진 문자열
+    (`FAILEDFAILED...`)은 접힌 키가 아니라 반복된 로그 줄이다.
+    """
+    classes = sum(
+        (
+            any(c.isupper() for c in text),
+            any(c.islower() for c in text),
+            any(c.isdigit() for c in text),
+        )
+    )
+    return classes >= 2
+
+
 # 그 줄 전체가 base64 글자인가. 산문은 공백과 문장부호 때문에 걸리지 않는다.
 _PEM_BODY_CHARS = re.compile(r"[A-Za-z0-9+/=]+")
 # 직렬화 잔해에만 나오는 글자들. 산문에는 이것만으로 된 줄이 없다.
@@ -1056,7 +1131,12 @@ def _is_serialisation_noise(line: str) -> bool:
 PEM_LOOKAHEAD_LINE_CHARS = 512
 _PEM_BODY_RUN = re.compile(r"[A-Za-z0-9+/=]{12,}")
 # PEM 헤더 줄: `Proc-Type: 4,ENCRYPTED` 처럼 이름과 값이 콜론으로 갈린다.
-_PEM_HEADER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s")
+# RFC 1421 의 헤더 이름들. 아무 `Name: value` 나 받으면
+# `AssertionError: boom` 이 헤더로 잡혀 실패 신호가 키 블록에 딸려 지워진다.
+_PEM_HEADER_LINE = re.compile(
+    r"^(?i:Proc-Type|DEK-Info|Originator-\S*|MIC-Info|Recipient-\S*|Key-Info|Issuer-\S*"
+    r"|Cert|CRL|Comment|Subject|Bag Attributes|friendlyName|localKeyID):\s"
+)
 # 진짜 줄바꿈이거나, JSON 에 직렬화되면서 이스케이프된 줄바꿈. 뒤쪽은
 # `\n` 과 `\r\n` 둘 다이고 이중 이스케이프도 있을 수 있다.
 _LINE_SEPARATOR = re.compile(r"\r?\n|(?:\\+r)?\\+n")
@@ -1083,10 +1163,17 @@ def looks_like_key_block(text: str, after: int) -> bool:
     # 에서는 한 줄이 곧 전체이고, 마커마다 끝까지 훑으면 이차 시간이 된다.
     # 자식이 출력 길이를 정하므로 그것은 공격 가능한 성질이다. 상한은 본문
     # 한 줄을 알아보기에 넉넉하다.
+    # **END 마커가 있으면 그것이 가장 강한 신호다.** 마커 쌍 사이의 내용이
+    # 접힌 본문 모양이면 글자 종류를 따질 필요가 없다 — 그 판정은 END 가
+    # 없을 때만 필요한 보조 수단이고, 여기서 쓰면 반복 바이트로 만든 키처럼
+    # 한 종류로만 이뤄진 본문을 놓친다.
+    closing = _PEM_END_RE.search(text, after, min(after + PEM_MAX_SPAN, len(text)))
+    if closing is not None and _between_markers_is_body(text[after : closing.start()]):
+        return True
     position = after
     skipped = 0
     noise = 0
-    folded = 0
+    folded_lines: list[str] = []
     horizon = min(len(text), after + PEM_LOOKAHEAD_LINES * PEM_LOOKAHEAD_LINE_CHARS)
     for _ in range(PEM_LOOKAHEAD_LINES + PEM_LOOKAHEAD_LINES * 4):
         if position >= horizon:
@@ -1112,12 +1199,24 @@ def looks_like_key_block(text: str, after: int) -> bool:
             return True
         if kind == "short":
             # 짧은 줄 하나로는 판단할 수 없다. 네 자씩 접힌 본문은 줄마다 네
-            # 글자다. 줄을 **가로질러** 누적한다.
-            folded += len(line)
-            if folded >= PEM_FOLDED_BODY_CHARS:
+            # 글자다. 줄을 **가로질러** 누적하되, 접힌 본문의 모양을 요구한다.
+            #
+            # 접기는 **길이가 같은** 줄을 만든다. 그리고 무작위 바이트의
+            # base64 는 48자 안에 대소문자와 숫자가 거의 확실히 섞인다.
+            # 그 둘을 안 보면 `FAILED` 가 여덟 번 이어진 실패 로그가 키로
+            # 오인돼 통째로 지워진다.
+            if folded_lines and len(folded_lines[-1]) != len(line):
+                folded_lines = []
+            folded_lines.append(line)
+            joined = "".join(folded_lines)
+            # 접힌 본문의 표식 둘 중 하나를 요구한다. base64 답게 글자 종류가
+            # 섞였거나, 줄이 낱말이라기엔 길거나. `FAILED` 가 여덟 번
+            # 이어진 로그는 둘 다 아니다(여섯 자, 한 종류).
+            plausible = _looks_like_base64(joined) or len(folded_lines[-1]) >= 16
+            if len(joined) >= PEM_FOLDED_BODY_CHARS and plausible:
                 return True
             continue
-        folded = 0
+        folded_lines = []
         # 한 줄이 본문도 헤더도 아니라고 바로 단정하지 않는다. 직렬화가
         # 남기는 부스러기(`",` 처럼)가 마커 바로 뒤에 올 수 있고, 그 한 줄로
         # 키를 "이름만 언급" 으로 몰면 통째로 남는다. 몇 줄은 더 본다 —
@@ -1173,7 +1272,7 @@ def _prefix_variants(line: str) -> list[str]:
     return [v for v in variants if v]
 
 
-def key_line_kind(line: str, candidates: list[str]) -> str:
+def key_line_kind(line: str, candidates: list[str], strict: bool = True) -> str:
     """이 줄이 키 블록의 무엇인가. **게이트와 범위 주사가 함께 쓴다.**
 
     둘이 서로 다른 판정을 쓰던 것이 이 파일에서 가장 오래 살아남은 결함이다.
@@ -1188,13 +1287,19 @@ def key_line_kind(line: str, candidates: list[str]) -> str:
                 판단할 수 없으므로 부르는 쪽이 이어짐을 세야 한다.
       "blank"   빈 줄이거나 접두사뿐인 줄
       "other"   키가 아니다
+
+    `strict` 는 **게이트가 참일 때만 참** 이어야 한다. 게이트(strict=True)는
+    산문을 키로 오인하지 않도록 글자 종류까지 보고, 범위 주사(strict=False)는
+    그보다 관대해야 한다. 순서가 뒤집히면 — 주사가 더 엄격하면 — 게이트가
+    열렸는데 아무것도 안 먹어 마커만 지워지고 본문이 통째로 나간다. 이
+    파일에서 가장 오래 살아남은 결함이 정확히 그 형태였다.
     """
     live = [c for c in candidates if c]
     if not live:
         return "blank"
     if any(_PEM_HEADER_LINE.match(c) for c in live):
         return "header"
-    if any(_looks_like_key_line(c, minimum=16) for c in live):
+    if any(_looks_like_key_line(c, minimum=16, mixed=strict) for c in live):
         return "body"
     # 짧은 줄은 **전부** base64 글자여야 하고, 그 판정에 접두사 변형을
     # 쓰면 안 된다. 변형은 낱말 경계에서도 자르므로 산문 한 줄의 마지막
@@ -1207,12 +1312,17 @@ def key_line_kind(line: str, candidates: list[str]) -> str:
     # 전부 탈락한다. 그 줄에는 키가 들어 있다. **END 마커가 함께 있을
     # 때만** 줄 안의 긴 연속을 본다 — 마커 없이 연속만 보던 앞선 규칙은
     # `FAILED authenticationfailure here` 를 본문으로 오인했다.
-    if _PEM_END_RE.search(line) and _PEM_BODY_RUN.search(line):
-        return "body"
+    if _PEM_END_RE.search(line):
+        run = _PEM_BODY_RUN.search(line)
+        # 그 연속도 **본문처럼 생겨야** 한다. 길이만 보면
+        # `FAILED authenticationfailure -----END PRIVATE KEY-----` 의 낱말이
+        # 본문으로 잡혀 실패 신호가 END 마커에 딸려 지워진다.
+        if run is not None and (not strict or _looks_like_base64(run.group(0))):
+            return "body"
     return "other"
 
 
-def _looks_like_key_line(candidate: str, minimum: int = 16) -> bool:
+def _looks_like_key_line(candidate: str, minimum: int = 16, mixed: bool = True) -> bool:
     """이 조각이 키 본문 한 줄처럼 보이는가.
 
     `minimum` 은 부르는 자리에 따라 다르다. 접두사 후보를 고를 때는 높게
@@ -1224,7 +1334,13 @@ def _looks_like_key_line(candidate: str, minimum: int = 16) -> bool:
     if _PEM_END_RE.search(candidate) or _PEM_BEGIN_RE.search(candidate):
         return True
     base64ish = sum(1 for ch in candidate if ch.isalnum() or ch in "+/=")
-    return len(candidate) >= minimum and base64ish >= len(candidate) * 0.9
+    if len(candidate) < minimum or base64ish < len(candidate) * 0.9:
+        return False
+    # 글자 종류는 **게이트에서만** 본다. 한 종류로만 이뤄진 긴 문자열은
+    # 대개 낱말이지만(`authenticationfailure`), 반복 바이트로 만든 키의
+    # 본문도 그럴 수 있다. 범위 주사에서까지 요구하면 그런 키에서 게이트가
+    # 열리고 주사가 멈춘다.
+    return not mixed or _looks_like_base64(candidate)
 
 
 def _key_body_end(text: str, body_at: int) -> int:
@@ -1260,7 +1376,9 @@ def _key_body_end(text: str, body_at: int) -> int:
         # **게이트와 같은 분류를 쓴다.** 여기서 다른 술어를 쓰면 게이트가
         # 열렸는데 아무것도 안 먹는 상태가 되고, 마커만 지워진 채 본문이
         # 통째로 나간다.
-        kind = key_line_kind(line, candidates)
+        # **관대한 쪽** 으로 판정한다. 게이트가 연 블록은 반드시 소비해야
+        # 한다 — 여기서 더 엄격하면 마커만 지워지고 본문이 남는다.
+        kind = key_line_kind(line, candidates, strict=False)
         if kind == "header":
             position = stop
             consumed_content = True
@@ -1276,7 +1394,7 @@ def _key_body_end(text: str, body_at: int) -> int:
         # 그때는 어느 후보도 통째로는 본문처럼 안 보인다 — next() 가 여기서
         # StopIteration 을 내면 리댁션 전체가 예외로 죽는다.
         body = next(
-            (c for c in candidates if c and _looks_like_key_line(c, minimum=16)),
+            (c for c in candidates if c and _looks_like_key_line(c, minimum=16, mixed=False)),
             line,
         )
         position = stop
@@ -1301,7 +1419,7 @@ def _key_body_end(text: str, body_at: int) -> int:
             # 벗기는데 탐침이 안 벗기면, 따옴표로 감싼 본문에서 판정이 갈려
             # 첫 줄만 지우고 멈춘다.
             head = _ESCAPE_NOISE.sub("", text[probe:head_end]).strip().strip('"')
-            continues = key_line_kind(head, [head, *_prefix_variants(head)]) in (
+            continues = key_line_kind(head, [head, *_prefix_variants(head)], strict=False) in (
                 "header",
                 "body",
                 "short",
@@ -1448,7 +1566,10 @@ def host_secret_values() -> list[str]:
         # 나서 슬래시 여섯 개가 되어 목록에 들어가고, 그 뒤 경로마다
         # [REDACTED] 가 박힌다. 길이뿐 아니라 **글자 종류** 도 본다 — 한두
         # 글자의 반복은 자격증명이 아니라 구분자다.
-        if len(decoded) >= 12 and len(set(decoded)) >= 4:
+        # 글자 **두 종** 이면 된다. 넷을 요구했더니 `a1/a1/a1/a1/` 이나
+        # `Ab1Ab1Ab1Ab1` 같은 실제 프록시 비밀번호가 빠졌다. 막으려던 것은
+        # `//////` 처럼 한 글자의 반복이므로 둘이면 충분하다.
+        if len(decoded) >= 8 and len(set(decoded)) >= 2:
             decoded_values.append(decoded)
     serialised = decoded_values
     # 긴 것부터 지워야 짧은 것이 긴 것의 일부를 먼저 갉아먹지 않는다.
@@ -1522,7 +1643,10 @@ def join_streams(out: str, err: str) -> str:
         for piece, at_head in ((out_piece, True), (err_piece, False)):
             if not piece:
                 continue
-            if len(piece) >= MINIMUM_SECRET_CHARS:
+            # 전역 치환의 하한은 **자격증명 길이 하한** 이어야 한다. 여섯
+            # 자로는 `FAILED` 같은 평범한 진단 텍스트가 걸려 출력 전체에서
+            # 지워진다. 그보다 짧은 조각은 이음매 자리에서만 지운다.
+            if len(piece) >= GLOBAL_REPLACE_CHARS:
                 forward = forward.replace(piece, "[REDACTED]")
             elif at_head and forward.startswith(piece):
                 forward = "[REDACTED]" + forward[len(piece) :]
@@ -1580,21 +1704,26 @@ def removed_spans(original: str, redacted: str) -> list[tuple[int, int]] | None:
 def _align_tail(original: str, tail: str, lower: int) -> int | None:
     """지운 결과의 남은 꼬리가 원문의 어느 자리에서 시작하는지.
 
-    꼬리는 표식과 원문 조각이 번갈아 이어진 것이다. 표식 사이의 원문 조각들이
-    `lower` 이후에서 **순서대로** 나오는 첫 자리를 고른다.
+    꼬리는 표식과 원문 조각이 번갈아 이어진 것이다. 그 조각들이 `lower`
+    이후에서 순서대로 나오는 자리를 찾되, **가장 늦은 자리** 를 고른다.
+
+    이른 자리를 고르면 지워진 구간 안에서 정렬될 수 있다. 그러면 구간이
+    실제보다 짧아지고, 이음매를 가로지르는지 판정이 어긋나 자격증명이
+    남는다. 늦은 자리를 고르면 구간이 커진다 — 더 지우는 쪽이므로 틀려도
+    안전한 방향이다.
     """
     token = "[REDACTED]"
     pieces = [piece for piece in tail.split(token) if piece]
     if not pieces:
-        # 꼬리가 표식뿐이다. 그 표식들이 어디서 왔는지는 이 자리에서 정할 수
-        # 없다 — 원문 끝까지 지운 것으로 보면 과잉이고, 안 지우면 부족하다.
+        # 꼬리가 표식뿐이다. 어디서 왔는지 정할 수 없다.
         return None
     first = pieces[0]
+    best: int | None = None
     at = lower
     while True:
         candidate = original.find(first, at)
         if candidate == -1:
-            return None
+            return best
         cursor = candidate + len(first)
         for piece in pieces[1:]:
             nxt = original.find(piece, cursor)
@@ -1603,7 +1732,7 @@ def _align_tail(original: str, tail: str, lower: int) -> int | None:
                 break
             cursor = nxt + len(piece)
         if cursor != -1:
-            return candidate
+            best = candidate
         at = candidate + 1
 
 
@@ -1628,7 +1757,31 @@ def redact_host_secrets(text: str) -> str:
     for secret in host_secret_values():
         for form in _encoded_forms(secret):
             cleaned = cleaned.replace(form, "[REDACTED]")
+        # 퍼센트 이스케이프는 **하나하나** 대소문자를 고를 수 있다
+        # (`%2f...%3F`). 형태를 열거하면 조합이 2^n 이므로 정규식으로 본다.
+        pattern = _percent_pattern(secret)
+        if pattern is not None:
+            cleaned = pattern.sub("[REDACTED]", cleaned)
     return cleaned
+
+
+def _percent_pattern(secret: str) -> re.Pattern[str] | None:
+    """퍼센트 인코딩된 값을 십육진수 대소문자와 무관하게 잡는 정규식."""
+    encoded = urllib.parse.quote(secret, safe="")
+    if encoded == secret:
+        return None
+    parts = []
+    index = 0
+    while index < len(encoded):
+        if encoded[index] == "%" and index + 2 < len(encoded) + 1:
+            parts.append(
+                "%" + "".join(f"[{c.upper()}{c.lower()}]" for c in encoded[index + 1 : index + 3])
+            )
+            index += 3
+        else:
+            parts.append(re.escape(encoded[index]))
+            index += 1
+    return re.compile("".join(parts))
 
 
 def _encoded_forms(secret: str) -> list[str]:

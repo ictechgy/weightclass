@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -1401,3 +1402,115 @@ def test_a_marker_mention_never_swallows_the_failure(text):
     """
     module = load_runner()
     assert "FAILED" in module.verify_excerpt(text)
+
+
+# --- 라운드 25: 게이트/주사의 방향, 인코딩 조합, 정렬의 안전한 방향 -----------
+
+
+@pytest.mark.parametrize(
+    "text,kept",
+    [
+        (
+            "-----BEGIN PRIVATE KEY-----\nFAILED\nauthenticationfailure\n"
+            "Traceback\nAssertionError\nsource line 42\n",
+            "FAILED",
+        ),
+        (
+            "expected -----BEGIN PRIVATE KEY-----\n" + "FAILED\n" * 8 + "AssertionError: boom\n",
+            "AssertionError",
+        ),
+        (
+            "ERROR expected -----BEGIN PRIVATE KEY-----\n"
+            "FAILED authenticationfailure -----END PRIVATE KEY-----\nTRACE line 42",
+            "FAILED authenticationfailure",
+        ),
+    ],
+)
+def test_one_word_failure_lines_are_not_a_folded_key(text, kept):
+    """접기는 길이가 같은 줄을 만들고, 산문은 길이가 제각각인 낱말을 만든다.
+
+    한 낱말짜리 실패 줄을 base64 로 누적하면 실패 증거가 통째로 지워진다.
+    `AssertionError: boom` 이 PEM 헤더로 분류되던 것도 함께 막는다 — 헤더
+    이름은 RFC 1421 이 정한 것뿐이다.
+    """
+    module = load_runner()
+    assert kept in module.verify_excerpt(text)
+
+
+@pytest.mark.parametrize("width", [4, 8, 16, 40, 64])
+def test_the_gate_and_the_walk_agree_on_folded_bodies(width):
+    """게이트가 열리면 주사도 먹어야 한다. 주사가 더 엄격하면 마커만 지워진다.
+
+    프로브는 입력에 실제로 있는 줄이다 — 그렇지 않으면 리댁션이 항등
+    함수여도 통과한다.
+    """
+    module = load_runner()
+    blob = base64.b64encode(hashlib.shake_256(b"seed").digest(1200)).decode()
+    lines = [blob[index : index + width] for index in range(0, len(blob), width)]
+    pem = BEGIN + KEY + "\n" + "\n".join(lines) + "\n" + END + KEY
+    cleaned = module.verify_excerpt(pem)
+    assert not [line for line in lines if line in cleaned]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "self.aws_secret_access_key = credentials.secret_key",
+        "credentials.aws_secret_access_key = credentials.secret_key",
+        'API_TOKEN = application_config["api_token"]',
+        'token = request.headers["Authorization"]',
+        "password=get_password (user)",
+    ],
+)
+def test_indexing_and_spaced_calls_read_as_code(source):
+    """색인과 괄호 앞 공백도 코드의 표식이다. AWS 갈래도 같은 가드를 쓴다."""
+    module = load_runner()
+    assert module.verify_excerpt(source) == source
+
+
+@pytest.mark.parametrize(
+    "encoded_password,printed",
+    [
+        ("a1%2Fa1%2Fa1%2Fa1%2F", "a1/a1/a1/a1/"),
+        ("%41%62%31%41%62%31%41%62%31%41%62%31", "Ab1Ab1Ab1Ab1"),
+        ("ab%40ab%40ab%40ab%40", "ab@ab@ab@ab@"),
+    ],
+)
+def test_decoded_proxy_passwords_are_redacted(monkeypatch, encoded_password, printed):
+    """복호 등록 조건을 좁히면 진짜 자격증명이 빠진다.
+
+    막으려던 것은 `//////` 처럼 한 글자의 반복이므로 두 종이면 충분하다.
+    """
+    monkeypatch.setenv("HTTPS_PROXY", f"http://user:{encoded_password}@proxy")
+    module = load_runner()
+    assert printed not in module.verify_excerpt(f"proxy rejected {printed}")
+
+
+def test_percent_escape_case_is_chosen_per_escape(monkeypatch):
+    """각 이스케이프가 대소문자를 따로 고른다. 형태 열거로는 조합이 2^n 이다."""
+    monkeypatch.setenv("SOME_API_KEY", "abcdefghijklmnop/qrstuvwxyz?1234")
+    module = load_runner()
+    for mixed in (
+        "abcdefghijklmnop%2fqrstuvwxyz%3F1234",
+        "abcdefghijklmnop%2Fqrstuvwxyz%3f1234",
+        "abcdefghijklmnop%2Fqrstuvwxyz%3F1234",
+    ):
+        assert mixed not in module.verify_excerpt(f"value {mixed} end")
+
+
+def test_a_short_seam_fragment_is_not_replaced_globally():
+    """여섯 자 조각을 전역으로 지우면 `FAILED` 같은 진단이 출력에서 사라진다."""
+    module = load_runner()
+    joined = module.join_streams("API_TOKEN=A1B2C3D4E5F6G7H8\nFAILED test_auth", "FAILED")
+    assert "FAILED test_auth" in joined
+
+
+def test_alignment_prefers_the_latest_position(monkeypatch):
+    """이른 자리를 고르면 지워진 구간 안에서 정렬돼 구간이 짧아진다.
+
+    늦은 자리는 구간을 키운다 — 더 지우는 쪽이므로 틀려도 안전한 방향이다.
+    """
+    monkeypatch.setenv("SOME_TOKEN", "ABCDEF_START_TAIL_END_SECRET_123")
+    module = load_runner()
+    joined = module.join_streams("START_TAIL_END_SECRET_123TAIL_END", "prefixABCDEF_")
+    assert "START_TAIL_END_SECRET_123" not in joined

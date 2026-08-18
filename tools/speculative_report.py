@@ -857,14 +857,30 @@ def main() -> int:
                         " a 는 그 일부에서만 나온다."
                     )
 
+            if mixed_application:
+                # **여기서 멈춘다.** 아래 수들(a, q, r, s)은 계획을 받은
+                # 실패와 못 받은 실패를 한 수로 뭉갠 값이다. 판정만 막고
+                # 수를 찍으면 그 수가 그대로 쓰인다 — 경고는 읽히지 않고
+                # 숫자는 인용된다.
+                print(
+                    "  계획 적용이 섞여 있어 a, q, r, s 를 내지 않는다."
+                    " 계획이 붙은 실행만 남기거나, 안 붙은 실행을 빼고 다시 모아야 한다."
+                )
+                return 0
             a_first = advice_stats("advice_first")
             a_failure = advice_stats("advice_failure")
-            for label, stats in (("시작 전", a_first), ("실패 후", a_failure)):
+            # 두 조언 호출은 입력이 달라 비용도 다르다. 둘 다 `a` 로 찍으면
+            # 읽는 쪽이 섞는다. 설계 문서의 기호를 그대로 쓴다 — 시작 전은
+            # a_A, 실패 후는 a_B(계획을 받은 뒤면 a_B′).
+            for symbol, label, stats in (
+                ("a_A", "시작 전", a_first),
+                (f"a_B{'′' if primed else ''}", "실패 후", a_failure),
+            ):
                 if stats is None:
                     continue
                 ratio, spread, count = stats
                 band = f" ± {spread:.3f}" if spread else ""
-                print(f"  {label} 조언 1회 비용비 a = {ratio:.3f}{band}  ({count}회)")
+                print(f"  {label} 조언 1회 비용비 {symbol} = {ratio:.3f}{band}  ({count}회)")
             a_ratio = a_failure[0] if a_failure else None
             a_spread = a_failure[1] if a_failure else 0.0
             if a_ratio is None:
@@ -971,7 +987,8 @@ def main() -> int:
                             else r_mean
                         ) / expensive_mean_all
                         print(
-                            f"  재시도 1회 비용비 r = {r_ratio:.3f}  ({len(retry_costs)}회)"
+                            f"  재시도 1회 비용비 r{'′' if primed else ''}"
+                            f" = {r_ratio:.3f}  ({len(retry_costs)}회)"
                             "  — 조언이 붙어 최초 싼 실행보다 비쌀 수 있다"
                         )
                     if a_ratio is not None and c_range is not None:
@@ -1061,7 +1078,7 @@ def main() -> int:
                             mark = "′" if primed else ""
                             basis = f"{q:.2f}·r{mark}" if q < 1 else f"r{mark}"
                             print(
-                                f"  손익분기 s{mark} = a{mark} + {basis}"
+                                f"  손익분기 s{mark} = a_B{mark} + {basis}"
                                 f" = {a_ratio + r_ratio * q:.3f}"
                                 f"  (구간 [{bound_low:.3f}, {bound_high:.3f}])"
                             )
