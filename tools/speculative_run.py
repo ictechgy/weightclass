@@ -2101,7 +2101,11 @@ def redact_block_scalars(text: str) -> str:
     while position < len(text):
         separator = _LINE_SEPARATOR.search(text, position)
         stop = separator.end() if separator else len(text)
-        head = _BLOCK_SCALAR.match(_block_scalar_line(text[position:stop]))
+        raw_head = _ESCAPE_NOISE.sub("", text[position:stop]).rstrip("\r\n")
+        # 머리가 표식으로 시작하면 그것이 이 블록의 표식이다. 본문 줄도 같은
+        # 표식이 붙어 있을 때만 벗긴다.
+        marker = raw_head[:1] if raw_head[:1] in "+-" else ""
+        head = _BLOCK_SCALAR.match(_block_scalar_line(text[position:stop], marker))
         if head is None:
             position = stop
             continue
@@ -2117,7 +2121,7 @@ def redact_block_scalars(text: str) -> str:
         while cursor < len(text):
             following = _LINE_SEPARATOR.search(text, cursor)
             line_end = following.end() if following else len(text)
-            line = _block_scalar_line(text[cursor:line_end])
+            line = _block_scalar_line(text[cursor:line_end], marker)
             # **탭은 들여쓰기가 아니다.** YAML 이 금지한다. 탭으로 시작하는
             # 줄을 본문으로 세면 그 뒤의 진단이 함께 지워진다.
             if line.strip() and (line[:1] == "\t" or len(line) - len(line.lstrip(" ")) < needed):
@@ -2136,22 +2140,27 @@ def redact_block_scalars(text: str) -> str:
     return "".join(out)
 
 
-def _block_scalar_line(raw: str) -> str:
-    """한 줄에서 직렬화 부스러기와 **줄머리 표식 하나** 를 걷는다.
+def _block_scalar_line(raw: str, marker: str = "") -> str:
+    """한 줄에서 직렬화 부스러기를 걷고, **머리가 쓴 표식만** 벗긴다.
 
-    표식을 머리와 본문이 **맞추도록** 요구하던 판은 두 방향으로 틀렸다.
-    통합 diff 는 머리가 문맥 줄(` `)이고 본문만 바뀐 줄(`+`/`-`)일 수 있고,
-    YAML 시퀀스(`- password: |`)의 하이픈도 같은 자리에 온다. 맞추려 하지
-    말고 **벗기기만** 하면 세 경우가 한 규칙으로 처리된다 — 벗긴 뒤의
-    들여쓰기가 그 줄의 진짜 깊이다.
+    표식을 세 가지로 다뤄 봤고 앞의 둘은 각각 한 방향으로 틀렸다.
+
+    - 머리와 본문이 **맞추도록** 요구하면, 통합 diff 에서 머리가 문맥
+      줄(` `)이고 본문만 바뀐 줄(`+`/`-`)일 때 본문이 통째로 남는다.
+    - **무조건 벗기면**, `password: |` 뒤의 진단 불릿(`- AssertionError…`)이
+      들여쓴 본문으로 둔갑해 실패 증거가 지워진다.
+
+    머리에 표식이 있을 때만, 그 표식이 붙은 줄에서만 벗긴다. 머리가
+    `password: |` 면 표식이 없으므로 불릿은 불릿으로 남고, 머리가
+    `+password: |` 면 `+` 를 벗긴 뒤의 깊이가 진짜 깊이다.
 
     **로그 접두사는 벗기지 않는다.** `strip_log_prefix` 는 `이름: ` 도
     접두사로 보므로 `password: |` 가 `|` 가 되어 머리 자체를 못 알아본다.
-    그리고 들여쓰기를 세는 함수라 접두사를 벗기면 그 수가 달라진다 —
-    쌍둥이와 같은 정규화를 쓰는 것보다 이 함수의 계약이 우선이다.
     """
     line = _ESCAPE_NOISE.sub("", raw).rstrip("\r\n")
-    return line[1:] if line[:1] in "+-" else line
+    if marker and line[:1] == marker:
+        return line[1:]
+    return line
 
 
 def redact_ppk_bodies(text: str) -> str:
@@ -2735,11 +2744,14 @@ def _looks_like_tool_payload(payload: dict[str, object]) -> bool:
     벤더마다 이름이 다르지만 도구 쪽에는 언제나 이름이나 식별자가 붙는다.
     조언 본문에는 그런 것이 없다.
     """
-    markers = ("tool", "tool_use_id", "tool_name", "name", "path", "file_path", "command")
+    # **명백한 표식만** 본다. `name`, `path`, `command` 는 평범한 조언 봉투에도
+    # 있는 이름이라, 그것을 표식으로 삼으면 정상 조언이 버려진다 — 좁히면
+    # 도구를 놓치고 넓히면 조언을 버리는 자리이므로, 애매한 것은 안 본다.
+    markers = ("tool_use_id", "tooluseid", "tool_name", "toolname", "tool_call_id")
     kind = payload.get("type")
-    if isinstance(kind, str) and "tool" in kind:
+    if isinstance(kind, str) and "tool" in kind.lower():
         return True
-    return any(key in payload for key in markers)
+    return any(key.lower() in markers for key in payload)
 
 
 def _first_text(payload: object, depth: int = 0) -> str:
@@ -2761,6 +2773,11 @@ def _first_text(payload: object, depth: int = 0) -> str:
                 if field == "content" and _looks_like_tool_payload(payload):
                     continue
                 return value.strip()
+        if _looks_like_tool_payload(payload):
+            # **페이로드 전체를 건너뛴다.** `content` 가 문자열일 때만 막으면,
+            # 정식 tool_result 모양(`content` 가 텍스트 블록 배열)이 아래 배열
+            # 분기로 흘러 파일 본문이 조언 자리에 들어간다.
+            return ""
         for value in payload.values():
             found = _first_text(value, depth + 1)
             if found:

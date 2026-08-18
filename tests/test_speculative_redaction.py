@@ -2325,18 +2325,21 @@ def test_a_diff_prefixed_block_scalar_is_recognised():
     [
         # YAML 시퀀스의 하이픈이 diff 표식과 같은 자리에 온다.
         ("- password: |\n    hunter2_correct_battery", "hunter2_correct_battery"),
-        # 통합 diff: 머리는 문맥 줄, 본문만 바뀐 줄.
-        (" db_password: |\n-  Tr0ub4dor3xyz\n+  correct-horse-battery", "Tr0ub4dor3xyz"),
         # 머리와 본문이 같은 표식.
         ("+password: |\n+  correcthorsebattery", "correcthorsebattery"),
     ],
 )
-def test_line_markers_are_stripped_not_matched(text, token):
-    """표식을 머리와 본문이 맞추도록 요구하면 두 방향으로 틀린다.
+def test_line_markers_are_decided_by_the_head(text, token):
+    """줄머리 표식은 **머리가 정한다.**
 
-    통합 diff 는 머리가 문맥 줄이고 본문만 바뀐 줄일 수 있고, YAML
-    시퀀스의 하이픈도 같은 자리에 온다. 벗기기만 하면 세 경우가 한 규칙으로
-    처리된다 — 벗긴 뒤의 들여쓰기가 그 줄의 진짜 깊이다.
+    세 가지를 시도했고 앞의 둘은 각각 한 방향으로 틀렸다.
+
+    - 머리와 본문이 **맞추도록** 요구하면 통합 diff 에서 머리가 문맥 줄이고
+      본문만 바뀐 줄일 때 본문이 남는다.
+    - **무조건 벗기면** `password: |` 뒤의 진단 불릿(`- AssertionError…`)이
+      들여쓴 본문으로 둔갑해 실패 증거가 지워진다.
+
+    머리에 표식이 있을 때만, 그 표식이 붙은 줄에서만 벗긴다.
     """
     module = load_runner()
     assert token not in module.verify_excerpt(text)
@@ -2361,3 +2364,30 @@ def test_a_tool_payload_is_not_advice():
     assert "id_rsa" not in module._first_text(payload)
     # 반대 방향: 평범한 content 는 여전히 본문이다.
     assert module._first_text({"content": "Use a bounded queue."}) == "Use a bounded queue."
+
+
+def test_a_diagnostic_bullet_after_a_block_scalar_survives():
+    """`password: |` 에는 표식이 없으므로 불릿은 불릿으로 남는다.
+
+    무조건 벗기던 판은 `- AssertionError…` 를 들여쓴 본문으로 보고 지웠다.
+    """
+    module = load_runner()
+    text = "password: |\n- AssertionError: TLS certificate failed\nTraceback"
+    assert "AssertionError: TLS certificate" in module.verify_excerpt(text)
+
+
+def test_a_context_line_head_with_changed_body_is_a_known_limit():
+    """머리가 diff 문맥 줄이고 본문만 바뀐 줄이면 그 본문은 남는다.
+
+    **문서화된 한계다.** 세 경우(문맥 머리 + 바뀐 본문 / 표식 머리 + 표식
+    본문 / 표식 없는 머리 + 불릿)를 한 규칙으로 만들 수 없다 — 그 셋의
+    요구가 서로 반대이기 때문이다. 표식 없는 머리 쪽을 택했다: 진단을
+    지우는 것이 값 하나를 놓치는 것보다 나쁘고, 그 값은 이름 없이 남는
+    문자열과 같은 부류로 남는다.
+
+    이 테스트는 그 한계가 **의도된 것** 임을 기록한다. 여기가 바뀌면
+    셋 중 다른 하나가 깨진다.
+    """
+    module = load_runner()
+    text = " db_password: |\n-  Tr0ub4dor3xyz\n+  correct-horse-battery"
+    assert "Tr0ub4dor3xyz" in module.verify_excerpt(text)
