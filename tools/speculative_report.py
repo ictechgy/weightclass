@@ -810,6 +810,12 @@ def main() -> int:
                 # 있다" 를 만족시키면 판정이 부분값 위에 선다.
                 if timed_out(advice):
                     return None
+                # **부분 가격도 뺀다.** 싼 경로와 비싼 경로는 이미
+                # has_missing_prices 로 거르는데 여기만 안 걸러, 벤더가
+                # 일부 필드를 못 매긴 값이 완전한 비용처럼 a 에 들어갔다.
+                # 그러면 a 가 작아져 조언에 유리하게 틀린다.
+                if has_missing_prices(advice):
+                    return None
                 return cost_of(advice)
 
             # 시작 전 조언은 **모든** 과제에서, 실패 후 조언은 실패한 과제에서만
@@ -864,16 +870,6 @@ def main() -> int:
                         " a 는 그 일부에서만 나온다."
                     )
 
-            if mixed_application:
-                # **여기서 멈춘다.** 아래 수들(a, q, r, s)은 계획을 받은
-                # 실패와 못 받은 실패를 한 수로 뭉갠 값이다. 판정만 막고
-                # 수를 찍으면 그 수가 그대로 쓰인다 — 경고는 읽히지 않고
-                # 숫자는 인용된다.
-                print(
-                    "  계획 적용이 섞여 있어 a, q, r, s 를 내지 않는다."
-                    " 계획이 붙은 실행만 남기거나, 안 붙은 실행을 빼고 다시 모아야 한다."
-                )
-                return 0
             if mixed_application:
                 # 아래 수들(a, q, r, s)은 계획을 받은 실패와 못 받은 실패를 한 수로
                 # 뭉갠 값이다. 판정만 막고 수를 찍으면 그 수가 그대로 쓰인다 —
@@ -954,6 +950,7 @@ def main() -> int:
                             for r in usable
                             if isinstance(r.get("retry"), dict)
                             and not timed_out(r.get("retry"))
+                            and not has_missing_prices(r.get("retry"))
                             and (value := cost_of(r.get("retry"))) is not None
                         ]
                         priced_retries = len(retry_costs)
@@ -1111,15 +1108,11 @@ def main() -> int:
                                     f" = {a_ratio + r_ratio * q:.3f}"
                                     f"  (구간 [{bound_low:.3f}, {bound_high:.3f}])"
                                 )
-                                if mixed_application:
-                                    # 계획을 받은 실패와 못 받은 실패가 한 수에
-                                    # 들어가 있다. 위에서 경고만 하고 여기서
-                                    # 판정을 내면 그 경고가 아무 일도 안 한다.
-                                    print(
-                                        "  -> 판정 없음. 계획 적용이 섞인 모집단이라"
-                                        " s 가 어느 설정의 값인지 말할 수 없다."
-                                    )
-                                elif s_lo > bound_high:
+                                # 계획 적용이 섞인 경우는 이 블록에 오지
+                                # 않는다 — 위쪽 `if mixed_application:` 이
+                                # 조언 구간 전체를 건너뛴다. 여기서 그것을
+                                # 다시 검사하면 언제나 거짓인 분기가 된다.
+                                if s_lo > bound_high:
                                     print(
                                         "  -> 구간 전체가 손익분기 위다."
                                         " 실패 후 조언이 승급보다 싸다."
@@ -1156,7 +1149,10 @@ def main() -> int:
         if len(first_flags) > 1:
             label = "c + 실패율(설정 혼합)"
         else:
-            label = "c + p′" if advice_first_on else "c + p"
+            # 프라임 표기의 기준을 **한 곳** 으로 맞춘다. 위쪽 a_B/s/r 은
+            # 실제 적용 여부를 쓰는데 여기만 다른 술어를 쓰면 한 보고서 안에서
+            # 같은 프라임이 서로 다른 뜻이 된다.
+            label = "c + p′" if plan_applied_on else "c + p"
         print(
             f"\n(참고) 이 로그의 {label} = {c + p:.2f}. 실제 모형과의 차이는 조언"
             " 비용만이 아니다 — 재시도가 구제해 승급하지 않은 과제도 이 식에는"
@@ -1174,7 +1170,16 @@ def main() -> int:
         # 출처 혼합으로 빠진 승급도 돈은 실제로 썼으므로, "실제로 쓴 돈" 이라고
         # 부르려면 몇 건이 빠졌는지 함께 말해야 한다.
         unpriced = escalated_total - len(paired)
-        realized = sum(cheap_all) + expensive_total
+        # **조언과 재시도도 실제로 쓴 돈이다.** 빼고 세면 절감의 부호까지
+        # 뒤집힌다 — 조언을 켜고 잰 로그에서 그 비용이 어느 항에도 안 들어가
+        # 조언 쪽에 유리하게 나온다.
+        advisory_spend = sum(
+            value
+            for r in usable
+            for key in ("advice_first", "advice_failure", "retry")
+            if (value := cost_of(r.get(key))) is not None
+        )
+        realized = sum(cheap_all) + expensive_total + advisory_spend
         expensive_mean = expensive_total / len(paired)
         # 승급하지 않은 과제의 비싼 비용은 잰 적이 없다. 승급 과제의 평균으로
         # 메꾸되, 그것이 대입값이라는 사실을 숨기지 않는다.
@@ -1201,9 +1206,14 @@ def main() -> int:
     best, worst = c_lo + lo, c_hi + hi
     if c_range is not None:
         print(f"  c 도 흔들리므로 구간은 c∈[{c_lo:.3f}, {c_hi:.3f}] 와 p 를 함께 태운다")
-    print(f"  가장 유리한 끝 (c={c_lo:.3f}, p={lo:.1%}): 절감 {1 - best:.1%}")
-    print(f"  가장 불리한 끝 (c={c_hi:.3f}, p={hi:.1%}): 절감 {1 - worst:.1%}")
-    print(f"  손익분기 p = {1 - c:.1%}  (c 가 {c_hi:.3f} 이면 {1 - c_hi:.1%})")
+    # 조언을 켜고 잰 로그에서는 이 수들을 **표식 없이 찍지 않는다.** 이것은
+    # 조언 없는 c + p 모형의 절감률과 손익분기다. 바로 위에서 "이 로그의 모형이
+    # 아니다" 라고 적어 놓고 무표식으로 찍으면, 읽는 쪽은 그 수를 이 실행의
+    # 결과로 가져간다 — 경고는 읽히지 않고 숫자는 인용된다.
+    aside = "  (조언 없는 모형의 수다) " if advisor_on else "  "
+    print(f"{aside}가장 유리한 끝 (c={c_lo:.3f}, p={lo:.1%}): 절감 {1 - best:.1%}")
+    print(f"{aside}가장 불리한 끝 (c={c_hi:.3f}, p={hi:.1%}): 절감 {1 - worst:.1%}")
+    print(f"{aside}손익분기 p = {1 - c:.1%}  (c 가 {c_hi:.3f} 이면 {1 - c_hi:.1%})")
 
     # 분모가 승급의 절반도 못 담으면, 그것은 요약이라고 부를 수 없다. 빠진
     # 값의 방향은 알 수 없으므로 넓히는 것으로도 메울 수 없다 — jackknife 는
@@ -1286,15 +1296,29 @@ def main() -> int:
                     else " 조언의 이득 판정은 위의 s > a + q·r 을 보라(q 는 재시도 시도율)."
                 )
                 if failure_advice_on
-                else " 시작 전 조언만 켠 로그에는 그 판정이 없다. 이득 조건은"
-                " a_A + (c_A − c) < p − p′ 이고, 이 중 **a_A, c_A, p′ 세 항은"
-                " 이 로그가 이미 준다** — 위에 찍힌 c 가 c_A 이고, 싼 경로의"
-                " **실패율** 이 p′ 다(통과율이 아니다 — 식은 실패율 차 p − p′"
-                " 를 쓰므로 여기서 뒤집으면 결론이 반대가 된다)."
-                " 조언을 끄고 같은 과제를 한 번 더 재야 나오는 것은"
-                " 기준선 두 항, c 와 p 뿐이다. a_A 를 p − p′ 와 바로 비교하면"
-                " 계획이 늘린 프롬프트 비용(c_A − c)이 빠져 조언 쪽에 유리하게"
-                " 틀린다."
+                else (
+                    (
+                        " 시작 전 조언만 켠 로그에는 그 판정이 없다. 이득 조건은"
+                        " a_A + (c_A − c) < p − p′ 이고, 이 중 **a_A, c_A, p′ 세"
+                        " 항은 이 로그가 이미 준다** — 위에 찍힌 c 가 c_A 이고,"
+                        " 싼 경로의 **실패율** 이 p′ 다(통과율이 아니다 — 식은"
+                        " 실패율 차 p − p′ 를 쓰므로 여기서 뒤집으면 결론이"
+                        " 반대가 된다). 조언을 끄고 같은 과제를 한 번 더 재야"
+                        " 나오는 것은 기준선 두 항, c 와 p 뿐이다. a_A 를"
+                        " p − p′ 와 바로 비교하면 계획이 늘린 프롬프트"
+                        " 비용(c_A − c)이 빠져 조언 쪽에 유리하게 틀린다."
+                    )
+                    if plan_applied_on and len(first_flags) == 1
+                    # 계획이 한 번도 안 붙었으면 이 로그의 c 는 c_A 가 아니라
+                    # 그냥 c 이고 실패율도 p′ 가 아니다. 조언 호출 비용만 쓰고
+                    # 계획은 못 받은 실행을 잰 것이다.
+                    else (
+                        " 시작 전 조언을 요청했지만 계획이 실제로 붙은 실행이"
+                        " 없다. 이 로그의 c 와 실패율은 조언 없는 값이고, 조언"
+                        " 호출 비용만 더 썼다. c_A 와 p′ 를 얻으려면 조언이"
+                        " 실제로 붙은 실행을 다시 모아야 한다."
+                    )
+                )
             )
         )
     elif timed_out_tasks and c_range is not None:

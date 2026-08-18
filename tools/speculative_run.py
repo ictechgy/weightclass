@@ -946,20 +946,6 @@ MINIMUM_SECRET_CHARS = 6
 GLOBAL_REPLACE_CHARS = 12
 
 
-def _looks_like_secret_fragment(piece: str) -> bool:
-    """이 조각이 자격증명의 **값** 쪽인가.
-
-    값 쪽은 자격증명 문자로만 이뤄지고 글자 종류가 섞인다. 이름 쪽
-    (`API_TOKEN=`)은 등호나 콜론을 달고 있고, 진단 낱말(`FAILED`)은 한
-    종류로만 이뤄진다.
-    """
-    if len(piece) < GLOBAL_REPLACE_CHARS:
-        return False
-    if not _PEM_BODY_CHARS.fullmatch(piece.replace("-", "").replace("_", "")):
-        return False
-    return _looks_like_base64(piece)
-
-
 # 인코딩을 몇 겹까지 합성해 볼지. 실제 로그에서 두 겹을 넘는 일은 드물지만,
 # 셋으로 두면 조합이 열다섯 개로 끝나므로 넉넉히 잡아도 비용이 없다.
 ENCODING_DEPTH = 3
@@ -1069,6 +1055,12 @@ PEM_FOLDED_BODY_CHARS = 48
 # DER 이 아닌 형식(PGP armor)은 태그로 가릴 수 없다. 그때는 양으로 본다 —
 # 마커 쌍 사이에 이만큼의 base64 가 들어 있는 진단 로그는 현실적이지 않다.
 PEM_ARMOURED_BODY_CHARS = 200
+# DER 로 풀린 것이 이보다 짧으면 키가 아니다. 가장 작은 개인키(Ed25519
+# PKCS#8)도 마흔여덟 바이트를 넘는다.
+PEM_MINIMUM_KEY_BYTES = 32
+# 표식이 하나도 없을 때 요구하는 본문 양. 진단 로그가 마커 쌍 사이에 이만큼의
+# base64 를 담는 일은 없다.
+PEM_BULK_BODY_CHARS = 400
 
 
 # 직렬화가 조각의 양 끝에 남기는 글자들.
@@ -1095,23 +1087,35 @@ def _between_markers_is_body(content: str) -> bool:
        아닌 형식이 있고, 마커 쌍 사이에 수백 자가 들어 있는 진단 로그는
        현실적이지 않다.
     """
-    material = _base64_material(content)
+    material, armoured, headered = _base64_material(content)
     if not material:
         return False
     decoded = _decode_base64(material)
     if decoded is None:
         return False
-    if decoded[:1] == b"\x30":
+    # DER SEQUENCE 로 시작하고 **키라 할 만큼 길면** 키다. 길이를 안 보면
+    # `MAAA`(0x30 0x00 0x00)처럼 세 바이트짜리 진단 문자열이 키로 잡힌다.
+    if decoded[:1] == b"\x30" and len(decoded) >= PEM_MINIMUM_KEY_BYTES:
         return True
-    return len(material) >= PEM_ARMOURED_BODY_CHARS
+    # DER 이 아닌 진짜 키가 있다. PGP armor 는 **체크섬 줄** 이 표식이고,
+    # 암호화된 PEM 은 본문이 암호문이라 0x30 으로 시작하지 않는 대신
+    # `Proc-Type:` 헤더를 단다.
+    if armoured or headered:
+        return len(material) >= PEM_ARMOURED_BODY_CHARS
+    # 표식이 하나도 없으면 **양** 으로 본다. 마커 쌍 사이에 이만큼의 base64 가
+    # 들어 있는 진단 로그는 현실적이지 않다. 임계값을 낮게 잡으면 같은 낱말을
+    # 서른 번 이어 붙인 로그가 넘어온다 — 실제로 그렇게 됐다.
+    return len(material) >= PEM_BULK_BODY_CHARS
 
 
-def _base64_material(content: str) -> str:
+def _base64_material(content: str) -> tuple[str, bool, bool]:
     """마커 사이에서 본문일 수 있는 글자만 모은다.
 
     접두사와 직렬화 부스러기를 걷는 방식은 본 주사와 같아야 한다.
     """
     pieces: list[str] = []
+    armoured = False
+    headered = False
     position = 0
     while position < len(content):
         separator = _LINE_SEPARATOR.search(content, position)
@@ -1121,19 +1125,25 @@ def _base64_material(content: str) -> str:
         stripped = strip_log_prefix(line).strip(_SERIALISATION_EDGE)
         if not stripped:
             continue
-        # PGP armor 의 체크섬 줄(`=abcd`)은 본문이 아니다.
+        # PGP armor 의 체크섬 줄(`=abcd`)은 본문이 아니지만, **armor 라는
+        # 표식** 이다. DER 이 아닌 형식을 가려내는 데 쓴다.
         if stripped.startswith("=") and len(stripped) <= 6:
+            armoured = True
+            continue
+        # 헤더는 **줄 단위** 로 건너뛴다. 낱말 단위로 보면
+        # `Version: GnuPG v2.4.7 (GNU/Linux)` 에서 `GnuPG` 가 본문으로
+        # 섞여 들어가 DER 판정을 망치고, `v2.4.7` 에서 산문으로 판정돼
+        # 키 전체가 빠져나간다.
+        if _ANY_HEADER_LINE.match(stripped):
+            headered = True
             continue
         for token in stripped.split():
             if _PEM_BODY_CHARS.fullmatch(token):
                 pieces.append(token)
-            elif _PEM_HEADER_LINE.match(stripped) or ":" in token:
-                # 헤더 줄(`Version: GnuPG v2`)은 건너뛴다.
-                continue
             else:
                 # 본문도 헤더도 아닌 조각이 섞여 있다. 산문이다.
-                return ""
-    return "".join(pieces)
+                return "", False, False
+    return "".join(pieces), armoured, headered
 
 
 def _decode_base64(material: str) -> bytes | None:
@@ -1181,6 +1191,10 @@ _PEM_BODY_RUN = re.compile(r"[A-Za-z0-9+/=]{12,}")
 # PEM 헤더 줄: `Proc-Type: 4,ENCRYPTED` 처럼 이름과 값이 콜론으로 갈린다.
 # RFC 1421 의 헤더 이름들. 아무 `Name: value` 나 받으면
 # `AssertionError: boom` 이 헤더로 잡혀 실패 신호가 키 블록에 딸려 지워진다.
+# 마커 쌍 **안쪽** 에서만 쓰는 헐거운 헤더 판정. 그 안에서는 `Name: value`
+# 모양이면 헤더로 봐도 안전하다 — 산문이 마커 사이에 들어오는 경우는 다른
+# 검사가 잡는다. 게이트에서 이것을 쓰면 `AssertionError: boom` 이 헤더가 된다.
+_ANY_HEADER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s")
 _PEM_HEADER_LINE = re.compile(
     r"^(?i:Proc-Type|DEK-Info|Originator-\S*|MIC-Info|Recipient-\S*|Key-Info|Issuer-\S*"
     r"|Cert|CRL|Comment|Subject|Bag Attributes|friendlyName|localKeyID):\s"
@@ -1688,22 +1702,21 @@ def join_streams(out: str, err: str) -> str:
         # 글자가 된다 — 그것을 전역으로 지우면 멀쩡한 출력이 걸레가 된다.
         err_piece = reverse_src[start:boundary]
         out_piece = reverse_src[boundary:stop]
-        for piece, at_head in ((out_piece, True), (err_piece, False)):
-            if not piece:
-                continue
-            # 전역 치환의 기준은 길이가 아니라 **그 조각이 자격증명의 값 쪽
-            # 인지** 다. 길이로 가르면 양쪽이 부딪힌다 — 낮으면 `FAILED` 가
-            # 걸려 출력 전체에서 지워지고, 높으면 열두 자짜리 중복 값이
-            # 남는다.
-            #
-            # 값 쪽 조각은 자격증명 문자로만 이뤄져 있고 낱말이 아니다.
-            # 이름 쪽 조각(`API_TOKEN=`, `FAILED`)은 그렇지 않다.
-            if _looks_like_secret_fragment(piece):
-                forward = forward.replace(piece, "[REDACTED]")
-            elif at_head and forward.startswith(piece):
-                forward = "[REDACTED]" + forward[len(piece) :]
-            elif not at_head and forward.endswith(piece):
-                forward = forward[: -len(piece)] + "[REDACTED]"
+        # 어느 조각이 값인지는 **모양이 아니라 위치** 가 말해 준다. 역순
+        # 이음매는 `err 의 꼬리` + `out 의 머리` 로 이름-값을 만든다. 즉
+        # err 쪽 조각이 이름이고 out 쪽 조각이 값이다.
+        #
+        # 값은 **전역** 으로 지운다 — 자식이 같은 값을 출력 여러 곳에 심어
+        # 둘 수 있다. 이름은 그 자리에서만 지운다 — 이름은 소스에도 나오는
+        # 평범한 식별자일 수 있고(`mySuperSecret`), 전역으로 지우면 그 소스가
+        # 통째로 사라진다.
+        #
+        # 앞선 두 판은 조각의 길이와 글자 모양으로 가르려 했고 둘 다 양쪽으로
+        # 틀렸다. 위치는 애매하지 않다.
+        if out_piece:
+            forward = forward.replace(out_piece, "[REDACTED]")
+        if err_piece and forward.endswith(err_piece):
+            forward = forward[: -len(err_piece)] + "[REDACTED]"
     return forward.strip()
 
 

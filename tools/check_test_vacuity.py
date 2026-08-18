@@ -68,8 +68,11 @@ def report(work: pathlib.Path) -> int:
         text=True,
         cwd=work,
     )
+    # pytest 의 요약 줄은 `FAILED <node id> - <사유>` 다. 사유까지 담으면
+    # 수집한 ID 와 절대 안 맞아 **모든 실패가 통과로 분류된다** — 이 도구가
+    # 잡으라고 만든 부류를 이 도구가 저지르는 셈이다.
     failed = {
-        line.split(" ", 1)[1].strip()
+        line.split(" ", 1)[1].split(" - ", 1)[0].strip()
         for line in run.stdout.splitlines()
         if line.startswith("FAILED ")
     }
@@ -89,7 +92,13 @@ def report(work: pathlib.Path) -> int:
         text=True,
         cwd=work,
     )
-    every = {line.strip() for line in collected.stdout.splitlines() if "::" in line}
+    # `--collect-only -q` 는 마지막에 `path: N` 요약 줄을 낸다. `::` 가
+    # 없으므로 걸러지지만, 확실히 하려고 접두사도 본다.
+    every = {
+        line.strip()
+        for line in collected.stdout.splitlines()
+        if "::" in line and line.startswith("tests/")
+    }
     if not every:
         print("테스트를 수집하지 못했다.", file=sys.stderr)
         return 1

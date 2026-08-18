@@ -1542,7 +1542,12 @@ def test_repeated_failure_words_between_markers_are_not_a_key(text, kept):
 
 
 def test_a_variably_folded_key_is_redacted():
-    """줄 길이가 고르지 않아도 DER 로 풀리면 키다."""
+    """줄 길이가 고르지 않아도 DER 로 풀리면 키다.
+
+    **프로브는 입력에 실제로 있는 조각이어야 한다.** 앞선 판은 접힌 자리를
+    가로지르는 40자 연속을 찾았고, 그 문자열은 입력 어디에도 없어 리댁션이
+    항등 함수여도 통과했다 — tools/check_test_vacuity.py 가 그것을 찾아냈다.
+    """
     module = load_runner()
     body = base64.b64encode(b"\x30\x82" + hashlib.shake_256(b"var").digest(400)).decode()
     ragged = []
@@ -1553,7 +1558,9 @@ def test_a_variably_folded_key_is_redacted():
     ragged.append(body[index:])
     pem = BEGIN + KEY + "\n" + "\n".join(ragged) + "\n" + END + KEY
     cleaned = module.verify_excerpt(pem)
-    assert body[50:90] not in cleaned
+    # 마지막 조각은 길고 입력에 그대로 있다. 그것이 사라져야 한다.
+    assert ragged[-1] not in cleaned
+    assert len(ragged[-1]) > 100
 
 
 def test_pgp_armoured_private_keys_are_redacted():
@@ -1601,3 +1608,77 @@ def test_composed_encodings_also_get_case_insensitive_matching(monkeypatch):
     encoded = urllib.parse.quote(escaped, safe="")
     lowered = regex.sub(r"%[0-9A-Fa-f]{2}", lambda match: match.group(0).lower(), encoded)
     assert lowered not in module.verify_excerpt(f"value {lowered} end")
+
+
+# --- 라운드 27: 표식으로 형식을 가리고, 위치로 값과 이름을 가른다 -------------
+
+
+def test_a_punctuated_armour_header_does_not_void_the_body():
+    """헤더는 **줄 단위** 로 건너뛴다.
+
+    낱말 단위로 보면 `Version: GnuPG v2.4.7 (GNU/Linux)` 에서 `GnuPG` 가 본문
+    으로 섞이고 `v2.4.7` 에서 산문으로 판정돼 키 전체가 빠져나간다.
+    """
+    module = load_runner()
+    armour = (
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----\n"
+        "Version: GnuPG v2.4.7 (GNU/Linux)\n\n"
+        + ("QUJD" * 60)
+        + "\n=abcd\n-----END PGP PRIVATE KEY BLOCK-----\nFAILED: signature mismatch"
+    )
+    cleaned = module.verify_excerpt(armour)
+    assert "QUJDQUJD" not in cleaned
+    assert "FAILED: signature mismatch" in cleaned
+
+
+@pytest.mark.parametrize(
+    "text,kept",
+    [
+        # 양만 보면 서른네 번 이어 붙인 낱말이 임계값을 넘는다.
+        (BEGIN + KEY + "\n" + "FAILED\n" * 34 + END + KEY + "\nTRACE line 42", "FAILED"),
+        # DER 첫 바이트만 보면 세 바이트짜리 문자열이 키가 된다.
+        (
+            "expected " + BEGIN + KEY + "\nMAAA\nTraceback\nFAILED\n" + END + KEY + "\nline 42",
+            "Traceback",
+        ),
+    ],
+)
+def test_quantity_alone_does_not_make_a_key(text, kept):
+    """표식(armor 체크섬, PEM 헤더)이 없으면 양의 문턱이 훨씬 높아야 한다."""
+    module = load_runner()
+    assert kept in module.verify_excerpt(text)
+
+
+@pytest.mark.parametrize(
+    "out,err,gone",
+    [
+        # 점이 든 값
+        (
+            "correct.horse.battery bare duplicate correct.horse.battery",
+            "PASSWORD=",
+            "correct.horse.battery",
+        ),
+        # 한 글자 종류로만 된 값
+        (
+            "abcdefghijklmnop bare duplicate abcdefghijklmnop",
+            "API_TOKEN=",
+            "abcdefghijklmnop",
+        ),
+    ],
+)
+def test_the_value_side_of_a_seam_is_removed_everywhere(out, err, gone):
+    """어느 조각이 값인지는 **모양이 아니라 위치** 가 말해 준다.
+
+    역순 이음매는 `err 의 꼬리` + `out 의 머리` 로 이름-값을 만든다. 모양으로
+    가르려던 두 판은 양쪽으로 틀렸다 — 길이 기준은 열두 자짜리 중복을 놓쳤고,
+    글자 종류 기준은 한 종류로 된 값을 놓쳤다.
+    """
+    module = load_runner()
+    assert gone not in module.join_streams(out, err)
+
+
+def test_the_name_side_of_a_seam_stays_in_the_source():
+    """이름은 소스에도 나오는 평범한 식별자일 수 있다. 전역으로 지우면 안 된다."""
+    module = load_runner()
+    joined = module.join_streams("=ABCDEFGHIJKLMNOP\ndef mySuperSecret(): pass", "mySuperSecret")
+    assert "def mySuperSecret(): pass" in joined
