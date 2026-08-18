@@ -245,11 +245,10 @@ def main() -> int:
         )
         for r in usable
     }
+    # p′ 라벨의 조건은 **전칭** 이다 — 모든 실행에 계획이 붙어야 한다.
+    # plan_applied_on 은 존재("하나라도 붙었는가")이므로 둘은 다른 술어다.
+    # 한쪽만 고치면 한 보고서 안에서 같은 프라임이 서로 다른 뜻이 된다.
     advice_first_on = first_flags == {True}
-    # 라벨(p′, c_A, s′)은 **실제로 계획이 붙은** 실행에만 붙일 수 있다.
-    # first_flags 와 같은 자리에서 정한다 — 두 값이 떨어져 있으면 한쪽만
-    # 고쳐진다.
-    plan_applied_on = True in first_flags
     # 조언 **설정** 이 섞이면 라벨도 못 붙인다. 앞선 판은 s 만 막고 p′ 와
     # c_A 는 계속 찍었는데, route 나 context 가 다른 실행을 한 수로 뭉갠
     # 값에 단일 설정의 이름을 붙이는 셈이다.
@@ -266,8 +265,16 @@ def main() -> int:
         for r in usable
         if isinstance(r.get("advisor"), dict)
     }
-    if len(advisor_fingerprints) > 1:
-        plan_applied_on = False
+    # 설정 순수성은 계획 적용과 **다른 질문** 이다. 한 변수에 합치면
+    # "계획이 붙었는가" 의 답을 잃는다. 따로 둔다.
+    single_advisor_config = len(advisor_fingerprints) <= 1
+    # **프라임 라벨의 조건은 하나다.** 네 자리(p′, c_A, s′, a_B′)가 각각
+    # 다른 조건을 쓰고 있었고, 그래서 한 보고서 안에서 같은 프라임이 서로
+    # 다른 뜻이 됐다. 조건은 셋을 모두 만족해야 한다.
+    #
+    #   1. 모든 실행에 계획이 실제로 붙었다 (전칭 — 하나라도 아니면 섞인 수다)
+    #   2. 조언 설정이 하나다 (route 나 context 가 다르면 다른 arm 이다)
+    shape_a_measured = advice_first_on and single_advisor_config
     if len(first_flags) > 1:
         print(
             "\n경고: 시작 전 조언을 켠 실행과 끄고 돈 실행이 한 로그에 섞여 있다."
@@ -276,7 +283,13 @@ def main() -> int:
     # 시작 전 조언이 켜졌으면 이 실패율은 계획을 받은 뒤의 것이다. p 라고
     # 부르면 조언 없는 설정의 p 와 섞인다.
     # 혼합이면 어느 이름도 맞지 않는다. 이름을 붙이면 그 설정의 값처럼 읽힌다.
-    rate_name = "실패율" if len(first_flags) > 1 else ("p′" if advice_first_on else "p")
+    rate_name = (
+        "p′"
+        if shape_a_measured
+        else (
+            "실패율(설정·적용 혼합)" if len(first_flags) > 1 or not single_advisor_config else "p"
+        )
+    )
     print(f"\n{rate_name} = {p:.1%}   95% CI [{lo:.1%}, {hi:.1%}]")
     if advice_first_on:
         print("  (시작 전 조언을 받은 뒤의 실패율이다. 조언 없는 p 와 같은 값이 아니다)")
@@ -814,7 +827,7 @@ def main() -> int:
                 " 계획을 받은 실패와 못 받은 실패가 한 수에 들어가므로 s 도 q 도"
                 " 어느 설정의 값인지 말할 수 없다. **판정을 내지 않는다.**"
             )
-        primed = plan_applied_on and not mixed_application
+        primed = shape_a_measured
         shapes = []
         if config.get("advise_first"):
             shapes.append("시작 전(A)")
@@ -1174,7 +1187,7 @@ def main() -> int:
             # 프라임 표기의 기준을 **한 곳** 으로 맞춘다. 위쪽 a_B/s/r 은
             # 실제 적용 여부를 쓰는데 여기만 다른 술어를 쓰면 한 보고서 안에서
             # 같은 프라임이 서로 다른 뜻이 된다.
-            label = "c + p′" if plan_applied_on else "c + p"
+            label = "c + p′" if shape_a_measured else "c + p"
         print(
             f"\n(참고) 이 로그의 {label} = {c + p:.2f}. 실제 모형과의 차이는 조언"
             " 비용만이 아니다 — 재시도가 구제해 승급하지 않은 과제도 이 식에는"
@@ -1346,7 +1359,7 @@ def main() -> int:
                         " p − p′ 와 바로 비교하면 계획이 늘린 프롬프트"
                         " 비용(c_A − c)이 빠져 조언 쪽에 유리하게 틀린다."
                     )
-                    if plan_applied_on and len(first_flags) == 1
+                    if shape_a_measured
                     # 계획이 한 번도 안 붙었으면 이 로그의 c 는 c_A 가 아니라
                     # 그냥 c 이고 실패율도 p′ 가 아니다. 조언 호출 비용만 쓰고
                     # 계획은 못 받은 실행을 잰 것이다.

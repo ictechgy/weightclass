@@ -48,6 +48,7 @@ import argparse
 import base64
 import binascii
 import contextlib
+import functools
 import hashlib
 import json
 import math
@@ -1058,6 +1059,18 @@ PEM_ARMOURED_BODY_CHARS = 200
 # DER 로 풀린 것이 이보다 짧으면 키가 아니다. 가장 작은 개인키(Ed25519
 # PKCS#8)도 마흔여덟 바이트를 넘는다.
 PEM_MINIMUM_KEY_BYTES = 32
+# 아는 개인키 형식의 시작 바이트.
+#   0x30            DER SEQUENCE — PKCS#1, PKCS#8, SEC1
+#   openssh-key-v1  OpenSSH 형식 (ssh-keygen 의 기본 출력)
+#   0x94/95/98/99   OpenPGP 비밀키 패킷 태그
+KEY_FORMAT_MAGICS = (
+    b"\x30",
+    b"openssh-key-v1\x00",
+    b"\x94",
+    b"\x95",
+    b"\x98",
+    b"\x99",
+)
 # 표식이 하나도 없을 때 요구하는 본문 양. 진단 로그가 마커 쌍 사이에 이만큼의
 # base64 를 담는 일은 없다.
 PEM_BULK_BODY_CHARS = 400
@@ -1093,9 +1106,13 @@ def _between_markers_is_body(content: str) -> bool:
     decoded = _decode_base64(material)
     if decoded is None:
         return False
-    # DER SEQUENCE 로 시작하고 **키라 할 만큼 길면** 키다. 길이를 안 보면
-    # `MAAA`(0x30 0x00 0x00)처럼 세 바이트짜리 진단 문자열이 키로 잡힌다.
-    if decoded[:1] == b"\x30" and len(decoded) >= PEM_MINIMUM_KEY_BYTES:
+    # 아는 키 형식의 **매직 바이트** 로 시작하고 키라 할 만큼 길면 키다.
+    # 길이를 안 보면 `MAAA`(0x30 0x00 0x00)처럼 세 바이트짜리 진단 문자열이
+    # 키로 잡힌다. DER 만 보면 OpenSSH 형식(`openssh-key-v1\0` 로 시작)이
+    # 통째로 샌다 — ssh-keygen 의 기본 출력이 그것이다.
+    if len(decoded) >= PEM_MINIMUM_KEY_BYTES and any(
+        decoded.startswith(magic) for magic in KEY_FORMAT_MAGICS
+    ):
         return True
     # DER 이 아닌 진짜 키가 있다. PGP armor 는 **체크섬 줄** 이 표식이고,
     # 암호화된 PEM 은 본문이 암호문이라 0x30 으로 시작하지 않는 대신
@@ -1142,7 +1159,9 @@ def _base64_material(content: str) -> tuple[str, bool, bool]:
         if _ANY_HEADER_LINE.match(stripped):
             name, _, value = stripped.partition(":")
             value = value.strip()
-            if _PEM_BODY_CHARS.fullmatch(value) and len(value) >= 8:
+            # base64 한 묶음(4자)이면 본문 조각으로 센다. 여덟 자를 요구했더니
+            # 네 자씩 쪼개 헤더로 위장한 본문이 통째로 빠져나갔다.
+            if _PEM_BODY_CHARS.fullmatch(value) and len(value) >= 4:
                 pieces.append(value)
                 continue
             if name.strip().lower() in PEM_HEADER_NAMES:
@@ -1403,6 +1422,15 @@ def key_line_kind(line: str, candidates: list[str], strict: bool = True) -> str:
     for probe in (line, strip_log_prefix(line)):
         if probe and _PEM_BODY_CHARS.fullmatch(probe):
             return "short"
+    # `Name: <base64>` 로 위장한 본문 줄. 마커 쌍 판정(_base64_material)이
+    # 이 형태를 본문으로 세므로 **범위 주사도 먹어야 한다** — 안 먹으면
+    # 게이트가 열리고 마커만 지워진 채 본문이 통째로 남는다. 게이트 쪽
+    # (strict)에서는 진단 줄(`AssertionError: boom`)이 걸리지 않도록
+    # 값이 충분히 길 때만 본문으로 본다.
+    if _ANY_HEADER_LINE.match(line):
+        value = line.partition(":")[2].strip()
+        if _PEM_BODY_CHARS.fullmatch(value) and len(value) >= (16 if strict else 4):
+            return "body"
     # 본문과 END 마커가 한 물리적 줄에 있으면 줄에 공백이 있어 위 판정이
     # 전부 탈락한다. 그 줄에는 키가 들어 있다. **END 마커가 함께 있을
     # 때만** 줄 안의 긴 연속을 본다 — 마커 없이 연속만 보던 앞선 규칙은
@@ -1748,11 +1776,25 @@ def join_streams(out: str, err: str) -> str:
         span = reverse_src[start:stop]
         # **첫** 구분자다. 마지막 것을 잡으면 값 안에 우연히 든 콜론
         # (`Traceback:`)이 경계로 잡혀, 이름 쪽 조각이 값으로 둔갑한다.
-        offsets = [at for at in (span.find("="), span.find(":")) if at >= 0]
+        #
+        # 정확 일치로 등록된 값에는 구분자 해석을 하지 않는다. 그 값 자체가
+        # 콜론을 담을 수 있고(`prefix:FAILED`), 그것을 이름-값 경계로 읽으면
+        # 흔한 낱말이 전역 삭제의 대상이 된다.
+        offsets = (
+            []
+            if span in known_secret_forms()
+            else [at for at in (span.find("="), span.find(":")) if at >= 0]
+        )
         value_at = min(offsets) + 1 if offsets else -1
         if value_at >= len(err_piece) and out_piece:
-            # 값이 out 쪽 조각 안에 통째로 들어 있다. 그것만 전역으로 지운다.
-            forward = forward.replace(out_piece, "[REDACTED]")
+            # 값이 out 쪽 조각 안에 있다. **조각이 아니라 값 텍스트** 를 지운다 —
+            # 조각째 지우면 `=` 같은 앞머리가 붙어 있어, 같은 값이 앞머리 없이
+            # 다른 곳에 있으면 그것이 남는다.
+            value_text = span[value_at:]
+            forward = forward.replace(value_text, "[REDACTED]")
+            leftover = out_piece[: len(out_piece) - len(value_text)]
+            if leftover and forward.startswith(leftover):
+                forward = "[REDACTED]" + forward[len(leftover) :]
         elif out_piece and forward.startswith(out_piece):
             # 구분자가 없거나 값이 이음매를 가로지른다. 그 값은 이 자리에만
             # 있으므로 자리 치환으로 충분하다.
@@ -1841,6 +1883,19 @@ def _align_tail(original: str, tail: str, lower: int) -> int | None:
         if cursor != -1:
             best = candidate
         at = candidate + 1
+
+
+@functools.lru_cache(maxsize=1)
+def known_secret_forms() -> frozenset[str]:
+    """정확 일치로 등록된 값과 그 인코딩 형태 전부.
+
+    이음매 복구에서 "이 구간이 우리가 아는 값인가" 를 묻는 데 쓴다. 아는
+    값이면 그 안의 구분자는 이름-값 경계가 아니라 값의 일부다.
+    """
+    forms: set[str] = set()
+    for secret in host_secret_values():
+        forms.update(_encoded_forms(secret))
+    return frozenset(forms)
 
 
 def redact_host_secrets(text: str) -> str:

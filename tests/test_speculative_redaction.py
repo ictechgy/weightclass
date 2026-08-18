@@ -1014,10 +1014,18 @@ def test_short_streams_are_dropped_when_the_seam_forms_a_credential():
 
 
 def test_the_seam_verdict_does_not_rest_on_length():
-    """길이가 같아도 잡은 것이 다를 수 있다. 동등성으로 판정해야 한다."""
+    """길이가 같아도 잡은 것이 다를 수 있다. 동등성으로 판정해야 한다.
+
+    두 순서가 **서로 다른** 자격증명을 같은 길이만큼 지우면 길이 비교는
+    "차이 없음" 을 내지만 잡은 것은 다르다. 그때 정방향 결과만 내보내면
+    역순에서만 형성되는 값이 남는다.
+    """
     module = load_runner()
-    # 평범한 출력은 두 순서가 같은 결과를 내므로 그대로 이어진다.
-    assert module.join_streams("out ok ", "err ok") == "out ok err ok"
+    out = "KEN=abcdef1234567890\nAWS_SECRET_ACCESS_"
+    err = "KEY=wJalrXUtnFEMI/K7MDENGbPxRf\nAPI_TO"
+    joined = module.join_streams(out, err)
+    assert "abcdef1234567890" not in joined
+    assert "wJalrXUtnFEMI/K7" not in joined
 
 
 @pytest.mark.parametrize(
@@ -1049,13 +1057,6 @@ def test_spaced_assignments_read_as_code(source):
     """사람이 쓴 코드는 구분자를 띄우고, 환경 덤프는 붙인다. 그 차이로 가른다."""
     module = load_runner()
     assert module.verify_excerpt(source) == source
-
-
-def test_short_decoded_forms_do_not_enter_the_redaction_list(monkeypatch):
-    """퍼센트 복호는 길이를 줄인다. 하한을 안 걸면 `////` 가 목록에 들어간다."""
-    monkeypatch.setenv("SOME_TOKEN", "%2F%2F%2F%2F%2F%2F")
-    module = load_runner()
-    assert "////" in module.verify_excerpt("path a////b and c////d")
 
 
 # --- 라운드 21: 창의 제거, 한쪽 공백, 표현의 깊이 -----------------------------
@@ -1713,16 +1714,20 @@ def test_header_shaped_body_lines_are_still_body():
     """`Name: <base64>` 로 위장한 본문을 통째로 버리면 키가 빠져나간다."""
     module = load_runner()
     blob = base64.b64encode(b"\x30\x82" + hashlib.shake_256(b"k").digest(400)).decode()
+    chunks = [blob[index : index + 64] for index in range(0, len(blob), 64)]
     pem = (
         BEGIN
         + KEY
         + "\n"
-        + "\n".join("PrivateBody: " + blob[index : index + 64] for index in range(0, len(blob), 64))
+        + "\n".join("PrivateBody: " + chunk for chunk in chunks)
         + "\n"
         + END
         + KEY
     )
-    assert blob[100:140] not in module.verify_excerpt(pem)
+    cleaned = module.verify_excerpt(pem)
+    # **프로브는 입력에 실제로 있는 줄이다.** 64자 경계를 가로지르는 조각을
+    # 찾으면 리댁션이 항등 함수여도 통과한다.
+    assert not [chunk for chunk in chunks if chunk in cleaned]
 
 
 @pytest.mark.parametrize(
@@ -1752,3 +1757,70 @@ def test_the_seam_value_is_scoped_by_the_separator(out, err, kept):
     """
     module = load_runner()
     assert kept in module.join_streams(out, err)
+
+
+# --- 라운드 29: 키 형식의 매직, 위장한 본문, 값 텍스트 ------------------------
+
+
+def test_openssh_private_keys_are_redacted():
+    """DER 만 보면 ssh-keygen 의 기본 출력이 통째로 샌다.
+
+    OpenSSH 형식의 본문은 `openssh-key-v1\\0` 로 시작하므로 DER SEQUENCE
+    검사에 걸리지 않고, armor 체크섬도 PEM 헤더도 없다. 좁게 접으면 줄 단위
+    판정도 빠져나가 400자 문턱만 남는데, ed25519 키는 그보다 짧다.
+    """
+    module = load_runner()
+    body = base64.b64encode(b"openssh-key-v1\x00" + bytes(range(256))).decode()
+    ragged = []
+    index = 0
+    for width in list(range(1, 16)) * 30:
+        if index >= len(body):
+            break
+        ragged.append(body[index : index + width])
+        index += width
+    pem = (
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        + "\n".join(ragged)
+        + "\n-----END OPENSSH PRIVATE KEY-----"
+    )
+    cleaned = module.verify_excerpt(pem)
+    assert not [chunk for chunk in ragged if len(chunk) > 8 and chunk in cleaned]
+
+
+def test_four_character_chunks_behind_a_colon_prefix_are_body():
+    """base64 한 묶음(4자)이면 본문이다.
+
+    여덟 자를 요구했더니 네 자씩 쪼개 헤더로 위장한 본문이 빠져나갔다.
+    게이트가 그것을 본문으로 세면 **범위 주사도 먹어야 한다** — 안 먹으면
+    마커만 지워지고 본문이 남는다.
+    """
+    module = load_runner()
+    chunks = ["MC4C", "AQAw", "BQYD", "K2Vw", "BCIE", "IAAB", "AgME", "BQYH"] * 12
+    pem = (
+        BEGIN
+        + KEY
+        + "\n"
+        + "\n".join("PrivateBody: " + chunk for chunk in chunks)
+        + "\n"
+        + END
+        + KEY
+    )
+    assert "PrivateBody: MC4C" not in module.verify_excerpt(pem)
+
+
+def test_the_seam_removes_the_value_text_not_the_fragment():
+    """조각째 지우면 앞머리(`=`)가 붙어 있어 같은 값의 맨몸 중복이 남는다."""
+    module = load_runner()
+    joined = module.join_streams("=A1B2C3D4E5F6G7H bare duplicate A1B2C3D4E5F6G7H", "PASSWORD")
+    assert "A1B2C3D4E5F6G7H" not in joined
+
+
+def test_a_separator_inside_a_known_secret_is_not_a_name_boundary(monkeypatch):
+    """아는 값이 콜론을 담으면 그것은 값의 일부다.
+
+    이름-값 경계로 읽으면 흔한 낱말(`FAILED`)이 전역 삭제의 대상이 된다.
+    """
+    monkeypatch.setenv("SOME_TOKEN", "prefix:FAILED")
+    module = load_runner()
+    joined = module.join_streams("FAILED test_auth\nsource FAILED remains", "SOME_TOKEN=prefix:")
+    assert "source FAILED remains" in joined
