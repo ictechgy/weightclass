@@ -1,240 +1,368 @@
-# Design: measuring the Advisor tool as a third arm
+# Design: the advisor pattern, reimplemented locally
 
-**Status: proposal.** Nothing here is implemented. It needs no change to the V1
-boundary, because it adds no capability to `weightclass` — it adds one more
-*route command* for the measurement harness that already exists.
+**Status: proposal.** Nothing here is implemented in `weightclass` itself. It
+requires moving the V1 boundary, which is a product decision. The measurement
+support described at the end is the part that gets built first.
 
-## What the Advisor tool is
+## What is being copied, and from where
 
-A beta feature of the Messages API (`anthropic-beta: advisor-tool-2026-03-01`).
-A cheap **executor** model runs the task; when it decides it needs a plan, it
-emits a `server_tool_use` block and Anthropic runs a separate inference pass on
-an expensive **advisor** model, server-side, inside the same `/v1/messages`
-request. The advisor reads the executor's full transcript and returns strategic
-guidance; the executor keeps going.
+Anthropic ships an [Advisor
+tool](https://platform.claude.com/docs/ko/agents-and-tools/tool-use/advisor-tool)
+(beta `advisor-tool-2026-03-01`). A cheap **executor** model runs the task; when
+it wants a plan it emits a `server_tool_use` block, Anthropic runs a separate
+inference pass on an expensive **advisor** model server-side, and the advice
+comes back inside the same request. Most tokens are generated at the executor's
+price while the planning comes from a stronger model.
 
-```
-tools = [{"type": "advisor_20260301", "name": "advisor",
-          "model": "claude-opus-5", "max_tokens": 2048}]
-```
+**This document is not about integrating that tool.** It is about reproducing the
+*pattern* locally, so it works:
 
-Parameters: `model` (required — the advisor), `max_uses` (per **request**, not
-per conversation), `max_tokens` (per call, min 1024, caps thinking + text),
-`caching` (`{"type": "ephemeral", "ttl": "5m" | "1h"}`, off by default, breaks
-even at roughly three advisor calls).
+- under a **subscription** as well as an API key, because the router drives CLIs,
+  not HTTP;
+- across **vendors**, including combinations the original cannot express;
+- on **Bedrock**, which does not support the `anthropic-beta` header at all and
+  therefore cannot reach the original.
 
-The advisor runs with no tools and no context management, and its thinking blocks
-are dropped before the result reaches the executor.
+## Why a local imitation is the better shape for this tool
 
-## Why this is worth measuring here specifically
+Three reasons, and the third is the strongest.
 
-Every lever this project has measured is dead except one.
+**It matches what weightclass already is.** The router's whole job is deciding
+which model does what, from a local reviewed policy, without making HTTP
+requests. "Cheap model does the work, expensive model advises" is a routing
+decision. Delegating it to a vendor's server-side feature would move the decision
+out of the policy and into an account.
 
-| lever | result |
-| --- | --- |
-| effort-tier routing | 0/18 tier-sensitive against a pre-registered floor of 9 |
-| pinned `medium` vs routing | pinned `medium` won on both vendors |
-| routing down to `low` | 15/15 passed, but shipped real input-validation defects |
-| vendor comparison | invalid — the CLIs report incomparable numbers |
-| **model grade** | **−69.02% cost, CI [60.57%, 77.47%], equal quality — rejected for 2/90 new critical failures** |
+**It removes the billing and platform preconditions.** The original needs a
+first-party Claude API key or Claude Platform on AWS. A local implementation
+needs neither: it invokes the CLI commands the user already reviewed.
 
-The model-grade saving is the only real one, and it was blocked by failures that
-are *mechanically detectable*. That produced the speculative-cheap-route design:
-run cheap, verify, escalate on failure.
+**It can pair models the original cannot.** The Advisor tool requires both sides
+to be Claude — the advisor must be Sonnet 4.6 class or better and at least as
+capable as the executor. A local implementation can run **Codex as executor with
+Claude as advisor**, or the reverse. That combination is not a workaround; it is
+the case this project has been routing between all along, and no vendor feature
+will ever offer it.
 
-The Advisor is a **rival mechanism for the same money**. It also puts most token
-generation on the cheap model, but instead of catching the cheap model's mistakes
-afterwards it tries to prevent them by paying for expensive *guidance* rather
-than expensive *output*. Both target the same 69%. Only one of them needs a
-verify script, a throwaway clone, and a boundary change.
+## What survives the translation, and what does not
 
-That makes it a genuinely useful third arm, and it is cheap to add: the harness
-already runs an arbitrary command per route.
+The original interrupts the executor **mid-generation**. A CLI cannot be
+interrupted mid-generation — `claude -p` and `codex exec` run their agentic loop
+internally and expose no hook. So a local implementation can only insert advice
+**between invocations.**
 
-## The prediction worth writing down before measuring
+Three consequences, stated plainly rather than discovered later:
 
-Stated now so it cannot be retrofitted afterwards.
-
-**The Advisor is aimed at a different failure mode than the one that killed the
-model-grade lever.** The two critical failures in the 90-pair study, and the
-defects `QUALITY-RESULT.md` records from the `low` arm, were not planning
-failures. They were: accepting `True` as a schema version, admitting a
-whitespace-padded identifier into a ledger, and returning a mutable internal
-cache list. Those are input-validation and API-surface defects in code the model
-had already decided how to structure.
-
-Advice like "use a channel-based coordination pattern" does not prevent any of
-them. So the honest prior is: **the Advisor arm should improve plan quality and
-leave the defect class that blocked model-grade routing untouched.** If it does,
-it is a cost lever with the same unresolved quality risk, not a fix for it.
-
-Anthropic's own framing is modest and matches this — the docs say results depend
-on the task and tell you to evaluate on your own workload, and the coding claim
-is Sonnet-executor-plus-Opus-advisor reaching *Sonnet-at-default-effort* quality
-more cheaply, not reaching Opus.
-
-## The arms
-
-Three arms, same tasks, same `verify.sh`, same throwaway-clone harness:
-
-| arm | route command | what it tests |
+| | original | local |
 | --- | --- | --- |
-| 1. baseline | expensive model alone | the quality bar and the cost ceiling |
-| 2. speculative | cheap → verify → escalate | the design in `speculative-cheap-route-design.md` |
-| 3. advisor | Sonnet executor + Opus advisor | guidance instead of a verify gate |
+| when advice arrives | inside one request, any number of times | between invocations, at fixed points |
+| what the advisor sees | the executor's full transcript, including its reasoning | the executor's **artifacts** — the diff, the verify output |
+| output cap | hard `max_tokens` on the advisor, min 1024 | prompt-level request only |
 
-Arms 1 and 2 already run under `tools/speculative_run.py`. Arm 3 needs one new
-piece.
+The second is a genuine loss for course-correction: advice grounded in *why* the
+executor went wrong is better than advice grounded in *what came out*. It is not
+a total loss, because a failing test is a very concrete artifact — arguably more
+concrete than a transcript.
 
-## The piece that does not exist
+The third is the real risk, and it gets its own section below.
 
-**The CLI cannot express this.** `claude` accepts `--betas`, but there is no way
-to put a tool *definition* into the request it builds, and the advisor tool is a
-tool definition. So arm 3 has to speak the Messages API directly.
+## The two shapes
 
-That does **not** mean changing the runner. The runner treats a route as an
-opaque reviewed command that runs in a workspace and edits files. A small script
-that speaks the Messages API and exposes a file-editing tool is exactly that:
+Both are opt-in, independently, by flag. They compose.
 
-```sh
-tools/advisor_route.py \
-  --executor claude-sonnet-5 --advisor claude-opus-5 --advisor-max-tokens 2048
+### Shape A — advice before the work
+
+```
+advisor (expensive, read-only)  reads the task and the repo, returns a plan
+      ↓
+cheap route runs with that plan prepended to the task
+      ↓
+verify  ── pass → accept
+        └─ fail → escalate to the expensive route
 ```
 
-passed to the existing harness as `--cheap` or `--expensive`. The runner does not
-learn anything new; it still clones, runs one command, rebuilds, verifies.
+Let one full expensive run cost `1` and the un-advised cheap route `c`. **The two
+shapes do not call the same advisor.** Shape A's advisor gets the task and reads
+the repository; Shape B's gets the task plus a failure excerpt and a diff. The
+inputs differ, so the costs differ, and one symbol for both would hide that.
+Shape A's call is `a_A`, Shape B's is `a_B`; where the text says `a` without a
+subscript it means whichever call that shape makes. Let `p` be the cheap route's
+failure rate without advice and `p′` with it. The advised cheap run is **not** `c`: it carries the plan in its prompt,
+so give it its own symbol `c_A`, for the same reason Shape B's retry gets `r`.
 
-What that script must do:
+```
+expected cost = a_A + c_A + p′      pays when   a_A + (c_A − c) < p − p′
+```
 
-1. Read the task from stdin, exactly as the vendor CLIs do.
-2. Run an agentic loop over a minimal tool set — read file, write file, run
-   command — in the current working directory, which the runner has already made
-   a throwaway clone.
-3. Include the advisor tool in `tools` on every request.
-4. **Emit its own cost as a single JSON object on stdout**, in the shape
-   `_claude_usage` already reads: `total_cost_usd` at the root plus a `usage`
-   object. The harness then needs no vendor-specific code for this arm.
+Writing `c` where `c_A` belongs understates the arm by exactly the prompt the
+advice adds, and that error runs in the arm's favour.
 
-Point 4 is what makes this fit the existing machinery instead of extending it.
+### Shape B — advice only after a failure
 
-## The cost trap, and why it must be handled inside that script
+```
+cheap route runs
+      ↓
+verify  ── pass → accept
+        └─ fail
+             ↓
+        advisor (expensive, read-only)  reads the diff and the verify output,
+                                        returns what went wrong and what to do
+             ↓
+        cheap route retries with that advice
+             ↓
+        verify  ── pass → accept
+                └─ fail → escalate to the expensive route
+```
 
-This is the part most likely to produce a wrong number quietly.
+With `s` the fraction of **advised failures** that end up rescued — not the
+fraction of *attempted retries* that pass; advice can come back empty and then no
+retry happens at all, and those failures still count against `s` because they
+still escalate — `r` the cost of that retry — **not** `c`, because the retry carries the advice in its prompt and so
+costs more than the first attempt — and `q` the fraction of advised failures that
+actually produce a retry (advice can come back empty, or the advisor call can
+fail, and then nothing is retried and no retry cost is paid):
 
-> **The top-level `usage` reflects executor tokens only.** Advisor tokens are
-> billed at the advisor model's rates and are **not** in the top-level totals.
-> They appear only in `usage.iterations[]` entries with `type:
-> "advisor_message"`, each carrying its own `model`.
+```
+expected cost = c + p·(a + q·r + (1 − s))      pays when   s > a + q·r
+```
 
-And separately:
+Charging `r` to every advised failure overstates the arm's cost and can produce
+the wrong verdict against it.
 
-> Every top-level `usage` field is a **sum across all executor iterations**.
-> Because each iteration resends the growing conversation, later iterations
-> include earlier output, so the summed `input_tokens` exceeds the size of any
-> single prompt.
+**Shape B's condition does not contain `p`.** That matters more than it looks:
+the decision can be made from the failed runs alone, which makes the
+pre-registration cleaner and the sample requirement smaller. At `c ≈ 0.31` and
+`a ≈ 0.1` the break-even is `s > 0.41` when every advised failure retries at the
+first attempt's cost, and higher once `r > c`, which it normally is. A `q < 1`
+lowers the *threshold* but also caps `s` at `q`, so it does not make the arm
+easier to justify **when the retries are not chosen selectively** — `a` is paid
+on every advised failure whether or not a retry follows, while only the `q`
+fraction can be rescued. Selective retrying breaks that: if the runner skips the
+retries least likely to work, `q·r` falls faster than `s` does, and the arm can
+pass at a `q < 1` that it would fail at `q = 1`. This measurement retries every
+advised failure precisely so that `q` reflects the advisor's own behaviour
+rather than a policy layered on top of it — a selective policy is a different
+arm and needs its own pre-registration. It replaces a full expensive run with one short
+advisory call plus one more cheap run, so the saving per rescued task is large —
+but the bar rises fast with `a`, and at `a ≈ c ≈ 0.31` it is already `s > 0.62`.
 
-Two independent ways to get this wrong, both of which flatter the Advisor arm or
-distort it:
+## The awkward fact about Shape A
 
-- Read the top-level `usage` and you have **omitted the advisor entirely** — the
-  expensive half of the arm — and the arm looks nearly free.
-- Read the top-level `input_tokens` as a prompt size and you have
-  **double-counted** the executor across iterations.
+Shape A aims at the failure mode that actually blocked model-grade routing — and
+this project cannot measure whether it hits it.
 
-So the script must price from `usage.iterations[]`, per entry, using the entry's
-own `model`, and never touch the top-level object. That is the single most
-important line of code in the arm, and it deserves a test that feeds it a
-recorded response with two executor iterations and one advisor iteration and
-asserts the total is the sum of three separately-priced entries.
+The two critical failures in the 90-pair study, and the defects `QUALITY-RESULT.md`
+records from the `low` arm, **passed their tests**: accepting `True` as a schema
+version, admitting a whitespace-padded identifier into a ledger, returning a
+mutable internal cache list. A verify gate never fires on those, so Shape B never
+runs for them. Only Shape A could have prevented them, by improving the plan
+before the code exists.
 
-This is the same class of error the existing report already guards against with
-its mixed-provenance check: a number that is real, arrives in the right field,
-and answers a different question than the one being asked.
+But the instrument that would detect that improvement has a documented ceiling:
+5/5 unanimity on planted controls, 7/14 on `low` versus routed tier, 3/7 on Codex
+versus Claude. `VENDOR-RESULT.md` names the two live explanations it cannot
+separate. Pointing it at Shape A at n≈20 would produce another inconclusive
+result at real token cost.
 
-## What the primary endpoint should be, and what it should not be
+So: **Shape B is decidable and Shape A is not, on this workload with this
+instrument.** Shape A is still worth building and worth measuring on `p′` — the
+failure rate is mechanical and measurable even when quality is not — but a
+`p′ ≈ p` result would mean "no measurable effect on failures", not "no effect".
+Recording that distinction now is the point of writing it down before collecting.
 
-**Primary: cost per *passing* task.** Total USD across the arm divided by the
-number of tasks whose `verify.sh` exited zero. It is measurable, it needs no
-rater, and it is the number the decision actually turns on.
+## The advisor call
 
-**Not a blind quality rating.** The quality instrument in
-`~/weightclass-token-study/` has a documented ceiling: 5/5 unanimity on planted
-controls, 7/14 on `low` vs routed tier, 3/7 on Codex vs Claude — decisive only on
-defects planted to be findable, and progressively less decisive on real
-differences. `VENDOR-RESULT.md` names the two live explanations it cannot
-separate. Pointing that instrument at a third arm at n≈20 would produce another
-inconclusive result at real token cost.
+One more reviewed command in the policy, alongside the cheap and expensive
+routes. What it does is deliberately narrow.
 
-**Secondary, cheap, and worth collecting anyway:** the count of advisor calls per
-task (`usage.iterations[]` filtered by type), the advisor's `output_tokens` per
-call against the `max_tokens` cap, and any `stop_reason: "max_tokens"` in the
-results. Those say whether the arm was configured sensibly, independent of
-whether it won.
+**It runs in a throwaway clone whose workspace is deleted unconditionally.** Not
+"deleted unless it passes" — deleted always. The advisor's only output channel is
+its stdout. Whatever it writes to disk goes nowhere, so a misbehaving advisor
+cannot reach the patch, the verify tree, or the user's repository. This is a
+stronger boundary than the executor gets, and it costs nothing because advice is
+text.
 
-**The defect check that actually matters** is not a rating either. It is a
-targeted re-run of the specific defect classes from `QUALITY-RESULT.md` —
-schema-version validation, identifier normalization, mutable-return — as tasks
-with tests that catch them. That is a small, falsifiable check of the prediction
-above, and it costs far less than a rating round.
+**It receives the artifacts on stdin.** For Shape A that is the task. For Shape B
+it is the task, the diff the cheap route produced, and the verify command's
+output. It is invoked as a route command like any other, so the user chooses the
+model, the effort, and the flags.
 
-## Pre-registration, before any tokens are spent
+**Its output is capped before use.** Advice is spliced into the executor's task,
+so an unbounded blob would blow the executor's context or simply cost money to
+carry. Truncation is recorded, not silent.
 
-This project's rule is that thresholds and stopping conditions are fixed before
-collection and shortfalls are reported rather than reinterpreted. That rule has
-already forced two negative results to stand (`CALIBRATION-REPORT.md`,
-`VENDOR-RESULT.md`), and it applies here.
+### The injection channel this opens, and why the blast radius is unchanged
 
-To fix before the first run:
+The chain is: untrusted cheap-route diff → advisor → advice text → executor
+prompt. A prompt injection planted by the cheap route can therefore try to steer
+the advisor into emitting text that steers the executor.
 
-- **n**, and the rule for stopping early.
-- **The decision threshold on cost per passing task.** Arm 3 has to beat arm 1 by
-  enough to matter; name the margin now.
-- **What counts as a failure of the prediction above** — i.e. how many of the
-  targeted defect tasks arm 3 must pass before "the Advisor does not address that
-  defect class" is falsified.
-- **The rule for an inconclusive result**, so the answer is not chosen after
-  seeing the numbers.
+That is a new channel and it should be named rather than waved at. What bounds it
+is that **nothing downstream is trusted either**: the retried executor's work is
+still rebuilt in a clone it never touched, still reduced to a patch, and still
+has to pass the same `verify.sh` — including its secret scan — before anything is
+accepted. The advice can change *what the executor tries*; it cannot change
+*what passes the gate*. The blast radius is the same directory that already gets
+thrown away.
 
-## Cost controls to set from the start
+The advice is delimited as untrusted input in the executor's prompt for the same
+reason the review target is delimited in this project's review skills: it is
+cheap, and it is not the load-bearing control.
 
-- `max_tokens: 2048` on the tool. Anthropic's own benchmark (n=40 per config)
-  reports this cut mean advisor output ~7× with ~0% truncation; the 1024 minimum
-  cut ~10× but truncated ~10% of calls. Leaving it unset gave 4,200–5,900 tokens
-  per call on hard reasoning tasks — which would dominate the arm's cost and make
-  the comparison a measurement of one default rather than of the mechanism.
-- `caching` **off** unless a task actually calls the advisor three or more times.
-  Below that the cache writes cost more than the reads save.
-- `max_uses` set to something finite, so one runaway task cannot skew the arm.
-  Note it is per **request**, not per conversation — an agentic loop makes many
-  requests, so a conversation-level budget has to be counted client-side, in the
-  script, by removing the tool from `tools` once the cap is hit.
+## The risk that could kill this: `a` is not small by default
 
-## Limits worth knowing before planning around this
+The original's saving depends on the advisor being brief. Anthropic's own numbers:
+with no `max_tokens`, advisor output ran 4,200–5,900 tokens on hard reasoning
+tasks; at `max_tokens: 2048` it fell to 630–840 with ~0% truncation; at the 1024
+minimum, 370–480 with ~10% truncation.
 
-- **Beta.** The header pins a dated version; it can change.
-- **Not on Bedrock, Vertex, or Foundry.** Claude API and Claude Platform on AWS
-  only. If the work environment routes Claude through Bedrock, this arm cannot
-  run there at all — which is also why `speculative_run.py` now warns when
-  `CLAUDE_CODE_USE_BEDROCK` is set and the AWS credential family was narrowed
-  out.
-- **Pairing constraint.** The advisor must be at least as capable as the
-  executor, and at least Sonnet 4.6 class. `claude-sonnet-5` executor accepts
-  `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-mythos-5`,
-  `claude-fable-5`, or `claude-sonnet-5` as advisor.
-- **Priority Tier does not carry over** from executor to advisor.
-- **Not suitable for** single-turn Q&A or workloads where every turn needs the
-  advisor's full capability — by Anthropic's own account.
+**No CLI exposes that cap.** A local implementation has only the soft lever —
+asking for brevity in the prompt — which the vendor's own documentation
+distinguishes from a hard cap.
 
-## Honest cost of building it
+Worse, a CLI advisor that runs in a clone will *read the repository*, so its input
+cost is not small either. `a` could plausibly land near `c`, and at `a ≈ c ≈ 0.31`
+Shape B needs `s > 0.62` — a much harder bar than 0.4.
 
-The script in "the piece that does not exist" is a small agentic loop, but it is
-a small agentic loop **that edits files from untrusted model output** — the same
-thing every other route in this harness does, with the same throwaway-clone and
-verify-gate protections around it. It is perhaps 200 lines. The comparison it
-makes possible is the first one in this project that pits two live cost
-mechanisms against each other rather than measuring one against a guess.
+Two levers exist, and both should be available:
 
-The argument against building it is the same one that applies to everything else
-here: five levers have been measured and four were dead, and the fifth was
-blocked by a defect class this one probably does not touch. Writing the
-prediction down first is what makes the answer worth having either way.
+- **Bound what the advisor sees.** For Shape B the diff plus the verify output may
+  be enough; running the advisor in an *empty* directory with that text on stdin
+  makes its input bounded and cheap. The cost is that it cannot look anything up.
+- **Ask for brevity explicitly**, and record the advice length every time so the
+  soft lever's effectiveness is visible rather than assumed.
+
+`a` is therefore a **measured quantity, never an assumed one** — the same rule
+this project already applies to `c`. A design that quietly assumes a small `a`
+would be assuming away the only thing that decides it.
+
+## Keeping the measurement tractable
+
+Two independent flags suggest four configurations and roughly four times the
+tokens. It does not have to cost that.
+
+Measure **two** configurations:
+
+1. **baseline + Shape B** — cheap → verify → (advisor → retry → verify) → escalate.
+   Yields `c`, `p`, `a_B`, `q`, `r` and `s` in one pass, because the un-advised
+   cheap run and its verify result are the first stage of the same pipeline.
+   It does **not** yield `a_A`: Shape A's advisor never runs here.
+2. **Shape A + Shape B** — the same pipeline with a plan prepended. Yields `a_A`,
+   `c_A`, `p′`, and the primed failure stage `a_B′`, `q′`, `r′`, `s′`.
+
+Configuration 2 **is** A+B, so A+B is measured. Shape A alone is measured too —
+its three terms all appear in a configuration-2 log, as the next paragraph
+explains. Nobody has to *run* Shape A alone to report it:
+
+```
+A alone      = a_A + c_A + p′
+A + B        = a_A + c_A + p′·(a_B′ + q′·r′ + (1 − s′))
+```
+
+Every term after the up-front advice is primed — including the failure-stage
+advisor call itself, whose input is the already-advised task plus the failure
+artifacts and so costs `a_B′`, not `a_B`. The escalation is the one exception:
+it costs `1` in both shapes because the expensive route gets the original task,
+not the advised one. That is why the equations carry `(1 − s′)` unprimed. Each
+other term is primed because it is measured on a run whose
+prompt already contains the plan: the retry cost, the retry-attempt rate
+and the rescue rate are all different quantities from their Shape-B-only
+counterparts. Reusing the unprimed symbols would silently assume the plan
+changes nothing about what happens after a failure.
+
+`a_A + c_A + p′` for Shape A alone **is measured**, not modelled. An earlier
+version of this document called it an extrapolation on the grounds that
+configuration 2's `p′` was observed on runs "whose failures were about to be
+advised". That reasoning is wrong, and it is worth recording why: Shape B runs
+strictly *after* the cheap run's verification, so it cannot change a failure
+rate that was already observed at that verification. Nothing about `a_A`, `c_A`
+or `p′` depends on what happens next. All three come straight out of a
+configuration-2 log.
+
+What the log does **not** give is `c` and `p` — the un-advised baseline. Those
+come from configuration 1. So the Shape A verdict needs both logs, but neither
+of its terms is modelled. The one assumption left is that the two
+configurations are comparable — same task set, same runner, same pricing source.
+That is a pre-registration requirement, not a modelling step, and the report
+refuses the verdict when it is violated.
+
+## What to fix before spending any tokens
+
+The rule here is that thresholds and stopping conditions are fixed before
+collection and shortfalls are reported rather than reinterpreted. It has already
+forced two negative results to stand (`CALIBRATION-REPORT.md`,
+`VENDOR-RESULT.md`).
+
+To pre-register:
+
+- **n**, and the early-stopping rule.
+- **The primary endpoint: cost per passing task.** Not a blind quality rating —
+  see the ceiling above.
+- **The decision rule for Shape B**: `s > a + q·r` — and note this is the gate
+  for adding B to whatever is already running. On an A+B log it answers "is the
+  failure-stage advice worth it *given* the plan", not "is A+B worth it"; that
+  second question needs configuration 1 as its baseline. Evaluated on the
+  *interval*
+  of every term, not the point estimates, and abstaining when the interval
+  crosses. `r` is the measured cost of the advised retry and is normally above
+  `c`, since the retry carries the advice in its prompt; `q` is the fraction of
+  advised failures that produced a retry at all.
+- **The decision rule for Shape A**: a named margin on `p − p′` **against
+  `a_A + (c_A − c)`**, not against `a_A` alone, plus the explicit statement that a
+  null result means "no measurable effect on failures" and not "no effect on
+  quality".
+- **The minimum number of failures** needed before `s` is reported at all. `s`
+  comes only from failed runs; twenty tasks at a 20% failure rate is four.
+- **What invalidates the run**, e.g. mixed advisor configurations in one log.
+
+## What it costs the V1 boundary
+
+| V1 property | after |
+| --- | --- |
+| exactly one foreground child | up to seven for A+B (cheap, **two** advisor calls, retry, expensive, plus two verify runs); six for Shape B alone; four for Shape A alone (advisor, cheap, expensive, plus one verify run) |
+| does not retry or recover | retries once, on a mechanical signal, with new input |
+| never creates or deletes directories | creates and deletes workspaces, including one it always deletes |
+| never runs anything but the selected route | runs a verify command and an advisor command |
+
+These are the same expansions the speculative-cheap-route design asks for, plus
+one route. The two proposals should be decided together, because **they compose
+rather than compete**: the verify gate catches catastrophes, and the advisor
+attacks the rate at which the gate fires. An earlier draft of this document
+framed them as rivals; that was wrong, and it was wrong because it assumed the
+advisor had to be the vendor's server-side feature.
+
+## Where it gets built
+
+In order:
+
+1. **Measurement first**, in `tools/speculative_run.py` and
+   `tools/speculative_report.py`, behind `--advisor`, `--advise-first` and
+   `--advise-on-failure`. Neither tool ships in the distribution, so this needs no
+   boundary change and nothing reaches users who have not asked for it.
+2. **Run it on real work** and get `a_A`, `a_B`, `s`, and `p′`.
+3. **Only then** decide whether the pattern belongs inside `weightclass`, which
+   is where the boundary above actually moves.
+
+Step 3 is a real decision and not a formality: five levers have been measured in
+this project and four were dead.
+
+## Appendix: the original's parameters, for reference
+
+Kept because they are the calibration source for the local version's defaults,
+not because the local version calls them.
+
+| parameter | value |
+| --- | --- |
+| beta header | `advisor-tool-2026-03-01` |
+| tool type / name | `advisor_20260301` / `advisor` |
+| `model` | required; the advisor, billed at its own rate |
+| `max_uses` | per **request**, not per conversation |
+| `max_tokens` | per call, thinking + text, minimum 1024, recommended 2048 |
+| `caching` | `{"type": "ephemeral", "ttl": "5m" \| "1h"}`, off by default, breaks even near three advisor calls |
+| usage reporting | `usage.iterations[]` entries typed `advisor_message`; the **top-level `usage` excludes advisor tokens entirely** |
+| platform | Claude API and Claude Platform on AWS; **not** Amazon Bedrock, Google Cloud, or Microsoft Foundry |
+
+The usage-reporting row is the one worth remembering even for a local
+implementation: it is a reminder that "the cost field you found" and "the cost you
+paid" are different questions, which is the same failure the local report guards
+against with its single-origin rule.
