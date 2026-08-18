@@ -953,12 +953,22 @@ _SECRET_SHAPES = re.compile(
     r"|(?i:[A-Z0-9_-]{0,40}"
     r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
     r"[A-Z0-9_-]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
-    r"(?=[^\s\r\n.(){}<>,;\[\]]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}"
-    + _VALUE_END
-    +
+    r"(?=[^\s\r\n.(){}<>,;\[\]]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}" + _VALUE_END +
     # YAML 블록 스칼라: `password: |` 뒤 들여쓴 줄이 값이다. 구분자를 다시
     # 줄바꿈 넘게 열면 라운드 35 의 결함(비밀 이름이 줄 끝에 있으면 다음 줄
     # 첫 토큰이 값으로 잡힘)이 돌아오므로, 이 **한 형태만** 따로 잡는다.
+    # 점이 든 설정 키(`db.password`, `spring.datasource.password`)를 위한
+    # 갈래. 이름 앞의 점을 막는 가드는 속성 접근(`self.api_key`)을 살리려고
+    # 있는데, 그것이 이 형태까지 함께 막는다. 값이 **점 없는** 것일 때만
+    # 받는다 — `self.api_key = config.api_key` 의 값은 점이 있으므로 여기
+    # 안 걸리고, `db.password=orchid_copper_velvet` 은 걸린다.
+    r"|(?i:[A-Z0-9_-]{0,40}(?:[.][A-Z0-9_-]{1,40}){0,6}[.]"
+    r"[A-Z0-9_-]{0,40}"
+    r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
+    r"[A-Z0-9_-]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
+    r"[^\s\r\n.(){}<>,;\[\]\"']{12,}"
+    + _VALUE_END
+    +
     # JWT
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     re.DOTALL,
@@ -1102,7 +1112,9 @@ PEM_BULK_BODY_CHARS = 400
 # 건너뛰면 그 상한이 리댁션을 끄는 스위치가 된다.
 PPK_MAX_BODY_LINES = 400
 # 본문 한 줄의 최소 길이. 실제 PPK 본문은 예순네 자다.
-PPK_MINIMUM_BODY_CHARS = 16
+# 본문 첫 줄의 최소 길이. 실제 PPK 본문은 예순네 자로 접힌다. 스물넷보다
+# 짧게 잡으면 `AuthenticationFailure` 같은 낱말이 본문 첫 줄로 잡힌다.
+PPK_MINIMUM_BODY_CHARS = 24
 
 
 # 직렬화가 조각의 양 끝에 남기는 글자들.
@@ -2072,6 +2084,8 @@ _PPK_HEADER = re.compile(
 
 # YAML 블록 스칼라의 머리: `password: |`, `api-key: >2-` 등.
 # 이름의 구분자는 밑줄과 하이픈 둘 다다 — `api_key` 만 보면 `api-key` 가 샌다.
+# CI 로그의 줄 태그: `[INFO] `, `[2026-01-02T03:04:05Z] ` 등.
+_LOG_TAG = re.compile(r"\[[^\]\r\n]{1,40}\][ \t]*")
 _BLOCK_SCALAR = re.compile(
     r"(?i)^(?P<indent>[ ]*)(?P<name>[A-Z0-9_-]{0,40}"
     r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
@@ -2105,7 +2119,12 @@ def redact_block_scalars(text: str) -> str:
         # 머리가 표식으로 시작하면 그것이 이 블록의 표식이다. 본문 줄도 같은
         # 표식이 붙어 있을 때만 벗긴다.
         marker = raw_head[:1] if raw_head[:1] in "+-" else ""
-        head = _BLOCK_SCALAR.match(_block_scalar_line(text[position:stop], marker))
+        # CI 로그는 줄마다 `[INFO] ` 같은 태그를 단다. 그 태그도 **머리가
+        # 정한다** — 머리에 있는 것과 똑같은 문자열이 붙은 줄에서만 벗긴다.
+        # `strip_log_prefix` 를 쓰면 `password: ` 까지 접두사로 보므로 안 된다.
+        tag = _LOG_TAG.match(raw_head[len(marker) :])
+        prefix = marker + (tag.group(0) if tag else "")
+        head = _BLOCK_SCALAR.match(_block_scalar_line(text[position:stop], prefix))
         if head is None:
             position = stop
             continue
@@ -2121,7 +2140,7 @@ def redact_block_scalars(text: str) -> str:
         while cursor < len(text):
             following = _LINE_SEPARATOR.search(text, cursor)
             line_end = following.end() if following else len(text)
-            line = _block_scalar_line(text[cursor:line_end], marker)
+            line = _block_scalar_line(text[cursor:line_end], prefix)
             # **탭은 들여쓰기가 아니다.** YAML 이 금지한다. 탭으로 시작하는
             # 줄을 본문으로 세면 그 뒤의 진단이 함께 지워진다.
             if line.strip() and (line[:1] == "\t" or len(line) - len(line.lstrip(" ")) < needed):
@@ -2140,7 +2159,7 @@ def redact_block_scalars(text: str) -> str:
     return "".join(out)
 
 
-def _block_scalar_line(raw: str, marker: str = "") -> str:
+def _block_scalar_line(raw: str, prefix: str = "") -> str:
     """한 줄에서 직렬화 부스러기를 걷고, **머리가 쓴 표식만** 벗긴다.
 
     표식을 세 가지로 다뤄 봤고 앞의 둘은 각각 한 방향으로 틀렸다.
@@ -2158,8 +2177,8 @@ def _block_scalar_line(raw: str, marker: str = "") -> str:
     접두사로 보므로 `password: |` 가 `|` 가 되어 머리 자체를 못 알아본다.
     """
     line = _ESCAPE_NOISE.sub("", raw).rstrip("\r\n")
-    if marker and line[:1] == marker:
-        return line[1:]
+    if prefix and line.startswith(prefix):
+        return line[len(prefix) :]
     return line
 
 
@@ -2182,29 +2201,41 @@ def redact_ppk_bodies(text: str) -> str:
     position = 0
     in_body = False
     body_lines = 0
+    body_width = 0
     while position < len(text):
         separator = _LINE_SEPARATOR.search(text, position)
         stop = separator.end() if separator else len(text)
         raw = text[position:stop]
         line = strip_log_prefix(_ESCAPE_NOISE.sub("", raw).strip(_SERIALISATION_EDGE))
-        if in_body and _is_ppk_body_line(line, first=body_lines == 0):
+        if in_body and _is_ppk_body_line(line, first=body_lines == 0, width=body_width):
             if body_lines == 0:
+                body_width = len(line)
                 out.append(text[kept:position])
-                out.append("[REDACTED]\n")
+                # 줄바꿈을 붙이지 않는다. 대신 아래에서 마지막 본문 줄의
+                # 구분자를 남겨 두므로 뒤따르는 텍스트가 붙지 않는다 —
+                # 쌍둥이 redact_block_scalars 와 같은 규칙이다. 원문에 없던
+                # 줄바꿈을 넣으면 removed_spans 의 전제가 깨진다.
+                out.append("[REDACTED]")
             # **상한에서 멈추지 않는다.** 멈추면 같은 본문의 나머지가 그대로
             # 나간다. 모양 판정이 자연히 끝을 잡으므로 상한이 필요 없다 —
             # 끝까지 base64 인 것을 더 지우는 것은 안전한 방향이다.
             body_lines += 1
-            kept = stop
+            # 구분자는 남긴다. 그것이 본문의 일부가 아니라 다음 줄과의
+            # 경계이기 때문이다.
+            kept = separator.start() if separator else stop
+            # 마지막 줄(더 짧은 줄)이 나오면 그 줄로 끝난다.
+            if body_lines > 1 and len(line) < body_width:
+                in_body = False
         else:
             in_body = bool(_PPK_HEADER.match(line))
             body_lines = 0
+            body_width = 0
         position = stop
     out.append(text[kept:])
     return "".join(out)
 
 
-def _is_ppk_body_line(line: str, first: bool) -> bool:
+def _is_ppk_body_line(line: str, first: bool, width: int = 0) -> bool:
     """PPK 본문 한 줄인가.
 
     공백 없는 base64 여야 한다. 길이 조건은 **첫 줄에만** 건다 — PuTTY 는
@@ -2216,7 +2247,12 @@ def _is_ppk_body_line(line: str, first: bool) -> bool:
     """
     if not line or not _PEM_BODY_CHARS.fullmatch(line):
         return False
-    return len(line) >= PPK_MINIMUM_BODY_CHARS if first else True
+    if first:
+        return len(line) >= PPK_MINIMUM_BODY_CHARS
+    # 본문은 **고정 폭** 으로 접힌다. 마지막 줄만 짧다. 첫 줄 뒤로 아무거나
+    # 먹으면 `Traceback` 이나 `FAILED` 같은 낱말이 본문으로 세어져 그 뒤의
+    # 진단이 통째로 지워진다. 같은 폭이거나, 마지막 줄이거나.
+    return len(line) == width or len(line) < width
 
 
 def redact_text(text: str) -> str:
@@ -2764,20 +2800,14 @@ def _first_text(payload: object, depth: int = 0) -> str:
     if depth > 6:
         return ""
     if isinstance(payload, dict):
+        if _looks_like_tool_payload(payload):
+            # **필드를 보기 전에 막는다.** 뒤에 두면 `result` 나 `text` 로
+            # 실려 온 도구 페이로드가 먼저 반환된다.
+            return ""
         for field in ("result", "text", "content", "message", "output_text"):
             value = payload.get(field)
             if isinstance(value, str) and value.strip():
-                # `content` 는 도구 결과에도 쓰이는 이름이다. 그 페이로드를
-                # 조언 본문으로 고르면 파일 내용이 조언 자리에 들어간다 —
-                # 배열 쪽은 이미 막았는데 여기만 안 막으면 비대칭이다.
-                if field == "content" and _looks_like_tool_payload(payload):
-                    continue
                 return value.strip()
-        if _looks_like_tool_payload(payload):
-            # **페이로드 전체를 건너뛴다.** `content` 가 문자열일 때만 막으면,
-            # 정식 tool_result 모양(`content` 가 텍스트 블록 배열)이 아래 배열
-            # 분기로 흘러 파일 본문이 조언 자리에 들어간다.
-            return ""
         for value in payload.values():
             found = _first_text(value, depth + 1)
             if found:

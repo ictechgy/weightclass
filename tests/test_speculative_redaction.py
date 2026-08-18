@@ -2391,3 +2391,68 @@ def test_a_context_line_head_with_changed_body_is_a_known_limit():
     module = load_runner()
     text = " db_password: |\n-  Tr0ub4dor3xyz\n+  correct-horse-battery"
     assert "Tr0ub4dor3xyz" in module.verify_excerpt(text)
+
+
+# --- 라운드 44: 머리가 접두사를 정한다, 본문은 고정 폭 ------------------------
+
+
+@pytest.mark.parametrize(
+    "text,token",
+    [
+        ("db.password: orchid_copper_velvet", "orchid_copper_velvet"),
+        ("spring.datasource.password=hunter2secretvalue", "hunter2secretvalue"),
+    ],
+)
+def test_dotted_configuration_keys_are_credentials(text, token):
+    """이름 앞의 점을 막는 가드가 속성 접근과 설정 키를 함께 막았다.
+
+    값이 **점 없는** 것일 때만 받는 갈래를 더한다 —
+    `self.api_key = config.api_key` 의 값은 점이 있어 안 걸리고,
+    `db.password=orchid_copper_velvet` 은 걸린다.
+    """
+    module = load_runner()
+    assert token not in module.redact_text(text)
+
+
+def test_attribute_assignment_still_survives():
+    """같은 규칙의 반대 방향."""
+    module = load_runner()
+    assert module.verify_excerpt("self.api_key = config.api_key") == "self.api_key = config.api_key"
+
+
+def test_a_log_tagged_block_scalar_is_recognised():
+    """CI 로그는 줄마다 태그를 단다. 그 태그도 **머리가 정한다.**
+
+    `strip_log_prefix` 를 쓰면 `password: ` 까지 접두사로 보므로 안 된다 —
+    머리에 있는 것과 똑같은 문자열이 붙은 줄에서만 벗긴다.
+    """
+    module = load_runner()
+    text = "[INFO] password: |\n[INFO]   orchid_copper_velvet\n[INFO] AssertionError: boom"
+    cleaned = module.verify_excerpt(text)
+    assert "orchid_copper_velvet" not in cleaned
+    assert "AssertionError" in cleaned
+
+
+def test_ppk_body_lines_have_a_fixed_width():
+    """PPK 본문은 고정 폭으로 접힌다. 마지막 줄만 짧다.
+
+    첫 줄 뒤로 아무거나 먹으면 `Traceback` 이나 `FAILED` 같은 낱말이 본문으로
+    세어져 그 뒤의 진단이 통째로 지워진다.
+    """
+    module = load_runner()
+    text = "Private-Lines: 1\nAuthenticationFailure\nTraceback\nFAILED"
+    assert "Traceback" in module.verify_excerpt(text)
+
+
+def test_a_tool_payload_in_the_result_field_is_skipped():
+    """도구 판정이 필드 순회 **뒤** 에 있으면 `result` 로 실려 온 것이 먼저 나간다."""
+    module = load_runner()
+    payload = {"type": "tool_result", "tool_use_id": "x", "result": "-----BEGIN id_rsa"}
+    assert "id_rsa" not in module._first_text(payload)
+    assert module._first_text({"result": "Use a bounded queue."}) == "Use a bounded queue."
+
+
+def test_ppk_redaction_adds_no_newline_at_end_of_input():
+    """쌍둥이(redact_block_scalars)와 같은 규칙이다."""
+    module = load_runner()
+    assert not module.verify_excerpt("Private-Lines: 1\nQUJDREVGR0hJSktMTU5PUFFS").endswith("\n")
