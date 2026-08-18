@@ -296,6 +296,9 @@ def main() -> int:
     #   1. 모든 실행에 계획이 실제로 붙었다 (전칭 — 하나라도 아니면 섞인 수다)
     #   2. 조언 설정이 하나다 (route 나 context 가 다르면 다른 arm 이다)
     shape_a_measured = advice_first_on and single_advisor_config
+    # 조언 구간 안에서만 대입되던 값이다. 그 구간이 안 돌면 아래 사다리에서
+    # NameError 가 난다 — 두 값이 언제나 정의돼 있게 둔다.
+    mixed_application = len(first_flags) > 1
     if len(first_flags) > 1:
         print(
             "\n경고: 시작 전 조언을 켠 실행과 끄고 돈 실행이 한 로그에 섞여 있다."
@@ -479,8 +482,13 @@ def main() -> int:
             # 비용이 B 의 판정을 양방향으로 흔든다.
             # 분모도 **같은 술어** 로 거른다. 분자(a, r)는 부분 가격을
             # 빼는데 분모가 받으면, 분모가 실제보다 작아져 a 와 r 이 커진다.
+            # 분모도 **분자와 같은 술어** 로 거른다. 분자(advice_cost,
+            # retry_costs)는 타임아웃과 부분 가격을 빼는데 분모가 받으면,
+            # 중간에 끊긴 비싼 시도의 부분값이 분모를 낮춰 a 와 r 을 키운다.
             standalone_expensive = (
-                None if has_missing_prices(r.get("expensive")) else cost_of(r.get("expensive"))
+                None
+                if has_missing_prices(r.get("expensive")) or timed_out(r.get("expensive"))
+                else cost_of(r.get("expensive"))
             )
             if not reached_verify(r):
                 pass
@@ -852,7 +860,6 @@ def main() -> int:
         config = json.loads(advisor_configs.pop())
         # **계획이 실제로 붙었는지** 가 설정과 갈리면 프라임 라벨을 못 쓴다.
         # 계획을 받은 실행과 못 받은 실행이 한 수에 섞이기 때문이다.
-        mixed_application = len(first_flags) > 1
         if mixed_application:
             print(
                 "\n경고: 같은 설정인데 계획이 붙은 실행과 안 붙은 실행이 섞여 있다."
@@ -1272,11 +1279,24 @@ def main() -> int:
             for key in ("advice_first", "advice_failure", "retry")
             if isinstance(r.get(key), dict) and cost_of(r.get(key)) is None
         )
+        # 부분 가격은 지출에 **넣되 밝힌다.** 넣는 것은 안 쓴 것처럼 보이지
+        # 않기 위해서이고, 밝히는 것은 그 수가 판정에는 안 쓰였기 때문이다.
+        advisory_partial = sum(
+            1
+            for r in usable
+            for key in ("advice_first", "advice_failure", "retry")
+            if has_missing_prices(r.get(key)) and cost_of(r.get(key)) is not None
+        )
         realized = sum(cheap_all) + expensive_total + advisory_spend
         if advisory_unpriced:
             print(
                 f"  주의: 조언·재시도 {advisory_unpriced}건의 비용을 얻지 못했다."
                 " 아래 '실제로 쓴 돈' 은 그만큼 실제보다 작다."
+            )
+        if advisory_partial:
+            print(
+                f"  주의: 조언·재시도 {advisory_partial}건의 비용이 부분값이다."
+                " 지출에는 넣었지만 a 와 r 에는 안 넣었다 — 두 수의 모집단이 다르다."
             )
         expensive_mean = expensive_total / len(paired)
         # 승급하지 않은 과제의 비싼 비용은 잰 적이 없다. 승급 과제의 평균으로
@@ -1308,7 +1328,15 @@ def main() -> int:
     # 조언 없는 c + p 모형의 절감률과 손익분기다. 바로 위에서 "이 로그의 모형이
     # 아니다" 라고 적어 놓고 무표식으로 찍으면, 읽는 쪽은 그 수를 이 실행의
     # 결과로 가져간다 — 경고는 읽히지 않고 숫자는 인용된다.
-    aside = "  (조언 없는 모형의 수다) " if advisor_on else "  "
+    # 이 수들의 c 는 **이 로그에서 잰 것** 이다. 계획이 붙었으면 그것은 c_A
+    # 이고, 아래 판정문도 그렇게 부른다. "조언 없는 모형" 이라고 표시하면
+    # 한 숫자를 두 곳이 반대로 부르게 된다 — 틀린 것은 c 가 아니라 **모형** 이다.
+    if not advisor_on:
+        aside = "  "
+    elif shape_a_measured:
+        aside = "  (c_A 로 세운 조언 없는 모형이다 — 이 로그의 모형이 아니다) "
+    else:
+        aside = "  (조언 없는 모형의 식이다 — 이 로그의 모형이 아니다) "
     print(f"{aside}가장 유리한 끝 (c={c_lo:.3f}, p={lo:.1%}): 절감 {1 - best:.1%}")
     print(f"{aside}가장 불리한 끝 (c={c_hi:.3f}, p={hi:.1%}): 절감 {1 - worst:.1%}")
     print(f"{aside}손익분기 p = {1 - c:.1%}  (c 가 {c_hi:.3f} 이면 {1 - c_hi:.1%})")
@@ -1386,7 +1414,15 @@ def main() -> int:
                     # 고르면, 계획이 실제로 안 붙은 로그에 A+B 식을 가리키게
                     # 된다 — 위쪽 계산은 프라임 없이 찍고 여기만 프라임이다.
                     if shape_a_measured
-                    else " 조언의 이득 판정은 위의 s > a + q·r 을 보라(q 는 재시도 시도율)."
+                    # 계획 적용이 섞이면 위쪽에서 a, q, r, s 를 아예 안
+                    # 냈다. 그런데 여기서 "위의 판정을 보라" 고 하면 없는
+                    # 것을 가리킨다 — 읽는 쪽은 다른 수를 찾아 쓰게 된다.
+                    else (
+                        " 계획 적용이 섞여 조언 판정을 내지 않았다. 그 건을 빼고"
+                        " 다시 모아야 s 를 낼 수 있다."
+                        if mixed_application
+                        else " 조언의 이득 판정은 위의 s > a + q·r 을 보라(q 는 재시도 시도율)."
+                    )
                 )
                 if failure_advice_on
                 else (

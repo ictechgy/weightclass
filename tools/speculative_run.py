@@ -841,7 +841,20 @@ def extract_tokens(stdout: str, stderr: str) -> int | None:
 # 허용하고, 대괄호 색인도 값이 아니라 표현식이다.
 # `\s*` 가 아니라 `[ \t]*` 다. 줄바꿈을 넘으면 다음 줄이 대괄호로 시작할 때
 # 값이 색인으로 오인돼 지워지지 않는다.
-_VALUE_END = r"(?![ \t]*[(\[])(?![^\s\r\n(){}<>,;\[\]\"'])"
+# 값의 끝. 두 갈래다.
+#
+# 숫자가 든 값은 **바로 뒤에 붙은** 괄호만 호출로 본다. 공백을 사이에 두면
+# 그것은 주석이나 다음 토큰이지 호출이 아니다 —
+# `API_TOKEN = abc123def456ghi789 (note)` 를 통과시키면 자격증명이 그대로
+# 나간다.
+#
+# 숫자가 없는 값은 공백을 사이에 둔 괄호도 호출로 본다.
+# `password=get_password (user)` 같은 소스 줄을 살리기 위해서다. 숫자 없는
+# 값은 애초에 낱말 조합이라 자격증명이라는 근거가 약하므로, 그 완화의
+# 대가가 작다.
+_VALUE_TAIL = r"(?![^\s\r\n(){}<>,;\[\]\"'])"
+_VALUE_END = r"(?!\()(?!\[)" + _VALUE_TAIL
+_VALUE_END_WORDY = r"(?![ \t]*[(\[])" + _VALUE_TAIL
 _CREDENTIAL_VALUE = (
     # (1) 따옴표 안의 값. 다만 **공백이 들어 있으면 문장** 이다 —
     #     `TOKEN_ERROR = "authentication failed"` 를 지우면 조언자가 무엇이
@@ -864,8 +877,13 @@ _CREDENTIAL_VALUE = (
     #     따옴표는 값 문자에서 뺀다. 넣으면 `"authentication failed"` 의 앞
     #     조각 `"authentication` 이 여기 걸려 문장이 반쪽만 지워진다 —
     #     따옴표로 감싼 값은 (1)이 맡는다.
-    + r"|[^\s\r\n(){}<>,;\[\]\"']{12,}"
+    #
+    #     숫자가 든 값과 없는 값을 값의 **끝** 판정에서만 가른다. 위의
+    #     _VALUE_END 주석이 그 이유를 적는다.
+    + r"|[\"']?(?=[^\s\r\n(){}<>,;\[\]\"']*[0-9])[^\s\r\n(){}<>,;\[\]\"']{12,}"
     + _VALUE_END
+    + r"|[^\s\r\n(){}<>,;\[\]\"']{12,}"
+    + _VALUE_END_WORDY
 )
 
 
@@ -2052,72 +2070,68 @@ def _percent_forms(value: str) -> tuple[str, str]:
 # PuTTY 의 개인키 파일에는 PEM 마커가 없다. `Private-Lines: N` 뒤의 N 줄이
 # 본문이다. 앵커도 **본 주사와 같은 줄 구분자** 를 봐야 한다 — 물리적
 # 줄바꿈만 보면 JSON 에 직렬화된 로그(`\n` 두 글자)에서 앵커가 안 잡힌다.
-_PPK_PRIVATE = re.compile(
+_PPK_HEADER = re.compile(
     # 줄머리의 diff 표식과 CI 접두사를 허용한다. PEM 경로는 strip_log_prefix
     # 로 이미 벗기는데 여기만 안 벗기면 쌍둥이 한쪽에만 적용된 방어가 된다.
-    r"(?i)(?:^|\r?\n|\\+n)[+\->|\s]{0,8}(?:\[[^\]\r\n]{1,20}\][ \t]*)?"
-    r"Private-Lines:[ \t]*(\d{1,5})[ \t]*(?=\r?\n|\\+n|$)"
+    # 접두사는 본문 루프와 **같은 방식**(strip_log_prefix)으로 이미 벗긴
+    # 줄에 대고 쓴다. 여기서 다시 손으로 깎으면 두 판정이 갈린다.
+    r"(?i)^Private-Lines:[ \t]*\d{1,5}[ \t]*$"
 )
 
 
 def redact_ppk_bodies(text: str) -> str:
     """PuTTY 개인키(.ppk)의 본문을 지운다.
 
-    `Private-Lines:` 는 **어디를 볼지** 만 말해 준다. 무엇을 지울지는 줄의
-    모양이 정한다 — 공백 없는 base64 이고 짧지 않은 줄이 이어지는 동안
-    지우고, 그렇지 않은 줄에서 멈춘다.
+    **줄 단위로 걷는다.** 앵커를 정규식으로 잡던 앞선 판은 접두사 허용을
+    손으로 깎았고, 본문 루프는 `strip_log_prefix` 를 썼다 — 같은 질문(이 줄은
+    무엇인가)을 두 곳이 다르게 판정하는, 이 파일에서 가장 자주 재발한 형태다.
+    이제 한 루프가 모든 줄을 같은 방식으로 정규화한다.
 
-    선언된 줄 수도, PPK 봉투도 보지 않는다. 세 라운드에 걸쳐 그 둘을 믿는
-    판을 세 번 냈고 세 번 다 틀렸다 — 상한 초과 선언이 리댁션을 끄는
-    스위치가 되고, 적게 선언하면 남은 본문이 나가고, 봉투 한 줄을 심으면
-    선언한 만큼의 진단 로그가 지워졌다. 자식이 정하는 수를 믿을 이유가 없다.
-
-    남는 한계: 자식이 본문 아닌 줄로 채워 진짜 본문을 뒤로 밀면 그 본문은
-    남는다. 그러나 그것은 이름 없는 base64 로 남는 것이고, 이 리댁터가
-    원래 못 잡는 형태다 — 진단 로그를 지우는 쪽보다 낫다.
+    `Private-Lines:` 는 **어디를 볼지** 만 말한다. 무엇을 지울지는 줄의 모양이
+    정한다 — 선언된 수도, PPK 봉투도 보지 않는다. 자식이 정하는 수를 믿는
+    판을 세 번 냈고 세 번 다 틀렸다.
     """
     if "private-lines:" not in text.lower():
         return text
     out: list[str] = []
-    index = 0
-    for match in _PPK_PRIVATE.finditer(text):
-        if match.start() < index:
-            continue
-        out.append(text[index : match.end()])
-        position = match.end()
-        separator = _LINE_SEPARATOR.match(text, position)
-        if separator is not None:
-            position = separator.end()
-        removed = 0
-        while position < len(text) and removed < PPK_MAX_BODY_LINES:
-            following = _LINE_SEPARATOR.search(text, position)
-            stop = following.end() if following else len(text)
-            line = text[position:stop].strip().strip(_SERIALISATION_EDGE)
-            if not _is_ppk_body_line(strip_log_prefix(line) or line):
-                break
-            position = stop
-            removed += 1
-            if following is None:
-                break
-        if removed == 0:
-            index = match.end()
-            continue
-        out.append("\n[REDACTED]\n" if position < len(text) else "\n[REDACTED]")
-        index = position
-    out.append(text[index:])
+    kept = 0
+    position = 0
+    in_body = False
+    body_lines = 0
+    while position < len(text):
+        separator = _LINE_SEPARATOR.search(text, position)
+        stop = separator.end() if separator else len(text)
+        raw = text[position:stop]
+        line = strip_log_prefix(_ESCAPE_NOISE.sub("", raw).strip(_SERIALISATION_EDGE))
+        if in_body and _is_ppk_body_line(line, first=body_lines == 0):
+            if body_lines == 0:
+                out.append(text[kept:position])
+                out.append("[REDACTED]\n")
+            body_lines += 1
+            if body_lines >= PPK_MAX_BODY_LINES:
+                in_body = False
+            kept = stop
+        else:
+            in_body = bool(_PPK_HEADER.match(line))
+            body_lines = 0
+        position = stop
+    out.append(text[kept:])
     return "".join(out)
 
 
-def _is_ppk_body_line(line: str) -> bool:
+def _is_ppk_body_line(line: str, first: bool) -> bool:
     """PPK 본문 한 줄인가.
 
-    공백 없는 base64 이고 짧지 않아야 한다. 길이를 안 보면 `FAILED` 나
-    `Traceback` 같은 실패 앵커가 본문으로 잡혀 통째로 지워진다 — 실제
-    PPK 본문 줄은 예순네 자다.
+    공백 없는 base64 여야 한다. 길이 조건은 **첫 줄에만** 건다 — PuTTY 는
+    blob 을 예순네 자로 접으므로 마지막 줄은 네 자일 수도 있다. 모든 줄에
+    열여섯 자를 요구하면 대략 다섯 키에 하나꼴로 꼬리가 남는다.
+
+    첫 줄에 길이를 요구하는 것은 산문 한 낱말(`AssertionError`)로 본문이
+    시작되는 것을 막기 위해서다.
     """
-    return (
-        bool(line) and len(line) >= PPK_MINIMUM_BODY_CHARS and bool(_PEM_BODY_CHARS.fullmatch(line))
-    )
+    if not line or not _PEM_BODY_CHARS.fullmatch(line):
+        return False
+    return len(line) >= PPK_MINIMUM_BODY_CHARS if first else True
 
 
 def redact_text(text: str) -> str:

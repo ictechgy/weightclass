@@ -2052,3 +2052,49 @@ def test_the_ppk_anchor_tolerates_line_prefixes():
     module = load_runner()
     body = "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo="
     assert body not in module.verify_excerpt(f"+++ b/x\n+Private-Lines: 1\n+{body}")
+
+
+# --- 라운드 34: 한 루프가 모든 줄을 같은 방식으로 본다 ------------------------
+
+
+def test_the_last_wrapped_ppk_line_is_short():
+    """PuTTY 는 예순네 자로 접으므로 마지막 줄은 네 자일 수도 있다.
+
+    모든 줄에 열여섯 자를 요구하면 대략 다섯 키에 하나꼴로 꼬리가 남는다.
+    길이 조건은 **첫 줄에만** 건다 — 산문 한 낱말로 본문이 시작되는 것만
+    막으면 된다.
+    """
+    module = load_runner()
+    text = "Private-Lines: 2\n" + "A" * 60 + "\nQUJD\nPrivate-MAC: x"
+    cleaned = module.verify_excerpt(text)
+    assert "QUJD" not in cleaned
+    assert "Private-MAC: x" in cleaned
+
+
+def test_the_ppk_walk_normalises_escaped_line_breaks():
+    """앵커와 본문이 같은 루프에서 같은 방식으로 정규화돼야 한다."""
+    module = load_runner()
+    body = "YWJjZGVmZ2hpamtsbW5vcA=="
+    assert body not in module.verify_excerpt(f"Private-Lines: 1\\n{body}\\nPrivate-MAC: x")
+
+
+def test_a_quoted_declaration_does_not_erase_prose():
+    """인용된 선언 뒤의 산문 한 낱말은 본문이 아니다."""
+    module = load_runner()
+    assert "AssertionError" in module.verify_excerpt(
+        "diagnostic:\n> Private-Lines: 1\nAssertionError"
+    )
+
+
+def test_a_numeric_value_before_a_spaced_paren_is_still_redacted():
+    """공백을 사이에 둔 괄호는 호출이 아니라 주석이다.
+
+    그것을 호출로 보면 `API_TOKEN = abc123def456ghi789 (note)` 가 그대로
+    나간다. 숫자 없는 값에만 그 완화를 준다 — 그쪽은 애초에 자격증명이라는
+    근거가 약하다.
+    """
+    module = load_runner()
+    assert "abc123def456ghi789" not in module.verify_excerpt(
+        "API_TOKEN = abc123def456ghi789 (note)"
+    )
+    assert module.verify_excerpt("password=get_password (user)") == "password=get_password (user)"
