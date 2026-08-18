@@ -246,6 +246,10 @@ def main() -> int:
         for r in usable
     }
     advice_first_on = first_flags == {True}
+    # 라벨(p′, c_A, s′)은 **실제로 계획이 붙은** 실행에만 붙일 수 있다.
+    # first_flags 와 같은 자리에서 정한다 — 두 값이 떨어져 있으면 한쪽만
+    # 고쳐진다.
+    plan_applied_on = True in first_flags
     if len(first_flags) > 1:
         print(
             "\n경고: 시작 전 조언을 켠 실행과 끄고 돈 실행이 한 로그에 섞여 있다."
@@ -757,8 +761,20 @@ def main() -> int:
         )
         for r in usable
     )
+    # 지문은 **설정 키만** 으로 만든다. 레코드별 결과값(advise_first_applied)을
+    # 같이 넣으면 계획이 붙은 실행과 안 붙은 실행이 "설정 두 종" 으로 보여
+    # 엉뚱한 이유를 대며 s 를 거부한다. 두 질문은 따로 물어야 한다.
     advisor_configs = {
-        json.dumps(r.get("advisor") or {}, sort_keys=True, ensure_ascii=False) for r in usable
+        json.dumps(
+            {
+                key: value
+                for key, value in (r.get("advisor") or {}).items()
+                if key != "advise_first_applied"
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        for r in usable
     }
     advised = [r for r in usable if isinstance(r.get("advisor"), dict)]
     if advised and len(advisor_configs) > 1:
@@ -767,6 +783,14 @@ def main() -> int:
         )
     elif advised:
         config = json.loads(advisor_configs.pop())
+        # **계획이 실제로 붙었는지** 가 설정과 갈리면 프라임 라벨을 못 쓴다.
+        # 계획을 받은 실행과 못 받은 실행이 한 수에 섞이기 때문이다.
+        if len(first_flags) > 1:
+            print(
+                "\n경고: 같은 설정인데 계획이 붙은 실행과 안 붙은 실행이 섞여 있다."
+                " s′ 도 p′ 도 단일 모양의 값이 아니므로 프라임 라벨을 쓰지 않는다."
+            )
+        primed = plan_applied_on and len(first_flags) == 1
         shapes = []
         if config.get("advise_first"):
             shapes.append("시작 전(A)")
@@ -794,7 +818,7 @@ def main() -> int:
                 # 요구하면 구독 실행처럼 0 을 보고하는 경우가 "가격 없음" 이
                 # 되어, 전수 검사가 영원히 통과하지 못한다.
                 values = [value for r in usable if (value := advice_cost(r, key)) is not None]
-                if not values or not priced_pairs:
+                if not values or not all_expensive_costs:
                     return None
                 expensive_mean_all = statistics.fmean(all_expensive_costs)
                 mean = statistics.fmean(values)
@@ -841,7 +865,7 @@ def main() -> int:
             # 조언이 비어 재시도조차 못 한 건은 비용은 쓰고 승급했는데 분모에서
             # 빠져, s 가 위로 치우친다.
             advised_failures = [r for r in usable if isinstance(r.get("advice_failure"), dict)]
-            if config.get("advise_first") and config.get("advise_on_failure"):
+            if primed and config.get("advise_on_failure"):
                 print(
                     "  주의: 시작 전 조언과 실패 후 조언이 함께 켜져 있다. 여기 s′ 는"
                     " 계획을 받은 뒤의 재시도 성공률이므로, 실패 후 조언만 켠 설정의"
@@ -867,7 +891,7 @@ def main() -> int:
                             " 재시도 시도율 q 를 곱한 q·r 을 쓴다."
                         )
                     print(
-                        f"  조언 후 재시도 성공률 {'s′' if config.get('advise_first') else 's'}"
+                        f"  조언 후 재시도 성공률 {'s′' if primed else 's'}"
                         f" = {s_hat:.1%}"
                         f"  95% CI [{s_lo:.1%}, {s_hi:.1%}]   ({rescued}/{len(advised_failures)})"
                     )
@@ -924,7 +948,7 @@ def main() -> int:
                         )
                     r_ratio = None
                     r_spread = 0.0
-                    if retry_costs and priced_pairs:
+                    if retry_costs and all_expensive_costs:
                         expensive_mean_all = statistics.fmean(all_expensive_costs)
                         r_mean = statistics.fmean(retry_costs)
                         r_ratio = r_mean / expensive_mean_all
@@ -1132,11 +1156,6 @@ def main() -> int:
     # 비용이 어느 항에도 안 들어가므로 결론이 조언 쪽에 유리하게 틀린다.
     advise_first_on = any(
         isinstance(rec.get("advisor"), dict) and (rec["advisor"] or {}).get("advise_first")
-        for rec in usable
-    )
-    # 라벨(p′, c_A)은 **실제로 계획이 붙은** 실행에만 붙일 수 있다.
-    plan_applied_on = any(
-        isinstance(rec.get("advisor"), dict) and (rec["advisor"] or {}).get("advise_first_applied")
         for rec in usable
     )
     failure_advice_on = any(

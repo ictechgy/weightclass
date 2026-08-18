@@ -820,6 +820,30 @@ def extract_tokens(stdout: str, stderr: str) -> int | None:
 # 해야 한다: 길이를 자르고, 자격증명 모양을 지운다. 자르는 이유는 비용이고,
 # 지우는 이유는 그 텍스트가 벤더로 나가기 때문이다 — 자식의 테스트가 호스트의
 # 비밀을 찍었다면 그것이 그대로 전송된다.
+# 자격증명 값의 모양. **한 곳에만 적는다** — 갈래마다 따로 적으면 한 갈래만
+# 고쳐지고 나머지가 남는다.
+#
+# 세 가지 중 하나여야 한다.
+#   (1) 따옴표 안의 값. 이름 뒤에 문자열 리터럴이 오면 자격증명이다.
+#   (2) 숫자가 든 열두 자 이상. 점을 허용한다(SendGrid 키가 `SG.<..>.<..>`).
+#   (3) 밑줄 없는 열두 자 이상. 밑줄은 식별자의 표식이다 —
+#       `authentication_failure`, `credentials.secret_key`, `get_password`
+#       를 지우면 조언자가 무엇이 실패했는지 못 본다.
+# 그리고 값 뒤에 여는 괄호가 오면 호출이지 값이 아니다.
+# 토큰의 **끝을 고정한다.** 안 하면 `authentication_failure` 에서 밑줄 앞의
+# `authentication` 만 매치돼 그 앞부분만 지워지고 `_failure` 가 남는다 —
+# 지우지 말았어야 할 것을 절반만 지운, 가장 나쁜 결과다.
+# 값 뒤에 여는 괄호가 오면 호출이지 값이 아니다. 그 조건도 여기 함께 둔다 —
+# 따로 두면 갈래를 고칠 때 하나가 빠진다(실제로 빠뜨렸다).
+_VALUE_END = r"(?!\()(?![^\s\r\n(){}<>,;\[\]\"'])"
+_CREDENTIAL_VALUE = (
+    r"[\"'][^\"'\r\n]{12,}[\"']"
+    r"|[\"']?(?=[^\s\r\n(){}<>,;\[\]]*[0-9])[^\s\r\n(){}<>,;\[\]]{12,}"
+    + _VALUE_END
+    + r"|[\"']?[^\s\r\n_(){}<>,;\[\]]{12,}"
+    + _VALUE_END
+)
+
 _SECRET_SHAPES = re.compile(
     r"(?i:sk-)[A-Za-z0-9_-]{16,}"
     r"|gh[pousr]_[A-Za-z0-9]{20,}"
@@ -843,16 +867,8 @@ _SECRET_SHAPES = re.compile(
     # 값이 코드처럼 생겼으면(괄호·점·대괄호가 있거나 아는 키워드면) 넘긴다.
     r"|(?i:aws_?secret_?access_?key|aws_?session_?token|aws_?security_?token)"
     r"[\"']?\s*[=:]\s*"
-    r"(?:"
-    # 따옴표 안의 값. 이 이름 뒤에 문자열 리터럴이 오면 자격증명이다 —
-    # 테스트 픽스처에 박힌 것이라도 지운다.
-    r"[\"'][^\"'\r\n]{12,}[\"']"
-    r"|"
-    # 따옴표 없는 값은 **자격증명처럼 생겨야** 한다. 숫자가 있고, 대문자나
-    # base64 기호가 있고, 스무 자 이상. `credentials.secret_key` 나
-    # `os.environ.get(...)` 이나 `Optional[str] = None` 은 여기 안 걸린다.
-    r"(?=[^\r\n]*[0-9])(?=[^\r\n]*[A-Z/+=])[A-Za-z0-9/+=_-]{20,}"
-    r")"
+    # 값의 모양은 **같은 정의** 를 쓴다. 갈래마다 따로 적으면 한쪽만 고쳐진다.
+    r"(?:" + _CREDENTIAL_VALUE + r")"
     # 환경을 통째로 찍는 실패 테스트가 흔하다. NAME=value 형태에서 이름이
     # 비밀을 뜻하면 값을 지운다.
     #
@@ -871,41 +887,27 @@ _SECRET_SHAPES = re.compile(
     # `re.compile(...)` 가 걸리지 않는다.
     # 이름 앞의 점은 **속성 접근** 이다 — `self.api_token` 은 코드이지 환경
     # 변수가 아니다. 환경 덤프와 설정 파일의 이름은 점 뒤에 오지 않는다.
+    #
+    # 구분자 주변의 공백은 **더 이상 보지 않는다.** 앞선 두 판이 그것으로
+    # 코드와 자격증명을 가르려 했고 둘 다 틀렸다 — 양쪽 공백만 보면 YAML 의
+    # `password: value` 를 흘리고, 공백 없는 형태를 무조건 받으면
+    # `api_token=credentials.secret_key` 를 지운다. 판정은 **값의 모양** 하나로
+    # 한다. 서식은 값이 무엇인지 말해 주지 않는다.
     r"|(?<![.\w])(?i:[A-Z0-9_]{0,40}"
     r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
     r"[A-Z0-9_]{0,40})"
-    r"(?:"
-    # (a) 구분자에 공백이 전혀 없다 — 환경 덤프와 .env 형식. 값의 모양을
-    #     따지지 않는다. 사람이 쓴 코드가 이렇게 붙여 쓰는 일은 드물다.
-    r"[\"']?[=:][\"']?[^\s\r\n(){}<>,;\[\]]{12,}(?!\()"
-    r"|"
-    # (b) 따옴표 안의 값. 공백이 어느 쪽에 있든 자격증명이다.
-    r"[\"']?\s*[=:]\s*[\"'][^\"'\r\n]{12,}[\"']"
-    r"|"
-    # (c) 공백이 **한쪽에만** 있는 형태를 포함해 나머지 전부. YAML 의
-    #     `password: value` 와 dotenv 의 `PASSWORD = value` 가 여기다.
-    #     앞선 판은 양쪽 공백만 다뤄 YAML 을 통째로 흘렸다. 대신 값이
-    #     자격증명처럼 생겨야 한다 — 숫자가 있거나(c1), 점 없이 열여섯 자
-    #     이상이거나(c2).
     r"[\"']?\s*[=:]\s*"
-    r"(?:"
-    r"(?=[^\s\r\n(){}<>,;\[\]]*[0-9])[^\s\r\n(){}<>,;\[\]]{12,}"
-    r"|"
-    # snake_case 는 식별자다. `authentication_failure` 를 지우면 조언자가
-    # 무엇이 실패했는지 못 본다. 자격증명이 순소문자 밑줄 이름인 일은 드물다.
-    r"[^\s\r\n._(){}<>,;\[\]]{16,}"
-    r")"
-    r"(?!\()"
-    r")"
+    r"(?:" + _CREDENTIAL_VALUE + r")"
     # 이름이 앞말에 붙어 있어도, 값이 **확실히** 자격증명 모양이면 지운다.
-    # 위 갈래는 이름 앞의 점으로 속성 접근을 걸러 내는데(`self.api_token`),
-    # 그 lookbehind 는 앞에 아무 낱말이나 붙어 있어도 함께 막는다. 자식은
-    # 구분자 없이 붙여 쓸 수 있으므로 그 구멍을 여기서 메운다. 코드가 걸리지
-    # 않도록 조건을 좁힌다 — 숫자가 있고, 점이 없고, 열두 자 이상.
+    # 위 갈래의 lookbehind 는 속성 접근을 걸러 내지만 앞에 아무 낱말이나
+    # 붙어 있어도 함께 막는다. 자식은 구분자 없이 붙여 쓸 수 있으므로 그
+    # 구멍을 여기서 메운다 — 대신 숫자가 있고 점이 없는 값만.
     r"|(?i:[A-Z0-9_]{0,40}"
     r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
     r"[A-Z0-9_]{0,40})[\"']?\s*[=:]\s*[\"']?"
-    r"(?=[^\s\r\n.(){}<>,;\[\]]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}(?!\()"
+    r"(?=[^\s\r\n.(){}<>,;\[\]]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}"
+    + _VALUE_END
+    +
     # JWT
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     re.DOTALL,
@@ -1435,17 +1437,39 @@ def join_streams(out: str, err: str) -> str:
     # 지울 수 있고, 창을 정할 필요가 없다.
     spans = removed_spans(reverse_src, reverse)
     if spans is None:
-        # 구간을 짚지 못했다. 두 이음매를 다 끊는 쪽으로 물러선다 — 값이
-        # 이름 없이 남는 원래의 한계는 남지만, 형성된 자격증명은 안 나간다.
-        return (
-            redact_text(redact_text(err) + "\n[...두 스트림이 만나는 자리 생략...]\n")
-            + redact_text(redact_text(out))
-        ).strip()
+        # 구간을 짚지 못했다. **fail-closed 로 간다.** 여기서 두 스트림을
+        # 따로 지워 내보내면, 자식이 출력에 `[REDACTED]` 를 한 번 찍는 것만으로
+        # 되짚기를 무력화하고 이음매에 걸친 값을 통과시킬 수 있다 — 되짚기의
+        # 실패는 자식이 고를 수 있는 사건이므로 그때의 실패 방향이 안전해야
+        # 한다. 조언자는 diff 로 진단해야 한다.
+        return "[...검증 출력 전체 생략: 두 스트림 경계의 자격증명을 짚지 못함...]"
     boundary = len(err)
-    for start, stop in spans:
-        for piece in (reverse_src[start:boundary], reverse_src[boundary:stop]):
-            if piece and start < boundary < stop:
+    crossing = [(start, stop) for start, stop in spans if start < boundary < stop]
+    if not crossing:
+        # 역순에서 잡힌 것이 이음매를 안 가로지른다. 그렇다면 정방향에서도
+        # 같은 자리에서 잡혔어야 하는데 아니었다 — 되짚기가 어긋났다는 뜻이다.
+        return "[...검증 출력 전체 생략: 두 스트림 경계의 자격증명을 짚지 못함...]"
+    for start, stop in crossing:
+        # 조각은 err 의 **꼬리** 와 out 의 **머리** 다. 치환 범위를 길이로
+        # 가른다.
+        #
+        # 긴 조각은 **전역** 으로 지운다. 자식이 같은 값을 출력 여러 곳에
+        # 심어 두면 이음매 자리만 지워서는 나머지가 그대로 남는다.
+        #
+        # 짧은 조각은 **그 자리에서만** 지운다. 자식은 이음매 매치가 경계
+        # 한 글자 앞에서 시작하도록 만들 수 있고, 그러면 조각이 흔한 한두
+        # 글자가 된다 — 그것을 전역으로 지우면 멀쩡한 출력이 걸레가 된다.
+        err_piece = reverse_src[start:boundary]
+        out_piece = reverse_src[boundary:stop]
+        for piece, at_head in ((out_piece, True), (err_piece, False)):
+            if not piece:
+                continue
+            if len(piece) >= MINIMUM_SECRET_CHARS:
                 forward = forward.replace(piece, "[REDACTED]")
+            elif at_head and forward.startswith(piece):
+                forward = "[REDACTED]" + forward[len(piece) :]
+            elif not at_head and forward.endswith(piece):
+                forward = forward[: -len(piece)] + "[REDACTED]"
     return forward.strip()
 
 
@@ -1453,8 +1477,21 @@ def removed_spans(original: str, redacted: str) -> list[tuple[int, int]] | None:
     """리댁션이 지운 구간의 원문 위치. 짚지 못하면 None.
 
     리댁션은 구간을 왼쪽부터 차례로 `[REDACTED]` 로 바꾸고 살아남은 구간은
-    원문 그대로다. 그 성질로 되짚는다. 원문에 이미 그 표식이 있으면 되짚을
-    수 없으므로 포기한다 — 틀린 위치를 주느니 없다고 말하는 편이 낫다.
+    원문 그대로다. 그 성질로 되짚는다.
+
+    세 가지를 조심한다.
+
+    **잇달아 붙은 표식.** 두 구간이 맞닿으면 그 사이의 살아남은 구간이 빈
+    문자열이다. 그것을 "문자열 끝까지 지웠다" 로 읽으면 뒤쪽 전부를 한
+    구간으로 삼아 엉뚱한 자리를 짚는다.
+
+    **살아남은 조각이 지워진 구간 안에도 있는 경우.** 뒤쪽에서 찾으면 경계를
+    안 넘는 짧은 구간이 나와 이음매 복구가 헛돈다. 살아남은 조각은 지워진
+    구간 **바로 뒤** 에 붙어 있어야 하므로, 원문의 그 자리부터 차례로 훑으며
+    남은 조각 전체가 이어지는 첫 자리를 고른다.
+
+    **원문에 이미 표식이 있는 경우.** 되짚을 수 없다. None 을 준다 — 틀린
+    위치를 주느니 없다고 말하는 편이 낫다.
     """
     token = "[REDACTED]"
     if token in original:
@@ -1468,16 +1505,48 @@ def removed_spans(original: str, redacted: str) -> list[tuple[int, int]] | None:
             return spans
         start = source + (hit - cursor)
         cursor = hit + len(token)
-        following = redacted.find(token, cursor)
-        survivor = redacted[cursor : following if following != -1 else len(redacted)]
-        if not survivor:
+        # **남은 꼬리 전체** 로 자리를 정한다. 바로 다음 조각만 보면 그것이
+        # 지워진 구간 안에도 있을 때 엉뚱한 자리를 고른다. 꼬리 전체는
+        # 표식을 품고 있으므로 그것까지 포함해 맞춰야 한다.
+        tail = redacted[cursor:]
+        if not tail:
             spans.append((start, len(original)))
             return spans
-        stop = original.find(survivor, start)
-        if stop == -1:
+        stop = _align_tail(original, tail, start)
+        if stop is None:
             return None
         spans.append((start, stop))
         source = stop
+
+
+def _align_tail(original: str, tail: str, lower: int) -> int | None:
+    """지운 결과의 남은 꼬리가 원문의 어느 자리에서 시작하는지.
+
+    꼬리는 표식과 원문 조각이 번갈아 이어진 것이다. 표식 사이의 원문 조각들이
+    `lower` 이후에서 **순서대로** 나오는 첫 자리를 고른다.
+    """
+    token = "[REDACTED]"
+    pieces = [piece for piece in tail.split(token) if piece]
+    if not pieces:
+        # 꼬리가 표식뿐이다. 그 표식들이 어디서 왔는지는 이 자리에서 정할 수
+        # 없다 — 원문 끝까지 지운 것으로 보면 과잉이고, 안 지우면 부족하다.
+        return None
+    first = pieces[0]
+    at = lower
+    while True:
+        candidate = original.find(first, at)
+        if candidate == -1:
+            return None
+        cursor = candidate + len(first)
+        for piece in pieces[1:]:
+            nxt = original.find(piece, cursor)
+            if nxt == -1:
+                cursor = -1
+                break
+            cursor = nxt + len(piece)
+        if cursor != -1:
+            return candidate
+        at = candidate + 1
 
 
 def redact_host_secrets(text: str) -> str:

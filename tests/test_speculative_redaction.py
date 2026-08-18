@@ -1236,3 +1236,73 @@ def test_a_name_glued_to_preceding_text_is_still_matched():
     """자식은 구분자 없이 붙여 쓸 수 있다. 값이 확실한 모양이면 위치를 안 따진다."""
     module = load_runner()
     assert "A1B2C3D4" not in module.verify_excerpt("yyyyAPI_TOKEN=A1B2C3D4E5F6G7H8")
+
+
+# --- 라운드 23: 되짚기의 세 함정, 값 모양의 단일 정의 -------------------------
+
+
+def test_removed_spans_handles_adjacent_and_repeated_regions():
+    """맞닿은 표식을 '끝까지 지움' 으로 읽으면 엉뚱한 자리를 짚는다."""
+    module = load_runner()
+    assert module.removed_spans("abcXYZdef", "abc[REDACTED]def") == [(3, 6)]
+    assert module.removed_spans("abcXXXdefYYYghi", "abc[REDACTED]def[REDACTED]ghi") == [
+        (3, 6),
+        (9, 12),
+    ]
+    assert module.removed_spans("abcXYZ", "abc[REDACTED]") == [(3, 6)]
+
+
+def test_removed_spans_does_not_align_inside_the_removed_region():
+    """살아남은 조각이 지워진 구간 안에도 있으면 뒤쪽 자리를 골라야 한다."""
+    module = load_runner()
+    assert module.removed_spans("AAsecretAAtail", "AA[REDACTED]AAtail") == [(2, 8)]
+
+
+def test_removed_spans_refuses_when_the_token_is_already_present():
+    """되짚을 수 없으면 틀린 위치를 주느니 없다고 말한다."""
+    module = load_runner()
+    assert module.removed_spans("a [REDACTED] b", "a [REDACTED] b") is None
+
+
+def test_injecting_the_token_fails_closed():
+    """되짚기 실패는 자식이 고를 수 있는 사건이다. 그 실패 방향이 안전해야 한다."""
+    module = load_runner()
+    joined = module.join_streams(
+        "KEY=SECRETVALUE1234567890AB\n[REDACTED] noise", "AWS_SECRET_ACCESS_"
+    )
+    assert "SECRETVALUE1234" not in joined
+
+
+def test_a_value_planted_twice_is_removed_everywhere():
+    """이음매 자리만 지우면 자식이 심어 둔 나머지가 남는다."""
+    module = load_runner()
+    joined = module.join_streams(
+        "KEY=SECRETVALUE1234567890AB\nFAILED here\nKEY=SECRETVALUE1234567890AB again",
+        "AWS_SECRET_ACCESS_",
+    )
+    assert "SECRETVALUE1234" not in joined
+    assert "FAILED here" in joined
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "authenticate(api_token=authentication_failure)",
+        "API_TOKEN=authentication_failure",
+        "api_token=credentials.secret_key",
+        'AWS_SESSION_TOKEN = os.environ.get("AWS_SESSION_TOKEN")',
+        "aws_secret_access_key = credentials.get_secret()",
+    ],
+)
+def test_the_value_shape_rules_are_shared_by_every_branch(source):
+    """갈래마다 값 규칙을 따로 적으면 한 갈래만 고쳐진다. 정의는 한 곳이다."""
+    module = load_runner()
+    assert module.verify_excerpt(source) == source
+
+
+def test_a_partial_match_never_splits_an_identifier():
+    """`authentication_failure` 에서 앞부분만 지우는 것이 가장 나쁜 결과다."""
+    module = load_runner()
+    assert module.verify_excerpt("API_TOKEN=authentication_failure") == (
+        "API_TOKEN=authentication_failure"
+    )
