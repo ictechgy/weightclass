@@ -966,7 +966,16 @@ _SECRET_SHAPES = re.compile(
     r"[A-Z0-9_-]{0,40}"
     r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
     r"[A-Z0-9_-]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
-    r"[^\s\r\n.(){}<>,;\[\]\"']{12,}"
+    r"[^\s\r\n.(){}<>,;\[\]\"']{12,}" + _VALUE_END +
+    # 점이 **둘 이상** 인 이름은 설정 네임스페이스다
+    # (`spring.datasource.password`). 파이썬의 속성 접근은 보통 점이 하나이므로
+    # (`self.api_key`), 그 경계로 값의 점을 허용할지 가른다 — 위 갈래는 값에
+    # 점이 없을 때만 받고, 이 갈래는 점 있는 값도 받는다.
+    r"|(?i:[A-Z0-9_-]{1,40}(?:[.][A-Z0-9_-]{1,40}){1,6}[.]"
+    r"[A-Z0-9_-]{0,40}"
+    r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
+    r"[A-Z0-9_-]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
+    r"[^\s\r\n(){}<>,;\[\]\"']{12,}"
     + _VALUE_END
     +
     # JWT
@@ -1114,7 +1123,7 @@ PPK_MAX_BODY_LINES = 400
 # 본문 한 줄의 최소 길이. 실제 PPK 본문은 예순네 자다.
 # 본문 첫 줄의 최소 길이. 실제 PPK 본문은 예순네 자로 접힌다. 스물넷보다
 # 짧게 잡으면 `AuthenticationFailure` 같은 낱말이 본문 첫 줄로 잡힌다.
-PPK_MINIMUM_BODY_CHARS = 24
+PPK_MINIMUM_BODY_CHARS = 16
 
 
 # 직렬화가 조각의 양 끝에 남기는 글자들.
@@ -2085,7 +2094,9 @@ _PPK_HEADER = re.compile(
 # YAML 블록 스칼라의 머리: `password: |`, `api-key: >2-` 등.
 # 이름의 구분자는 밑줄과 하이픈 둘 다다 — `api_key` 만 보면 `api-key` 가 샌다.
 # CI 로그의 줄 태그: `[INFO] `, `[2026-01-02T03:04:05Z] ` 등.
-_LOG_TAG = re.compile(r"\[[^\]\r\n]{1,40}\][ \t]*")
+# **뒤 공백은 먹지 않는다.** 먹으면 본문 줄의 들여쓰기가 함께 사라져
+# 그 줄이 본문으로 안 잡힌다.
+_LOG_TAG = re.compile(r"\[[^\]\r\n]{1,40}\]")
 _BLOCK_SCALAR = re.compile(
     r"(?i)^(?P<indent>[ ]*)(?P<name>[A-Z0-9_-]{0,40}"
     r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
@@ -2122,9 +2133,12 @@ def redact_block_scalars(text: str) -> str:
         # CI 로그는 줄마다 `[INFO] ` 같은 태그를 단다. 그 태그도 **머리가
         # 정한다** — 머리에 있는 것과 똑같은 문자열이 붙은 줄에서만 벗긴다.
         # `strip_log_prefix` 를 쓰면 `password: ` 까지 접두사로 보므로 안 된다.
-        tag = _LOG_TAG.match(raw_head[len(marker) :])
-        prefix = marker + (tag.group(0) if tag else "")
-        head = _BLOCK_SCALAR.match(_block_scalar_line(text[position:stop], prefix))
+        # 태그는 **글자 그대로 요구하지 않는다.** 줄마다 시간이 찍히는 형식
+        # (`[2026-08-18T12:00:00Z] `)에서는 두 줄의 태그가 절대 같지 않다.
+        # 머리는 "태그가 붙는 형식인가" 만 정하고, 각 줄은 **자기 태그** 를
+        # 벗긴다.
+        tagged = _LOG_TAG.match(raw_head[len(marker) :]) is not None
+        head = _BLOCK_SCALAR.match(_block_scalar_line(text[position:stop], marker, tagged))
         if head is None:
             position = stop
             continue
@@ -2140,7 +2154,7 @@ def redact_block_scalars(text: str) -> str:
         while cursor < len(text):
             following = _LINE_SEPARATOR.search(text, cursor)
             line_end = following.end() if following else len(text)
-            line = _block_scalar_line(text[cursor:line_end], prefix)
+            line = _block_scalar_line(text[cursor:line_end], marker, tagged)
             # **탭은 들여쓰기가 아니다.** YAML 이 금지한다. 탭으로 시작하는
             # 줄을 본문으로 세면 그 뒤의 진단이 함께 지워진다.
             if line.strip() and (line[:1] == "\t" or len(line) - len(line.lstrip(" ")) < needed):
@@ -2159,7 +2173,7 @@ def redact_block_scalars(text: str) -> str:
     return "".join(out)
 
 
-def _block_scalar_line(raw: str, prefix: str = "") -> str:
+def _block_scalar_line(raw: str, marker: str = "", tagged: bool = False) -> str:
     """한 줄에서 직렬화 부스러기를 걷고, **머리가 쓴 표식만** 벗긴다.
 
     표식을 세 가지로 다뤄 봤고 앞의 둘은 각각 한 방향으로 틀렸다.
@@ -2177,8 +2191,12 @@ def _block_scalar_line(raw: str, prefix: str = "") -> str:
     접두사로 보므로 `password: |` 가 `|` 가 되어 머리 자체를 못 알아본다.
     """
     line = _ESCAPE_NOISE.sub("", raw).rstrip("\r\n")
-    if prefix and line.startswith(prefix):
-        return line[len(prefix) :]
+    if marker and line[:1] == marker:
+        line = line[1:]
+    if tagged:
+        tag = _LOG_TAG.match(line)
+        if tag is not None:
+            line = line[tag.end() :]
     return line
 
 
@@ -2248,10 +2266,20 @@ def _is_ppk_body_line(line: str, first: bool, width: int = 0) -> bool:
     if not line or not _PEM_BODY_CHARS.fullmatch(line):
         return False
     if first:
-        return len(line) >= PPK_MINIMUM_BODY_CHARS
+        # base64 는 네 글자씩 묶인다. 그 성질을 쓰면 낱말과 갈린다 —
+        # `AuthenticationFailure` 는 스물한 자라 묶음이 안 맞고,
+        # `T3BlblNTSC1rZXktdjEA` 는 스무 자로 맞는다. 길이 문턱만으로는
+        # 짧게 접힌 진짜 본문을 놓치거나 긴 낱말을 먹는다.
+        return len(line) >= PPK_MINIMUM_BODY_CHARS and len(line) % 4 == 0
     # 본문은 **고정 폭** 으로 접힌다. 마지막 줄만 짧다. 첫 줄 뒤로 아무거나
     # 먹으면 `Traceback` 이나 `FAILED` 같은 낱말이 본문으로 세어져 그 뒤의
-    # 진단이 통째로 지워진다. 같은 폭이거나, 마지막 줄이거나.
+    # 진단이 통째로 지워진다.
+    #
+    # 첫 줄보다 **긴** 줄이 나오면 그것은 접힌 본문이 아니다 — 첫 줄이
+    # 짧았다는 뜻이므로 그 블록의 폭을 잘못 잡은 것이다. 그때는 멈추는 대신
+    # 계속 본다: 짧은 첫 줄 뒤에 긴 본문이 오는 형태가 실제로 있다.
+    if len(line) > width:
+        return len(line) >= PPK_MINIMUM_BODY_CHARS
     return len(line) == width or len(line) < width
 
 
@@ -2787,7 +2815,9 @@ def _looks_like_tool_payload(payload: dict[str, object]) -> bool:
     kind = payload.get("type")
     if isinstance(kind, str) and "tool" in kind.lower():
         return True
-    return any(key.lower() in markers for key in payload)
+    # **값이 있어야 마커다.** 평범한 메시지 스키마가 선택적 필드를 `null` 로
+    # 내보내면, 키의 존재만 보는 판정은 그것을 도구로 보고 조언을 버린다.
+    return any(key.lower() in markers and payload[key] for key in payload)
 
 
 def _first_text(payload: object, depth: int = 0) -> str:

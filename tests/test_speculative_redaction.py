@@ -1888,7 +1888,8 @@ def test_the_ppk_anchor_sees_escaped_line_breaks():
 def test_an_over_cap_declaration_does_not_switch_redaction_off():
     """상한을 넘는 선언에 `continue` 를 걸면 그 상한이 리댁션을 끄는 스위치가 된다."""
     module = load_runner()
-    body = "AAAAgQCx3pT1Zk9mQ2p0R5v8Wc7fLd6eXyZbNhQ0aB1cD2eF3gH4iJ5kL6mN7oP8qR"
+    # base64 는 네 글자씩 묶인다. 픽스처도 그래야 실제 키와 같은 모양이다.
+    body = "AAAAgQCx3pT1Zk9mQ2p0R5v8Wc7fLd6eXyZbNhQ0aB1cD2eF3gH4iJ5kL6mN"
     assert body not in module.verify_excerpt(f"Private-Lines: 900\n{body}")
 
 
@@ -2456,3 +2457,63 @@ def test_ppk_redaction_adds_no_newline_at_end_of_input():
     """쌍둥이(redact_block_scalars)와 같은 규칙이다."""
     module = load_runner()
     assert not module.verify_excerpt("Private-Lines: 1\nQUJDREVGR0hJSktMTU5PUFFS").endswith("\n")
+
+
+# --- 라운드 45: 태그는 모양으로, 본문은 base64 묶음으로 ----------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[INFO] password: |\n[INFO]   orchid_copper_velvet",
+        # 줄마다 시간이 찍히면 두 줄의 태그가 절대 같지 않다.
+        "[2026-08-18T12:00:00Z] password: |\n[2026-08-18T12:00:01Z]   orchid_copper_velvet",
+    ],
+)
+def test_log_tags_are_matched_by_shape_not_by_text(text):
+    """태그를 **글자 그대로** 요구하면 타임스탬프 형식에서 깨진다.
+
+    머리는 "태그가 붙는 형식인가" 만 정하고, 각 줄은 자기 태그를 벗긴다.
+    """
+    module = load_runner()
+    assert "orchid_copper_velvet" not in module.verify_excerpt(text)
+
+
+def test_a_short_first_body_line_is_still_a_key():
+    """base64 는 네 글자씩 묶인다. 그 성질로 낱말과 갈린다.
+
+    `AuthenticationFailure` 는 스물한 자라 묶음이 안 맞고,
+    `T3BlblNTSC1rZXktdjEA` 는 스무 자로 맞는다. 길이 문턱만으로는 짧게 접힌
+    진짜 본문을 놓치거나 긴 낱말을 먹는다.
+    """
+    module = load_runner()
+    text = "Private-Lines: 2\nT3BlblNTSC1rZXktdjEA\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="
+    cleaned = module.verify_excerpt(text)
+    assert "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=" not in cleaned
+    # 반대 방향: 낱말은 본문이 아니다.
+    assert "Traceback" in module.verify_excerpt(
+        "Private-Lines: 1\nAuthenticationFailure\nTraceback\nFAILED"
+    )
+
+
+def test_a_null_marker_field_is_not_a_tool_payload():
+    """평범한 메시지 스키마도 선택적 필드를 `null` 로 내보낸다.
+
+    키의 존재만 보면 그런 봉투를 도구로 보고 조언을 버린다.
+    """
+    module = load_runner()
+    payload = {"type": "message", "tool_call_id": None, "content": "Use a bounded queue."}
+    assert module._first_text(payload) == "Use a bounded queue."
+
+
+def test_a_configuration_namespace_may_hold_a_dotted_value():
+    """점이 **둘 이상** 인 이름은 설정 네임스페이스다.
+
+    파이썬의 속성 접근은 보통 점이 하나이므로(`self.api_key`), 그 경계로
+    값의 점을 허용할지 가른다.
+    """
+    module = load_runner()
+    assert "correct.horse.battery" not in module.redact_text(
+        "spring.datasource.password=correct.horse.battery"
+    )
+    assert module.verify_excerpt("self.api_key = config.api_key") == "self.api_key = config.api_key"
