@@ -1219,6 +1219,16 @@ def _decode_base64(material: str) -> bytes | None:
         return None
 
 
+def _is_credential_shaped(value: str) -> bool:
+    """이 값이 자격증명처럼 생겼는가. 이음매에서 배운 값을 전역으로 지울지의 기준.
+
+    **숫자가 있거나** 대소문자가 섞였으면 그렇다. `_looks_like_base64` 는 두
+    종류를 요구하므로 숫자만으로 된 값(`123456789012`)을 놓친다 — 주석은
+    "숫자가 있거나" 라고 적어 놓고 코드는 그렇지 않았다.
+    """
+    return any(character.isdigit() for character in value) or _looks_like_base64(value)
+
+
 def _looks_like_base64(text: str) -> bool:
     """무작위 바이트의 base64 처럼 생겼는가.
 
@@ -1826,7 +1836,8 @@ def join_streams(out: str, err: str) -> str:
             # 값이 out 쪽 조각 안에 있다. **조각이 아니라 값 텍스트** 를 지운다 —
             # 조각째 지우면 `=` 같은 앞머리가 붙어 있어, 같은 값이 앞머리 없이
             # 다른 곳에 있으면 그것이 남는다.
-            value_text = span[value_at:]
+            # 따옴표는 값이 아니다. 함께 지우면 따옴표 없는 같은 값이 남는다.
+            value_text = span[value_at:].strip("\"'")
             # **전역으로 지울지의 기준을 여기서 고정한다.** 이 자리는 세
             # 라운드 동안 두 방향을 왕복했다 — 전역으로 지우면
             # `authentication_failure` 같은 소스 앵커가 출력 전체에서
@@ -1837,7 +1848,7 @@ def join_streams(out: str, err: str) -> str:
             # 맨몸 중복은 **이름 없이** 남는데, 그것은 이 리댁터의 원래
             # 한계(이름 없는 문자열은 못 잡는다)와 같은 것이고, 소스를 지우는
             # 쪽보다 낫다.
-            if len(value_text) >= MINIMUM_SECRET_CHARS * 2 and _looks_like_base64(value_text):
+            if len(value_text) >= MINIMUM_SECRET_CHARS * 2 and _is_credential_shaped(value_text):
                 forward = forward.replace(value_text, "[REDACTED]")
             elif forward.startswith(out_piece):
                 forward = "[REDACTED]" + forward[len(out_piece) :]
@@ -2044,7 +2055,9 @@ def redact_ppk_bodies(text: str) -> str:
     `Private-Lines: N` 은 뒤이어 오는 N 줄이 개인키 본문이라고 스스로
     선언한다. 그 선언을 그대로 쓴다 — 모양을 짐작할 필요가 없다.
     """
-    if "Private-Lines:" not in text:
+    # 빠른 검사도 **정규식과 같은 규칙** 이어야 한다. 대소문자를 구분하면
+    # `private-lines:` 가 여기서 걸러져 정규식이 아예 안 돈다.
+    if "private-lines:" not in text.lower():
         return text
     out: list[str] = []
     index = 0
@@ -2059,15 +2072,24 @@ def redact_ppk_bodies(text: str) -> str:
         header_break = _LINE_SEPARATOR.match(text, position)
         if header_break is not None:
             position = header_break.end()
+        # 선언된 줄 수는 **최소치로만** 믿는다. 자식이 적게 선언하면 남은
+        # 본문 줄이 그대로 나가므로, 선언한 만큼 지운 뒤에도 본문처럼 생긴
+        # 줄이 이어지면 계속 지운다. 반대로 많이 선언하면 위의 상한이 막는다.
         removed = 0
-        while removed < declared and position < len(text):
+        while position < len(text):
             separator = _LINE_SEPARATOR.search(text, position)
-            if separator is None:
-                position = len(text)
-                removed += 1
-                break
-            position = separator.end()
+            stop = separator.end() if separator else len(text)
+            line = text[position:stop].strip()
+            if removed >= declared:
+                # 선언분은 다 지웠다. 이어지는 줄이 본문 모양이 아니면 멈춘다.
+                if not line or not _PEM_BODY_CHARS.fullmatch(line.rstrip("=")):
+                    break
+                if removed >= PPK_MAX_BODY_LINES:
+                    break
+            position = stop
             removed += 1
+            if separator is None:
+                break
         out.append("\n[REDACTED]\n" if position < len(text) else "\n[REDACTED]")
         index = position
     out.append(text[index:])

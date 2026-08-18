@@ -276,6 +276,16 @@ def main() -> int:
     }
     # 설정 순수성은 계획 적용과 **다른 질문** 이다. 한 변수에 합치면
     # "계획이 붙었는가" 의 답을 잃는다. 따로 둔다.
+    # 조언을 켜고 잰 로그인가. 비용비의 이름을 정하는 데도 쓰므로 지문·라벨과
+    # **같은 자리** 에서 정한다 — 떨어져 있으면 한쪽만 고쳐진다.
+    advisor_on = any(
+        isinstance(r.get("advisor"), dict)
+        and (
+            (r["advisor"] or {}).get("advise_first")
+            or (r["advisor"] or {}).get("advise_on_failure")
+        )
+        for r in usable
+    )
     single_advisor_config = len(advisor_fingerprints) <= 1
     # **프라임 라벨의 조건은 하나다.** 네 자리(p′, c_A, s′, a_B′)가 각각
     # 다른 조건을 쓰고 있었고, 그래서 한 보고서 안에서 같은 프라임이 서로
@@ -389,11 +399,13 @@ def main() -> int:
     # 환산값인 채로 분자 평균에 함께 들어가면, 그 평균은 무엇의 평균도
     # 아니다. 앞선 라운드는 쌍만 검사하고 분자는 그대로 뒀다.
     origins: set[str | None] = set()
+    # **네 단계를 모두 본다.** 싼/비싼 경로만 검사하면 조언과 재시도가 다른
+    # 회계에서 온 로그가 통과하고, 그 수로 s > a + q·r 을 판정하게 된다.
+    # 판정에 쓰이는 비용은 전부 같은 출처여야 한다.
     for r in usable:
-        if cost_of(r.get("cheap")):
-            origins.add(cost_origin(r.get("cheap")))
-        if cost_of(r.get("expensive")):
-            origins.add(cost_origin(r.get("expensive")))
+        for key in ("cheap", "expensive", "advice_first", "advice_failure", "retry"):
+            if cost_of(r.get(key)):
+                origins.add(cost_origin(r.get(key)))
     # 세 경우를 구별한다. 출처가 실제로 섞였는가, 러너가 cost_origin 을 남기지
     # 않은 옛 로그인가, 아니면 비용 자체가 하나도 없는가. 셋 다 c 를 못 재게
     # 하지만 사용자가 할 일이 다르다.
@@ -662,7 +674,15 @@ def main() -> int:
         # 고쳐지고, 그러면 구간이 점추정과 다른 값을 중심으로 잡힌다.
         measured = point
         median_ratio = statistics.median(paired)
-        cost_symbol = "c_A" if shape_a_measured else "c"
+        # 세 경우다. 계획이 전부 붙고 설정이 하나면 c_A, 조언을 아예 안 켰으면
+        # c, 그 사이(적용이 섞였거나 설정이 섞였거나)는 **어느 이름도 아니다** —
+        # 두 모집단의 평균에 단일 모양의 이름을 붙이면 그 수가 그대로 인용된다.
+        if shape_a_measured:
+            cost_symbol = "c_A"
+        elif not advisor_on:
+            cost_symbol = "c"
+        else:
+            cost_symbol = "비용비(모집단 혼합 — c 도 c_A 도 아니다)"
         print(
             f"\n실측 비용비 {cost_symbol} = {measured:.3f}"
             f"  (싼 경로 과제당 평균 {statistics.fmean(cheap_all):.4f} — {len(cheap_all)}건 —"
@@ -798,14 +818,6 @@ def main() -> int:
     # ── 조언 패턴 ────────────────────────────────────────────────────────
     # 설정이 섞이면 s 도 p 도 무엇의 값인지 알 수 없다. 라우트 지문과 같은
     # 방식으로 먼저 확인한다.
-    advisor_on = any(
-        isinstance(r.get("advisor"), dict)
-        and (
-            (r["advisor"] or {}).get("advise_first")
-            or (r["advisor"] or {}).get("advise_on_failure")
-        )
-        for r in usable
-    )
     # 지문은 **설정 키만** 으로 만든다. 레코드별 결과값(advise_first_applied)을
     # 같이 넣으면 계획이 붙은 실행과 안 붙은 실행이 "설정 두 종" 으로 보여
     # 엉뚱한 이유를 대며 s 를 거부한다. 두 질문은 따로 물어야 한다.
@@ -1060,7 +1072,12 @@ def main() -> int:
                                 f" = {r_ratio:.3f}  ({len(retry_costs)}회)"
                                 "  — 조언이 붙어 최초 싼 실행보다 비쌀 수 있다"
                             )
-                        if a_ratio is not None and c_range is not None:
+                        # **c_range 로 막지 않는다.** 이득 조건 s > a + q·r 에는
+                        # c 가 나오지 않는다 — 분모의 흔들림은 아래에서 직접
+                        # 낸다. c 를 요구하면 구독 로그처럼 비용이 0 이라 c 를
+                        # 못 내는 경우에 Shape B 를 영영 판정할 수 없고, 그것이
+                        # 이 도구가 겨냥한 바로 그 사례다.
+                        if a_ratio is not None:
                             # 이득 조건은 s > a + q·r. 모든 항의 흔들림을 태운다.
                             # 조언이 비어 재시도조차 못 한 실패에는 r 이 들지 않는다.
                             # 모든 실패에 r 을 물리면 조언 경로가 실제보다 비싸
@@ -1179,7 +1196,7 @@ def main() -> int:
                                         "  -> 구간이 손익분기를 가로지른다. 아직 결론 낼 수 없다."
                                     )
                         else:
-                            print("  a 나 c 를 재지 못해 판정하지 않는다.")
+                            print("  a 를 재지 못해 판정하지 않는다.")
                     else:
                         print("  아직 조언을 받은 실패가 없어 s 를 낼 수 없다.")
 

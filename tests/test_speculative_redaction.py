@@ -1896,3 +1896,46 @@ def test_known_secret_forms_are_not_cached_across_environment_changes(monkeypatc
     module.known_secret_forms()
     monkeypatch.setenv("SOME_TOKEN", "prefix:FAILEDvalue")
     assert "prefix:FAILEDvalue" in module.known_secret_forms()
+
+
+# --- 라운드 31: 빠른 검사의 일치, 선언은 최소치, 주석과 코드 ------------------
+
+
+def test_the_ppk_fast_check_matches_its_regex():
+    """빠른 검사와 정규식이 다른 규칙이면 빠른 검사가 fail-open 이 된다."""
+    module = load_runner()
+    text = "private-lines: 1\nYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=\nFAILED keep"
+    cleaned = module.verify_excerpt(text)
+    assert "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=" not in cleaned
+    assert "FAILED keep" in cleaned
+
+
+def test_an_undercounted_private_lines_declaration_still_removes_the_body():
+    """선언된 줄 수는 자식이 정한다. 적게 선언하면 남은 본문이 그대로 나간다."""
+    module = load_runner()
+    text = (
+        "PuTTY-User-Key-File-3: ssh-ed25519\nPrivate-Lines: 1\n"
+        "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=\n"
+        "MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3A=\nPrivate-MAC: 0011\nFAILED keep"
+    )
+    cleaned = module.verify_excerpt(text)
+    assert "MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3A=" not in cleaned
+    # 본문 모양이 아닌 줄에서 멈춰야 한다.
+    assert "Private-MAC: 0011" in cleaned
+    assert "FAILED keep" in cleaned
+
+
+@pytest.mark.parametrize(
+    "out,err,gone",
+    [
+        # 숫자만으로 된 값 — 주석은 "숫자가 있거나" 인데 코드는 두 종류를
+        # 요구해, 이 형태가 이음매에서만 지워지고 중복이 남았다.
+        ("123456789012 bare duplicate 123456789012", "API_TOKEN=", "123456789012"),
+        # 따옴표는 값이 아니다. 함께 지우면 따옴표 없는 중복이 남는다.
+        ('"AbCdEfGhIjKlMn" bare duplicate AbCdEfGhIjKlMn', "PASSWORD=", "AbCdEfGhIjKlMn"),
+    ],
+)
+def test_the_seam_rule_matches_what_its_comment_says(out, err, gone):
+    """주석과 코드가 어긋나면 다음 사람이 주석을 믿고 고친다."""
+    module = load_runner()
+    assert gone not in module.join_streams(out, err)
