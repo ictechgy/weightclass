@@ -2517,3 +2517,85 @@ def test_a_configuration_namespace_may_hold_a_dotted_value():
         "spring.datasource.password=correct.horse.battery"
     )
     assert module.verify_excerpt("self.api_key = config.api_key") == "self.api_key = config.api_key"
+
+
+# --- 라운드 46: 토큰의 시작, 수신자 이름 --------------------------------------
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "ERROR: No matching distribution found for disk-inventory-collector",
+        "see aghp_notatoken_but_long_enough_here",
+    ],
+)
+def test_prefixed_tokens_are_anchored_at_their_start(source):
+    """값의 끝은 고정해 놓고 시작을 안 고정하면 낱말 안의 접두사가 걸린다.
+
+    `disk-inventory-collector` 안의 `sk-` 가 매치돼 평범한 오류 메시지가
+    반쪽 지워졌다.
+    """
+    module = load_runner()
+    assert module.verify_excerpt(source) == source
+
+
+@pytest.mark.parametrize(
+    "line,token",
+    [
+        ("key sk-abcdefghijklmnopqrstuv here", "sk-abcdefghijklmnopqrstuv"),
+        ("token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123"),
+    ],
+)
+def test_real_prefixed_tokens_are_still_redacted(line, token):
+    """시작을 고정해도 진짜 토큰은 잡아야 한다."""
+    module = load_runner()
+    assert token not in module.verify_excerpt(line)
+
+
+@pytest.mark.parametrize(
+    "text,token",
+    [
+        # 점 하나짜리 이름 + 점 있는 값 — 두 갈래 사이로 빠지던 형태
+        ("db.password=Passw0rd.With.Dots", "Passw0rd.With.Dots"),
+        ("spring.datasource.password=correct.horse.battery", "correct.horse.battery"),
+        ("db.password: orchid_copper_velvet", "orchid_copper_velvet"),
+    ],
+)
+def test_dotted_names_are_one_branch(text, token):
+    """점 **개수** 로 갈래를 나누면 그 사이에 구멍이 생긴다."""
+    module = load_runner()
+    assert token not in module.redact_text(text)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "self.api_key = config.api_key",
+        "credentials.aws_secret_access_key = credentials.secret_key",
+        "obj.password=other.password",
+    ],
+)
+def test_receiver_names_mark_attribute_access(source):
+    """`correct.horse.battery`(암구호)와 `config.api_key`(속성)는 모양이 같다.
+
+    가르는 것은 값이 아니라 **수신자 이름** 이다. 목록이라는 것이 이 판정의
+    한계지만, 모양 짐작과 달리 왜 그런지 읽을 수 있고 늘릴 수 있다.
+    """
+    module = load_runner()
+    assert module.verify_excerpt(source) == source
+
+
+def test_an_empty_log_record_ends_the_block_scalar():
+    """태그를 벗겨 빈 줄이 된 것과 원래 빈 줄은 다르다.
+
+    전자는 로그 레코드의 메시지가 비었을 뿐이고 그 뒤는 블록 안이 아니다.
+    """
+    module = load_runner()
+    text = "[T1] password: |\n[T2]   secretvalue\n[T3]\n[T4]   AssertionError: boom"
+    assert "AssertionError" in module.verify_excerpt(text)
+
+
+def test_the_gemini_response_field_is_a_body_field():
+    """벤더마다 본문 필드의 이름이 다르다."""
+    module = load_runner()
+    assert module._first_text({"session_id": "s-1", "response": "advice here"}) == "advice here"

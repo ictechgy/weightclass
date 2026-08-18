@@ -890,15 +890,19 @@ _CREDENTIAL_VALUE = (
 )
 
 
+# 접두사 토큰은 **시작도 고정한다.** 값의 끝은 _VALUE_END 로 고정해 놓고
+# 시작을 안 고정하면, `disk-inventory-collector` 안의 `sk-` 가 걸려 평범한
+# 오류 메시지가 반쪽 지워진다.
+_TOKEN_START = r"(?<![A-Za-z0-9_-])"
 _SECRET_SHAPES = re.compile(
-    r"(?i:sk-)[A-Za-z0-9_-]{16,}"
-    r"|gh[pousr]_[A-Za-z0-9]{20,}"
-    r"|github_pat_[A-Za-z0-9_]{20,}"
-    r"|glpat-[A-Za-z0-9_-]{16,}"
-    r"|npm_[A-Za-z0-9]{30,}"
-    r"|AIza[0-9A-Za-z_-]{35}"
-    r"|xox[baprs]-[A-Za-z0-9-]{10,}"
-    r"|A[KS]IA[0-9A-Z]{16}"
+    _TOKEN_START + r"(?i:sk-)[A-Za-z0-9_-]{16,}"
+    r"|" + _TOKEN_START + r"gh[pousr]_[A-Za-z0-9]{20,}"
+    r"|" + _TOKEN_START + r"github_pat_[A-Za-z0-9_]{20,}"
+    r"|" + _TOKEN_START + r"glpat-[A-Za-z0-9_-]{16,}"
+    r"|" + _TOKEN_START + r"npm_[A-Za-z0-9]{30,}"
+    r"|" + _TOKEN_START + r"AIza[0-9A-Za-z_-]{35}"
+    r"|" + _TOKEN_START + r"xox[baprs]-[A-Za-z0-9-]{10,}"
+    r"|" + _TOKEN_START + r"A[KS]IA[0-9A-Z]{16}"
     # AWS 비밀 액세스 키와 세션 토큰은 고정 접두사가 없다. Bedrock 을 쓰는
     # 곳에서 가장 흔한 자격증명이므로 이름으로 잡는다.
     # 이름 뒤의 닫는 따옴표를 허용해야 한다. AWS CLI 와 boto 는 JSON 을 찍고,
@@ -957,21 +961,25 @@ _SECRET_SHAPES = re.compile(
     # YAML 블록 스칼라: `password: |` 뒤 들여쓴 줄이 값이다. 구분자를 다시
     # 줄바꿈 넘게 열면 라운드 35 의 결함(비밀 이름이 줄 끝에 있으면 다음 줄
     # 첫 토큰이 값으로 잡힘)이 돌아오므로, 이 **한 형태만** 따로 잡는다.
-    # 점이 든 설정 키(`db.password`, `spring.datasource.password`)를 위한
-    # 갈래. 이름 앞의 점을 막는 가드는 속성 접근(`self.api_key`)을 살리려고
-    # 있는데, 그것이 이 형태까지 함께 막는다. 값이 **점 없는** 것일 때만
-    # 받는다 — `self.api_key = config.api_key` 의 값은 점이 있으므로 여기
-    # 안 걸리고, `db.password=orchid_copper_velvet` 은 걸린다.
-    r"|(?i:[A-Z0-9_-]{0,40}(?:[.][A-Z0-9_-]{1,40}){0,6}[.]"
-    r"[A-Z0-9_-]{0,40}"
-    r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
-    r"[A-Z0-9_-]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
-    r"[^\s\r\n.(){}<>,;\[\]\"']{12,}" + _VALUE_END +
-    # 점이 **둘 이상** 인 이름은 설정 네임스페이스다
-    # (`spring.datasource.password`). 파이썬의 속성 접근은 보통 점이 하나이므로
-    # (`self.api_key`), 그 경계로 값의 점을 허용할지 가른다 — 위 갈래는 값에
-    # 점이 없을 때만 받고, 이 갈래는 점 있는 값도 받는다.
-    r"|(?i:[A-Z0-9_-]{1,40}(?:[.][A-Z0-9_-]{1,40}){1,6}[.]"
+    # 점이 든 이름(`db.password`, `spring.datasource.password`, `self.api_key`).
+    # 이름 앞의 점을 막는 가드는 속성 접근을 살리려고 있는데, 그것이 설정
+    # 키까지 함께 막는다.
+    #
+    # 점 **개수** 로 두 갈래를 나눴던 판은 그 사이에 구멍을 만들었고, **값의
+    # 모양** 으로 가르려던 판은 `correct.horse.battery`(암구호)와
+    # `config.api_key`(속성)를 구별하지 못했다. 둘은 모양이 같다.
+    #
+    # 가르는 것은 **수신자 이름** 이다. `self`, `this`, `cls` 는 언어가 정한
+    # 것이고 나머지는 관례적인 변수 이름이다. 설정 네임스페이스
+    # (`spring.datasource`, `db`)가 이 이름으로 시작하는 일은 없다.
+    #
+    # 목록이라는 것이 이 판정의 한계다 — 여기 없는 수신자 이름은 지워진다.
+    # 그러나 모양으로 가르려던 판들이 `correct.horse.battery`(암구호)와
+    # `config.api_key`(속성)를 구별하지 못한 것에 비하면, 목록은 적어도
+    # **왜 그런지 읽을 수 있고** 늘릴 수 있다.
+    r"|(?<![.\w])(?!(?i:self|this|cls|obj|me|credentials|config|settings"
+    r"|options|args|ctx|context|client|session|request|response|env)[.])"
+    r"(?i:[A-Z0-9_-]{0,40}(?:[.][A-Z0-9_-]{1,40}){0,6}[.]"
     r"[A-Z0-9_-]{0,40}"
     r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
     r"[A-Z0-9_-]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
@@ -2157,6 +2165,11 @@ def redact_block_scalars(text: str) -> str:
             line = _block_scalar_line(text[cursor:line_end], marker, tagged)
             # **탭은 들여쓰기가 아니다.** YAML 이 금지한다. 탭으로 시작하는
             # 줄을 본문으로 세면 그 뒤의 진단이 함께 지워진다.
+            # 태그를 벗겨 **빈 줄이 된 것** 과 원래 빈 줄은 다르다. 전자는
+            # 로그 레코드의 메시지가 비었을 뿐이고, 그 뒤는 블록 안이 아니다.
+            # 구별하지 않으면 빈 메시지 하나로 뒤의 진단을 계속 먹는다.
+            if tagged and not line.strip() and text[cursor:line_end].strip():
+                break
             if line.strip() and (line[:1] == "\t" or len(line) - len(line.lstrip(" ")) < needed):
                 break
             cursor = line_end
@@ -2834,7 +2847,8 @@ def _first_text(payload: object, depth: int = 0) -> str:
             # **필드를 보기 전에 막는다.** 뒤에 두면 `result` 나 `text` 로
             # 실려 온 도구 페이로드가 먼저 반환된다.
             return ""
-        for field in ("result", "text", "content", "message", "output_text"):
+        # 벤더마다 본문 필드의 이름이 다르다. `response` 는 Gemini CLI 다.
+        for field in ("result", "text", "content", "message", "output_text", "response"):
             value = payload.get(field)
             if isinstance(value, str) and value.strip():
                 return value.strip()
