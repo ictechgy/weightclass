@@ -250,6 +250,24 @@ def main() -> int:
     # first_flags 와 같은 자리에서 정한다 — 두 값이 떨어져 있으면 한쪽만
     # 고쳐진다.
     plan_applied_on = True in first_flags
+    # 조언 **설정** 이 섞이면 라벨도 못 붙인다. 앞선 판은 s 만 막고 p′ 와
+    # c_A 는 계속 찍었는데, route 나 context 가 다른 실행을 한 수로 뭉갠
+    # 값에 단일 설정의 이름을 붙이는 셈이다.
+    advisor_fingerprints = {
+        json.dumps(
+            {
+                key: value
+                for key, value in (r.get("advisor") or {}).items()
+                if key != "advise_first_applied"
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        for r in usable
+        if isinstance(r.get("advisor"), dict)
+    }
+    if len(advisor_fingerprints) > 1:
+        plan_applied_on = False
     if len(first_flags) > 1:
         print(
             "\n경고: 시작 전 조언을 켠 실행과 끄고 돈 실행이 한 로그에 섞여 있다."
@@ -419,7 +437,11 @@ def main() -> int:
             # 실패는 러너가 조언을 건너뛰고 바로 승급하므로 Shape B 의 대상이
             # 아니다. 그 비용이 a 와 r 의 분모에 섞이면, B 와 무관한 실행의
             # 비용이 B 의 판정을 양방향으로 흔든다.
-            standalone_expensive = cost_of(r.get("expensive"))
+            # 분모도 **같은 술어** 로 거른다. 분자(a, r)는 부분 가격을
+            # 빼는데 분모가 받으면, 분모가 실제보다 작아져 a 와 r 이 커진다.
+            standalone_expensive = (
+                None if has_missing_prices(r.get("expensive")) else cost_of(r.get("expensive"))
+            )
             if not reached_verify(r):
                 pass
             elif standalone_expensive is None:
@@ -1173,13 +1195,29 @@ def main() -> int:
         # **조언과 재시도도 실제로 쓴 돈이다.** 빼고 세면 절감의 부호까지
         # 뒤집힌다 — 조언을 켜고 잰 로그에서 그 비용이 어느 항에도 안 들어가
         # 조언 쪽에 유리하게 나온다.
+        # **같은 술어로 거른다.** a 와 r 은 부분 가격을 빼는데 여기서 다시
+        # 받으면, 같은 보고서가 "비용을 얻지 못했다" 고 경고하면서 그 값을
+        # 정확한 지출액으로 합산하게 된다.
         advisory_spend = sum(
             value
             for r in usable
             for key in ("advice_first", "advice_failure", "retry")
-            if (value := cost_of(r.get(key))) is not None
+            if not has_missing_prices(r.get(key)) and (value := cost_of(r.get(key))) is not None
+        )
+        # 타임아웃 난 조언도 돈은 썼다. 그 부분값은 통계에서 빼되 **지출에는
+        # 넣는다** — 빼고 세면 실제보다 적게 쓴 것처럼 보인다.
+        advisory_timeouts = sum(
+            1
+            for r in usable
+            for key in ("advice_first", "advice_failure", "retry")
+            if timed_out(r.get(key))
         )
         realized = sum(cheap_all) + expensive_total + advisory_spend
+        if advisory_timeouts:
+            print(
+                f"  주의: 조언·재시도 {advisory_timeouts}건이 타임아웃이라 그 비용을"
+                " 지출에 넣지 못했다. 아래 '실제로 쓴 돈' 은 실제보다 작다."
+            )
         expensive_mean = expensive_total / len(paired)
         # 승급하지 않은 과제의 비싼 비용은 잰 적이 없다. 승급 과제의 평균으로
         # 메꾸되, 그것이 대입값이라는 사실을 숨기지 않는다.

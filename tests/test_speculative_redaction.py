@@ -1682,3 +1682,73 @@ def test_the_name_side_of_a_seam_stays_in_the_source():
     module = load_runner()
     joined = module.join_streams("=ABCDEFGHIJKLMNOP\ndef mySuperSecret(): pass", "mySuperSecret")
     assert "def mySuperSecret(): pass" in joined
+
+
+# --- 라운드 28: 헤더의 세 갈래, 구분자 위치 ------------------------------------
+
+
+def test_a_diagnostic_colon_line_is_not_a_pem_header():
+    """`Name: value` 를 전부 헤더로 보면 진단 줄이 문턱을 낮춘다.
+
+    `AssertionError: boom` 이 헤더가 되면 표식 없는 400자 문턱이 200자로
+    내려가고, 그 줄 자체도 건너뛰어져 실패 증거가 사라진다.
+    """
+    module = load_runner()
+    text = (
+        "before\n"
+        + BEGIN
+        + KEY
+        + "\nAssertionError: boom\n"
+        + ("QUJD" * 55)
+        + "\n"
+        + END
+        + KEY
+        + "\nFAILED keep"
+    )
+    cleaned = module.verify_excerpt(text)
+    assert "AssertionError: boom" in cleaned
+
+
+def test_header_shaped_body_lines_are_still_body():
+    """`Name: <base64>` 로 위장한 본문을 통째로 버리면 키가 빠져나간다."""
+    module = load_runner()
+    blob = base64.b64encode(b"\x30\x82" + hashlib.shake_256(b"k").digest(400)).decode()
+    pem = (
+        BEGIN
+        + KEY
+        + "\n"
+        + "\n".join("PrivateBody: " + blob[index : index + 64] for index in range(0, len(blob), 64))
+        + "\n"
+        + END
+        + KEY
+    )
+    assert blob[100:140] not in module.verify_excerpt(pem)
+
+
+@pytest.mark.parametrize(
+    "out,err,kept",
+    [
+        # 접두사 토큰은 구분자가 없다 — 값 하나가 이음매를 가로지를 뿐이다.
+        (
+            "FAILED test_auth\nsource: FAILED should remain\n",
+            "sk-ABCDEFGHIJ",
+            "FAILED should remain",
+        ),
+        ("FAIL\nFAILED test_auth\n", "ghp_ABCDEFGHIJKLMNOP", "FAILED test_auth"),
+        # 값이 이음매를 가로지르면 out 쪽 조각만 값인 것이 아니다.
+        (
+            "Traceback: failure at auth.py:42\nTraceback: repeated",
+            "AWS_SECRET_ACCESS_KEY: prefix",
+            "Traceback: repeated",
+        ),
+    ],
+)
+def test_the_seam_value_is_scoped_by_the_separator(out, err, kept):
+    """ "err 쪽이 이름" 은 이름-값 형태에만 맞다.
+
+    구분자가 없거나 값이 이음매를 가로지르면 out 쪽 조각도 값의 일부일 뿐이라,
+    그것을 전역으로 지우면 멀쩡한 로그가 사라진다. 값의 범위는 **첫** 구분자가
+    정한다 — 마지막 것을 잡으면 값 안에 우연히 든 콜론이 경계가 된다.
+    """
+    module = load_runner()
+    assert kept in module.join_streams(out, err)

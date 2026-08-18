@@ -261,7 +261,10 @@ A + B        = a_A + c_A + p′·(a_B′ + q′·r′ + (1 − s′))
 
 Every term after the up-front advice is primed — including the failure-stage
 advisor call itself, whose input is the already-advised task plus the failure
-artifacts and so costs `a_B′`, not `a_B` — because each is measured on a run whose
+artifacts and so costs `a_B′`, not `a_B`. The escalation is the one exception:
+it costs `1` in both shapes because the expensive route gets the original task,
+not the advised one. That is why the equations carry `(1 − s′)` unprimed. Each
+other term is primed because it is measured on a run whose
 prompt already contains the plan: the retry cost, the retry-attempt rate
 and the rescue rate are all different quantities from their Shape-B-only
 counterparts. Reusing the unprimed symbols would silently assume the plan
@@ -316,7 +319,7 @@ To pre-register:
 
 | V1 property | after |
 | --- | --- |
-| exactly one foreground child | up to seven for A+B (cheap, **two** advisor calls, retry, expensive, plus two verify runs); six when only one shape is on |
+| exactly one foreground child | up to seven for A+B (cheap, **two** advisor calls, retry, expensive, plus two verify runs); six for Shape B alone; four for Shape A alone (advisor, cheap, expensive, plus one verify run) |
 | does not retry or recover | retries once, on a mechanical signal, with new input |
 | never creates or deletes directories | creates and deletes workspaces, including one it always deletes |
 | never runs anything but the selected route | runs a verify command and an advisor command |

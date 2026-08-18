@@ -71,11 +71,19 @@ def report(work: pathlib.Path) -> int:
     # pytest 의 요약 줄은 `FAILED <node id> - <사유>` 다. 사유까지 담으면
     # 수집한 ID 와 절대 안 맞아 **모든 실패가 통과로 분류된다** — 이 도구가
     # 잡으라고 만든 부류를 이 도구가 저지르는 셈이다.
+    # `FAILED` 만 세면 안 된다. pytest 는 수집/픽스처 오류를 `ERROR` 로
+    # 내는데, 그것을 통과로 세면 오류 난 테스트가 "리댁션과 무관하다" 로
+    # 분류된다 — 이 도구의 세 번째 파싱 결함이다.
     failed = {
         line.split(" ", 1)[1].split(" - ", 1)[0].strip()
         for line in run.stdout.splitlines()
-        if line.startswith("FAILED ")
+        if line.startswith(("FAILED ", "ERROR "))
     }
+    if run.returncode not in (0, 1):
+        print(
+            f"경고: pytest 가 코드 {run.returncode} 로 끝났다. 아래 수를 믿을 수 없다.",
+            file=sys.stderr,
+        )
     collected = subprocess.run(
         [
             sys.executable,

@@ -1130,13 +1130,25 @@ def _base64_material(content: str) -> tuple[str, bool, bool]:
         if stripped.startswith("=") and len(stripped) <= 6:
             armoured = True
             continue
-        # 헤더는 **줄 단위** 로 건너뛴다. 낱말 단위로 보면
-        # `Version: GnuPG v2.4.7 (GNU/Linux)` 에서 `GnuPG` 가 본문으로
-        # 섞여 들어가 DER 판정을 망치고, `v2.4.7` 에서 산문으로 판정돼
-        # 키 전체가 빠져나간다.
+        # 헤더는 **줄 단위** 로 본다. 낱말 단위로 보면
+        # `Version: GnuPG v2.4.7 (GNU/Linux)` 에서 `GnuPG` 가 본문으로 섞여
+        # DER 판정을 망치고, `v2.4.7` 에서 산문으로 판정돼 키가 빠져나간다.
+        #
+        # 다만 `Name: value` 모양을 **전부** 헤더로 보면 양쪽으로 틀린다.
+        # `AssertionError: boom` 이 헤더가 되어 문턱을 낮추고 실패 신호를
+        # 삼키고, `PrivateBody: MC4CAQAwBQYD` 는 통째로 버려져 본문이
+        # 빠져나간다. 값이 본문이면 본문으로 세고, 이름이 아는 헤더면
+        # 건너뛰고, 둘 다 아니면 산문이다.
         if _ANY_HEADER_LINE.match(stripped):
-            headered = True
-            continue
+            name, _, value = stripped.partition(":")
+            value = value.strip()
+            if _PEM_BODY_CHARS.fullmatch(value) and len(value) >= 8:
+                pieces.append(value)
+                continue
+            if name.strip().lower() in PEM_HEADER_NAMES:
+                headered = True
+                continue
+            return "", False, False
         for token in stripped.split():
             if _PEM_BODY_CHARS.fullmatch(token):
                 pieces.append(token)
@@ -1195,6 +1207,27 @@ _PEM_BODY_RUN = re.compile(r"[A-Za-z0-9+/=]{12,}")
 # 모양이면 헤더로 봐도 안전하다 — 산문이 마커 사이에 들어오는 경우는 다른
 # 검사가 잡는다. 게이트에서 이것을 쓰면 `AssertionError: boom` 이 헤더가 된다.
 _ANY_HEADER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s")
+# PEM 과 OpenPGP armor 가 실제로 쓰는 헤더 이름. 이 목록 밖의 `Name: value`
+# 는 헤더가 아니라 진단 줄이다.
+PEM_HEADER_NAMES = frozenset(
+    {
+        "proc-type",
+        "dek-info",
+        "version",
+        "comment",
+        "charset",
+        "messageid",
+        "hash",
+        "originator-name",
+        "originator-key-asymmetric",
+        "mic-info",
+        "bag attributes",
+        "friendlyname",
+        "localkeyid",
+        "subject",
+        "issuer",
+    }
+)
 _PEM_HEADER_LINE = re.compile(
     r"^(?i:Proc-Type|DEK-Info|Originator-\S*|MIC-Info|Recipient-\S*|Key-Info|Issuer-\S*"
     r"|Cert|CRL|Comment|Subject|Bag Attributes|friendlyName|localKeyID):\s"
@@ -1702,19 +1735,28 @@ def join_streams(out: str, err: str) -> str:
         # 글자가 된다 — 그것을 전역으로 지우면 멀쩡한 출력이 걸레가 된다.
         err_piece = reverse_src[start:boundary]
         out_piece = reverse_src[boundary:stop]
-        # 어느 조각이 값인지는 **모양이 아니라 위치** 가 말해 준다. 역순
-        # 이음매는 `err 의 꼬리` + `out 의 머리` 로 이름-값을 만든다. 즉
-        # err 쪽 조각이 이름이고 out 쪽 조각이 값이다.
+        # 값을 **전역** 으로 지워야 한다 — 자식이 같은 값을 출력 여러 곳에
+        # 심어 둘 수 있다. 이름은 그 자리에서만 지운다 — 이름은 소스에도
+        # 나오는 평범한 식별자일 수 있고, 전역으로 지우면 그 소스가 통째로
+        # 사라진다.
         #
-        # 값은 **전역** 으로 지운다 — 자식이 같은 값을 출력 여러 곳에 심어
-        # 둘 수 있다. 이름은 그 자리에서만 지운다 — 이름은 소스에도 나오는
-        # 평범한 식별자일 수 있고(`mySuperSecret`), 전역으로 지우면 그 소스가
-        # 통째로 사라진다.
-        #
-        # 앞선 두 판은 조각의 길이와 글자 모양으로 가르려 했고 둘 다 양쪽으로
-        # 틀렸다. 위치는 애매하지 않다.
-        if out_piece:
+        # 어디까지가 값인지는 **구분자의 위치** 가 정한다. 앞선 판은 "err
+        # 쪽이 이름, out 쪽이 값" 이라고 단정했는데, 그것은 이름-값 형태에만
+        # 맞다. `sk-` 나 `ghp_` 처럼 접두사가 붙는 토큰은 구분자가 없고 값
+        # 하나가 이음매를 가로지를 뿐이라, out 쪽 조각(`FAILED`)을 값으로
+        # 보고 전역 삭제하면 멀쩡한 로그가 지워진다.
+        span = reverse_src[start:stop]
+        # **첫** 구분자다. 마지막 것을 잡으면 값 안에 우연히 든 콜론
+        # (`Traceback:`)이 경계로 잡혀, 이름 쪽 조각이 값으로 둔갑한다.
+        offsets = [at for at in (span.find("="), span.find(":")) if at >= 0]
+        value_at = min(offsets) + 1 if offsets else -1
+        if value_at >= len(err_piece) and out_piece:
+            # 값이 out 쪽 조각 안에 통째로 들어 있다. 그것만 전역으로 지운다.
             forward = forward.replace(out_piece, "[REDACTED]")
+        elif out_piece and forward.startswith(out_piece):
+            # 구분자가 없거나 값이 이음매를 가로지른다. 그 값은 이 자리에만
+            # 있으므로 자리 치환으로 충분하다.
+            forward = "[REDACTED]" + forward[len(out_piece) :]
         if err_piece and forward.endswith(err_piece):
             forward = forward[: -len(err_piece)] + "[REDACTED]"
     return forward.strip()
