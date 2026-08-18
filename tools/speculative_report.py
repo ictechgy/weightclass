@@ -507,7 +507,20 @@ def main() -> int:
             # 경우가 대부분이다. cost_of 는 타임아웃에도 None 을 준다.
             unusable_cheap += 1
             continue
-        expensive_cost = cost_of(r.get("expensive")) if escalated else None
+        # **분모의 걸러내기를 a/r 쪽과 맞춘다.** 같은 질문("승급 과제의 비싼
+        # 비용 평균")을 두 리스트가 다르게 판정하고 있었다. 부분 가격과
+        # 타임아웃은 어느 쪽에서도 쓸 수 없는 값이다.
+        #
+        # 남는 차이는 **하나뿐** 이다: a 와 r 의 분모는 `reached_verify` 를
+        # 요구한다. 조언이 닿을 수 있었던 승급만 세야 하기 때문이고, c 는
+        # 그런 제약이 없다. 그 하나는 의도된 차이다.
+        expensive_cost = (
+            None
+            if not escalated
+            or has_missing_prices(r.get("expensive"))
+            or timed_out(r.get("expensive"))
+            else cost_of(r.get("expensive"))
+        )
         observed_expensive = expensive_cost
         # 비싼 비용 0 은 관측값이지만 **분모로는 못 쓴다.** 이유를 나눠 센다 —
         # 진위값 하나로 뭉뚱그리면 아래 나눗셈 가드가 공허해지고, 나중에 그
@@ -1383,7 +1396,20 @@ def main() -> int:
             " 얻어, 분모가 승급의 절반도 대표하지 못한다. 빠진 값이 어느 쪽이었는지"
             " 알 수 없으므로 구간을 넓히는 것으로도 메울 수 없다."
         )
-    if advisor_on and c_range is None:
+    # **타임아웃을 먼저 본다.** 순서가 반대면 c 를 못 잰 이유가 타임아웃일 때
+    # 그 사실이 안 나오고 "c 를 내지 못했다" 로만 끝난다 — 사용자가 할 일이
+    # 다르다(과제를 빼거나 CHILD_TIMEOUT 을 늘리는 것).
+    if advisor_on and timed_out_tasks:
+        print(
+            f"\n  -> 판정 없음. 과제 {timed_out_tasks}건이 타임아웃이라 그 비용을 모른다."
+            + (
+                " 위의 조언 판정도 같은 이유로 보류됐다."
+                if failure_advice_on
+                else " 이 로그의 c 를 c_A 로 쓰면 안 된다 — 타임아웃난 실행은"
+                " 예산을 끝까지 태운 가장 비싼 실행이므로 빠진 비용은 위쪽으로 열려 있다."
+            )
+        )
+    elif advisor_on and c_range is None:
         # c 를 재지 못한 로그다. 사다리 뒤쪽의 c_range is None 분기는 아래
         # advisor_on 이 먼저 흡수해 도달하지 못하므로 여기서 막는다. 이것을
         # 빠뜨리면 재지 못한 c 를 c_A 라고 소개하게 된다.
@@ -1396,19 +1422,6 @@ def main() -> int:
                 # 켜지도 않은 팔이다.
                 else " 실패 후 조언의 판정 s > a + q·r 에는 c 가 안 들어가므로"
                 " 그쪽은 위에서 따로 낸다."
-            )
-        )
-    elif advisor_on and timed_out_tasks:
-        # 조언 분기가 타임아웃 경고를 가리면 안 된다. 빠진 비용이 위쪽으로
-        # 열려 있다는 사실은 조언 판정에도 그대로 해당한다. **어느 모양이든**
-        # 그렇다 — 시작 전 조언만 켠 로그에서 이 경고를 건너뛰면 불완전한 c 를
-        # c_A 라고 소개하며 Shape A 손익식을 제시하게 된다.
-        print(
-            f"\n  -> 판정 없음. 과제 {timed_out_tasks}건이 타임아웃이라 그 비용을 모른다."
-            + (
-                " 위의 조언 판정도 같은 이유로 보류됐다."
-                if failure_advice_on
-                else " 이 로그의 c 를 c_A 로 쓰면 안 된다 — 빠진 비용만큼 작다."
             )
         )
     elif advisor_on:

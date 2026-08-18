@@ -2139,3 +2139,41 @@ def test_a_ppk_body_longer_than_the_old_cap_is_fully_redacted():
     body = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="
     cleaned = module.verify_excerpt("Private-Lines: 401\n" + (body + "\n") * 401)
     assert body not in cleaned
+
+
+# --- 라운드 36: 이음매는 리댁션을 없앨 수도 있다 ------------------------------
+
+
+def test_the_seam_can_suppress_a_redaction_too():
+    """이음매는 자격증명을 **만들** 수도, 이미 있던 리댁션을 **없앨** 수도 있다.
+
+    `API_TOKEN=<값>` 뒤에 stderr 의 첫 글자가 `(` 이면 값 끝 판정이 그것을
+    호출로 보고 매치를 통째로 죽인다. 원문을 이어 붙인 뒤에만 지우면 그
+    억제를 막을 방법이 없다 — 조각을 먼저 지운 뒤 이어 다시 훑는다.
+    """
+    module = load_runner()
+    assert "abc123def456ghi789" not in module.join_streams("API_TOKEN=abc123def456ghi789", "(")
+
+
+@pytest.mark.parametrize(
+    "text,token",
+    [
+        ("password: |\n  abc123def456ghi789", "abc123def456ghi789"),
+        ("api_token: >-\n  abc123def456ghi789", "abc123def456ghi789"),
+    ],
+)
+def test_yaml_block_scalars_are_redacted(text, token):
+    """YAML 블록 스칼라는 값이 다음 줄에 온다.
+
+    구분자를 다시 줄바꿈 넘게 열면 앞선 라운드의 결함(비밀 이름이 줄 끝에
+    있으면 다음 줄 첫 토큰이 값으로 잡힘)이 돌아오므로 이 한 형태만 잡는다.
+    """
+    module = load_runner()
+    assert token not in module.redact_text(text)
+
+
+def test_an_ordinary_block_scalar_survives():
+    """같은 규칙의 반대 방향. 비밀 이름이 아닌 블록은 건드리지 않는다."""
+    module = load_runner()
+    text = "description: |\n  a short note"
+    assert module.verify_excerpt(text) == text

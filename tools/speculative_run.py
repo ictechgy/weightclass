@@ -119,6 +119,9 @@ class Advice(TypedDict, total=False):
     chars: int
     truncated: bool
     empty: bool
+    # 봉투에서 본문을 못 꺼내 조언을 버렸는가. `empty` 와 다른 사건이다 —
+    # 조언자는 답을 냈고 비용도 지불했는데 우리가 못 읽은 것이다.
+    envelope_only: bool
     # 조언자가 0 이 아닌 코드로 끝났거나 타임아웃. 그때 stdout 은 조언이
     # 아니라 오류 메시지이므로 쓰지 않는다.
     route_failed: bool
@@ -950,9 +953,14 @@ _SECRET_SHAPES = re.compile(
     r"|(?i:[A-Z0-9_]{0,40}"
     r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
     r"[A-Z0-9_]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
-    r"(?=[^\s\r\n.(){}<>,;\[\]]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}"
-    + _VALUE_END
-    +
+    r"(?=[^\s\r\n.(){}<>,;\[\]]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}" + _VALUE_END +
+    # YAML 블록 스칼라: `password: |` 뒤 들여쓴 줄이 값이다. 구분자를 다시
+    # 줄바꿈 넘게 열면 라운드 35 의 결함(비밀 이름이 줄 끝에 있으면 다음 줄
+    # 첫 토큰이 값으로 잡힘)이 돌아오므로, 이 **한 형태만** 따로 잡는다.
+    r"|(?<![.\w])(?i:[A-Z0-9_]{0,40}"
+    r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
+    r"[A-Z0-9_]{0,40})[ \t]*:[ \t]*[|>][-+]?[ \t]*\r?\n"
+    r"(?:[ \t]+[^\r\n]*(?:\r?\n|$))+"
     # JWT
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     re.DOTALL,
@@ -1789,13 +1797,22 @@ def join_streams(out: str, err: str) -> str:
     이름만 갈린 경우, 어느 순서로 이어도 그 값은 이름 없는 문자열로 남는다 —
     모양 기반 리댁션이 이름 없는 base64 를 못 잡는다는 원래의 한계다.
     """
-    forward = redact_text(out + err)
+    # **조각을 먼저 지운 뒤 잇는다.** 이음매는 리댁션을 만들 수도 있고
+    # 없앨 수도 있다 — `API_TOKEN=<값>` 뒤에 stderr 의 첫 글자가 `(` 이면
+    # 값 끝 판정이 그것을 호출로 보고 매치를 통째로 죽인다. 원문을 이어
+    # 붙인 뒤에만 지우면 그 억제를 막을 방법이 없다.
+    #
+    # 이미 지운 조각을 이어 다시 훑으면 두 방향이 다 막힌다. 조각 안에서
+    # 잡힌 것은 이미 사라졌고(억제 불가), 이음매에서만 형성되는 것은 이
+    # 두 번째 훑기가 잡는다.
+    ro, re_ = redact_text(out), redact_text(err)
+    forward = redact_text(ro + re_)
     # **길이로 판정하지 않는다.** 두 순서가 서로 다른 자격증명을 같은 길이만큼
     # 지우면 길이는 같은데 잡은 것은 다르다. "따로 지운 것과 이어서 지운 것이
     # 다른가" 를 직접 묻는다 — 다르면 그 이음매에서만 형성되는 것이 있다.
-    reverse_src = err + out
+    reverse_src = re_ + ro
     reverse = redact_text(reverse_src)
-    if reverse == redact_text(err) + redact_text(out):
+    if reverse == re_ + ro:
         return forward.strip()
     # 역순 이음매에서 자격증명이 형성된다. 역순 결과를 그대로 내보내면 안
     # 된다 — **두 순서가 각각 다른 자격증명을 만들 수 있고**, 그때 역순
@@ -2618,6 +2635,8 @@ def ask_advisor(
     # 과제에 붙이면 executor 가 조언 대신 계측 데이터를 읽고, 리댁션도
     # 인코딩된 텍스트와 디코딩된 값을 비교하게 되어 어긋난다. 조언을 버린다.
     envelope_only = not extracted_ok
+    # 이 사실이 레코드에 남아야 한다. 안 남기면 보고서가 "조언자가 답을 못
+    # 냈다" 와 "돈 주고 받은 답을 우리가 버렸다" 를 한 모집단으로 센다.
     if envelope_only:
         print("  조언 봉투에서 본문을 꺼내지 못해 이번 조언은 쓰지 않는다")
     text = "" if failed or envelope_only else redact_text(extracted)
@@ -2629,10 +2648,14 @@ def ask_advisor(
             "stage": stage,
             "child": child,
             "chars": len(text),
-            # 상한에 걸려 잘렸거나, 자식이 타임아웃으로 중간에 끊겼거나.
-            "truncated": truncated or bool(child["timed_out"]),
+            # **잘림과 타임아웃을 한 불리언에 합치지 않는다.** 타임아웃이면
+            # text 가 비어 아무것도 안 잘렸는데도 참이 됐다.
+            "truncated": truncated,
             "empty": not text,
             "route_failed": failed,
+            # 봉투를 못 읽어 우리가 버린 경우. "조언자가 답을 못 냈다" 와
+            # 다른 사건이고, 비용은 이미 지불했다.
+            "envelope_only": envelope_only,
         },
         text,
     )
@@ -3281,6 +3304,7 @@ def main() -> int:
                     "chars": 0,
                     "truncated": False,
                     "empty": True,
+                    "envelope_only": False,
                     "route_failed": True,
                 },
                 "",
