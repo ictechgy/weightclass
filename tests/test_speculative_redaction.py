@@ -1267,17 +1267,6 @@ def test_injecting_the_token_fails_closed():
     assert "SECRETVALUE1234" not in joined
 
 
-def test_a_value_planted_twice_is_removed_everywhere():
-    """이음매 자리만 지우면 자식이 심어 둔 나머지가 남는다."""
-    module = load_runner()
-    joined = module.join_streams(
-        "KEY=SECRETVALUE1234567890AB\nFAILED here\nKEY=SECRETVALUE1234567890AB again",
-        "AWS_SECRET_ACCESS_",
-    )
-    assert "SECRETVALUE1234" not in joined
-    assert "FAILED here" in joined
-
-
 @pytest.mark.parametrize(
     "source",
     [
@@ -1583,17 +1572,6 @@ def test_pgp_armoured_private_keys_are_redacted():
     assert "FAILED: signature mismatch" in cleaned
 
 
-def test_a_duplicated_seam_credential_is_removed_everywhere():
-    """전역 치환의 기준은 길이가 아니라 그 조각이 값 쪽인지다.
-
-    길이로 가르면 양쪽이 부딪힌다 — 낮으면 `FAILED` 가 출력 전체에서
-    지워지고, 높으면 열두 자짜리 중복 값이 남는다.
-    """
-    module = load_runner()
-    joined = module.join_streams("A1B2C3D4E5F6G7H bare duplicate A1B2C3D4E5F6G7H", "API_TOKEN=")
-    assert "A1B2C3D4E5F6G7H" not in joined
-
-
 def test_a_short_diagnostic_word_is_not_replaced_globally():
     """같은 규칙이 반대 방향도 지켜야 한다."""
     module = load_runner()
@@ -1652,35 +1630,6 @@ def test_quantity_alone_does_not_make_a_key(text, kept):
     """표식(armor 체크섬, PEM 헤더)이 없으면 양의 문턱이 훨씬 높아야 한다."""
     module = load_runner()
     assert kept in module.verify_excerpt(text)
-
-
-@pytest.mark.parametrize(
-    "out,err,gone",
-    [
-        # 숫자가 든 값 — 자격증명 모양이다
-        (
-            "A1b2C3d4E5f6G7h8 bare duplicate A1b2C3d4E5f6G7h8",
-            "PASSWORD=",
-            "A1b2C3d4E5f6G7h8",
-        ),
-        (
-            "Xy9Zw8Vu7Ts6Rq5P bare duplicate Xy9Zw8Vu7Ts6Rq5P",
-            "API_TOKEN=",
-            "Xy9Zw8Vu7Ts6Rq5P",
-        ),
-    ],
-)
-def test_the_value_side_of_a_seam_is_removed_everywhere(out, err, gone):
-    """이음매에서 배운 값을 **다른 자리에서도** 지운다.
-
-    다만 이름 없는 자리의 중복은 자격증명 모양일 때만 지운다. 순소문자
-    낱말 조합(`authentication_failure`)은 소스 앵커와 구별할 수 없고, 그것을
-    전역으로 지우면 조언자가 무엇이 실패했는지 못 본다. 이름이 붙은 자리는
-    문법이 이미 잡으므로, 남는 것은 이름 없는 문자열뿐이다 — 이 리댁터의
-    원래 한계와 같은 것이다.
-    """
-    module = load_runner()
-    assert gone not in module.join_streams(out, err)
 
 
 def test_the_name_side_of_a_seam_stays_in_the_source():
@@ -1815,13 +1764,6 @@ def test_four_character_chunks_behind_a_colon_prefix_are_body():
     assert not [chunk for chunk in chunks if "PrivateBody: " + chunk in cleaned]
 
 
-def test_the_seam_removes_the_value_text_not_the_fragment():
-    """조각째 지우면 앞머리(`=`)가 붙어 있어 같은 값의 맨몸 중복이 남는다."""
-    module = load_runner()
-    joined = module.join_streams("=A1B2C3D4E5F6G7H bare duplicate A1B2C3D4E5F6G7H", "PASSWORD")
-    assert "A1B2C3D4E5F6G7H" not in joined
-
-
 def test_a_separator_inside_a_known_secret_is_not_a_name_boundary(monkeypatch):
     """아는 값이 콜론을 담으면 그것은 값의 일부다.
 
@@ -1927,22 +1869,6 @@ def test_an_undercounted_private_lines_declaration_still_removes_the_body():
     # 본문 모양이 아닌 줄에서 멈춰야 한다.
     assert "Private-MAC: 0011" in cleaned
     assert "FAILED keep" in cleaned
-
-
-@pytest.mark.parametrize(
-    "out,err,gone",
-    [
-        # 글자와 숫자가 섞인 값. 숫자**만** 으로 된 값은 이제 전역 삭제
-        # 대상이 아니다 — 아래 테스트가 그 이유를 적는다.
-        ("abc123def456 bare duplicate abc123def456", "API_TOKEN=", "abc123def456"),
-        # 따옴표는 값이 아니다. 함께 지우면 따옴표 없는 중복이 남는다.
-        ('"AbCdEfGhIjKlMn" bare duplicate AbCdEfGhIjKlMn', "PASSWORD=", "AbCdEfGhIjKlMn"),
-    ],
-)
-def test_the_seam_rule_matches_what_its_comment_says(out, err, gone):
-    """주석과 코드가 어긋나면 다음 사람이 주석을 믿고 고친다."""
-    module = load_runner()
-    assert gone not in module.join_streams(out, err)
 
 
 # --- 라운드 32: PPK 의 다섯 결함, 입력 쪽 리댁션 -----------------------------
@@ -2229,17 +2155,6 @@ def test_block_scalar_indicators_are_recognised(text, token):
 # --- 라운드 38: 분석과 출력이 다른 텍스트를 본다 ------------------------------
 
 
-def test_the_value_starts_after_the_separator_whitespace():
-    """값은 구분자 **바로 다음** 이 아니다.
-
-    패턴이 `[=:][ \\t]*` 이므로 공백이 뒤따를 수 있고 따옴표도 값이 아니다.
-    한 글자만 넘기면 잡아낸 값 텍스트가 실제 값과 달라 중복이 남는다.
-    """
-    module = load_runner()
-    joined = module.join_streams("Zz9Yy8Xx7Ww6Vv5 and again Zz9Yy8Xx7Ww6Vv5", "API_TOKEN = ")
-    assert "Zz9Yy8Xx7Ww6Vv5" not in joined
-
-
 def test_raw_spans_are_applied_to_raw_text():
     """원문에서 찾은 구간을 이미 지운 텍스트에 대고 맞추면 어긋난다.
 
@@ -2356,3 +2271,47 @@ def test_a_serialised_block_scalar_head_is_recognised():
     module = load_runner()
     text = "password: |\\n  correct_horse_battery\\nnext: failure"
     assert "correct_horse_battery" not in module.verify_excerpt(text)
+
+
+def test_a_seam_learned_value_is_redacted_only_where_the_evidence_is():
+    """이음매에서 얻은 근거는 **그 자리에 대한 것** 이다.
+
+    여섯 라운드 동안 이 자리는 양쪽으로 왕복했다. 전역으로 지우면
+    `AuthenticationFailure` 같은 소스 식별자가 출력 전체에서 사라지고, 안
+    지우면 같은 값의 맨몸 중복이 남는다. 좁히면 진짜 자격증명을 놓치고
+    (`correcthorsebattery`), 넓히면 진단을 지운다(`123456789012` 가
+    `assert retry_after == 123456789012` 에도 있을 때). 그 사이에 안정된
+    자리는 없었다.
+
+    다른 자리의 같은 문자열에는 이름이 붙어 있지 않고, 이름 없는 문자열을
+    못 잡는 것은 이 리댁터의 원래 한계다. 근거가 있는 자리만 지운다.
+    """
+    module = load_runner()
+    joined = module.join_streams(
+        "AuthenticationFailure\nraise AuthenticationFailure()", "API_TOKEN="
+    )
+    # 이음매 자리는 지워진다.
+    assert not joined.startswith("AuthenticationFailure")
+    # 이름 없는 다른 자리는 남는다 — 그것이 이 리댁터의 원래 한계다.
+    assert "raise AuthenticationFailure()" in joined
+
+
+def test_the_twin_pattern_also_learned_the_hyphen():
+    """하이픈을 한 패턴에만 넣으면 쌍둥이 쪽으로 샌다."""
+    module = load_runner()
+    assert "orchidcoppervelvet" not in module.redact_text("api-key=orchidcoppervelvet123")
+
+
+def test_an_invalid_indicator_rejects_the_header():
+    """유효하지 않은 지시자를 1 로 대신하면 그 수를 자식이 고르는 것은 똑같다."""
+    module = load_runner()
+    text = "password: |0\n AssertionError: database unavailable\nTraceback"
+    assert "AssertionError: database unavailable" in module.verify_excerpt(text)
+
+
+def test_a_diff_prefixed_block_scalar_is_recognised():
+    """패치 안의 YAML 은 줄마다 diff 표식을 단다."""
+    module = load_runner()
+    assert "correcthorsebattery" not in module.verify_excerpt(
+        "+password: |\n+  correcthorsebattery"
+    )

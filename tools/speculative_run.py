@@ -941,8 +941,8 @@ _SECRET_SHAPES = re.compile(
     # `password: value` 를 흘리고, 공백 없는 형태를 무조건 받으면
     # `api_token=credentials.secret_key` 를 지운다. 판정은 **값의 모양** 하나로
     # 한다. 서식은 값이 무엇인지 말해 주지 않는다.
-    r"|(?<![.\w])(?i:[A-Z0-9_]{0,40}"
-    r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
+    r"|(?<![.\w])(?i:[A-Z0-9_-]{0,40}"
+    r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
     r"[A-Z0-9_]{0,40})"
     r"[\"']?[ \t]*[=:][ \t]*"
     r"(?:" + _CREDENTIAL_VALUE + r")"
@@ -950,9 +950,9 @@ _SECRET_SHAPES = re.compile(
     # 위 갈래의 lookbehind 는 속성 접근을 걸러 내지만 앞에 아무 낱말이나
     # 붙어 있어도 함께 막는다. 자식은 구분자 없이 붙여 쓸 수 있으므로 그
     # 구멍을 여기서 메운다 — 대신 숫자가 있고 점이 없는 값만.
-    r"|(?i:[A-Z0-9_]{0,40}"
-    r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
-    r"[A-Z0-9_]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
+    r"|(?i:[A-Z0-9_-]{0,40}"
+    r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
+    r"[A-Z0-9_-]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
     r"(?=[^\s\r\n.(){}<>,;\[\]]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}"
     + _VALUE_END
     +
@@ -1844,16 +1844,16 @@ def join_streams(out: str, err: str) -> str:
         if value_at >= len(err_piece) and out_piece:
             # 앞쪽 따옴표는 value_at 이 이미 넘겼고, 뒤쪽도 값이 아니다.
             # 함께 지우면 따옴표 없는 같은 값이 남는다.
-            value_text = span[value_at:].rstrip("\"'")
-            # **전역으로 지울지의 기준.** 이 자리는 여러 라운드 동안 두 방향을
-            # 왕복했다 — 전역으로 지우면 `authentication_failure` 같은 소스
-            # 앵커가 출력 전체에서 사라지고, 자리에서만 지우면 같은 값의 맨몸
-            # 중복이 남는다. 자격증명처럼 생긴 값만 전역으로 지운다. 그렇지
-            # 않은 값의 맨몸 중복은 이름 없이 남는데, 그것은 이 리댁터의 원래
-            # 한계와 같은 것이고 소스를 지우는 쪽보다 낫다.
-            if len(value_text) >= MINIMUM_SECRET_CHARS * 2 and _is_credential_shaped(value_text):
-                kept_out = kept_out.replace(value_text, "[REDACTED]")
-            elif kept_out.startswith(out_piece):
+            # **전역으로 지우지 않는다.** 이 자리는 여섯 라운드 동안 양쪽으로
+            # 왕복했다 — 지우면 `AuthenticationFailure` 같은 소스 식별자가
+            # 출력 전체에서 사라지고, 안 지우면 같은 값의 맨몸 중복이 남는다.
+            # 좁히면 진짜 자격증명을 놓치고, 넓히면 진단을 지운다. 매번 한쪽이
+            # 틀렸고, 그 사이에 안정된 자리는 없었다.
+            #
+            # 이음매에서 얻은 근거는 **그 자리에 대한 것** 이다. 다른 자리의
+            # 같은 문자열에는 이름이 붙어 있지 않고, 이름 없는 문자열을 못
+            # 잡는 것은 이 리댁터의 원래 한계다. 근거가 있는 자리만 지운다.
+            if kept_out.startswith(out_piece):
                 kept_out = "[REDACTED]" + kept_out[len(out_piece) :]
         elif out_piece and kept_out.startswith(out_piece):
             # 구분자가 없거나 값이 이음매를 가로지른다. 그 값은 이 자리에만
@@ -2073,7 +2073,7 @@ _PPK_HEADER = re.compile(
 # YAML 블록 스칼라의 머리: `password: |`, `api-key: >2-` 등.
 # 이름의 구분자는 밑줄과 하이픈 둘 다다 — `api_key` 만 보면 `api-key` 가 샌다.
 _BLOCK_SCALAR = re.compile(
-    r"(?i)^(?P<indent>[ ]*)(?P<name>[A-Z0-9_-]{0,40}"
+    r"(?i)^(?P<mark>[+-]?)(?P<indent>[ ]*)(?P<name>[A-Z0-9_-]{0,40}"
     r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
     r"[A-Z0-9_-]{0,40})[ \t]*:[ \t]*[|>](?P<hint>(?:[0-9][-+]?|[-+][0-9]?)?)[ \t]*$"
 )
@@ -2106,14 +2106,25 @@ def redact_block_scalars(text: str) -> str:
             position = stop
             continue
         hint = "".join(character for character in head.group("hint") if character.isdigit())
-        extra = int(hint) if hint and int(hint) in BLOCK_SCALAR_HINT_RANGE else 1
-        needed = len(head.group("indent")) + extra
+        if hint and int(hint) not in BLOCK_SCALAR_HINT_RANGE:
+            # 유효하지 않은 지시자는 **머리를 거부한다.** 1 로 대신하면 그
+            # 수를 자식이 고르는 것은 똑같고, `|0` 뒤의 진단이 먹힌다.
+            position = stop
+            continue
+        mark = head.group("mark")
+        needed = len(head.group("indent")) + (int(hint) if hint else 1)
         body_from = stop
         cursor = stop
         while cursor < len(text):
             following = _LINE_SEPARATOR.search(text, cursor)
             line_end = following.end() if following else len(text)
             line = _block_scalar_line(text[cursor:line_end])
+            # diff 표식은 머리와 **같아야** 한다. 표식이 붙은 YAML 은 패치
+            # 안에 있고, 그 본문 줄에도 같은 표식이 붙는다.
+            if mark:
+                if line[:1] != mark:
+                    break
+                line = line[1:]
             # **탭은 들여쓰기가 아니다.** YAML 이 금지한다. 탭으로 시작하는
             # 줄을 본문으로 세면 그 뒤의 진단이 함께 지워진다.
             if line.strip() and (line[:1] == "\t" or len(line) - len(line.lstrip(" ")) < needed):
@@ -2255,6 +2266,15 @@ def untrusted_block(*parts: str) -> str:
     return _tail(redact_text("".join(parts)), COMBINED_EXCERPT_CHARS)
 
 
+def _as_text(captured: object) -> str:
+    """communicate 가 예외에 달아 준 부분 출력을 문자열로."""
+    if isinstance(captured, str):
+        return captured
+    if isinstance(captured, (bytes, bytearray)):
+        return captured.decode("utf-8", errors="replace")
+    return ""
+
+
 def run_verify(verify: Path, workspace: Path, home: Path) -> tuple[VerifyResult, str]:
     """The gate. Exit code is the whole verdict; nothing is parsed from output.
 
@@ -2313,9 +2333,13 @@ def run_verify(verify: Path, workspace: Path, home: Path) -> tuple[VerifyResult,
             _kill_group(verifier)
             try:
                 out, err = verifier.communicate(timeout=30)
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as second:
                 verifier.kill()
-                out, err = "", ""
+                # **이미 읽은 것을 버리지 않는다.** CPython 은 그때까지 읽은
+                # 바이트를 예외에 달아 준다. 빈 문자열로 덮으면 검증기가 남긴
+                # 실패 이유가 통째로 사라져, 조언자가 진단할 것이 없어진다.
+                out = _as_text(second.output)
+                err = _as_text(second.stderr)
         # 정상 종료 경로에서는 그룹을 죽이지 **않는다.** communicate() 가
         # 이미 wait() 로 자식을 회수했으므로 그 PID 는 OS 에 반납된 상태이고,
         # os.getpgid(반납된 PID) 는 재사용된 다른 프로세스의 그룹을 가리킬 수
