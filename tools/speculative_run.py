@@ -869,12 +869,15 @@ _SECRET_SHAPES = re.compile(
     # 붙여 쓴 형태는 값에 점을 허용한다. 띄어 쓴 형태는 자격증명처럼 생겨야
     # 한다 — 점이 없고 숫자가 있어야 `credentials.secret_key` 나
     # `re.compile(...)` 가 걸리지 않는다.
-    r"|(?i:[A-Z0-9_]{0,40}(?:secret|token|password|passwd|api_?key|private_?key|credential)"
+    # 이름 앞의 점은 **속성 접근** 이다 — `self.api_token` 은 코드이지 환경
+    # 변수가 아니다. 환경 덤프와 설정 파일의 이름은 점 뒤에 오지 않는다.
+    r"|(?<![.\w])(?i:[A-Z0-9_]{0,40}"
+    r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
     r"[A-Z0-9_]{0,40})"
     r"(?:"
     # (a) 구분자에 공백이 전혀 없다 — 환경 덤프와 .env 형식. 값의 모양을
     #     따지지 않는다. 사람이 쓴 코드가 이렇게 붙여 쓰는 일은 드물다.
-    r"[\"']?[=:][\"']?[^\s\r\n(){}<>,;\[\]]{12,}"
+    r"[\"']?[=:][\"']?[^\s\r\n(){}<>,;\[\]]{12,}(?!\()"
     r"|"
     # (b) 따옴표 안의 값. 공백이 어느 쪽에 있든 자격증명이다.
     r"[\"']?\s*[=:]\s*[\"'][^\"'\r\n]{12,}[\"']"
@@ -888,9 +891,21 @@ _SECRET_SHAPES = re.compile(
     r"(?:"
     r"(?=[^\s\r\n(){}<>,;\[\]]*[0-9])[^\s\r\n(){}<>,;\[\]]{12,}"
     r"|"
-    r"[^\s\r\n.(){}<>,;\[\]]{16,}"
+    # snake_case 는 식별자다. `authentication_failure` 를 지우면 조언자가
+    # 무엇이 실패했는지 못 본다. 자격증명이 순소문자 밑줄 이름인 일은 드물다.
+    r"[^\s\r\n._(){}<>,;\[\]]{16,}"
     r")"
+    r"(?!\()"
     r")"
+    # 이름이 앞말에 붙어 있어도, 값이 **확실히** 자격증명 모양이면 지운다.
+    # 위 갈래는 이름 앞의 점으로 속성 접근을 걸러 내는데(`self.api_token`),
+    # 그 lookbehind 는 앞에 아무 낱말이나 붙어 있어도 함께 막는다. 자식은
+    # 구분자 없이 붙여 쓸 수 있으므로 그 구멍을 여기서 메운다. 코드가 걸리지
+    # 않도록 조건을 좁힌다 — 숫자가 있고, 점이 없고, 열두 자 이상.
+    r"|(?i:[A-Z0-9_]{0,40}"
+    r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
+    r"[A-Z0-9_]{0,40})[\"']?\s*[=:]\s*[\"']?"
+    r"(?=[^\s\r\n.(){}<>,;\[\]]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}(?!\()"
     # JWT
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     re.DOTALL,
@@ -898,10 +913,10 @@ _SECRET_SHAPES = re.compile(
 # 목록에 넣을 최소 길이. 이보다 짧으면 흔한 문자열일 가능성이 커서, 지우는
 # 이득보다 보고서를 알아볼 수 없게 만드는 손해가 크다.
 MINIMUM_SECRET_CHARS = 6
-# 텍스트를 몇 겹까지 풀어 볼지. 실제 로그에서 두 겹을 넘는 일은 드물지만,
-# 깊이를 값 쪽에 두면 조합마다 항목이 늘고 텍스트 쪽에 두면 상수 하나로 끝난다.
-UNWRAP_DEPTH = 4
-_JSON_ESCAPE = re.compile(r'\\[nrtbf"\\/u]')
+# 인코딩을 몇 겹까지 합성해 볼지. 실제 로그에서 두 겹을 넘는 일은 드물지만,
+# 셋으로 두면 조합이 열다섯 개로 끝나므로 넉넉히 잡아도 비용이 없다.
+ENCODING_DEPTH = 3
+_PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
 VERIFY_EXCERPT_CHARS = 4000
 # 검증 출력과 diff 를 한 덩어리로 보낼 때의 상한. 두 몫을 합친 크기다.
 COMBINED_EXCERPT_CHARS = 8000
@@ -1407,69 +1422,117 @@ def join_streams(out: str, err: str) -> str:
     # **길이로 판정하지 않는다.** 두 순서가 서로 다른 자격증명을 같은 길이만큼
     # 지우면 길이는 같은데 잡은 것은 다르다. "따로 지운 것과 이어서 지운 것이
     # 다른가" 를 직접 묻는다 — 다르면 그 이음매에서만 형성되는 것이 있다.
-    reverse = redact_text(err + out)
+    reverse_src = err + out
+    reverse = redact_text(reverse_src)
     if reverse == redact_text(err) + redact_text(out):
         return forward.strip()
-    # 역순 이음매에서 자격증명이 형성된다. 역순 결과에는 그것이 지워져 있고,
-    # 정방향 이음매를 이루던 두 조각(out 의 꼬리, err 의 머리)은 이제 양 끝에
-    # 떨어져 있어 형성되지 않는다.
-    return reverse.strip()
+    # 역순 이음매에서 자격증명이 형성된다. 역순 결과를 그대로 내보내면 안
+    # 된다 — **두 순서가 각각 다른 자격증명을 만들 수 있고**, 그때 역순
+    # 결과에는 정방향에서만 잡히던 값이 이름 없이 되살아난다.
+    #
+    # 역순에서 지워진 구간을 찾아, 그 구간이 이음매를 가로지르면 두 조각으로
+    # 나눠 정방향 결과에서도 지운다. 조각은 원문 그대로이므로 정확 일치로
+    # 지울 수 있고, 창을 정할 필요가 없다.
+    spans = removed_spans(reverse_src, reverse)
+    if spans is None:
+        # 구간을 짚지 못했다. 두 이음매를 다 끊는 쪽으로 물러선다 — 값이
+        # 이름 없이 남는 원래의 한계는 남지만, 형성된 자격증명은 안 나간다.
+        return (
+            redact_text(redact_text(err) + "\n[...두 스트림이 만나는 자리 생략...]\n")
+            + redact_text(redact_text(out))
+        ).strip()
+    boundary = len(err)
+    for start, stop in spans:
+        for piece in (reverse_src[start:boundary], reverse_src[boundary:stop]):
+            if piece and start < boundary < stop:
+                forward = forward.replace(piece, "[REDACTED]")
+    return forward.strip()
+
+
+def removed_spans(original: str, redacted: str) -> list[tuple[int, int]] | None:
+    """리댁션이 지운 구간의 원문 위치. 짚지 못하면 None.
+
+    리댁션은 구간을 왼쪽부터 차례로 `[REDACTED]` 로 바꾸고 살아남은 구간은
+    원문 그대로다. 그 성질로 되짚는다. 원문에 이미 그 표식이 있으면 되짚을
+    수 없으므로 포기한다 — 틀린 위치를 주느니 없다고 말하는 편이 낫다.
+    """
+    token = "[REDACTED]"
+    if token in original:
+        return None
+    spans: list[tuple[int, int]] = []
+    source = 0
+    cursor = 0
+    while True:
+        hit = redacted.find(token, cursor)
+        if hit == -1:
+            return spans
+        start = source + (hit - cursor)
+        cursor = hit + len(token)
+        following = redacted.find(token, cursor)
+        survivor = redacted[cursor : following if following != -1 else len(redacted)]
+        if not survivor:
+            spans.append((start, len(original)))
+            return spans
+        stop = original.find(survivor, start)
+        if stop == -1:
+            return None
+        spans.append((start, stop))
+        source = stop
 
 
 def redact_host_secrets(text: str) -> str:
-    """아는 값을 지운다. **표현을 열거하지 않고 텍스트를 정규화한다.**
+    """아는 값을 지운다. 인코딩을 거친 형태까지 함께 본다.
 
-    앞선 판은 값에서 파생 표현(JSON 한 겹, 두 겹, 퍼센트 복호)을 만들어
-    목록에 넣었다. 그 방식은 깊이가 언제나 임의적이다 — 세 겹 직렬화나
-    두 번 인코딩은 목록에 없고, 새 조합이 나올 때마다 항목이 하나씩 는다.
+    값은 원문 그대로 나오지 않을 수 있다. JSON 직렬화는 따옴표와 역슬래시를
+    바꾸고, URL 인코딩은 특수문자를 `%XX` 로 바꾸며, 로거가 이미 직렬화된
+    페이로드를 한 번 더 감싸면 그것이 겹친다.
 
-    방향을 뒤집는다. 원문 값 하나만 두고, **텍스트 쪽** 을 한 겹씩 풀면서
-    같은 자리를 본다. 겹의 수는 텍스트가 정한다.
+    두 가지를 시도해 봤고 둘 다 틀렸다. 손으로 고른 목록(원문, JSON 한 겹,
+    JSON 두 겹, 퍼센트 복호)은 조합을 빠뜨린다 — 퍼센트 인코딩한 뒤 JSON 으로
+    감싼 형태가 목록에 없었다. **텍스트** 를 한 겹씩 푸는 방식은 실제 검증
+    출력에서 아예 동작하지 않는다 — `json.loads` 는 여러 줄 텍스트나 따옴표가
+    든 텍스트를 거부하므로 첫 겹에서 멈춘다.
+
+    그래서 값 쪽에서, 두 변환의 **합성에 대해 닫힌** 집합을 만든다. 변환이
+    둘(JSON 이스케이프, 퍼센트 인코딩)이고 깊이가 셋이면 형태가 최대 열다섯
+    개다 — 열거이되 빠지는 조합이 없다. 텍스트는 건드리지 않는다.
     """
-    secrets = host_secret_values()
-    if not secrets:
-        return text
     cleaned = text
-    for secret in secrets:
-        cleaned = cleaned.replace(secret, "[REDACTED]")
-    # 텍스트를 한 겹씩 푼다. 푼 결과에서 값이 보이면 **원문 텍스트에서** 그
-    # 자리에 해당하는 인코딩된 형태를 찾아 지운다. 인코딩된 형태는 그때그때
-    # 만들어 쓰므로 목록이 늘지 않는다.
-    layer = cleaned
-    for _ in range(UNWRAP_DEPTH):
-        unwrapped = _unwrap_once(layer)
-        if unwrapped == layer:
-            break
-        layer = unwrapped
-        for secret in secrets:
-            if secret not in layer:
-                continue
-            # 이 겹에서 보였다. 그 겹까지의 인코딩 형태를 다시 만들어 지운다.
-            for form in _rewrap_forms(secret):
-                cleaned = cleaned.replace(form, "[REDACTED]")
+    for secret in host_secret_values():
+        for form in _encoded_forms(secret):
+            cleaned = cleaned.replace(form, "[REDACTED]")
     return cleaned
 
 
-def _unwrap_once(text: str) -> str:
-    """JSON 이스케이프 한 겹과 퍼센트 인코딩 한 겹을 푼다."""
-    try:
-        unescaped = json.loads(f'"{text}"') if _JSON_ESCAPE.search(text) else text
-    except ValueError:
-        unescaped = text.replace("\\\\", "\\")
-    if "%" in unescaped:
-        unescaped = urllib.parse.unquote(unescaped)
-    return str(unescaped)
+def _encoded_forms(secret: str) -> list[str]:
+    """값과 그 인코딩 형태들. 두 변환의 합성에 대해 닫혀 있다.
+
+    긴 것부터 돌려준다. 짧은 형태가 긴 형태의 일부를 먼저 갉아먹으면 남은
+    조각이 어느 형태와도 안 맞아 그대로 남는다.
+    """
+    seen = {secret}
+    frontier = [secret]
+    for _ in range(ENCODING_DEPTH):
+        nxt = []
+        for form in frontier:
+            for made in (json.dumps(form)[1:-1], *_percent_forms(form)):
+                if made and made not in seen:
+                    seen.add(made)
+                    nxt.append(made)
+        frontier = nxt
+    return sorted(seen, key=len, reverse=True)
 
 
-def _rewrap_forms(secret: str) -> list[str]:
-    """값을 다시 감싼 형태들. 겹마다 하나씩."""
-    forms = []
-    current = secret
-    for _ in range(UNWRAP_DEPTH):
-        current = json.dumps(current)[1:-1]
-        forms.append(current)
-        forms.append(urllib.parse.quote(secret, safe=""))
-    return [form for form in forms if form and form != secret]
+def _percent_forms(value: str) -> tuple[str, str]:
+    """퍼센트 인코딩. 대문자와 소문자 십육진수를 모두 낸다.
+
+    `quote` 는 `%2F` 를 내지만 많은 클라이언트가 `%2f` 를 쓴다. 한쪽만
+    등록하면 다른 쪽이 그대로 나간다 — 십육진 숫자만 바꿔야 하므로 전체를
+    소문자로 만들면 값 자체가 망가진다.
+    """
+    upper = urllib.parse.quote(value, safe="")
+    lower = _PERCENT_ESCAPE.sub(lambda match: match.group(0).lower(), upper)
+    return upper, lower
 
 
 def redact_text(text: str) -> str:
@@ -2711,10 +2774,13 @@ def main() -> int:
         # 섞이면 s 도 p 도 무엇의 값인지 알 수 없게 된다.
         "advisor": {
             "route": _route_identity(advisor_argv) if advisor_argv else None,
-            # 요청과 실제를 나눠 남긴다. 보고서의 동질성 검사는 실제 쪽을
-            # 봐야 하고, 요청 쪽은 "조언을 켰는데 왜 안 붙었나" 를 묻는 데 쓴다.
-            "advise_first": plan_applied,
-            "advise_first_requested": bool(arguments.advise_first),
+            # 요청과 실제를 나눠 남긴다. **두 이름 다 요청을 뜻하게 두고**
+            # 실제 쪽에 따로 이름을 준다 — 나란한 두 키가 서로 다른 의미를
+            # 가지면(하나는 설정, 하나는 결과) 읽는 쪽이 반드시 헷갈린다.
+            # 요청 쪽은 "조언 비용을 지불했는가" 에, 실제 쪽은 "이 실행이
+            # Shape A 표본인가" 에 답한다.
+            "advise_first": bool(arguments.advise_first),
+            "advise_first_applied": plan_applied,
             "advise_on_failure": bool(arguments.advise_on_failure),
             "context": arguments.advisor_context,
         },

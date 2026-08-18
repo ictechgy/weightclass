@@ -236,8 +236,13 @@ def main() -> int:
     # 일부 기록만 시작 전 조언이면 그 비율은 p 도 p′ 도 아니다. 두 설정을
     # 섞어 놓고 한쪽 이름을 붙이면, 조언 없는 실행이 섞인 수를 단일 설정의
     # p′ 처럼 보이게 한다.
+    # **실제로 계획이 붙었는지** 를 본다. 설정 플래그를 보면, 조언이 비어
+    # 계획이 안 붙은 실행도 "계획을 받은 뒤의 실패율" 로 라벨링된다. 실제
+    # 쪽을 보면 그런 로그는 두 값이 섞여 아래 혼합 가드가 라벨을 거부한다.
     first_flags = {
-        bool(isinstance(r.get("advisor"), dict) and (r["advisor"] or {}).get("advise_first"))
+        bool(
+            isinstance(r.get("advisor"), dict) and (r["advisor"] or {}).get("advise_first_applied")
+        )
         for r in usable
     }
     advice_first_on = first_flags == {True}
@@ -1111,8 +1116,8 @@ def main() -> int:
         1
         for rec in usable
         if isinstance(rec.get("advisor"), dict)
-        and (rec["advisor"] or {}).get("advise_first_requested")
-        and not (rec["advisor"] or {}).get("advise_first")
+        and (rec["advisor"] or {}).get("advise_first")
+        and not (rec["advisor"] or {}).get("advise_first_applied")
     )
     if plan_requested_not_applied:
         print(
@@ -1121,8 +1126,17 @@ def main() -> int:
             " 아니다 — p′ 와 c_A 를 이 로그에서 뽑으면 계획을 받은 실행과 못 받은"
             " 실행이 섞인다. 그 건을 빼고 다시 모아야 한다."
         )
+    # **요청** 쪽을 본다. 조언이 전부 비었거나 실패해도 그 호출 비용은 이미
+    # 지불했다. 실제 적용 여부로 이 깃발을 세우면, 그런 로그에서 조언 비용
+    # 구간이 통째로 건너뛰어지고 조언 없는 c + p 판정이 나간다 — 지불한
+    # 비용이 어느 항에도 안 들어가므로 결론이 조언 쪽에 유리하게 틀린다.
     advise_first_on = any(
         isinstance(rec.get("advisor"), dict) and (rec["advisor"] or {}).get("advise_first")
+        for rec in usable
+    )
+    # 라벨(p′, c_A)은 **실제로 계획이 붙은** 실행에만 붙일 수 있다.
+    plan_applied_on = any(
+        isinstance(rec.get("advisor"), dict) and (rec["advisor"] or {}).get("advise_first_applied")
         for rec in usable
     )
     failure_advice_on = any(

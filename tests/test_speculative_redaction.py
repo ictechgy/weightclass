@@ -1078,7 +1078,7 @@ def test_short_decoded_forms_do_not_enter_the_redaction_list(monkeypatch):
         # 짧은 스트림
         ("KEY=SECRETVALUE1234567890AB", "AWS_SECRET_ACCESS_", "SECRETVALUE1234"),
         # 조각이 한 스트림의 머리부터 수천 자에 걸치는 경우 — 고정 창으로는 못 잡는다
-        ("KEN=" + "A1" * 3000, "y" * 100 + "API_TO", "A1" * 40),
+        ("KEN=" + "A1" * 3000, "y" * 100 + "\nAPI_TO", "A1" * 40),
     ],
 )
 def test_the_reverse_seam_needs_no_window(out, err, secret):
@@ -1142,3 +1142,97 @@ def test_percent_encoded_known_secret_is_redacted(monkeypatch):
     module = load_runner()
     encoded = urllib.parse.quote(secret, safe="")
     assert encoded not in module.verify_excerpt(f"payload {encoded} end")
+
+
+# --- 라운드 22: 양방향 형성, 인코딩 합성, 이름 쪽의 점 ------------------------
+
+
+def test_credentials_formed_in_both_orders_are_both_redacted():
+    """두 순서가 각각 다른 자격증명을 만들면 어느 한쪽 결과도 안전하지 않다.
+
+    역순 결과를 그대로 내보내면, 정방향에서만 잡히던 값이 이름 없이 되살아난다.
+    """
+    module = load_runner()
+    joined = module.join_streams(
+        "KEN=abcdef1234567890\nAWS_SECRET_ACCESS_",
+        "KEY=wJalrXUtnFEMI/K7MDENGbPxRf\nAPI_TO",
+    )
+    assert "abcdef1234567890" not in joined
+    assert "wJalrXUtnFEMI/K7" not in joined
+
+
+def test_removed_spans_recovers_the_redacted_regions():
+    """지운 구간을 되짚지 못하면 None 을 줘야 한다 — 틀린 위치보다 낫다."""
+    module = load_runner()
+    assert module.removed_spans("abcXYZdef", "abc[REDACTED]def") == [(3, 6)]
+    assert module.removed_spans("already [REDACTED] here", "already [REDACTED] here") is None
+
+
+@pytest.mark.parametrize(
+    "wrap",
+    [
+        "json",
+        "json2",
+        "json3",
+        "percent",
+        "percent_lower",
+        "percent_then_json",
+        "json_then_percent",
+        "percent2",
+    ],
+)
+def test_encoded_forms_are_closed_under_composition(monkeypatch, wrap):
+    """손으로 고른 목록은 조합을 빠뜨리고, 텍스트 파싱은 여러 줄에서 깨진다.
+
+    값 쪽에서 두 변환의 합성에 닫힌 집합을 만들면 둘 다 피한다.
+    """
+    import re as regex
+    import urllib.parse
+
+    secret = 'wJalr"XUtn/FEMIK7MDENGbPxRfiCYEX'
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", secret)
+    module = load_runner()
+
+    def js(value):
+        return json.dumps(value)[1:-1]
+
+    def pc(value):
+        return urllib.parse.quote(value, safe="")
+
+    forms = {
+        "json": js(secret),
+        "json2": js(js(secret)),
+        "json3": js(js(js(secret))),
+        "percent": pc(secret),
+        "percent_lower": regex.sub(
+            r"%[0-9A-Fa-f]{2}", lambda match: match.group(0).lower(), pc(secret)
+        ),
+        "percent_then_json": js(pc(secret)),
+        "json_then_percent": pc(js(secret)),
+        "percent2": pc(pc(secret)),
+    }
+    encoded = forms[wrap]
+    # 여러 줄 텍스트에서도 동작해야 한다. 검증 출력은 언제나 여러 줄이다.
+    assert encoded not in module.verify_excerpt(f"line one\nline two {encoded} end")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "self.api_token=config.api_token",
+        "obj.password=other.password",
+        "self.token = self.token2",
+        "password=get_password(user)",
+        "API_TOKEN = authentication_failure",
+    ],
+)
+def test_attribute_assignments_are_not_credentials(source):
+    """이름 앞의 점은 속성 접근이다. 값 뒤의 괄호는 호출이다. 둘 다 코드다."""
+    module = load_runner()
+    assert module.verify_excerpt(source) == source
+
+
+def test_a_name_glued_to_preceding_text_is_still_matched():
+    """자식은 구분자 없이 붙여 쓸 수 있다. 값이 확실한 모양이면 위치를 안 따진다."""
+    module = load_runner()
+    assert "A1B2C3D4" not in module.verify_excerpt("yyyyAPI_TOKEN=A1B2C3D4E5F6G7H8")
