@@ -1985,15 +1985,25 @@ def test_the_declaration_alone_does_not_authorise_deletion(text, kept):
     assert kept in module.verify_excerpt(text)
 
 
-def test_the_envelope_makes_the_declaration_trustworthy():
-    """봉투가 있으면 선언한 만큼 지우고, 그 뒤로 본문이 이어지면 계속 지운다."""
+def test_the_envelope_does_not_authorise_deleting_non_body_lines():
+    """봉투가 있어도 **모양은 본다.**
+
+    앞선 판은 봉투가 있으면 선언한 만큼 무조건 지웠다. 그러면 자식이 봉투
+    한 줄을 붙이고 큰 수를 적어 그 만큼의 진단 로그를 지우게 할 수 있다.
+    선언은 "어디까지" 를 말할 뿐 "무엇이든" 을 말하지 않는다.
+
+    대가는 있다 — 자식이 본문 아닌 줄로 채워 진짜 본문을 뒤로 밀면 그
+    본문은 남는다. 그러나 그것은 이름 없는 base64 로 남는 것이고, 진단
+    로그를 지우는 쪽보다 낫다.
+    """
     module = load_runner()
     text = (
-        "PuTTY-User-Key-File-3: ssh-ed25519\nPrivate-Lines: 200\n"
-        + "A\n" * 200
-        + "U0VDUkVUS0VZMTIzNDU2Nzg5MA=="
+        "PuTTY-User-Key-File-3: ssh-ed25519\nPrivate-Lines: 3\n"
+        "FAILED tests/test_auth.py::test_login\nTraceback\nAssertionError"
     )
-    assert "U0VDUkVUS0VZMTIzNDU2Nzg5MA==" not in module.verify_excerpt(text)
+    cleaned = module.verify_excerpt(text)
+    assert "FAILED tests/test_auth.py::test_login" in cleaned
+    assert "Traceback" in cleaned
 
 
 def test_the_task_text_is_redacted_before_it_reaches_the_advisor():
@@ -2004,3 +2014,41 @@ def test_the_task_text_is_redacted_before_it_reaches_the_advisor():
     module = load_runner()
     task = "Fix the parser.\npassword=Abcd1234Efgh5678"
     assert "Abcd1234Efgh5678" not in module.redact_text(task)
+
+
+# --- 라운드 33: 자식이 정하는 수는 믿지 않는다 --------------------------------
+
+
+@pytest.mark.parametrize(
+    "text,kept",
+    [
+        # 문서 어딘가의 봉투 언급이 모든 선언을 신뢰하게 만들면 안 된다.
+        (
+            "Private-Lines: 2\nTraceback: boom\nAssertionError: failed\n"
+            "PuTTY-User-Key-File-3: later",
+            "Traceback: boom",
+        ),
+        # 봉투를 붙이고 큰 수를 적어도 모양이 아니면 안 지운다.
+        (
+            "PuTTY-User-Key-File-3: x\nPrivate-Lines: 3\n"
+            "FAILED tests/test_auth.py::test_login\nTraceback\nAssertionError",
+            "FAILED tests/test_auth.py::test_login",
+        ),
+    ],
+)
+def test_the_declared_count_never_authorises_deletion(text, kept):
+    """`Private-Lines:` 는 **어디를 볼지** 만 말한다. 무엇을 지울지는 모양이 정한다.
+
+    세 라운드에 걸쳐 선언과 봉투를 믿는 판을 세 번 냈고 세 번 다 틀렸다 —
+    상한 초과 선언이 리댁션을 끄는 스위치가 되고, 적게 선언하면 남은 본문이
+    나가고, 봉투 한 줄을 심으면 선언한 만큼의 진단 로그가 지워졌다.
+    """
+    module = load_runner()
+    assert kept in module.verify_excerpt(text)
+
+
+def test_the_ppk_anchor_tolerates_line_prefixes():
+    """PEM 경로는 접두사를 벗기는데 PPK 앵커만 안 벗기면 쌍둥이 한쪽만 막힌다."""
+    module = load_runner()
+    body = "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo="
+    assert body not in module.verify_excerpt(f"+++ b/x\n+Private-Lines: 1\n+{body}")

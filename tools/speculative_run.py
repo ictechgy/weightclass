@@ -2053,40 +2053,36 @@ def _percent_forms(value: str) -> tuple[str, str]:
 # 본문이다. 앵커도 **본 주사와 같은 줄 구분자** 를 봐야 한다 — 물리적
 # 줄바꿈만 보면 JSON 에 직렬화된 로그(`\n` 두 글자)에서 앵커가 안 잡힌다.
 _PPK_PRIVATE = re.compile(
-    r"(?i)(?:^|\r?\n|\\+n)[ \t]*Private-Lines:[ \t]*(\d{1,5})[ \t]*(?=\r?\n|\\+n|$)"
+    # 줄머리의 diff 표식과 CI 접두사를 허용한다. PEM 경로는 strip_log_prefix
+    # 로 이미 벗기는데 여기만 안 벗기면 쌍둥이 한쪽에만 적용된 방어가 된다.
+    r"(?i)(?:^|\r?\n|\\+n)[+\->|\s]{0,8}(?:\[[^\]\r\n]{1,20}\][ \t]*)?"
+    r"Private-Lines:[ \t]*(\d{1,5})[ \t]*(?=\r?\n|\\+n|$)"
 )
-# PPK 봉투의 표식. 이것이 있으면 선언된 줄 수를 믿는다.
-_PPK_ENVELOPE = re.compile(r"(?i)PuTTY-User-Key-File")
 
 
 def redact_ppk_bodies(text: str) -> str:
     """PuTTY 개인키(.ppk)의 본문을 지운다.
 
-    두 가지를 함께 쓴다.
+    `Private-Lines:` 는 **어디를 볼지** 만 말해 준다. 무엇을 지울지는 줄의
+    모양이 정한다 — 공백 없는 base64 이고 짧지 않은 줄이 이어지는 동안
+    지우고, 그렇지 않은 줄에서 멈춘다.
 
-    **선언** — `Private-Lines: N` 은 뒤이어 오는 N 줄이 본문이라고 스스로
-    말한다. 다만 그 말을 믿는 것은 PPK 봉투(`PuTTY-User-Key-File`)가 함께
-    있을 때뿐이다. 봉투 없이 그 한 줄만 있는 것은 자식이 심을 수 있는
-    문자열이고, 그것을 믿으면 선언한 만큼의 진단 로그가 지워진다.
+    선언된 줄 수도, PPK 봉투도 보지 않는다. 세 라운드에 걸쳐 그 둘을 믿는
+    판을 세 번 냈고 세 번 다 틀렸다 — 상한 초과 선언이 리댁션을 끄는
+    스위치가 되고, 적게 선언하면 남은 본문이 나가고, 봉투 한 줄을 심으면
+    선언한 만큼의 진단 로그가 지워졌다. 자식이 정하는 수를 믿을 이유가 없다.
 
-    **모양** — 본문 줄은 공백 없는 base64 이고 짧지 않다. 선언을 다 소비한
-    뒤에도 그런 줄이 이어지면 계속 지운다(적게 선언한 경우), 봉투가 없으면
-    처음부터 모양만 본다.
-
-    앞선 판은 선언만 믿었고, 그래서 다섯 가지로 틀렸다 — 상한을 넘는 선언에
-    `continue` 를 걸어 리댁션을 아예 끄고, 선언분을 내용과 무관하게 지우고,
-    이어짐 판정이 `FAILED` 같은 낱말을 본문으로 봤다.
+    남는 한계: 자식이 본문 아닌 줄로 채워 진짜 본문을 뒤로 밀면 그 본문은
+    남는다. 그러나 그것은 이름 없는 base64 로 남는 것이고, 이 리댁터가
+    원래 못 잡는 형태다 — 진단 로그를 지우는 쪽보다 낫다.
     """
     if "private-lines:" not in text.lower():
         return text
-    trusted = _PPK_ENVELOPE.search(text) is not None
     out: list[str] = []
     index = 0
     for match in _PPK_PRIVATE.finditer(text):
         if match.start() < index:
             continue
-        declared = int(match.group(1)) if trusted else 0
-        declared = min(declared, PPK_MAX_BODY_LINES)
         out.append(text[index : match.end()])
         position = match.end()
         separator = _LINE_SEPARATOR.match(text, position)
@@ -2097,7 +2093,7 @@ def redact_ppk_bodies(text: str) -> str:
             following = _LINE_SEPARATOR.search(text, position)
             stop = following.end() if following else len(text)
             line = text[position:stop].strip().strip(_SERIALISATION_EDGE)
-            if removed >= declared and not _is_ppk_body_line(line):
+            if not _is_ppk_body_line(strip_log_prefix(line) or line):
                 break
             position = stop
             removed += 1

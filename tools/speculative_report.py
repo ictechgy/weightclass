@@ -1253,28 +1253,30 @@ def main() -> int:
         # **조언과 재시도도 실제로 쓴 돈이다.** 빼고 세면 절감의 부호까지
         # 뒤집힌다 — 조언을 켜고 잰 로그에서 그 비용이 어느 항에도 안 들어가
         # 조언 쪽에 유리하게 나온다.
-        # **같은 술어로 거른다.** a 와 r 은 부분 가격을 빼는데 여기서 다시
-        # 받으면, 같은 보고서가 "비용을 얻지 못했다" 고 경고하면서 그 값을
-        # 정확한 지출액으로 합산하게 된다.
+        #
+        # **지출은 통계와 다른 질문이다.** 통계는 "이 수를 판정에 쓸 수
+        # 있는가" 를 묻고 부분 가격을 뺀다. 지출은 "얼마를 썼는가" 를 묻고,
+        # 부분값이라도 안 쓴 것보다는 낫다 — 빼면 실제보다 적게 쓴 것처럼
+        # 보이고 절감의 부호까지 뒤집힌다.
         advisory_spend = sum(
             value
             for r in usable
             for key in ("advice_first", "advice_failure", "retry")
-            if not has_missing_prices(r.get(key)) and (value := cost_of(r.get(key))) is not None
+            if (value := cost_of(r.get(key))) is not None
         )
-        # 타임아웃 난 조언도 돈은 썼다. 그 부분값은 통계에서 빼되 **지출에는
-        # 넣는다** — 빼고 세면 실제보다 적게 쓴 것처럼 보인다.
-        advisory_timeouts = sum(
+        # 값을 아예 못 얻은 건만 센다. **경고와 제외가 같은 술어여야 한다** —
+        # 앞선 판은 타임아웃으로 세고 부분 가격으로 뺐다.
+        advisory_unpriced = sum(
             1
             for r in usable
             for key in ("advice_first", "advice_failure", "retry")
-            if timed_out(r.get(key))
+            if isinstance(r.get(key), dict) and cost_of(r.get(key)) is None
         )
         realized = sum(cheap_all) + expensive_total + advisory_spend
-        if advisory_timeouts:
+        if advisory_unpriced:
             print(
-                f"  주의: 조언·재시도 {advisory_timeouts}건이 타임아웃이라 그 비용을"
-                " 지출에 넣지 못했다. 아래 '실제로 쓴 돈' 은 실제보다 작다."
+                f"  주의: 조언·재시도 {advisory_unpriced}건의 비용을 얻지 못했다."
+                " 아래 '실제로 쓴 돈' 은 그만큼 실제보다 작다."
             )
         expensive_mean = expensive_total / len(paired)
         # 승급하지 않은 과제의 비싼 비용은 잰 적이 없다. 승급 과제의 평균으로
