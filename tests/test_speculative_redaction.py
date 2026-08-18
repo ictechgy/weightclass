@@ -2265,3 +2265,42 @@ def test_block_scalar_indicators_come_in_either_order(text, token):
     """YAML 은 `|2-` 와 `|-2` 를 둘 다 받는다. 한쪽만 받으면 다른 쪽이 샌다."""
     module = load_runner()
     assert token not in module.redact_text(text)
+
+
+# --- 라운드 39: 수를 세는 판정은 코드로 -------------------------------------
+
+
+def test_an_explicit_indentation_indicator_is_respected():
+    """`|2` 는 본문이 두 칸 더 들여쓴 줄이라고 말한다.
+
+    정규식은 수를 셀 수 없어 지시자를 무시했고, 한 칸만 들여쓴 진단 줄을
+    본문으로 먹었다. 이 파일에서 정규식으로 옮긴 판정은 매번 양쪽으로
+    틀렸고, 코드로 옮긴 판정(PPK, userinfo)은 그러지 않았다.
+    """
+    module = load_runner()
+    text = "password: |2\n AssertionError: database unavailable\nTraceback"
+    assert "AssertionError: database unavailable" in module.verify_excerpt(text)
+
+
+@pytest.mark.parametrize(
+    "text,token",
+    [
+        ("password: |\n  orchidcoppervelvet", "orchidcoppervelvet"),
+        ("password: |-2\n  correct_horse_battery", "correct_horse_battery"),
+        ("api_key: |2-\n  Zz9Yy8Xx7Ww6Vv5Uu4", "Zz9Yy8Xx7Ww6Vv5Uu4"),
+        ("token: >+\n  abc123def456ghi", "abc123def456ghi"),
+    ],
+)
+def test_block_scalar_bodies_are_still_redacted(text, token):
+    """규칙을 코드로 옮겨도 원래 잡던 것은 그대로 잡아야 한다."""
+    module = load_runner()
+    assert token not in module.redact_text(text)
+
+
+def test_a_block_scalar_keeps_a_sibling_diagnostic_line():
+    """본문은 키보다 더 들여쓴 줄까지다. 같은 깊이의 줄은 형제이지 본문이 아니다."""
+    module = load_runner()
+    text = "  password: |\n    orchidcoppervelvet\n  AssertionError: expected 1, got 2"
+    cleaned = module.verify_excerpt(text)
+    assert "orchidcoppervelvet" not in cleaned
+    assert "AssertionError: expected 1, got 2" in cleaned

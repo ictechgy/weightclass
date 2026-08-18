@@ -953,18 +953,12 @@ _SECRET_SHAPES = re.compile(
     r"|(?i:[A-Z0-9_]{0,40}"
     r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
     r"[A-Z0-9_]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
-    r"(?=[^\s\r\n.(){}<>,;\[\]]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}" + _VALUE_END +
+    r"(?=[^\s\r\n.(){}<>,;\[\]]*[0-9])[^\s\r\n.(){}<>,;\[\]]{12,}"
+    + _VALUE_END
+    +
     # YAML 블록 스칼라: `password: |` 뒤 들여쓴 줄이 값이다. 구분자를 다시
     # 줄바꿈 넘게 열면 라운드 35 의 결함(비밀 이름이 줄 끝에 있으면 다음 줄
     # 첫 토큰이 값으로 잡힘)이 돌아오므로, 이 **한 형태만** 따로 잡는다.
-    # 본문은 **키보다 더 들여쓴 줄** 까지다. 들여쓰기를 역참조로 잡지 않으면
-    # 뒤따르는 들여쓴 줄을 전부 먹어, 같은 깊이의 진단 줄이 함께 지워진다.
-    # 지시자(`|2`)와 chomping(`|-`, `>+`)도 받는다.
-    r"|(?:^|\r?\n)(?P<yamlind>[ \t]*)(?<![.\w])(?i:[A-Z0-9_]{0,40}"
-    r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
-    # 지시자와 chomping 은 **어느 순서로도** 온다(`|2-`, `|-2` 둘 다 유효).
-    r"[A-Z0-9_]{0,40})[ \t]*:[ \t]*[|>](?:[0-9][-+]?|[-+][0-9]?)?[ \t]*\r?\n"
-    r"(?:(?P=yamlind)[ \t]+[^\r\n]*(?:\r?\n|$))+"
     # JWT
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
     re.DOTALL,
@@ -1255,11 +1249,17 @@ def _decode_base64(material: str) -> bytes | None:
 def _is_credential_shaped(value: str) -> bool:
     """이 값이 자격증명처럼 생겼는가. 이음매에서 배운 값을 전역으로 지울지의 기준.
 
-    **숫자가 있거나** 대소문자가 섞였으면 그렇다. `_looks_like_base64` 는 두
-    종류를 요구하므로 숫자만으로 된 값(`123456789012`)을 놓친다 — 주석은
-    "숫자가 있거나" 라고 적어 놓고 코드는 그렇지 않았다.
+    **숫자가 있거나** 대소문자가 섞였으면 그렇다.
+
+    `_looks_like_base64` 에 위임하지 않는다. 그것은 "접힌 키 본문 한 줄인가"
+    를 묻는 술어이고, 이것은 "이 값을 출력 전체에서 지워도 되는가" 를 묻는다.
+    두 질문이 지금은 같은 답을 내더라도, 한쪽을 고칠 때 다른 쪽이 함께
+    움직이면 안 된다 — 이 파일에서 가장 자주 재발한 결함이 그 형태였다.
     """
-    return any(character.isdigit() for character in value) or _looks_like_base64(value)
+    return any(character.isdigit() for character in value) or (
+        any(character.isupper() for character in value)
+        and any(character.islower() for character in value)
+    )
 
 
 def _looks_like_base64(text: str) -> bool:
@@ -2065,6 +2065,61 @@ _PPK_HEADER = re.compile(
 )
 
 
+# YAML 블록 스칼라의 머리: `password: |`, `api_key: >2-` 등.
+_BLOCK_SCALAR = re.compile(
+    r"(?i)^(?P<indent>[ \t]*)(?P<name>[A-Z0-9_]{0,40}"
+    r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
+    r"[A-Z0-9_]{0,40})[ \t]*:[ \t]*[|>](?P<hint>(?:[0-9][-+]?|[-+][0-9]?)?)[ \t]*$"
+)
+
+
+def redact_block_scalars(text: str) -> str:
+    """YAML 블록 스칼라로 적힌 비밀 값을 지운다.
+
+    **정규식으로 하지 않는다.** 본문의 범위는 들여쓰기를 세어야 정해지고,
+    명시 지시자(`|2`)가 있으면 그 수만큼을 요구해야 한다 — 정규식은 수를 셀
+    수 없어서, 지시자를 무시한 판이 한 칸만 들여쓴 진단 줄을 본문으로 먹었다.
+    이 파일에서 정규식으로 옮긴 판정은 매번 양쪽으로 틀렸고, 코드로 옮긴
+    판정(PPK, userinfo)은 그러지 않았다.
+
+    규칙은 YAML 그대로다. 본문은 키보다 더 들여쓴 줄까지이고, 지시자가 있으면
+    그 수만큼 더 들여쓴 줄까지다. 빈 줄은 본문 안에 있을 수 있으므로 판정을
+    미룬다.
+    """
+    if ":" not in text:
+        return text
+    out: list[str] = []
+    kept = 0
+    position = 0
+    while position < len(text):
+        separator = _LINE_SEPARATOR.search(text, position)
+        stop = separator.end() if separator else len(text)
+        head = _BLOCK_SCALAR.match(text[position:stop].rstrip("\r\n"))
+        if head is None:
+            position = stop
+            continue
+        hint = "".join(character for character in head.group("hint") if character.isdigit())
+        needed = len(head.group("indent")) + (int(hint) if hint else 1)
+        body_from = stop
+        cursor = stop
+        while cursor < len(text):
+            following = _LINE_SEPARATOR.search(text, cursor)
+            line_end = following.end() if following else len(text)
+            line = text[cursor:line_end].rstrip("\r\n")
+            if line.strip() and len(line) - len(line.lstrip(" \t")) < needed:
+                break
+            cursor = line_end
+            if following is None:
+                break
+        if cursor > body_from:
+            out.append(text[kept:body_from])
+            out.append("[REDACTED]\n")
+            kept = cursor
+        position = cursor if cursor > body_from else stop
+    out.append(text[kept:])
+    return "".join(out)
+
+
 def redact_ppk_bodies(text: str) -> str:
     """PuTTY 개인키(.ppk)의 본문을 지운다.
 
@@ -2125,6 +2180,7 @@ def redact_text(text: str) -> str:
     """자르지 않고 지우기만 한다. 조언 본문처럼 길이를 따로 관리하는 곳에 쓴다."""
     cleaned = redact_private_keys(text)
     cleaned = redact_ppk_bodies(cleaned)
+    cleaned = redact_block_scalars(cleaned)
     cleaned = redact_host_secrets(cleaned)
     return _SECRET_SHAPES.sub("[REDACTED]", cleaned)
 
@@ -2146,6 +2202,7 @@ def verify_excerpt(output: str) -> str:
     # PEM 주사는 선형이고 패턴들은 중첩 수량자가 없다.
     cleaned = redact_private_keys(output)
     cleaned = redact_ppk_bodies(cleaned)
+    cleaned = redact_block_scalars(cleaned)
     # 아는 값을 지운다. 모양으로 못 잡는 것을 잡는 유일한 방법이다.
     cleaned = redact_host_secrets(cleaned)
     cleaned = _SECRET_SHAPES.sub("[REDACTED]", cleaned)
