@@ -2224,3 +2224,44 @@ def test_block_scalar_indicators_are_recognised(text, token):
     """YAML 은 `|2`, `|-`, `>+` 같은 지시자를 붙일 수 있다."""
     module = load_runner()
     assert token not in module.redact_text(text)
+
+
+# --- 라운드 38: 분석과 출력이 다른 텍스트를 본다 ------------------------------
+
+
+def test_the_value_starts_after_the_separator_whitespace():
+    """값은 구분자 **바로 다음** 이 아니다.
+
+    패턴이 `[=:][ \\t]*` 이므로 공백이 뒤따를 수 있고 따옴표도 값이 아니다.
+    한 글자만 넘기면 잡아낸 값 텍스트가 실제 값과 달라 중복이 남는다.
+    """
+    module = load_runner()
+    joined = module.join_streams("Zz9Yy8Xx7Ww6Vv5 and again Zz9Yy8Xx7Ww6Vv5", "API_TOKEN = ")
+    assert "Zz9Yy8Xx7Ww6Vv5" not in joined
+
+
+def test_raw_spans_are_applied_to_raw_text():
+    """원문에서 찾은 구간을 이미 지운 텍스트에 대고 맞추면 어긋난다.
+
+    그 텍스트에는 표식이 박혀 있어 정확 일치가 대부분 실패한다. 조각을
+    원문에서 걷어낸 뒤 마지막에 한 번 지운다.
+    """
+    module = load_runner()
+    joined = module.join_streams(
+        "B2C3D4E5F6G7H8I9\nsk-ABCDEFGHIJKLMNOPQRST", "AWS_SECRET_ACCESS_KEY=A1"
+    )
+    assert "B2C3D4E5F6G7H8I9" not in joined
+
+
+@pytest.mark.parametrize(
+    "text,token",
+    [
+        ("password: |-2\n  correct_horse_battery", "correct_horse_battery"),
+        ("api_key: |2-\n  Zz9Yy8Xx7Ww6Vv5Uu4", "Zz9Yy8Xx7Ww6Vv5Uu4"),
+        ("token: >+\n  abc123def456ghi", "abc123def456ghi"),
+    ],
+)
+def test_block_scalar_indicators_come_in_either_order(text, token):
+    """YAML 은 `|2-` 와 `|-2` 를 둘 다 받는다. 한쪽만 받으면 다른 쪽이 샌다."""
+    module = load_runner()
+    assert token not in module.redact_text(text)

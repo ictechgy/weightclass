@@ -962,7 +962,8 @@ _SECRET_SHAPES = re.compile(
     # 지시자(`|2`)와 chomping(`|-`, `>+`)도 받는다.
     r"|(?:^|\r?\n)(?P<yamlind>[ \t]*)(?<![.\w])(?i:[A-Z0-9_]{0,40}"
     r"(?:secret|token|password|passwd|api_?key|private_?key|credential)"
-    r"[A-Z0-9_]{0,40})[ \t]*:[ \t]*[|>][0-9]*[-+]?[ \t]*\r?\n"
+    # 지시자와 chomping 은 **어느 순서로도** 온다(`|2-`, `|-2` 둘 다 유효).
+    r"[A-Z0-9_]{0,40})[ \t]*:[ \t]*[|>](?:[0-9][-+]?|[-+][0-9]?)?[ \t]*\r?\n"
     r"(?:(?P=yamlind)[ \t]+[^\r\n]*(?:\r?\n|$))+"
     # JWT
     r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
@@ -1783,134 +1784,90 @@ def join_streams(out: str, err: str) -> str:
     구분자를 넣으면 안 된다 — 자식이 `-----BEGIN PRI` 를 stdout 에, 나머지를
     stderr 에 써서 마커를 가를 수 있고, 그 사이의 줄바꿈이 회피로가 된다.
 
-    구분자만 없애면 한 방향만 막힌다. stdout 을 먼저 두면 `KEY=<값>` +
-    `AWS_SECRET_ACCESS_` 순서가 되어 이름이 값 **뒤** 로 가고, 이름-값 패턴이
-    형성되지 않는다. 두 스트림에 무엇을 쓸지도, 어느 쪽에 앞부분을 둘지도
-    자식이 고른다.
+    이음매는 자격증명을 **만들** 수도, 이미 있던 리댁션을 **없앨** 수도 있다.
+    조각을 먼저 지운 뒤 이어 다시 훑으면 두 방향이 함께 막힌다 — 조각 안에서
+    잡힌 것은 이미 사라졌으므로 억제될 수 없고, 이음매에서만 형성되는 것은
+    두 번째 훑기가 잡는다.
 
-    그래서 두 순서를 모두 지어 보고, **역순에서만 잡히는 것이 있으면 역순
-    결과를 내보낸다.** 내용은 같고 순서만 다르다.
-
-    앞선 판은 경계 부근을 고정 4096자씩 버렸다. 그 창은 언제나 틀린 크기다 —
-    작으면 긴 PEM 본문과 긴 세션 토큰을 놓치고, 크면 멀쩡한 검증 출력을
-    통째로 버린다. 조각이 한 스트림의 머리부터 수천 자에 걸칠 수 있으므로
-    어떤 고정값도 맞지 않는다. 순서를 바꾸면 창이 필요 없다.
-
-    남는 한계는 이 함수의 것이 아니다. 값이 한 스트림 안에 통째로 있고
-    이름만 갈린 경우, 어느 순서로 이어도 그 값은 이름 없는 문자열로 남는다 —
-    모양 기반 리댁션이 이름 없는 base64 를 못 잡는다는 원래의 한계다.
+    역순으로만 형성되는 것은 그 훑기로도 못 잡는다. 그래서 **원문** 두
+    순서를 지어 보고, 역순에서만 잡히는 구간이 이음매를 가로지르면 그
+    조각을 원문에서 걷어낸다. 분석이 원문이어야 하는 이유는 지운 텍스트에는
+    `[REDACTED]` 표식이 박혀 있어 구간을 되짚을 수 없기 때문이다.
     """
-    # **조각을 먼저 지운 뒤 잇는다.** 이음매는 리댁션을 만들 수도 있고
-    # 없앨 수도 있다 — `API_TOKEN=<값>` 뒤에 stderr 의 첫 글자가 `(` 이면
-    # 값 끝 판정이 그것을 호출로 보고 매치를 통째로 죽인다. 원문을 이어
-    # 붙인 뒤에만 지우면 그 억제를 막을 방법이 없다.
-    #
-    # 이미 지운 조각을 이어 다시 훑으면 두 방향이 다 막힌다. 조각 안에서
-    # 잡힌 것은 이미 사라졌고(억제 불가), 이음매에서만 형성되는 것은 이
-    # 두 번째 훑기가 잡는다.
-    ro, re_ = redact_text(out), redact_text(err)
-    forward = redact_text(ro + re_)
-    # **길이로 판정하지 않는다.** 두 순서가 서로 다른 자격증명을 같은 길이만큼
-    # 지우면 길이는 같은데 잡은 것은 다르다. "따로 지운 것과 이어서 지운 것이
-    # 다른가" 를 직접 묻는다 — 다르면 그 이음매에서만 형성되는 것이 있다.
-    # **이음매 분석은 원문에서 한다.** 지운 조각에는 `[REDACTED]` 표식이
-    # 들어 있고, removed_spans 는 원문에 그 표식이 있으면 되짚기를 포기한다 —
-    # 조각을 먼저 지우도록 바꾼 순간 그 포기가 **언제나** 일어났고, 정상
-    # 출력이 통째로 버려졌다. 출력은 지운 조각에서, 분석은 원문에서.
     reverse_src = err + out
     reverse = redact_text(reverse_src)
     if reverse == redact_text(err) + redact_text(out):
-        return forward.strip()
-    # 역순 이음매에서 자격증명이 형성된다. 역순 결과를 그대로 내보내면 안
-    # 된다 — **두 순서가 각각 다른 자격증명을 만들 수 있고**, 그때 역순
-    # 결과에는 정방향에서만 잡히던 값이 이름 없이 되살아난다.
-    #
-    # 역순에서 지워진 구간을 찾아, 그 구간이 이음매를 가로지르면 두 조각으로
-    # 나눠 정방향 결과에서도 지운다. 조각은 원문 그대로이므로 정확 일치로
-    # 지울 수 있고, 창을 정할 필요가 없다.
+        return _join_redacted(out, err)
     spans = removed_spans(reverse_src, reverse)
     if spans is None:
-        # 구간을 짚지 못했다. **fail-closed 로 간다.** 여기서 두 스트림을
-        # 따로 지워 내보내면, 자식이 출력에 `[REDACTED]` 를 한 번 찍는 것만으로
-        # 되짚기를 무력화하고 이음매에 걸친 값을 통과시킬 수 있다 — 되짚기의
-        # 실패는 자식이 고를 수 있는 사건이므로 그때의 실패 방향이 안전해야
-        # 한다. 조언자는 diff 로 진단해야 한다.
+        # 되짚기 실패는 자식이 고를 수 있는 사건이다(출력에 표식을 심으면
+        # 된다). 그때의 실패 방향이 안전해야 한다.
         return "[...검증 출력 전체 생략: 두 스트림 경계의 자격증명을 짚지 못함...]"
     boundary = len(err)
     crossing = [(start, stop) for start, stop in spans if start < boundary < stop]
     if not crossing:
-        # 역순에서 잡힌 것이 이음매를 **안 가로지른다.** 그것은 한 스트림
-        # 안에서 형성된 것이고, 정방향 리댁션도 같은 스트림을 통째로 보므로
-        # 이미 잡았다. 이음매 문제가 아니다.
-        #
-        # 진입 조건(`reverse != 따로 지운 것`)은 역순이 **덜** 지울 때도 참이
-        # 된다. 그때까지 검증 출력을 통째로 버리면, 자식이 스트림 하나를
-        # 마침표 하나로 만들어 진단을 통째로 날릴 수 있다.
-        return forward.strip()
+        # 역순에서 잡힌 것이 이음매를 **안 가로지른다.** 한 스트림 안에서
+        # 형성된 것이고, 조각별 리댁션이 이미 잡았다. 진입 조건은 역순이
+        # **덜** 지울 때도 참이 되므로 여기서 버리면 안 된다.
+        return _join_redacted(out, err)
+    kept_out, kept_err = out, err
     for start, stop in crossing:
-        # 조각은 err 의 **꼬리** 와 out 의 **머리** 다. 치환 범위를 길이로
-        # 가른다.
+        # 조각은 err 의 **꼬리** 와 out 의 **머리** 다.
         #
-        # 긴 조각은 **전역** 으로 지운다. 자식이 같은 값을 출력 여러 곳에
-        # 심어 두면 이음매 자리만 지워서는 나머지가 그대로 남는다.
-        #
-        # 짧은 조각은 **그 자리에서만** 지운다. 자식은 이음매 매치가 경계
-        # 한 글자 앞에서 시작하도록 만들 수 있고, 그러면 조각이 흔한 한두
-        # 글자가 된다 — 그것을 전역으로 지우면 멀쩡한 출력이 걸레가 된다.
+        # 값은 전역으로 지운다 — 자식이 같은 값을 여러 곳에 심어 둘 수 있다.
+        # 이름은 그 자리에서만 지운다 — 소스에도 나오는 평범한 식별자일 수
+        # 있고, 전역으로 지우면 그 소스가 통째로 사라진다.
         err_piece = reverse_src[start:boundary]
         out_piece = reverse_src[boundary:stop]
-        # 값을 **전역** 으로 지워야 한다 — 자식이 같은 값을 출력 여러 곳에
-        # 심어 둘 수 있다. 이름은 그 자리에서만 지운다 — 이름은 소스에도
-        # 나오는 평범한 식별자일 수 있고, 전역으로 지우면 그 소스가 통째로
-        # 사라진다.
-        #
-        # 어디까지가 값인지는 **구분자의 위치** 가 정한다. 앞선 판은 "err
-        # 쪽이 이름, out 쪽이 값" 이라고 단정했는데, 그것은 이름-값 형태에만
-        # 맞다. `sk-` 나 `ghp_` 처럼 접두사가 붙는 토큰은 구분자가 없고 값
-        # 하나가 이음매를 가로지를 뿐이라, out 쪽 조각(`FAILED`)을 값으로
-        # 보고 전역 삭제하면 멀쩡한 로그가 지워진다.
         span = reverse_src[start:stop]
         # **첫** 구분자다. 마지막 것을 잡으면 값 안에 우연히 든 콜론
-        # (`Traceback:`)이 경계로 잡혀, 이름 쪽 조각이 값으로 둔갑한다.
-        #
-        # 정확 일치로 등록된 값에는 구분자 해석을 하지 않는다. 그 값 자체가
-        # 콜론을 담을 수 있고(`prefix:FAILED`), 그것을 이름-값 경계로 읽으면
-        # 흔한 낱말이 전역 삭제의 대상이 된다.
+        # (`Traceback:`)이 경계로 잡혀 이름 쪽 조각이 값으로 둔갑한다.
+        # 정확 일치로 등록된 값에는 구분자 해석을 하지 않는다 — 그 값 자체가
+        # 콜론을 담을 수 있다(`prefix:FAILED`).
         offsets = (
             []
             if span in known_secret_forms()
             else [at for at in (span.find("="), span.find(":")) if at >= 0]
         )
-        value_at = min(offsets) + 1 if offsets else -1
+        # 값은 구분자 **바로 다음** 이 아니다. 패턴이 `[=:][ \t]*` 이므로
+        # 공백이 뒤따를 수 있고, 따옴표도 값이 아니다.
+        value_at = -1
+        if offsets:
+            value_at = min(offsets) + 1
+            while value_at < len(span) and span[value_at] in " \t\"'":
+                value_at += 1
         if value_at >= len(err_piece) and out_piece:
-            # 값이 out 쪽 조각 안에 있다. **조각이 아니라 값 텍스트** 를 지운다 —
-            # 조각째 지우면 `=` 같은 앞머리가 붙어 있어, 같은 값이 앞머리 없이
-            # 다른 곳에 있으면 그것이 남는다.
-            # 따옴표는 값이 아니다. 함께 지우면 따옴표 없는 같은 값이 남는다.
-            value_text = span[value_at:].strip("\"'")
-            # **전역으로 지울지의 기준을 여기서 고정한다.** 이 자리는 세
-            # 라운드 동안 두 방향을 왕복했다 — 전역으로 지우면
-            # `authentication_failure` 같은 소스 앵커가 출력 전체에서
-            # 사라지고, 자리에서만 지우면 같은 값의 맨몸 중복이 남는다.
-            #
-            # 자격증명처럼 생긴 값만 전역으로 지운다: 숫자가 있거나 대소문자가
-            # 섞여 있고 열두 자 이상. 그렇지 않은 값(순소문자 낱말 조합)의
-            # 맨몸 중복은 **이름 없이** 남는데, 그것은 이 리댁터의 원래
-            # 한계(이름 없는 문자열은 못 잡는다)와 같은 것이고, 소스를 지우는
-            # 쪽보다 낫다.
+            # 앞쪽 따옴표는 value_at 이 이미 넘겼고, 뒤쪽도 값이 아니다.
+            # 함께 지우면 따옴표 없는 같은 값이 남는다.
+            value_text = span[value_at:].rstrip("\"'")
+            # **전역으로 지울지의 기준.** 이 자리는 여러 라운드 동안 두 방향을
+            # 왕복했다 — 전역으로 지우면 `authentication_failure` 같은 소스
+            # 앵커가 출력 전체에서 사라지고, 자리에서만 지우면 같은 값의 맨몸
+            # 중복이 남는다. 자격증명처럼 생긴 값만 전역으로 지운다. 그렇지
+            # 않은 값의 맨몸 중복은 이름 없이 남는데, 그것은 이 리댁터의 원래
+            # 한계와 같은 것이고 소스를 지우는 쪽보다 낫다.
             if len(value_text) >= MINIMUM_SECRET_CHARS * 2 and _is_credential_shaped(value_text):
-                forward = forward.replace(value_text, "[REDACTED]")
-            elif forward.startswith(out_piece):
-                forward = "[REDACTED]" + forward[len(out_piece) :]
-            else:
-                forward = forward.replace(value_text, "[REDACTED]", 1)
-        elif out_piece and forward.startswith(out_piece):
+                kept_out = kept_out.replace(value_text, "[REDACTED]")
+            elif kept_out.startswith(out_piece):
+                kept_out = "[REDACTED]" + kept_out[len(out_piece) :]
+        elif out_piece and kept_out.startswith(out_piece):
             # 구분자가 없거나 값이 이음매를 가로지른다. 그 값은 이 자리에만
             # 있으므로 자리 치환으로 충분하다.
-            forward = "[REDACTED]" + forward[len(out_piece) :]
-        if err_piece and forward.endswith(err_piece):
-            forward = forward[: -len(err_piece)] + "[REDACTED]"
-    return forward.strip()
+            kept_out = "[REDACTED]" + kept_out[len(out_piece) :]
+        if err_piece and kept_err.endswith(err_piece):
+            kept_err = kept_err[: -len(err_piece)] + "[REDACTED]"
+    return _join_redacted(kept_out, kept_err)
+
+
+def _join_redacted(out: str, err: str) -> str:
+    """조각을 먼저 지운 뒤 이어 다시 훑는다.
+
+    두 단계인 이유는 이음매가 리댁션을 **없앨** 수도 있기 때문이다 —
+    `API_TOKEN=<값>` 뒤에 stderr 의 첫 글자가 `(` 이면 값 끝 판정이 그것을
+    호출로 보고 매치를 죽인다. 먼저 지우면 그 억제가 불가능하고, 두 번째
+    훑기가 이음매에서만 형성되는 것을 잡는다.
+    """
+    return redact_text(redact_text(out) + redact_text(err)).strip()
 
 
 def removed_spans(original: str, redacted: str) -> list[tuple[int, int]] | None:
