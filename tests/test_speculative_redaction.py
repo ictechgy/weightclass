@@ -2315,3 +2315,49 @@ def test_a_diff_prefixed_block_scalar_is_recognised():
     assert "correcthorsebattery" not in module.verify_excerpt(
         "+password: |\n+  correcthorsebattery"
     )
+
+
+# --- 라운드 42: 표식은 맞추지 말고 벗긴다 ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text,token",
+    [
+        # YAML 시퀀스의 하이픈이 diff 표식과 같은 자리에 온다.
+        ("- password: |\n    hunter2_correct_battery", "hunter2_correct_battery"),
+        # 통합 diff: 머리는 문맥 줄, 본문만 바뀐 줄.
+        (" db_password: |\n-  Tr0ub4dor3xyz\n+  correct-horse-battery", "Tr0ub4dor3xyz"),
+        # 머리와 본문이 같은 표식.
+        ("+password: |\n+  correcthorsebattery", "correcthorsebattery"),
+    ],
+)
+def test_line_markers_are_stripped_not_matched(text, token):
+    """표식을 머리와 본문이 맞추도록 요구하면 두 방향으로 틀린다.
+
+    통합 diff 는 머리가 문맥 줄이고 본문만 바뀐 줄일 수 있고, YAML
+    시퀀스의 하이픈도 같은 자리에 온다. 벗기기만 하면 세 경우가 한 규칙으로
+    처리된다 — 벗긴 뒤의 들여쓰기가 그 줄의 진짜 깊이다.
+    """
+    module = load_runner()
+    assert token not in module.verify_excerpt(text)
+
+
+def test_the_hyphen_reached_the_suffix_too():
+    """이름의 접두사에만 하이픈을 넣으면 접미사 쪽으로 샌다."""
+    module = load_runner()
+    assert "correcthorsebattery" not in module.redact_text(
+        "db-password-primary: correcthorsebattery"
+    )
+
+
+def test_a_tool_payload_is_not_advice():
+    """`content` 는 도구 결과에도 쓰이는 이름이다.
+
+    배열 쪽은 이미 막았는데 dict 쪽만 안 막으면 비대칭이고, 그 틈으로 파일
+    내용이 조언 자리에 들어간다.
+    """
+    module = load_runner()
+    payload = {"type": "tool_result", "tool_use_id": "x", "content": "-----BEGIN id_rsa"}
+    assert "id_rsa" not in module._first_text(payload)
+    # 반대 방향: 평범한 content 는 여전히 본문이다.
+    assert module._first_text({"content": "Use a bounded queue."}) == "Use a bounded queue."

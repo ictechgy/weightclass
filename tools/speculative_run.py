@@ -943,7 +943,7 @@ _SECRET_SHAPES = re.compile(
     # 한다. 서식은 값이 무엇인지 말해 주지 않는다.
     r"|(?<![.\w])(?i:[A-Z0-9_-]{0,40}"
     r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
-    r"[A-Z0-9_]{0,40})"
+    r"[A-Z0-9_-]{0,40})"
     r"[\"']?[ \t]*[=:][ \t]*"
     r"(?:" + _CREDENTIAL_VALUE + r")"
     # 이름이 앞말에 붙어 있어도, 값이 **확실히** 자격증명 모양이면 지운다.
@@ -1853,11 +1853,11 @@ def join_streams(out: str, err: str) -> str:
             # 이음매에서 얻은 근거는 **그 자리에 대한 것** 이다. 다른 자리의
             # 같은 문자열에는 이름이 붙어 있지 않고, 이름 없는 문자열을 못
             # 잡는 것은 이 리댁터의 원래 한계다. 근거가 있는 자리만 지운다.
-            if kept_out.startswith(out_piece):
-                kept_out = "[REDACTED]" + kept_out[len(out_piece) :]
-        elif out_piece and kept_out.startswith(out_piece):
-            # 구분자가 없거나 값이 이음매를 가로지른다. 그 값은 이 자리에만
-            # 있으므로 자리 치환으로 충분하다.
+            pass
+        if out_piece and kept_out.startswith(out_piece):
+            # 구분자가 있든 없든 out 쪽 조각은 이음매 자리에 있다. 값이
+            # 어디까지인지 따지던 두 분기가 같은 동작을 하게 됐으므로 하나로
+            # 합친다 — 전역 삭제를 없앤 뒤 남은 잔재다.
             kept_out = "[REDACTED]" + kept_out[len(out_piece) :]
         if err_piece and kept_err.endswith(err_piece):
             kept_err = kept_err[: -len(err_piece)] + "[REDACTED]"
@@ -2073,7 +2073,7 @@ _PPK_HEADER = re.compile(
 # YAML 블록 스칼라의 머리: `password: |`, `api-key: >2-` 등.
 # 이름의 구분자는 밑줄과 하이픈 둘 다다 — `api_key` 만 보면 `api-key` 가 샌다.
 _BLOCK_SCALAR = re.compile(
-    r"(?i)^(?P<mark>[+-]?)(?P<indent>[ ]*)(?P<name>[A-Z0-9_-]{0,40}"
+    r"(?i)^(?P<indent>[ ]*)(?P<name>[A-Z0-9_-]{0,40}"
     r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
     r"[A-Z0-9_-]{0,40})[ \t]*:[ \t]*[|>](?P<hint>(?:[0-9][-+]?|[-+][0-9]?)?)[ \t]*$"
 )
@@ -2111,7 +2111,6 @@ def redact_block_scalars(text: str) -> str:
             # 수를 자식이 고르는 것은 똑같고, `|0` 뒤의 진단이 먹힌다.
             position = stop
             continue
-        mark = head.group("mark")
         needed = len(head.group("indent")) + (int(hint) if hint else 1)
         body_from = stop
         cursor = stop
@@ -2119,12 +2118,6 @@ def redact_block_scalars(text: str) -> str:
             following = _LINE_SEPARATOR.search(text, cursor)
             line_end = following.end() if following else len(text)
             line = _block_scalar_line(text[cursor:line_end])
-            # diff 표식은 머리와 **같아야** 한다. 표식이 붙은 YAML 은 패치
-            # 안에 있고, 그 본문 줄에도 같은 표식이 붙는다.
-            if mark:
-                if line[:1] != mark:
-                    break
-                line = line[1:]
             # **탭은 들여쓰기가 아니다.** YAML 이 금지한다. 탭으로 시작하는
             # 줄을 본문으로 세면 그 뒤의 진단이 함께 지워진다.
             if line.strip() and (line[:1] == "\t" or len(line) - len(line.lstrip(" ")) < needed):
@@ -2144,14 +2137,21 @@ def redact_block_scalars(text: str) -> str:
 
 
 def _block_scalar_line(raw: str) -> str:
-    """한 줄에서 직렬화 부스러기만 걷는다.
+    """한 줄에서 직렬화 부스러기와 **줄머리 표식 하나** 를 걷는다.
+
+    표식을 머리와 본문이 **맞추도록** 요구하던 판은 두 방향으로 틀렸다.
+    통합 diff 는 머리가 문맥 줄(` `)이고 본문만 바뀐 줄(`+`/`-`)일 수 있고,
+    YAML 시퀀스(`- password: |`)의 하이픈도 같은 자리에 온다. 맞추려 하지
+    말고 **벗기기만** 하면 세 경우가 한 규칙으로 처리된다 — 벗긴 뒤의
+    들여쓰기가 그 줄의 진짜 깊이다.
 
     **로그 접두사는 벗기지 않는다.** `strip_log_prefix` 는 `이름: ` 도
     접두사로 보므로 `password: |` 가 `|` 가 되어 머리 자체를 못 알아본다.
     그리고 들여쓰기를 세는 함수라 접두사를 벗기면 그 수가 달라진다 —
     쌍둥이와 같은 정규화를 쓰는 것보다 이 함수의 계약이 우선이다.
     """
-    return _ESCAPE_NOISE.sub("", raw).rstrip("\r\n")
+    line = _ESCAPE_NOISE.sub("", raw).rstrip("\r\n")
+    return line[1:] if line[:1] in "+-" else line
 
 
 def redact_ppk_bodies(text: str) -> str:
@@ -2729,6 +2729,19 @@ def ask_advisor(
     )
 
 
+def _looks_like_tool_payload(payload: dict[str, object]) -> bool:
+    """이 dict 가 조언이 아니라 도구 호출·결과인가.
+
+    벤더마다 이름이 다르지만 도구 쪽에는 언제나 이름이나 식별자가 붙는다.
+    조언 본문에는 그런 것이 없다.
+    """
+    markers = ("tool", "tool_use_id", "tool_name", "name", "path", "file_path", "command")
+    kind = payload.get("type")
+    if isinstance(kind, str) and "tool" in kind:
+        return True
+    return any(key in payload for key in markers)
+
+
 def _first_text(payload: object, depth: int = 0) -> str:
     """봉투 안에서 사람이 읽을 본문을 찾는다.
 
@@ -2742,6 +2755,11 @@ def _first_text(payload: object, depth: int = 0) -> str:
         for field in ("result", "text", "content", "message", "output_text"):
             value = payload.get(field)
             if isinstance(value, str) and value.strip():
+                # `content` 는 도구 결과에도 쓰이는 이름이다. 그 페이로드를
+                # 조언 본문으로 고르면 파일 내용이 조언 자리에 들어간다 —
+                # 배열 쪽은 이미 막았는데 여기만 안 막으면 비대칭이다.
+                if field == "content" and _looks_like_tool_payload(payload):
+                    continue
                 return value.strip()
         for value in payload.values():
             found = _first_text(value, depth + 1)
@@ -3399,8 +3417,9 @@ def main() -> int:
         # 실행에서 유일하게 외부로 나가는 경로다.
         first_advice, text = advise(
             "first",
-            f"{redact_text(task)}\n\nYou are advising another model that will do this"
-            f" work. {ADVICE_BRIEF}",
+            redact_text(
+                f"{task}\n\nYou are advising another model that will do this work. {ADVICE_BRIEF}"
+            ),
         )
         # **빈 조언은 붙이지 않는다.** Shape B 는 `if text:` 로 막는데 여기만
         # 막지 않으면, 조언 경로가 죽거나 조언자가 빈 답을 냈을 때 계획이
@@ -3495,7 +3514,11 @@ def main() -> int:
             "Explain what went wrong and what to do differently. "
             f"{ADVICE_BRIEF}"
         )
-        failure_advice, text = advise("failure", prompt)
+        # **조립한 뒤 한 번 더 지운다.** 과제와 산출물을 따로 지우면, 과제에
+        # 이름이 있고 출력에 값만 있는 자격증명은 어느 쪽에서도 안 잡힌다.
+        # 리댁션은 없애기만 하므로 다시 훑는 것이 안전하고, 사이의 틀 문구에는
+        # 비밀이 없다.
+        failure_advice, text = advise("failure", redact_text(prompt))
         record["advice_failure"] = failure_advice
         if text:
             retry, _, _ = attempt(
