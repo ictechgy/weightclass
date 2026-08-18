@@ -785,12 +785,14 @@ def main() -> int:
         config = json.loads(advisor_configs.pop())
         # **계획이 실제로 붙었는지** 가 설정과 갈리면 프라임 라벨을 못 쓴다.
         # 계획을 받은 실행과 못 받은 실행이 한 수에 섞이기 때문이다.
-        if len(first_flags) > 1:
+        mixed_application = len(first_flags) > 1
+        if mixed_application:
             print(
                 "\n경고: 같은 설정인데 계획이 붙은 실행과 안 붙은 실행이 섞여 있다."
-                " s′ 도 p′ 도 단일 모양의 값이 아니므로 프라임 라벨을 쓰지 않는다."
+                " 계획을 받은 실패와 못 받은 실패가 한 수에 들어가므로 s 도 q 도"
+                " 어느 설정의 값인지 말할 수 없다. **판정을 내지 않는다.**"
             )
-        primed = plan_applied_on and len(first_flags) == 1
+        primed = plan_applied_on and not mixed_application
         shapes = []
         if config.get("advise_first"):
             shapes.append("시작 전(A)")
@@ -818,9 +820,17 @@ def main() -> int:
                 # 요구하면 구독 실행처럼 0 을 보고하는 경우가 "가격 없음" 이
                 # 되어, 전수 검사가 영원히 통과하지 못한다.
                 values = [value for r in usable if (value := advice_cost(r, key)) is not None]
+                # 리스트가 비지 않아도 **평균이 0** 일 수 있다(관측이 전부 0).
+                # estimate_c 는 그 가드를 갖는데 같은 분모를 쓰는 여기와 r 쪽
+                # 에는 없어서, 구독 로그처럼 비용이 0 인 실행에서 죽었다.
                 if not values or not all_expensive_costs:
                     return None
                 expensive_mean_all = statistics.fmean(all_expensive_costs)
+                # 리스트가 비지 않아도 **평균이 0** 일 수 있다(관측이 전부 0).
+                # estimate_c 는 그 가드를 갖는데 같은 분모를 쓰는 여기와 r 쪽
+                # 에는 없어서, 비용이 0 인 로그에서 죽었다.
+                if expensive_mean_all <= 0:
+                    return None
                 mean = statistics.fmean(values)
                 # a 도 표본에서 온 값이다. 점추정만 쓰면 s > a + q·r 판정이
                 # 실제보다 확정적으로 보인다.
@@ -948,7 +958,10 @@ def main() -> int:
                         )
                     r_ratio = None
                     r_spread = 0.0
-                    if retry_costs and all_expensive_costs:
+                    retry_denominator = (
+                        statistics.fmean(all_expensive_costs) if all_expensive_costs else 0.0
+                    )
+                    if retry_costs and retry_denominator > 0:
                         expensive_mean_all = statistics.fmean(all_expensive_costs)
                         r_mean = statistics.fmean(retry_costs)
                         r_ratio = r_mean / expensive_mean_all
@@ -1041,12 +1054,26 @@ def main() -> int:
                                     # 되돌려 곱한다.
                                     bound_low = bound_low * mean_e / upper_e
                                     bound_high = bound_high * mean_e / lower_e
-                            basis = f"{q:.2f}·r" if q < 1 else "r"
+                            # A+B 로그에서는 **네 기호가 모두** 프라임이다.
+                            # 실패 단계 조언 비용, 시도율, 재시도 비용, 구제율이
+                            # 전부 계획을 받은 뒤에 측정된 값이다. s′ 만 찍고
+                            # 나머지를 안 찍으면 읽는 쪽이 B 단독의 수와 섞는다.
+                            mark = "′" if primed else ""
+                            basis = f"{q:.2f}·r{mark}" if q < 1 else f"r{mark}"
                             print(
-                                f"  손익분기 s = a + {basis} = {a_ratio + r_ratio * q:.3f}"
+                                f"  손익분기 s{mark} = a{mark} + {basis}"
+                                f" = {a_ratio + r_ratio * q:.3f}"
                                 f"  (구간 [{bound_low:.3f}, {bound_high:.3f}])"
                             )
-                            if s_lo > bound_high:
+                            if mixed_application:
+                                # 계획을 받은 실패와 못 받은 실패가 한 수에
+                                # 들어가 있다. 위에서 경고만 하고 여기서
+                                # 판정을 내면 그 경고가 아무 일도 안 한다.
+                                print(
+                                    "  -> 판정 없음. 계획 적용이 섞인 모집단이라"
+                                    " s 가 어느 설정의 값인지 말할 수 없다."
+                                )
+                            elif s_lo > bound_high:
                                 print(
                                     "  -> 구간 전체가 손익분기 위다. 실패 후 조언이 승급보다 싸다."
                                 )

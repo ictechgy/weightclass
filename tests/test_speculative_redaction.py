@@ -933,7 +933,6 @@ def test_mixed_content_array_ignores_non_text_blocks():
     "source",
     [
         "AWS_SESSION_TOKEN: Optional[str] = None",
-        "AWS_SECRET_ACCESS_KEY = credentials.secret_key",
         'AWS_SESSION_TOKEN = os.environ.get("AWS_SESSION_TOKEN")',
         'API_KEY_HEADER = "X-Api-Key"',
         'TOKEN_RE = re.compile(r"x")',
@@ -1050,7 +1049,6 @@ def test_dotted_credentials_are_redacted(line, token):
 @pytest.mark.parametrize(
     "source",
     [
-        "AWS_SECRET_ACCESS_KEY = credentials.secret_key",
         "self.api_key = config.api_key",
         "password = get_password(user)",
         'TOKEN_RE = re.compile(r"x")',
@@ -1223,7 +1221,6 @@ def test_encoded_forms_are_closed_under_composition(monkeypatch, wrap):
         "obj.password=other.password",
         "self.token = self.token2",
         "password=get_password(user)",
-        "API_TOKEN = authentication_failure",
     ],
 )
 def test_attribute_assignments_are_not_credentials(source):
@@ -1287,9 +1284,7 @@ def test_a_value_planted_twice_is_removed_everywhere():
 @pytest.mark.parametrize(
     "source",
     [
-        "authenticate(api_token=authentication_failure)",
-        "API_TOKEN=authentication_failure",
-        "api_token=credentials.secret_key",
+        "password=get_password(user)",
         'AWS_SESSION_TOKEN = os.environ.get("AWS_SESSION_TOKEN")',
         "aws_secret_access_key = credentials.get_secret()",
     ],
@@ -1300,9 +1295,109 @@ def test_the_value_shape_rules_are_shared_by_every_branch(source):
     assert module.verify_excerpt(source) == source
 
 
-def test_a_partial_match_never_splits_an_identifier():
-    """`authentication_failure` 에서 앞부분만 지우는 것이 가장 나쁜 결과다."""
+def test_a_partial_match_never_splits_a_value():
+    """값을 절반만 지우는 것이 가장 나쁜 결과다.
+
+    지울 것이면 전부 지우고, 남길 것이면 전부 남긴다. 토큰 끝을 고정하지
+    않으면 `authentication_failure` 에서 `authentication` 만 지워져 뒤쪽이
+    남는다 — 자격증명이었다면 앵커만 잃은 채 값이 남고, 코드였다면 조언자가
+    읽을 수 없는 조각이 된다.
+    """
     module = load_runner()
-    assert module.verify_excerpt("API_TOKEN=authentication_failure") == (
-        "API_TOKEN=authentication_failure"
-    )
+    cleaned = module.verify_excerpt("API_TOKEN=authentication_failure")
+    # 전부 지워졌거나(이름까지 함께) 전부 남았거나 — 그 사이는 없어야 한다.
+    assert cleaned in ("[REDACTED]", "API_TOKEN=authentication_failure")
+
+
+# --- 라운드 24: 뒤집은 판정과 그 이유 ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line,token",
+    [
+        # 숫자도 점도 없는 패스프레이즈. 앞선 판은 밑줄을 식별자의 표식으로
+        # 보고 남겼는데, 그러면 이것이 통째로 조언자에게 간다.
+        ("PASSWORD=correct_horse_battery", "correct_horse"),
+        ("PASSWORD=correct.horse.battery", "correct.horse"),
+        ("password: correcthorsebattery", "correcthorse"),
+    ],
+)
+def test_passphrase_values_are_redacted_even_without_digits(line, token):
+    """`correct_horse_battery` 와 `authentication_failure` 는 모양이 같다.
+
+    정규식으로 갈릴 수 있는 것이 아니다. 네 라운드 동안 세 기준(점, 밑줄,
+    구분자 공백)을 시도했고 셋 다 한쪽 방향으로 틀렸다. 그래서 **한 방향을
+    고른다** — 지운다. 코드는 다른 신호로만 살린다(이름 앞의 점, 값 뒤의
+    괄호, 따옴표 안의 공백). 그 셋에 안 걸리는 소스 줄은 지워지지만,
+    조언자에게는 diff 가 함께 가므로 되찾을 수 있다. 반대 방향의 실수는
+    되돌릴 수 없다.
+    """
+    module = load_runner()
+    assert token not in module.verify_excerpt(line)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # 이름 앞의 점 — 속성 접근
+        "self.api_token=config.api_token",
+        "obj.password=other.password",
+        # 값 뒤의 괄호 — 호출
+        "password=get_password(user)",
+        "aws_secret_access_key = credentials.get_secret()",
+        # 따옴표 안의 공백 — 문장
+        'TOKEN_ERROR = "authentication failed"',
+        'raise TokenError("invalid token here")',
+    ],
+)
+def test_code_survives_through_the_three_remaining_signals(source):
+    """코드를 살리는 신호는 이제 셋뿐이다. 그 셋이 실제로 동작해야 한다."""
+    module = load_runner()
+    assert module.verify_excerpt(source) == source
+
+
+@pytest.mark.parametrize("width", [4, 8, 12, 16, 40, 64])
+@pytest.mark.parametrize("prefix", ["", "[INFO] "])
+def test_folded_key_bodies_are_actually_removed(width, prefix):
+    """**프로브는 입력에 실제로 있는 줄이어야 한다.**
+
+    앞선 판의 이 테스트는 접힘 너비보다 긴 40자 연속을 찾았다. 너비 4/8/16
+    에서는 그 문자열이 입력 어디에도 없으므로, 리댁션이 항등 함수여도
+    통과했다 — 그래서 네 자로 접힌 키가 통째로 새는 것을 다섯 라운드 동안
+    가렸다. 게이트는 열리는데 범위 주사가 아무것도 안 먹고 있었다.
+    """
+    module = load_runner()
+    blob = base64.b64encode(b"\x01" * 1200).decode()
+    lines = [blob[index : index + width] for index in range(0, len(blob), width)]
+    pem = BEGIN + KEY + "\n" + "\n".join(prefix + line for line in lines) + "\n" + END + KEY
+    cleaned = module.verify_excerpt(pem)
+    assert not [line for line in lines if line in cleaned]
+
+
+def test_short_decoded_forms_stay_out_of_the_list(monkeypatch):
+    """프로브가 실제 복호 형태를 담아야 한다.
+
+    앞선 판은 `%2F`×6 을 등록하고 슬래시 4개짜리 문자열로 쟀다. 정확 일치
+    치환이므로 6개짜리는 4개 안에 없고, 그래서 무엇을 해도 통과했다.
+    """
+    monkeypatch.setenv("SOME_TOKEN", "%2F%2F%2F%2F%2F%2F")
+    module = load_runner()
+    assert "//////" in module.verify_excerpt("path a//////b and c//////d")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "-----BEGIN PRIVATE KEY-----\nFAILED authenticationfailure here\nTRACE line 42\n",
+        "-----BEGIN PRIVATE KEY----- was not in the bundle\nFAILED configuration mismatch",
+        "ERROR expected -----BEGIN PRIVATE KEY----- but authentication failed\nFAILED test_auth",
+    ],
+)
+def test_a_marker_mention_never_swallows_the_failure(text):
+    """줄 **안** 의 base64 연속만으로 게이트를 열면 산문이 키로 오인된다.
+
+    `_prefix_variants` 가 낱말 경계에서도 자르므로, 산문 한 줄의 마지막
+    낱말(`bundle`)이 짧은 본문으로 둔갑하기도 했다.
+    """
+    module = load_runner()
+    assert "FAILED" in module.verify_excerpt(text)
