@@ -2506,19 +2506,6 @@ def test_a_null_marker_field_is_not_a_tool_payload():
     assert module._first_text(payload) == "Use a bounded queue."
 
 
-def test_a_configuration_namespace_may_hold_a_dotted_value():
-    """점이 **둘 이상** 인 이름은 설정 네임스페이스다.
-
-    파이썬의 속성 접근은 보통 점이 하나이므로(`self.api_key`), 그 경계로
-    값의 점을 허용할지 가른다.
-    """
-    module = load_runner()
-    assert "correct.horse.battery" not in module.redact_text(
-        "spring.datasource.password=correct.horse.battery"
-    )
-    assert module.verify_excerpt("self.api_key = config.api_key") == "self.api_key = config.api_key"
-
-
 # --- 라운드 46: 토큰의 시작, 수신자 이름 --------------------------------------
 
 
@@ -2557,7 +2544,6 @@ def test_real_prefixed_tokens_are_still_redacted(line, token):
     [
         # 점 하나짜리 이름 + 점 있는 값 — 두 갈래 사이로 빠지던 형태
         ("db.password=Passw0rd.With.Dots", "Passw0rd.With.Dots"),
-        ("spring.datasource.password=correct.horse.battery", "correct.horse.battery"),
         ("db.password: orchid_copper_velvet", "orchid_copper_velvet"),
     ],
 )
@@ -2599,3 +2585,62 @@ def test_the_gemini_response_field_is_a_body_field():
     """벤더마다 본문 필드의 이름이 다르다."""
     module = load_runner()
     assert module._first_text({"session_id": "s-1", "response": "advice here"}) == "advice here"
+
+
+def test_a_dotted_lowercase_value_is_a_known_limit():
+    """점으로 이어진 소문자 낱말은 속성 접근과 암구호를 구별할 수 없다.
+
+    `credentials.secret_key`(소스)와 `correct.horse.battery`(암구호)는 모양이
+    같다. 수신자 이름을 열거해 가르려던 판은 한 라운드 만에 양쪽으로
+    틀렸다 — 목록에 있는 이름(`config`, `settings`)이 흔한 설정
+    네임스페이스이기도 해서 자격증명이 새고, 목록에 없는 이름(`state`)은
+    소스 줄이 지워졌다.
+
+    **소스를 살리는 쪽을 택했다.** 조언자가 볼 것이 없어지는 편이 더 나쁘고,
+    남는 값은 이름 없는 문자열과 같은 부류로 남는다.
+
+    이 테스트는 그 한계가 **의도된 것** 임을 기록한다. 여기가 바뀌면
+    `state.api_token = credentials.secret_key` 같은 소스 줄이 지워진다.
+    """
+    module = load_runner()
+    text = "spring.datasource.password=correct.horse.battery"
+    assert module.verify_excerpt(text) == text
+    # 반대 방향: 점 없는 값은 여전히 지워진다.
+    assert "orchid_copper_velvet" not in module.redact_text(
+        "spring.datasource.password=orchid_copper_velvet"
+    )
+
+
+def test_a_diff_marker_does_not_hide_a_prefixed_token():
+    """하이픈을 경계 문자로 두면 diff 삭제 줄의 토큰이 통째로 빠져나간다."""
+    module = load_runner()
+    assert "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in module.verify_excerpt(
+        "-ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+    )
+    # 반대 방향은 그대로다 — 낱말 안의 접두사는 여전히 안 걸린다.
+    assert module.verify_excerpt("found for disk-inventory-collector") == (
+        "found for disk-inventory-collector"
+    )
+
+
+def test_a_ppk_tail_line_must_have_a_base64_length():
+    """마지막 줄은 짧을 수 있지만 base64 길이여야 한다.
+
+    네 글자 묶음에서 남는 길이는 2 나 3 뿐이다. `Traceback`(9자)은 나머지가
+    1 이라 base64 조각이 될 수 없다.
+    """
+    module = load_runner()
+    text = "Private-Lines: 1\n" + "A" * 64 + "\nTraceback\nFAILED"
+    assert "Traceback" in module.verify_excerpt(text)
+
+
+def test_a_credential_file_path_is_not_the_credential(monkeypatch):
+    """자격증명 이름을 단 환경변수가 **비밀이 있는 곳** 을 담기도 한다.
+
+    그 경로를 목록에 넣으면 파일을 못 찾았다는 진단이 무슨 파일인지 알 수
+    없게 된다.
+    """
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/home/runner/work/app/sa.json")
+    module = load_runner()
+    text = "FileNotFoundError: /home/runner/work/app/sa.json"
+    assert "/home/runner/work/app/sa.json" in module.verify_excerpt(text)

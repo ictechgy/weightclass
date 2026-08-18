@@ -893,7 +893,10 @@ _CREDENTIAL_VALUE = (
 # 접두사 토큰은 **시작도 고정한다.** 값의 끝은 _VALUE_END 로 고정해 놓고
 # 시작을 안 고정하면, `disk-inventory-collector` 안의 `sk-` 가 걸려 평범한
 # 오류 메시지가 반쪽 지워진다.
-_TOKEN_START = r"(?<![A-Za-z0-9_-])"
+# 하이픈은 **경계 문자로 두지 않는다.** diff 삭제 줄의 표식(`-ghp_…`)이
+# 토큰에 바로 붙으면 여덟 갈래가 전부 죽는다. 하이픈을 빼도
+# `disk-inventory-collector` 의 `sk-` 는 앞 글자가 `k` 라 여전히 안 걸린다.
+_TOKEN_START = r"(?<![A-Za-z0-9_])"
 _SECRET_SHAPES = re.compile(
     _TOKEN_START + r"(?i:sk-)[A-Za-z0-9_-]{16,}"
     r"|" + _TOKEN_START + r"gh[pousr]_[A-Za-z0-9]{20,}"
@@ -969,20 +972,25 @@ _SECRET_SHAPES = re.compile(
     # 모양** 으로 가르려던 판은 `correct.horse.battery`(암구호)와
     # `config.api_key`(속성)를 구별하지 못했다. 둘은 모양이 같다.
     #
-    # 가르는 것은 **수신자 이름** 이다. `self`, `this`, `cls` 는 언어가 정한
-    # 것이고 나머지는 관례적인 변수 이름이다. 설정 네임스페이스
-    # (`spring.datasource`, `db`)가 이 이름으로 시작하는 일은 없다.
+    # **수신자 이름 목록을 쓰지 않는다.** 한 라운드 만에 양쪽으로 틀렸다 —
+    # 목록에 있는 이름(`config`, `settings`)이 흔한 설정 네임스페이스이기도
+    # 해서 진짜 자격증명이 새고, 목록에 없는 이름(`state`)은 소스 줄이
+    # 지워졌다. 이름을 열거하는 한 그 둘을 동시에 만족할 수 없다.
     #
-    # 목록이라는 것이 이 판정의 한계다 — 여기 없는 수신자 이름은 지워진다.
-    # 그러나 모양으로 가르려던 판들이 `correct.horse.battery`(암구호)와
-    # `config.api_key`(속성)를 구별하지 못한 것에 비하면, 목록은 적어도
-    # **왜 그런지 읽을 수 있고** 늘릴 수 있다.
-    r"|(?<![.\w])(?!(?i:self|this|cls|obj|me|credentials|config|settings"
-    r"|options|args|ctx|context|client|session|request|response|env)[.])"
+    # 가르는 것은 **값** 이다. 값이 점으로 이어진 소문자 식별자 사슬이면
+    # 속성 접근이고(`config.api_key`, `credentials.secret_key`), 아니면
+    # 자격증명이다(`orchid_copper_velvet`, `Passw0rd.With.Dots`).
+    #
+    # 남는 한계: 점으로 이어진 소문자 낱말이 **암구호** 인 경우
+    # (`correct.horse.battery`)는 속성 접근과 구별할 수 없어 남는다. 소스 줄을
+    # 지우는 쪽보다 낫다고 보고 그 방향을 택했다 — 조언자가 볼 것이 없어지는
+    # 편이 더 나쁘다.
+    r"|(?<![.\w])"
     r"(?i:[A-Z0-9_-]{0,40}(?:[.][A-Z0-9_-]{1,40}){0,6}[.]"
     r"[A-Z0-9_-]{0,40}"
     r"(?:secret|token|password|passwd|api[_-]?key|private[_-]?key|credential)"
     r"[A-Z0-9_-]{0,40})[\"']?[ \t]*[=:][ \t]*[\"']?"
+    r"(?![a-z_]+(?:[.][a-z_]+)+[\s\r\n)\]},;]*$)"
     r"[^\s\r\n(){}<>,;\[\]\"']{12,}"
     + _VALUE_END
     +
@@ -1737,6 +1745,17 @@ def redact_private_keys(text: str) -> str:
         out.append("[REDACTED]")
 
 
+def _looks_like_path(value: str) -> bool:
+    """이 값이 비밀이 아니라 **비밀이 있는 곳** 인가.
+
+    자격증명 이름을 단 환경변수가 파일 경로를 담는 일이 흔하다
+    (`GOOGLE_APPLICATION_CREDENTIALS`, `*_KEY_FILE`, `*_CERT_PATH`).
+    """
+    if value.startswith(("/", "./", "../", "~/")) and "/" in value[1:]:
+        return True
+    return bool(re.match(r"^[A-Za-z]:[\\\\/]", value))
+
+
 def host_secret_values() -> list[str]:
     """이 머신의 환경에 실제로 들어 있는 자격증명 **값** 들.
 
@@ -1784,7 +1803,11 @@ def host_secret_values() -> list[str]:
         if not _HOST_SECRET_NAMES.search(name):
             continue
         # 짧은 값은 평범한 문자열과 부딪혀 과잉 삭제를 만든다.
-        if len(value) >= 12 and not value.isspace():
+        # 값이 **파일 경로** 면 비밀이 아니라 비밀이 있는 곳이다.
+        # `GOOGLE_APPLICATION_CREDENTIALS=/home/runner/…/sa.json` 를 목록에
+        # 넣으면 그 경로가 출력 전체에서 지워져, 파일을 못 찾았다는 진단이
+        # 무슨 파일인지 알 수 없게 된다.
+        if len(value) >= 12 and not value.isspace() and not _looks_like_path(value):
             values.append(value)
     # **인코딩 형태는 여기서 만들지 않는다.** redact_host_secrets 가
     # _encoded_forms 로 합성에 닫힌 집합을 만든다. 여기서 또 만들면 두 곳이
@@ -2293,7 +2316,12 @@ def _is_ppk_body_line(line: str, first: bool, width: int = 0) -> bool:
     # 계속 본다: 짧은 첫 줄 뒤에 긴 본문이 오는 형태가 실제로 있다.
     if len(line) > width:
         return len(line) >= PPK_MINIMUM_BODY_CHARS
-    return len(line) == width or len(line) < width
+    # 마지막 줄은 짧을 수 있지만 **base64 길이** 여야 한다. 네 글자 묶음에서
+    # 남는 길이는 2 나 3 뿐이다(패딩 없이 접었을 때). `Traceback`(9자)은
+    # 4 로 나눈 나머지가 1 이라 base64 조각이 될 수 없다.
+    if len(line) < width:
+        return len(line) % 4 != 1
+    return len(line) == width
 
 
 def redact_text(text: str) -> str:
@@ -2320,13 +2348,10 @@ def verify_excerpt(output: str) -> str:
     #
     # 자르지 않으면 그 부류가 통째로 사라진다. 비용은 잰다: 200KB 에 0.4초,
     # PEM 주사는 선형이고 패턴들은 중첩 수량자가 없다.
-    cleaned = redact_private_keys(output)
-    cleaned = redact_ppk_bodies(cleaned)
-    cleaned = redact_block_scalars(cleaned)
-    # 아는 값을 지운다. 모양으로 못 잡는 것을 잡는 유일한 방법이다.
-    cleaned = redact_host_secrets(cleaned)
-    cleaned = _SECRET_SHAPES.sub("[REDACTED]", cleaned)
-    return _tail(cleaned, VERIFY_EXCERPT_CHARS)
+    # **redact_text 를 부른다.** 같은 다섯 단계를 여기 다시 적으면, 한쪽에
+    # 단계를 더할 때 다른 쪽이 뒤처진다 — 이 파일에서 가장 자주 재발한
+    # 결함이 "같은 질문을 두 곳이 다르게 판정한다" 이고 여기가 그 쌍둥이다.
+    return _tail(redact_text(output), VERIFY_EXCERPT_CHARS)
 
 
 def _tail(cleaned: str, limit: int) -> str:
