@@ -67,6 +67,8 @@ A route command may contain the literal token `{{task}}` exactly once:
 
 Rules, enforced when the policy is parsed:
 
+- The first element is always a fixed executable. `{{task}}` in `argv[0]` is
+  rejected so untrusted task text can never select the program that runs.
 - The token must be an entire argv element. `--prompt={{task}}` is rejected, so
   there is never a question of how the task and a flag were joined.
 - At most one element may be the token. Zero means stdin delivery, unchanged.

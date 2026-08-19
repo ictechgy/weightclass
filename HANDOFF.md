@@ -16,10 +16,11 @@ _Last updated: 2026-08-19 KST by Codex_
 ## Current Status
 
 - Project root: `/Users/jinhongan/Desktop/subscription-agent-router`.
-- Root worktree: `main` at `dddf804` (PR #55), equal to `origin/main`. The
-  0.15.1 release, source-of-truth Homebrew formula, release handoff, advisory
-  measurement hardening, and fresh blind direction check are merged.
-- PRs **#40 through #55 are all merged**. Merge commits: `c8a3311` (#40),
+- Root worktree baseline: `main` at `5265501` (PR #56), equal to `origin/main`
+  before the current security/performance follow-up branch. The 0.15.1 release,
+  advisory measurement hardening, blind direction check, and final handoff are
+  merged.
+- PRs **#40 through #56 are all merged**. Merge commits: `c8a3311` (#40),
   `1a7c91f` (#41), `fe93a5c` (#42), `ec5eb29` (#43), `a763d9c` (#44),
   `887159a` (#45), `bf1ad11` (#46, version bump), `4145745` (#47, downward
   result), `77802ed` (#48, speculative-run measurement tooling), `8ae5a8f`
@@ -28,7 +29,8 @@ _Last updated: 2026-08-19 KST by Codex_
   `1cf2f6a` (#52, the 0.15.1 routing/accounting fixes and policy 4), and
   `59acd7b` (#53, the Homebrew source formula), `97b83c5` (#54, the final
   0.15.1 handoff), and `dddf804` (#55, advisory measurement hardening and blind
-  evidence). PRs #40-#51 used the recorded review loops; #52 and #55 had
+  evidence), and `5265501` (#56, the advisory follow-up handoff). PRs #40-#51
+  used the recorded review loops; #52 and #55 had
   independent Sol reviews plus full CI, and #53 had full CI plus
   formula-specific Homebrew verification.
 - The stale linked-worktree metadata for the old detached study worktree was
@@ -190,6 +192,30 @@ human to read.
   `docs/policy4-fresh-blind-evaluation.md`; task text and per-row artifacts stay
   outside this repository.
 
+### Security, performance, and architecture follow-up (2026-08-19)
+
+- Codex Security Standard scan `d2175938-1f01-47e6-b0f2-8d5089f5d839`
+  recorded two medium and two low findings. Coverage was deliberately partial:
+  29/183 files were fully reviewed, while all six security-critical surfaces
+  were traced by an independent baseline, two focused investigators, and parent
+  validation.
+- Immediate fixes reject `{{task}}` in `argv[0]`, apply recursive duplicate-key
+  rejection and complete `ValueError` normalization to usage stores, and bound
+  schema-3 controlling-console lines/numeric choices.
+- The standalone `--version` path now bypasses the full command dispatcher.
+  On the same Apple M4 Pro/Python 3.14.6 host, 30-process median cold start fell
+  from 77.022 ms to 19.412 ms (−74.8%). Classification and help paths were not
+  changed, and timing is not a test gate.
+- CI no longer starts both push and pull-request matrices for one feature-branch
+  SHA. Push CI is restricted to `main`, while PR-number concurrency cancels
+  only stale runs for the same pull request.
+- Path-based executable spawn remains a medium residual even after detailed
+  re-observation; a custom usage store under an unsafe ancestor remains a low
+  pathname race. The derived hardening portfolio recommends safe-ancestor
+  admission first and capability-gated descriptor execution research, but its
+  sticky-directory/group-write compatibility decisions are not silently chosen
+  in this patch. See `docs/security-performance-followup.md`.
+
 ## Completed
 
 - Released state is `weightclass 0.15.1`. Tags `v0.14.0`, `v0.15.0`, and
@@ -216,6 +242,11 @@ human to read.
 - The vacuity audit records subtests with opaque stable ordinals, preserves
   parent failures, skips, missing outcomes, expected failures, and unexpected
   successes, and refuses an incomplete neutralization rewrite.
+- Legacy policy task slots cannot occupy executable position, usage-store JSON
+  shares the duplicate-safe parser boundary, and interactive schema-3 selection
+  has explicit line and numeric-choice bounds.
+- Exact standalone version queries use the lightweight entry point; PR CI runs
+  one feature-head matrix and cancels stale same-PR work.
 - The schema-3 branch adds installed-agent discovery, interactive selection,
   reviewed cross-vendor/profile grants, observation-bound execution, and
   `wclass delegate native route|run` for one bounded child.
@@ -290,8 +321,9 @@ human to read.
   under the release gate, because unittest does not collect module-level
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
-- Verified on merged `main` (`dddf804`): `unittest discover` runs **1131**
-  tests and `pytest -q` reports 1131 passed; Ruff check/format is clean on 155
+- Verified on the current follow-up branch based on `5265501`: `unittest
+  discover` runs **1137** tests and `pytest -q` reports 1137 passed; Ruff
+  check/format is clean on 156
   files; `mypy --strict src tests` is clean on 126 source files; strict mypy is
   also clean on the three measurement tools; and an isolated sdist/wheel build
   succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
@@ -325,6 +357,8 @@ human to read.
 - `src/weightclass/classification.py`: classification policy 4.
 - `docs/policy4-fresh-blind-evaluation.md`: aggregate-only protocol and result
   from the fresh 24-prompt blind direction check.
+- `docs/security-performance-followup.md`: current security findings,
+  cold-start/CI evidence, implemented local fixes, and deferred architecture.
 - `src/weightclass/router.py`: `_TIER_LADDER` and `next_tier()` for escalation.
 - `src/weightclass/usage_aggregation.py`: aggregate schema, validation, locking,
   atomic writes, reporting, and default platform paths.
@@ -422,7 +456,18 @@ human to read.
    complete. The unrelated pre-existing `relay.rb` whole-tap style finding was
    intentionally left untouched. The shadowing user-level tool is now 0.15.1,
    old kegs were cleaned, and stale linked-worktree metadata was pruned.
-2. **The default tier is not being lowered. That question is settled for now.**
+2. **Verified-object execution remains an open architecture item.** Current
+   double observation narrows replacement but `Popen` still resolves a path.
+   Before enforcing safe ancestors, settle sticky-directory and group-writable
+   installation semantics and run the macOS/Linux compatibility matrix in the
+   completed hardening plan. Do not claim the medium finding is fixed by another
+   metadata comparison.
+3. **Custom usage-store ancestry remains a low residual.** The parser is fixed,
+   but lock/replace operations are not directory-fd anchored. Prefer the default
+   private home location; implement ancestor admission only after the sticky and
+   shared-group rules are fixed, or move directly to a dirfd transaction if
+   privileged/shared-tree support becomes a requirement.
+4. **The default tier is not being lowered. That question is settled for now.**
    The quality instrument was built, calibrated, and run
    (`QUALITY-INSTRUMENT.md`, `PRE-REGISTRATION-quality.md`, `QUALITY-RESULT.md`
    in the study repo). Blind pairwise review of both arms on 14 tasks: `low` won
@@ -439,7 +484,7 @@ human to read.
    Do not reopen this by pointing at `DOWNWARD-REPORT.md`'s "all 15 passed".
    That result was always qualified as "relative to what the acceptance test
    required", and this is what that qualifier was hiding.
-3. **The one cheap lever still standing is model grade, and it is measurable
+5. **The one cheap lever still standing is model grade, and it is measurable
    now.** A 90-pair qualification put a cheaper Codex model 69.02% below the
    stronger one on estimated API cost (95% interval [60.57%, 77.47%]) at equal
    quality (85/90 both arms), and it was rejected only for two new critical
@@ -455,26 +500,26 @@ human to read.
    under 20% the saving may justify moving the V1 boundary, while near 69% the
    idea is dead. Note this recovers safety, not quality — the defects in
    `QUALITY-RESULT.md` all passed their tests.
-4. **Advisor adoption remains undecided.** Two corrected Shape-B failures now
+6. **Advisor adoption remains undecided.** Two corrected Shape-B failures now
    have observed rescue `s=0/2`, and neither study had a price-derived `a` or
    `r`. A later study needs a user-supplied single-origin price table, more real
    failed tasks, and the pre-registered interval rule. Do not integrate
    retry/advice into `wclass` from these pilots.
-5. **Policy 4 needs broader high-tier evidence before another classifier
+7. **Policy 4 needs broader high-tier evidence before another classifier
    change.** The public fixture remains 5/15 high recall; the fresh blind
    direction check found 1/9 with a wide interval and sent the other eight to
    `standard`. Do not tune on either visible corpus. A new policy candidate
    requires a new independently generated, rated, and sealed corpus.
-6. If the paired token study is ever reopened, fix the three acceptance tests first
+8. If the paired token study is ever reopened, fix the three acceptance tests first
    (`p13`, `p26`, `p27`). They reject correct implementations that chose a
    different interface, which would mark a correct arm `completed: false` and
    fail the study's completion gate for reasons unrelated to routing.
-7. If measuring routing economics, set the `medium` weight first — it is the
+9. If measuring routing economics, set the `medium` weight first — it is the
    counterfactual the report compares against, and without it the report
    abstains with `missing_baseline_weight`. Pass `--usage-rework` on any retry of
    an already counted task; a failed run prints
    `{"usage_hint": "record_retry_with_usage_rework"}` as a reminder.
-8. Review an exact schema-3 route/fingerprint before any real run. Never launch a
+10. Review an exact schema-3 route/fingerprint before any real run. Never launch a
    vendor merely to populate metrics without explicit task authorization.
 
 ## Resume Prompt
@@ -483,12 +528,17 @@ Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
 applicable `AGENTS.md` files, then continue from: `0.15.1 is merged, tagged, and
 published from main commit 1cf2f6a; every Release job passed. The canonical
 sdist URL and SHA are recorded above. Source formula PR #53, Homebrew tap PR
-#14, release handoff PR #54, and advisory follow-up PR #55 are merged. Both
+#14, release handoff PR #54, advisory follow-up PR #55, and handoff PR #56 are
+merged. Both
 ~/.local/bin/wclass and /opt/homebrew/bin/wclass report 0.15.1; old kegs and
 stale worktree metadata were cleaned. Four real Shape-B samples now include two
 failures that reached advice, with observed rescue 0/2 and no economic verdict
 because no reviewed price table existed. The fresh 24-prompt blind direction
 check found policy-4 agreement 10/24, high recall 1/9, and over-routing 6/24;
-it is spent direction evidence, not a tuning set. Never infer prices, read
-vendor credentials/config, backfill task/session data, or reuse a published
-version or tag.`
+it is spent direction evidence, not a tuning set. Security scan
+d2175938-1f01-47e6-b0f2-8d5089f5d839 found two medium and two low findings;
+argv[0] task substitution and usage JSON fail-closed parsing are fixed in the
+current branch, while verified-object execution and directory-fd usage state
+remain design work with compatibility decisions recorded in the hardening
+portfolio. Never infer prices, read vendor credentials/config, backfill
+task/session data, or reuse a published version or tag.`

@@ -112,6 +112,25 @@ class NativeV3SelectorTests(unittest.TestCase):
 
         self.assertEqual(str(raised.exception), "")
 
+    def test_oversized_console_fields_fail_closed(self) -> None:
+        """Breaks if controlling-console input can grow or parse without a bound."""
+        with tempfile.TemporaryDirectory() as directory:
+            installed = self.installed(directory)
+            for answers in (
+                io.StringIO("1" * 33 + "\n"),
+                io.StringIO("1\n" + "x" * 4_097 + "\n"),
+            ):
+                with (
+                    self.subTest(size=len(answers.getvalue())),
+                    self.assertRaises(InteractiveSelectorError),
+                ):
+                    run_interactive_selector(
+                        answers,
+                        io.StringIO(),
+                        io.StringIO(),
+                        path_value=installed,
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

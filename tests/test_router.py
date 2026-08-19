@@ -604,6 +604,25 @@ class TaskPlaceholderTests(unittest.TestCase):
             with self.assertRaises(cli.InvalidInputError):
                 cli.load_routes(path)
 
+    def test_the_token_cannot_replace_the_executable(self) -> None:
+        """Breaks if untrusted task text can become argv[0]."""
+        for command in (["{{task}}"], ["{{task}}", "--fixed-argument"]):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                path = self._policy(Path(directory), command)
+                with self.assertRaises(cli.InvalidInputError):
+                    cli.load_routes(path)
+                result = _weightclass(
+                    "route",
+                    "--policy",
+                    str(path),
+                    "--source-vendor",
+                    "codex",
+                    task="/bin/echo",
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+
     def test_the_token_inside_a_larger_argument_is_rejected(self) -> None:
         """Breaks if how the task and a flag were joined becomes ambiguous."""
         for argument in ("--prompt={{task}}", "prefix{{task}}", "{{task}}suffix"):

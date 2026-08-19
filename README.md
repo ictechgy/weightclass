@@ -319,6 +319,9 @@ If validation fails before execution, code `9` emits
 `{"error": "usage_unavailable"}` and starts no child. If the child completed but
 the atomic aggregate update failed, code `9` additionally emits
 `"child_completed": true`; callers must not automatically retry that task.
+Store JSON uses the same duplicate-key rejection as policy inputs, and bounded
+integer-conversion or recursion failures are normalized to this value-free
+diagnostic rather than escaping as a traceback.
 
 ## Discover installed agents and generate a policy
 
@@ -959,6 +962,8 @@ That route receives the task at that argv position and receives empty standard
 input, instead of the default of the task on standard input. This exists for
 agents that read a prompt only from their command line: `agy --print ""` and
 `grok -p ""` both refuse an empty prompt and never read the pipe.
+The token cannot be the first command element: `argv[0]` is the fixed reviewed
+executable, never task data.
 
 `wclass route` prints the command with `{{task}}` still in it and adds
 `"task_delivery": "argv"`, so a review never contains task text and the

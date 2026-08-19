@@ -46,6 +46,18 @@ class CIWorkflowStructureTests(unittest.TestCase):
         )
         self.assertIn("-W error::ResourceWarning", test_job)
 
+    def test_feature_branch_pushes_do_not_duplicate_pull_request_ci(self) -> None:
+        """Breaks if one PR head starts both push and pull-request matrices."""
+        triggers = self.text.split("\njobs:\n", 1)[0]
+        self.assertIn("push:\n    branches: [main]", triggers)
+        self.assertIn("pull_request:", triggers)
+        self.assertIn(
+            "group: ${{ github.workflow }}-"
+            "${{ github.event.pull_request.number || github.run_id }}",
+            triggers,
+        )
+        self.assertIn("cancel-in-progress: true", triggers)
+
     def test_quality_job_contains_every_required_gate(self) -> None:
         quality = self.text.split("\n  quality:\n", 1)[1].split(
             "\n  macos-routing-boundaries:\n", 1

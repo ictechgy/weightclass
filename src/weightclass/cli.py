@@ -598,7 +598,10 @@ def _require_at_most_one_task_slot(command: tuple[str, ...]) -> tuple[str, ...]:
 
     부분 문자열로 쓰면 태스크와 플래그가 어떻게 이어붙었는지가 모호해지고, 두 번
     쓰면 태스크를 두 번 전달한다는 뜻이 되는데 그런 의미는 정의된 적이 없다.
+    첫 토큰은 실행 파일이므로 데이터 슬롯이 될 수 없다.
     """
+    if command[:1] == (TASK_PLACEHOLDER,):
+        raise InvalidInputError()
     if sum(token == TASK_PLACEHOLDER for token in command) > 1:
         raise InvalidInputError()
     if any(TASK_PLACEHOLDER in token and token != TASK_PLACEHOLDER for token in command):
