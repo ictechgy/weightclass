@@ -23,6 +23,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unittest
+from types import TracebackType
+
+ExcInfo = tuple[type[BaseException], BaseException, TracebackType] | tuple[None, None, None]
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 PATTERN = "test_speculative_redaction.py"
@@ -45,51 +49,24 @@ RUNNER_SOURCE = '''\
 
 from __future__ import annotations
 
+import pathlib
 import sys
 import unittest
 
-
-class LeafRecorder(unittest.TestResult):
-    """메서드와 subTest 를 같은 층위의 "잎" 으로 기록한다."""
-
-    def __init__(self) -> None:
-        """잎 목록과, subTest 를 가진 메서드 이름을 따로 모은다."""
-        super().__init__()
-        self.leaves: list[tuple[str, bool]] = []
-        self.parents_with_subtests: set[str] = set()
-
-    def addSubTest(self, test, subtest, outcome) -> None:  # noqa: N802
-        """subTest 한 건을 잎으로 기록한다. outcome 이 None 이면 통과다."""
-        super().addSubTest(test, subtest, outcome)
-        self.parents_with_subtests.add(test.id())
-        self.leaves.append((subtest.id(), outcome is None))
-
-    def addSuccess(self, test) -> None:  # noqa: N802
-        """subTest 가 없는 메서드만 잎이 된다."""
-        super().addSuccess(test)
-        self.leaves.append((test.id(), True))
-
-    def addFailure(self, test, err) -> None:  # noqa: N802
-        """실패한 메서드를 잎으로 기록한다."""
-        super().addFailure(test, err)
-        self.leaves.append((test.id(), False))
-
-    def addError(self, test, err) -> None:  # noqa: N802
-        """오류를 통과로 세면 안 된다. 실패한 잎으로 기록한다."""
-        super().addError(test, err)
-        self.leaves.append((test.id(), False))
-
+sys_path = str(pathlib.Path(__file__).parent / "tools")
+if sys_path not in sys.path:
+    sys.path.insert(0, sys_path)
+from check_test_vacuity import LeafRecorder, reported_leaves
 
 def main() -> int:
     """잎마다 `OK <id>` 또는 `NG <id>` 를 한 줄씩 낸다."""
     suite = unittest.TestLoader().discover("tests", pattern="{pattern}")
     result = LeafRecorder()
     suite.run(result)
-    for identifier, ok in result.leaves:
-        if identifier in result.parents_with_subtests:
-            continue
+    leaves = reported_leaves(result)
+    for identifier, ok in leaves:
         print(f"{'OK' if ok else 'NG'} {identifier}")
-    if not result.leaves:
+    if not leaves:
         print("수집한 테스트가 없다.", file=sys.stderr)
         return 1
     return 0
@@ -97,6 +74,85 @@ def main() -> int:
 
 raise SystemExit(main())
 '''
+
+
+class LeafRecorder(unittest.TestResult):
+    """Record every leaf, while dropping only redundant parent successes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.leaves: list[tuple[str, bool]] = []
+        self.collected_test_ids: set[str] = set()
+        self.parents_with_subtests: set[str] = set()
+        self._subtest_ordinals: dict[str, int] = {}
+
+    def startTest(self, test: unittest.TestCase) -> None:  # noqa: N802
+        super().startTest(test)
+        self.collected_test_ids.add(test.id())
+
+    def addSubTest(  # noqa: N802
+        self,
+        test: unittest.TestCase,
+        subtest: unittest.TestCase,
+        outcome: ExcInfo | None,
+    ) -> None:
+        super().addSubTest(test, subtest, outcome)
+        parent_id = test.id()
+        self.parents_with_subtests.add(parent_id)
+        self.leaves.append((self._next_subtest_id(parent_id), outcome is None))
+
+    def addSuccess(self, test: unittest.TestCase) -> None:  # noqa: N802
+        super().addSuccess(test)
+        self.leaves.append((test.id(), True))
+
+    def addFailure(self, test: unittest.TestCase, err: ExcInfo) -> None:  # noqa: N802
+        super().addFailure(test, err)
+        self.leaves.append((test.id(), False))
+
+    def addError(self, test: unittest.TestCase, err: ExcInfo) -> None:  # noqa: N802
+        super().addError(test, err)
+        self.leaves.append((test.id(), False))
+
+    def addExpectedFailure(  # noqa: N802
+        self, test: unittest.TestCase, err: ExcInfo
+    ) -> None:
+        super().addExpectedFailure(test, err)
+        self.leaves.append((test.id(), False))
+
+    def addUnexpectedSuccess(self, test: unittest.TestCase) -> None:  # noqa: N802
+        super().addUnexpectedSuccess(test)
+        self.leaves.append((test.id(), True))
+
+    def addSkip(self, test: unittest.TestCase, reason: str) -> None:  # noqa: N802
+        super().addSkip(test, reason)
+        parent = getattr(test, "test_case", None)
+        if parent is not None and hasattr(test, "params"):
+            parent_id = parent.id()
+            self.parents_with_subtests.add(parent_id)
+            self.leaves.append((self._next_subtest_id(parent_id), False))
+            return
+        self.leaves.append((test.id(), False))
+
+    def _next_subtest_id(self, parent_id: str) -> str:
+        ordinal = self._subtest_ordinals.get(parent_id, 0) + 1
+        self._subtest_ordinals[parent_id] = ordinal
+        return f"{parent_id}#subtest-{ordinal}"
+
+    def missing_test_ids(self) -> set[str]:
+        """Return collected tests for which no reported leaf was produced."""
+        leaf_ids = {identifier for identifier, _ in self.leaves}
+        covered = leaf_ids | self.parents_with_subtests
+        return self.collected_test_ids - covered
+
+
+def reported_leaves(result: LeafRecorder) -> list[tuple[str, bool]]:
+    """Return visible leaves and turn every unrepresented method into NG."""
+    leaves = [
+        (identifier, ok)
+        for identifier, ok in result.leaves
+        if not (identifier in result.parents_with_subtests and ok)
+    ]
+    return [*leaves, *((identifier, False) for identifier in sorted(result.missing_test_ids()))]
 
 
 def main() -> int:
@@ -107,12 +163,10 @@ def main() -> int:
         shutil.copytree(REPO / "tests", work / "tests")
         runner = work / "tools" / "speculative_run.py"
         source = runner.read_text(encoding="utf-8")
-        for signature, body in NEUTRALISED:
-            if signature not in source:
-                print(f"경고: {signature!r} 를 찾지 못했다. 점검이 불완전하다.", file=sys.stderr)
-                continue
-            source = source.replace(signature, f"{signature}\n{body}  # 공허성 점검", 1)
-        runner.write_text(source, encoding="utf-8")
+        neutralized = neutralize_source(source)
+        if neutralized is None:
+            return 1
+        runner.write_text(neutralized, encoding="utf-8")
         (work / "run_leaves.py").write_text(
             RUNNER_SOURCE.replace("{pattern}", PATTERN), encoding="utf-8"
         )
@@ -121,11 +175,30 @@ def main() -> int:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def neutralize_source(source: str) -> str | None:
+    """Replace each reviewed redaction target exactly once, or fail closed."""
+    for signature, body in NEUTRALISED:
+        occurrences = source.count(signature)
+        if occurrences != 1:
+            print(
+                f"중화 대상 검증 실패: {occurrences}개 일치 (정확히 1개 필요)",
+                file=sys.stderr,
+            )
+            return None
+        source = source.replace(signature, f"{signature}\n{body}  # 공허성 점검", 1)
+    return source
+
+
 def leaf_name(identifier: str) -> str:
-    """`모듈.클래스.메서드 [파라미터]` 에서 사람이 읽을 부분만 남긴다."""
-    head, _, params = identifier.partition(" ")
-    method = head.rsplit(".", 1)[-1]
-    return f"{method} {params}".strip()
+    """Render a safe method name and optional opaque subtest ordinal."""
+    parent, marker, ordinal = identifier.partition("#subtest-")
+    method = parent.rsplit(".", 1)[-1]
+    return f"{method} [subtest {ordinal}]" if marker else method
+
+
+def parent_test_id(identifier: str) -> str:
+    """Return the method ID shared by every opaque subtest leaf."""
+    return identifier.partition("#subtest-")[0]
 
 
 def report(work: pathlib.Path) -> int:
@@ -156,16 +229,14 @@ def report(work: pathlib.Path) -> int:
         f" (잎 {len(leaves)}개)"
     )
 
-    def method_of(identifier: str) -> str:
-        """파라미터를 뗀 메서드 이름."""
-        return identifier.partition(" ")[0]
-
-    partial = sorted({method_of(name) for name in survivors} & {method_of(n) for n in failed})
+    partial = sorted(
+        {parent_test_id(name) for name in survivors} & {parent_test_id(name) for name in failed}
+    )
     if partial:
         print("\n**부분적으로 공허한 테스트** — 같은 이름의 다른 파라미터는 실패했다:")
         for name in partial:
             print(f"    {name.rsplit('.', 1)[-1]}")
-            for node in (s for s in survivors if method_of(s) == name):
+            for node in (survivor for survivor in survivors if parent_test_id(survivor) == name):
                 print(f"      통과: {leaf_name(node)}")
     print("\n항등 리댁션에서도 통과한 것 — 각각 어느 방향을 보는지 확인하라:")
     print("  (보존 테스트와 봉투 파싱 단위 테스트는 여기 나오는 것이 정상이다)")

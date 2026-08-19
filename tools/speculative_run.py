@@ -154,7 +154,13 @@ class Attempt(TypedDict, total=False):
 
 # 작업공간 이름의 접두사. mkdtemp 호출부와 삭제 허용 목록이 같은 상수를
 # 보게 해서, 한쪽만 바뀌면 --prune 이 조용히 아무것도 못 지우는 일을 막는다.
-WORKSPACE_PREFIXES = ("spec-cheap-", "spec-expensive-", "spec-home-")
+WORKSPACE_PREFIXES = (
+    "spec-advice-",
+    "spec-cheap-",
+    "spec-expensive-",
+    "spec-home-",
+    "spec-retry-",
+)
 
 # 벤더 자식이 기본으로 보는 환경. 허용 목록이지 차단 목록이 아니다 — 모르는
 # 비밀은 차단 목록으로 막을 수 없고, 이 머신에 어떤 제공자의 키가 있는지
@@ -469,8 +475,11 @@ def run_child(
     `CHILD_ENV_NAMES`/`CHILD_ENV_PREFIXES` is the default allowlist. `--child-env`
     adds names to it; `--child-env-all` restores the old pass-everything
     behaviour for anyone whose setup needs a variable the list does not know
-    about. The run prints how many names it dropped, so a CLI that suddenly
-    cannot authenticate points at its own cause.
+    about, except that Git routing variables are always removed. Inheriting
+    `GIT_DIR`, `GIT_WORK_TREE`, or an alternate object directory would let a
+    child escape the isolated clone or prompt-only repository. The run prints
+    how many names it dropped, so a CLI that suddenly cannot authenticate
+    points at its own cause.
 
     **It narrows variables, not the filesystem.** `HOME` survives, because the
     CLI finds its own credentials under it — blank it and nothing authenticates.
@@ -491,10 +500,12 @@ def run_child(
     environment = (
         {name: value for name, value in os.environ.items() if name in allowed_env}
         if allowed_env is not None
-        else None
+        else dict(os.environ)
     )
+    for name in tuple(environment):
+        if name.startswith("GIT_"):
+            environment.pop(name)
     if home is not None:
-        environment = dict(environment if environment is not None else os.environ)
         environment["HOME"] = str(home)
         # HOME 하나만 바꾸면 격리가 반만 된다. XDG_CONFIG_HOME 이나 CODEX_HOME
         # 같은 변수가 여전히 실제 홈을 가리키면 CLI 는 그쪽을 먼저 본다.
@@ -2666,7 +2677,15 @@ def discard(registry: Path, workspace: Path, out_dir: Path) -> None:
         # 만들 수 있다. 지우지 못한 것은 등록에 남겨 사람이 보게 하는 편이 낫다.
         print(f"작업공간을 지우지 못했다, 등록에 남긴다: {target} ({error})", file=sys.stderr)
         return
-    register(registry, workspace, add=False)
+    try:
+        register(registry, workspace, add=False)
+    except OSError as error:
+        # 디렉터리는 이미 사라졌다. 여기서 예외를 다시 던지면 성공한 정리가
+        # 실행 전체를 실패시키지만, 남은 등록 한 줄은 다음 --prune 이 존재하지
+        # 않는 경로로 보고 안전하게 버릴 수 있다.
+        print(
+            f"작업공간은 지웠지만 등록을 갱신하지 못했다: {type(error).__name__}", file=sys.stderr
+        )
 
 
 def resolved_own_workspace(candidate: Path, out_dir: Path) -> Path | None:
@@ -2695,6 +2714,32 @@ def resolved_own_workspace(candidate: Path, out_dir: Path) -> Path | None:
     # 검사한 경로를 그대로 돌려준다. 검사와 삭제가 서로 다른 경로를 보면
     # 그 사이에 링크를 갈아끼워 다른 곳을 지우게 만들 수 있다.
     return resolved if accepted else None
+
+
+def create_registered_workspace(
+    prefix: str, work_root: Path, registry: Path, out_dir: Path
+) -> Path:
+    """Create and register one workspace without an untracked failure window."""
+    workspace = Path(tempfile.mkdtemp(prefix=prefix, dir=work_root))
+    try:
+        register(registry, workspace, add=True)
+    except OSError:
+        target = resolved_own_workspace(workspace, out_dir)
+        if target is not None:
+            try:
+                shutil.rmtree(target)
+            except OSError:
+                # If deletion also fails, make one best-effort attempt to leave
+                # the path registered for --prune instead of silently stranding it.
+                with contextlib.suppress(OSError):
+                    register(registry, workspace, add=True)
+            else:
+                # register() may have replaced the registry before fsync failed.
+                # Remove that now-stale line when the registry is writable again.
+                with contextlib.suppress(OSError):
+                    register(registry, workspace, add=False)
+        raise
+    return workspace
 
 
 def prune(registry: Path, out_dir: Path) -> int:
@@ -2775,6 +2820,13 @@ def ask_advisor(
         register(registry, workspace, add=True)
         if grounded:
             clone_at(repo, commit, workspace)
+        else:
+            # Prompt-only advice still needs an isolated repository boundary.
+            # Some coding CLIs refuse a bare directory, and without this anchor
+            # Git discovery can walk into a repository containing ``out_dir``.
+            # The scrubbed Git environment prevents global templates or hooks
+            # from entering the otherwise empty workspace.
+            run_git(["init", "--quiet"], workspace)
         child, body = run_child(command, workspace, prompt, rates, allowed_env, home, prefer_prices)
     finally:
         # 언제나 지운다. 여기가 조언자와 executor 를 가르는 지점이다.
@@ -2985,22 +3037,24 @@ def attempt(
     # 코드이므로 사용자가 닿는 곳이면 어디든 닿는다. 진짜 격리는 검증 명령
     # 자체를 컨테이너나 jail 에 넣는 것뿐이고, 설계 문서가 그렇게 권한다.
     work_root = out_dir / ".work"
-    work_root.mkdir(mode=0o700, exist_ok=True)
-    # 만드는 즉시 등록한다. 둘을 만들고 나서 등록하면 그 사이에 실패했을 때
-    # 첫 번째가 아무도 가리키지 않는 채 디스크에 남는다.
-    workspace = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=work_root))
-    register(registry, workspace, add=True)
-    handover = Path(tempfile.mkdtemp(prefix=f"spec-{name}-", dir=work_root))
-    register(registry, handover, add=True)
-    record: Attempt = {"route": name, "workspace": str(handover)}
-    # 패치 이름에 무작위 접미사를 물려 준다. 고정 이름이면 과제를 20개 재는
-    # 동안 out_dir/cheap.patch 를 계속 덮어써 마지막 하나만 남고, 그 20개를
-    # 재는 것이 이 스크립트의 목적이다.
-    patch = out_dir / f"{handover.name}.patch"
+    workspace: Path | None = None
+    handover: Path | None = None
+    patch: Path | None = None
+    record: Attempt = {"route": name, "workspace": None}
     patch_bytes = b""
     build_scaffolding: list[str] = []
     verify_output = ""
     try:
+        work_root.mkdir(mode=0o700, exist_ok=True)
+        # 만드는 즉시 등록한다. 등록 자체가 실패하면 방금 만든 디렉터리도
+        # 이 try 안에서 회수되어, 두 번째 디렉터리를 만들기 전의 틈도 남지 않는다.
+        workspace = create_registered_workspace(f"spec-{name}-", work_root, registry, out_dir)
+        handover = create_registered_workspace(f"spec-{name}-", work_root, registry, out_dir)
+        record["workspace"] = str(handover)
+        # 패치 이름에 무작위 접미사를 물려 준다. 고정 이름이면 과제를 20개 재는
+        # 동안 out_dir/cheap.patch 를 계속 덮어써 마지막 하나만 남고, 그 20개를
+        # 재는 것이 이 스크립트의 목적이다.
+        patch = out_dir / f"{handover.name}.patch"
         clone_at(repo, commit, workspace)
         # attempt 는 stdout 을 쓰지 않는다. 과제 내용과 자식이 쓴 텍스트가
         # 로그로 새지 않게 여기서 버린다.
@@ -3022,8 +3076,7 @@ def attempt(
         # 결과와 수치만 기록한다는 것이므로 개수만 남긴다.
         record["dropped_ignored"] = len(dropped)
         record["made_changes"] = record["patch_lines"] > 0
-        verify_home = Path(tempfile.mkdtemp(prefix="spec-home-", dir=work_root))
-        register(registry, verify_home, add=True)
+        verify_home = create_registered_workspace("spec-home-", work_root, registry, out_dir)
         try:
             # 검증 출력은 기록에 넣지 않는다. 자식 코드가 찍은 텍스트라 무엇이든
             # 담을 수 있고, 로그는 안전해야 한다. 조언 단계에만 넘긴다.
@@ -3062,7 +3115,8 @@ def attempt(
 
     # 자식이 돌던 워크스페이스는 어느 쪽이든 항상 버린다. 넘길 것은 재구성한
     # 트리이고, 자식의 .git 을 살려 둘 이유가 없다.
-    discard(registry, workspace, out_dir)
+    if workspace is not None:
+        discard(registry, workspace, out_dir)
 
     verdict = record.get("verify")
     # 변경이 없으면 통과로 치지 않는다. 저장소의 기존 테스트는 이미 초록이므로,
@@ -3077,6 +3131,7 @@ def attempt(
         record["failure_kind"] = "route"
     record["accepted"] = bool(verdict and verdict["passed"] and record.get("made_changes"))
     if record["accepted"]:
+        assert handover is not None and patch is not None
         # 검증을 통과한 뒤에야 디스크에 쓴다. 여기서 실패해도 이 함수의 계약은
         # 지켜야 한다 — 무슨 일이 있어도 판정을 남기고 정상 반환한다.
         try:
@@ -3094,7 +3149,8 @@ def attempt(
             return record, verify_output, patch_bytes
         record["patch"] = str(patch)
     else:
-        discard(registry, handover, out_dir)
+        if handover is not None:
+            discard(registry, handover, out_dir)
         record["workspace"] = None
     return record, verify_output, patch_bytes
 
@@ -3144,7 +3200,10 @@ def main() -> int:
     parser.add_argument(
         "--child-env-all",
         action="store_true",
-        help="pass the entire environment to the vendor child, as older versions did",
+        help=(
+            "pass the environment to the vendor child except Git routing variables, "
+            "which could escape its isolated repository"
+        ),
     )
     # HOME 은 arm 마다 따로 받는다. 하나를 두 arm 이 공유하면 싼 경로가 거기에
     # .bashrc 나 CLI 훅처럼 **실행되는** 파일을 남길 수 있고, 승급 경로가 그것을
