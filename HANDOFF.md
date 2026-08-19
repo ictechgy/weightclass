@@ -16,17 +16,18 @@ _Last updated: 2026-08-19 KST by Codex_
 ## Current Status
 
 - Project root: `/Users/jinhongan/Desktop/subscription-agent-router`.
-- Root worktree: branch `release/homebrew-0.15.1`, based on `origin/main` at
-  `1cf2f6a` (PR #52). The only repository change is the 0.15.1 Homebrew formula
-  plus this final handoff refresh.
-- PRs **#40 through #52 are all merged**. Merge commits: `c8a3311` (#40),
+- Root worktree: `main` at `59acd7b` (PR #53), equal to `origin/main`. The
+  0.15.1 release and source-of-truth Homebrew formula are merged.
+- PRs **#40 through #53 are all merged**. Merge commits: `c8a3311` (#40),
   `1a7c91f` (#41), `fe93a5c` (#42), `ec5eb29` (#43), `a763d9c` (#44),
   `887159a` (#45), `bf1ad11` (#46, version bump), `4145745` (#47, downward
   result), `77802ed` (#48, speculative-run measurement tooling), `8ae5a8f`
   (#49, measured cheap-path cost from API-key billing), `7ff2917` (#50, the
   vendor-neutral advisor arm), `a489044` (#51, the release-gate fix below), and
-  `1cf2f6a` (#52, the 0.15.1 routing/accounting fixes and policy 4).
-  Every merge was gated on an `ultra-review-loop` run and full CI.
+  `1cf2f6a` (#52, the 0.15.1 routing/accounting fixes and policy 4), and
+  `59acd7b` (#53, the Homebrew source formula). PRs #40-#51 used the recorded
+  review loops; #52 had an independent Sol review plus full CI, and #53 had
+  full CI plus formula-specific Homebrew verification.
 - A linked worktree remains at `/private/tmp/weightclass-ralplan.7coU17/worktree`
   (detached at `a763d9c`; merged, safe to remove).
 - **The paired token study is closed.** See "The routing-economics result" below.
@@ -41,11 +42,13 @@ _Last updated: 2026-08-19 KST by Codex_
   exactly one wheel and one sdist, neither yanked. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/db/94/533630e84006e7fec7561b99aa1b0a9b0ed9bee46df4d42d411910de6213/weightclass-0.15.1.tar.gz`
   - sha256: `684cedcaa3a3ec75edb9ff44d6f37eba972a2fdf6ffbeafe86c7e1b3d50000dc`
-- **The 0.15.1 Homebrew formula is locally verified but not pushed to the tap
-  yet.** The source formula and copied tap formula pass Ruby syntax, formula-only
-  `brew style`, strict audit, source upgrade, and `brew test`. Homebrew now has
-  0.15.1 installed while the old 0.14.0 keg is retained. The user-level
-  `~/.local/bin/wclass` remains 0.14.0 and still shadows Homebrew by design.
+- **The 0.15.1 Homebrew formula is published.** Source PR #53 merged as
+  `59acd7b`; tap PR #14 merged as `d1c623a`. The exact copied formula passed Ruby
+  syntax, formula-only `brew style`, strict audit, source upgrade, and
+  `brew test`. Homebrew has 0.15.1 installed while the old 0.14.0 keg is
+  retained. Homebrew also upgraded `ca-certificates` to 2026-08-13 and retained
+  the prior 2026-07-16 keg. The user-level `~/.local/bin/wclass` remains 0.14.0
+  and still shadows Homebrew by design.
   `packaging/homebrew/weightclass.rb` in this repo is the source of truth; copy
   it into `ictechgy/homebrew-tap` rather than editing the tap by hand, because
   `brew style`/`brew audit` only apply tap rules to a file already inside a tap.
@@ -362,8 +365,9 @@ human to read.
   raw session histories. Do not retroactively synthesize usage.
 - Do not read `.grok`, auth, credential, key, cookie, or token files to explain
   startup prompts. Ask for a redacted prompt excerpt if the issue recurs.
-- Do not overwrite `/opt/homebrew/bin/wclass`; the user-level executable is the
-  reversible precedence layer.
+- Do not assume plain `wclass` exercises the Homebrew build: the user-level
+  executable still shadows `/opt/homebrew/bin/wclass`. Do not reinstall the
+  user-level tool without explicit approval.
 - Do not reuse/relabel the published `0.14.0` artifacts or protected tag for
   unreleased work.
 - Do not narrow `HIGH_SIGNALS` on the calibration result. `p08`/`p21` both
@@ -382,10 +386,10 @@ human to read.
 
 ## Next Steps
 
-1. **Finish the Homebrew publication.** Merge the source formula/handoff PR,
-   then commit and push the already verified copied formula in
-   `ictechgy/homebrew-tap`. Read back both repositories and keep the unrelated
-   pre-existing `relay.rb` whole-tap style finding untouched.
+1. **No 0.15.1 release work remains.** PyPI and Homebrew publication are both
+   complete. The unrelated pre-existing `relay.rb` whole-tap style finding was
+   intentionally left untouched. Updating the shadowing user-level 0.14.0 tool
+   is optional and requires explicit approval.
 3. **The default tier is not being lowered. That question is settled for now.**
    The quality instrument was built, calibrated, and run
    (`QUALITY-INSTRUMENT.md`, `PRE-REGISTRATION-quality.md`, `QUALITY-RESULT.md`
@@ -442,12 +446,12 @@ human to read.
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
 applicable `AGENTS.md` files, then continue from: `0.15.1 is merged, tagged, and
 published from main commit 1cf2f6a; every Release job passed. The canonical
-sdist URL and SHA are recorded above. The Homebrew 0.15.1 formula is source-built
-and tested locally, and the old 0.14.0 keg remains installed, but the source
-formula/handoff PR and tap commit still need to be pushed. The user-level
-~/.local/bin/wclass remains 0.14.0 and shadows /opt/homebrew/bin/wclass 0.15.1;
-do not reinstall it without explicit approval. The corrected Shape-B pilot had
-q=1 and s=0/1 and no economic verdict because no user price table existed, so it
-does not justify product integration. Never infer prices, read vendor
-credentials/config, backfill task/session data, or reuse a published version or
-tag.`
+sdist URL and SHA are recorded above. Source formula PR #53 and Homebrew tap PR
+#14 are merged, and the source-built 0.15.1 formula passed audit and brew test.
+The old 0.14.0 Homebrew keg remains installed. The user-level
+~/.local/bin/wclass also remains 0.14.0 and shadows /opt/homebrew/bin/wclass
+0.15.1; do not reinstall it without explicit approval. The corrected Shape-B
+pilot had q=1 and s=0/1 and no economic verdict because no user price table
+existed, so it does not justify product integration. Never infer prices, read
+vendor credentials/config, backfill task/session data, or reuse a published
+version or tag.`
