@@ -21,7 +21,7 @@ class ClassificationPolicyContractTests(unittest.TestCase):
         classify_with_reason = getattr(classification, "classify_task_with_reason", None)
 
         self.assertTrue(callable(classify_with_reason))
-        self.assertEqual(getattr(classification, "CLASSIFICATION_POLICY_VERSION", None), "3")
+        self.assertEqual(getattr(classification, "CLASSIFICATION_POLICY_VERSION", None), "4")
         self.assertIsInstance(classification.classify_task("Fix the typo."), str)
 
     def test_high_signals_have_distinct_static_english_and_korean_reason_codes(self) -> None:
@@ -89,7 +89,7 @@ class ClassificationPolicyContractTests(unittest.TestCase):
             {
                 "tier": "low",
                 "reason_code": "low.mechanical",
-                "policy_version": "3",
+                "policy_version": "4",
             },
         )
 
@@ -241,6 +241,33 @@ class ThresholdTests(unittest.TestCase):
 
 
 class ClassificationRegressionTests(unittest.TestCase):
+    def test_intermittent_root_cause_investigations_route_high(self) -> None:
+        """Breaks if symptom-described diagnostic uncertainty stays unreachable."""
+        cases = (
+            "Investigate why this cache sometimes returns a stale entry after a refresh.",
+            "간헐적으로 작업 결과가 이전 값으로 돌아가는 원인을 찾아줘.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                decision = classification.classify_task_with_reason(task)
+                self.assertEqual(
+                    (decision.tier, decision.reason_code),
+                    ("high", "high.uncertain_diagnostic"),
+                )
+
+    def test_diagnostic_intent_or_instability_alone_does_not_route_high(self) -> None:
+        """Breaks if one broad word makes routine work expensive."""
+        cases = (
+            ("Investigate why this unit test fails.", "standard"),
+            ("Rename the intermittent-failure test.", "low"),
+            ("간헐적 장애 대응 문서의 오타를 고쳐줘.", "low"),
+        )
+
+        for task, expected in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classification.classify_task(task), expected)
+
     def test_classifies_explicit_high_impact_outcomes_as_high(self) -> None:
         """Breaks if costly duplicate-work or balance-integrity failures stay standard.
 
@@ -458,6 +485,17 @@ class CheapTierRecallTests(unittest.TestCase):
             "add a docstring to parse_config and make the parser reject unknown keys",
             "sort the imports; then split this module into two",
             "이 주석 지우고 재시도 간격 계산도 다시 짜줘",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classification.classify_task(task), "standard")
+
+    def test_two_imperative_sentences_are_multiple_instructions(self) -> None:
+        """Breaks if only connective words can close the mechanical cheap path."""
+        cases = (
+            "Remove the unused import. Rewrite the retry loop.",
+            "Change the page size from 20 to 50. Add pagination validation.",
         )
 
         for task in cases:

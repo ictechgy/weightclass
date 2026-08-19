@@ -2023,7 +2023,7 @@ class CommandLineTests(unittest.TestCase):
             {
                 "tier": "low",
                 "reason_code": "low.mechanical",
-                "policy_version": "3",
+                "policy_version": "4",
             },
         )
         self.assertNotIn("sentinel-private-heading-9482", result.stdout)
