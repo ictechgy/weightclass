@@ -187,6 +187,14 @@ it is the task, the diff the cheap route produced, and the verify command's
 output. It is invoked as a route command like any other, so the user chooses the
 model, the effort, and the flags.
 
+Prompt-only context still runs inside a newly initialized, zero-commit Git
+repository. It contains no source files or remote; the repository merely stops
+coding CLIs from refusing a bare directory and prevents Git discovery from
+walking into a parent repository that happens to contain the output directory.
+Git routing variables such as `GIT_DIR`, `GIT_WORK_TREE`, and alternate object
+directories are removed even with `--child-env-all`, so inherited shell state
+cannot redirect the advisor out of that repository.
+
 **Its output is capped before use.** Advice is spliced into the executor's task,
 so an unbounded blob would blow the executor's context or simply cost money to
 carry. Truncation is recorded, not silent.

@@ -16,20 +16,22 @@ _Last updated: 2026-08-19 KST by Codex_
 ## Current Status
 
 - Project root: `/Users/jinhongan/Desktop/subscription-agent-router`.
-- Root worktree: `main` at `59acd7b` (PR #53), equal to `origin/main`. The
-  0.15.1 release and source-of-truth Homebrew formula are merged.
-- PRs **#40 through #53 are all merged**. Merge commits: `c8a3311` (#40),
+- Root worktree baseline: `main` at `97b83c5` (PR #54), equal to `origin/main`
+  before the advisory follow-up branch. The 0.15.1 release, source-of-truth
+  Homebrew formula, and final release handoff are merged.
+- PRs **#40 through #54 are all merged**. Merge commits: `c8a3311` (#40),
   `1a7c91f` (#41), `fe93a5c` (#42), `ec5eb29` (#43), `a763d9c` (#44),
   `887159a` (#45), `bf1ad11` (#46, version bump), `4145745` (#47, downward
   result), `77802ed` (#48, speculative-run measurement tooling), `8ae5a8f`
   (#49, measured cheap-path cost from API-key billing), `7ff2917` (#50, the
   vendor-neutral advisor arm), `a489044` (#51, the release-gate fix below), and
   `1cf2f6a` (#52, the 0.15.1 routing/accounting fixes and policy 4), and
-  `59acd7b` (#53, the Homebrew source formula). PRs #40-#51 used the recorded
-  review loops; #52 had an independent Sol review plus full CI, and #53 had
-  full CI plus formula-specific Homebrew verification.
-- A linked worktree remains at `/private/tmp/weightclass-ralplan.7coU17/worktree`
-  (detached at `a763d9c`; merged, safe to remove).
+  `59acd7b` (#53, the Homebrew source formula), and `97b83c5` (#54, the final
+  0.15.1 handoff). PRs #40-#51 used the recorded review loops; #52 had an
+  independent Sol review plus full CI, and #53 had full CI plus
+  formula-specific Homebrew verification.
+- The stale linked-worktree metadata for the old detached study worktree was
+  pruned. Only the root worktree remains.
 - **The paired token study is closed.** See "The routing-economics result" below.
 - **`weightclass 0.15.0` is published (2026-08-18).** The annotated tag
   `v0.15.0` points at `a489044`; every `Release` job passed and the maintainer
@@ -45,17 +47,13 @@ _Last updated: 2026-08-19 KST by Codex_
 - **The 0.15.1 Homebrew formula is published.** Source PR #53 merged as
   `59acd7b`; tap PR #14 merged as `d1c623a`. The exact copied formula passed Ruby
   syntax, formula-only `brew style`, strict audit, source upgrade, and
-  `brew test`. Homebrew has 0.15.1 installed while the old 0.14.0 keg is
-  retained. Homebrew also upgraded `ca-certificates` to 2026-08-13 and retained
-  the prior 2026-07-16 keg. The user-level `~/.local/bin/wclass` remains 0.14.0
-  and still shadows Homebrew by design.
+  `brew test`. Homebrew has 0.15.1 installed; `brew cleanup` removed the old
+  0.14.0 keg and the prior `ca-certificates` 2026-07-16 keg. The user-level
+  `~/.local/bin/wclass` was explicitly upgraded with `uv tool` to 0.15.1, so
+  both user-level and Homebrew entrypoints now report 0.15.1.
   `packaging/homebrew/weightclass.rb` in this repo is the source of truth; copy
   it into `ictechgy/homebrew-tap` rather than editing the tap by hand, because
   `brew style`/`brew audit` only apply tap rules to a file already inside a tap.
-  The published sdist, read from PyPI's own JSON (the `/packages/source/w/...`
-  redirect form fails Homebrew's audit):
-  - url: `https://files.pythonhosted.org/packages/f8/c9/5b39f36d6b72ac011de21137062c5f0a9903696e497d81d4a38e9c7d0e96/weightclass-0.15.0.tar.gz`
-  - sha256: `32a62a33607f0a56da22e0f2b79b067c49d247a9daa3250775e3c931c8ca21fd`
 - Release notes live only in the session scratchpad
   (`release-notes-0.15.0.md`); rewrite them from `git log v0.14.0..main` if
   lost. The two breaking changes must appear there because no commit body
@@ -138,7 +136,11 @@ that pattern, and they are the transferable part:
 checking nothing — its probe string was not in the input — and hid a real key
 leak for five rounds. It reruns the suite against a copy of the runner whose
 redaction functions are replaced by identity and lists what still passes.
-Baseline on `a489044`: **227 leaves fail, 107 pass, 334 total**. Passing is not
+It now uses deterministic parent-plus-ordinal subtest IDs instead of printing
+parameter reprs, retains parent errors/skips/missing outcomes and expected-
+failure semantics, and fails closed unless every reviewed neutralization target
+appears exactly once. The hardened audit still reports **227 leaves fail, 107
+pass, 334 total**, with byte-stable output across repeated runs. Passing is not
 by itself a defect (preservation tests are supposed to pass); the list is for a
 human to read.
 
@@ -159,6 +161,34 @@ human to read.
   report correctly abstained from `a`, `r`, and the economic verdict. One task
   cannot support a product decision.
 
+### Advisory follow-up and blind policy check (2026-08-19)
+
+- Three additional real maintenance tasks exercised the measurement tooling.
+  The cheap route passed 2/3. The remaining task reached Shape B; advice was
+  non-empty and the advisor route itself succeeded, but both the advised retry
+  and escalation failed verification. New-sample rescue was therefore 0/1;
+  combined with the first corrected task, observed rescue is 0/2. The three
+  follow-up tasks reported 2,823,560 child tokens in total. This is descriptive
+  only: there was still no reviewed single-origin price table, so no economic
+  verdict is available.
+- The follow-up exposed measurement-tool defects rather than product evidence:
+  prompt-only advisors needed their own empty Git boundary; inherited `GIT_*`
+  routing variables could bypass it; `spec-retry-` and `spec-advice-` crash
+  workspaces were missing from the prune allowlist; setup could leave a newly
+  created workspace untracked if registry I/O failed; and the vacuity recorder
+  could lose or expose several unittest leaf shapes. Focused RED tests now bind
+  those cases.
+- A separately pre-registered 24-prompt blind direction check used two
+  independent generators and three isolated raters, with ratings sealed before
+  policy-4 predictions. There were no three-way splits and 20/24 ratings were
+  unanimous. Policy 4 agreed on 10/24 (41.7%; Wilson 95% CI 24.5%–61.2%), found
+  1/9 majority-`high` prompts (11.1%; 2.0%–43.5%), and over-routed 6/24 (25.0%;
+  12.0%–44.9%). This small synthetic sample is a warning, not a promotion gate;
+  it does not justify lowering the default or tuning against the spent corpus.
+  Aggregate protocol and results are in
+  `docs/policy4-fresh-blind-evaluation.md`; task text and per-row artifacts stay
+  outside this repository.
+
 ## Completed
 
 - Released state is `weightclass 0.15.1`. Tags `v0.14.0`, `v0.15.0`, and
@@ -178,6 +208,13 @@ human to read.
   `high.uncertain_diagnostic`, while either signal alone does not escalate.
   The public fixture remains a direction check only: 21/40 agreement, high
   recall 5/15, over-routing 9/40 (22.5%).
+- Advisory measurement workspaces now have an isolated zero-commit Git anchor;
+  every child drops inherited `GIT_*` routing variables, including under
+  `--child-env-all`; retry and advice prefixes are prune-recognized; and a
+  registry failure during attempt setup removes the just-created workspace.
+- The vacuity audit records subtests with opaque stable ordinals, preserves
+  parent failures, skips, missing outcomes, expected failures, and unexpected
+  successes, and refuses an incomplete neutralization rewrite.
 - The schema-3 branch adds installed-agent discovery, interactive selection,
   reviewed cross-vendor/profile grants, observation-bound execution, and
   `wclass delegate native route|run` for one bounded child.
@@ -252,27 +289,19 @@ human to read.
   under the release gate, because unittest does not collect module-level
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
-- Verified on merged `main` (`a489044`): `unittest discover` runs **1117**
-  tests, `pytest -q` reports 1117 passed and 1420 subtests, `ruff check` and
-  `format --check` are clean on 152 files, and `mypy --strict src tests` is
-  clean on 124 files. Note the mypy target: `src` **and** `tests`. Checking only
-  `tools/` hides real errors — that is how 139 of them reached `main`. Ruff and
-  mypy run through `uvx --offline` against the local uv cache; neither venv has
-  them installed, and neither does the default `python3`.
-- One local test fails on this machine and is **not** a code defect:
-  `test_parent_sentinel_is_absent`, reached through
-  `test_extracted_sdist_tests_do_not_inherit_parent_environment`. The minimal
-  PATH's `python3` resolves to a different interpreter here than the one running
-  the suite. It fails identically at `8ae5a8f`, before any of this work, and
-  passes on CI.
-- The installed `~/.local/bin/wclass` still predates these commits (0.15.0 is
-  on PyPI but has not been installed here), so the user's enabled store stays
-  schema 1 until a new wheel is built and installed.
-  A schema-1 store is readable by the new code; a schema-2 store is not
-  readable by the installed build. Do not reinstall without asking.
-- A verified local wheel from `5fddc38` is installed with `uv tool` at
-  `~/.local/bin/wclass`; it precedes and leaves intact the Homebrew executable
-  at `/opt/homebrew/bin/wclass`.
+- Verified on the advisory follow-up branch: `unittest discover` runs **1131**
+  tests and `pytest -q` reports 1131 passed; Ruff check/format is clean on 155
+  files; `mypy --strict src tests` is clean on 126 source files; strict mypy is
+  also clean on the three measurement tools; and an isolated sdist/wheel build
+  succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
+  hides real errors — that is how 139 of them once reached `main`.
+- The verification venv is not an editable project install. Full local test
+  commands therefore need `PYTHONPATH=<repo>/src`; omitting it produces
+  `No module named weightclass` import failures and is not a product result.
+- The published `weightclass 0.15.1` is installed with `uv tool` at
+  `~/.local/bin/wclass`; it precedes and leaves intact the separate Homebrew
+  0.15.1 executable at `/opt/homebrew/bin/wclass`. Both entrypoints were
+  version-checked after the explicit upgrade.
 - The default macOS aggregate store is enabled at
   `~/Library/Application Support/weightclass/usage-v1.json`.
   The directory is `0700`; store and lock are `0600`.
@@ -292,7 +321,9 @@ human to read.
 - `AGENTS.md`: privacy, networking, one-child, and persisted-aggregate boundary.
 - `docs/paired-token-study.md`: the closed study — design, pre-registered gate,
   and the Phase 1b result that stopped it.
-- `src/weightclass/classification.py`: classification policy 3.
+- `src/weightclass/classification.py`: classification policy 4.
+- `docs/policy4-fresh-blind-evaluation.md`: aggregate-only protocol and result
+  from the fresh 24-prompt blind direction check.
 - `src/weightclass/router.py`: `_TIER_LADDER` and `next_tier()` for escalation.
 - `src/weightclass/usage_aggregation.py`: aggregate schema, validation, locking,
   atomic writes, reporting, and default platform paths.
@@ -366,8 +397,8 @@ human to read.
 - Do not read `.grok`, auth, credential, key, cookie, or token files to explain
   startup prompts. Ask for a redacted prompt excerpt if the issue recurs.
 - Do not assume plain `wclass` exercises the Homebrew build: the user-level
-  executable still shadows `/opt/homebrew/bin/wclass`. Do not reinstall the
-  user-level tool without explicit approval.
+  executable still shadows `/opt/homebrew/bin/wclass`, although both now report
+  0.15.1. Test an exact path when packaging provenance matters.
 - Do not reuse/relabel the published `0.14.0` artifacts or protected tag for
   unreleased work.
 - Do not narrow `HIGH_SIGNALS` on the calibration result. `p08`/`p21` both
@@ -388,9 +419,9 @@ human to read.
 
 1. **No 0.15.1 release work remains.** PyPI and Homebrew publication are both
    complete. The unrelated pre-existing `relay.rb` whole-tap style finding was
-   intentionally left untouched. Updating the shadowing user-level 0.14.0 tool
-   is optional and requires explicit approval.
-3. **The default tier is not being lowered. That question is settled for now.**
+   intentionally left untouched. The shadowing user-level tool is now 0.15.1,
+   old kegs were cleaned, and stale linked-worktree metadata was pruned.
+2. **The default tier is not being lowered. That question is settled for now.**
    The quality instrument was built, calibrated, and run
    (`QUALITY-INSTRUMENT.md`, `PRE-REGISTRATION-quality.md`, `QUALITY-RESULT.md`
    in the study repo). Blind pairwise review of both arms on 14 tasks: `low` won
@@ -407,7 +438,7 @@ human to read.
    Do not reopen this by pointing at `DOWNWARD-REPORT.md`'s "all 15 passed".
    That result was always qualified as "relative to what the acceptance test
    required", and this is what that qualifier was hiding.
-4. **The one cheap lever still standing is model grade, and it is measurable
+3. **The one cheap lever still standing is model grade, and it is measurable
    now.** A 90-pair qualification put a cheaper Codex model 69.02% below the
    stronger one on estimated API cost (95% interval [60.57%, 77.47%]) at equal
    quality (85/90 both arms), and it was rejected only for two new critical
@@ -418,27 +449,31 @@ human to read.
    route can fail two times in three and still not lose money.
    **Measure `p` before building any of it.** `tools/speculative_run.py` and
    `tools/speculative_report.py` (merged in #48, not shipped in the
-   distribution) do exactly that. If `p` lands under 20% the saving justifies
-   moving the V1 boundary; near 69% the idea is dead. Note this recovers safety,
-   not quality — the defects in `QUALITY-RESULT.md` all passed their tests.
-5. **Advisor adoption remains undecided.** The first corrected Shape-B task had
-   `s=0/1` and no price-derived `a` or `r`. A later study needs a user-supplied
-   single-origin price table, more real failed tasks, and the pre-registered
-   interval rule. Do not integrate retry/advice into `wclass` from this pilot.
-6. If the study is ever reopened, fix the three acceptance tests first
+   distribution) do exactly that. The latest three real maintenance tasks had
+   cheap acceptance 2/3, far too few to estimate `p`; if a larger sample lands
+   under 20% the saving may justify moving the V1 boundary, while near 69% the
+   idea is dead. Note this recovers safety, not quality — the defects in
+   `QUALITY-RESULT.md` all passed their tests.
+4. **Advisor adoption remains undecided.** Two corrected Shape-B failures now
+   have observed rescue `s=0/2`, and neither study had a price-derived `a` or
+   `r`. A later study needs a user-supplied single-origin price table, more real
+   failed tasks, and the pre-registered interval rule. Do not integrate
+   retry/advice into `wclass` from these pilots.
+5. **Policy 4 needs broader high-tier evidence before another classifier
+   change.** The public fixture remains 5/15 high recall; the fresh blind
+   direction check found 1/9 with a wide interval and sent the other eight to
+   `standard`. Do not tune on either visible corpus. A new policy candidate
+   requires a new independently generated, rated, and sealed corpus.
+6. If the paired token study is ever reopened, fix the three acceptance tests first
    (`p13`, `p26`, `p27`). They reject correct implementations that chose a
    different interface, which would mark a correct arm `completed: false` and
    fail the study's completion gate for reasons unrelated to routing.
-7. `high` recall is still 5/15 on the public fixture. Policy 4 makes one
-   independently specified symptom/diagnostic structure reachable, but the
-   visible fixture cannot establish an accuracy gain. Any broader work needs a
-   fresh, independently rated corpus; do not add words to chase the 40 rows.
-8. If measuring routing economics, set the `medium` weight first — it is the
+7. If measuring routing economics, set the `medium` weight first — it is the
    counterfactual the report compares against, and without it the report
    abstains with `missing_baseline_weight`. Pass `--usage-rework` on any retry of
    an already counted task; a failed run prints
    `{"usage_hint": "record_retry_with_usage_rework"}` as a reminder.
-9. Review an exact schema-3 route/fingerprint before any real run. Never launch a
+8. Review an exact schema-3 route/fingerprint before any real run. Never launch a
    vendor merely to populate metrics without explicit task authorization.
 
 ## Resume Prompt
@@ -446,12 +481,12 @@ human to read.
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
 applicable `AGENTS.md` files, then continue from: `0.15.1 is merged, tagged, and
 published from main commit 1cf2f6a; every Release job passed. The canonical
-sdist URL and SHA are recorded above. Source formula PR #53 and Homebrew tap PR
-#14 are merged, and the source-built 0.15.1 formula passed audit and brew test.
-The old 0.14.0 Homebrew keg remains installed. The user-level
-~/.local/bin/wclass also remains 0.14.0 and shadows /opt/homebrew/bin/wclass
-0.15.1; do not reinstall it without explicit approval. The corrected Shape-B
-pilot had q=1 and s=0/1 and no economic verdict because no user price table
-existed, so it does not justify product integration. Never infer prices, read
-vendor credentials/config, backfill task/session data, or reuse a published
-version or tag.`
+sdist URL and SHA are recorded above. Source formula PR #53, Homebrew tap PR
+#14, and release handoff PR #54 are merged. Both ~/.local/bin/wclass and
+/opt/homebrew/bin/wclass report 0.15.1; old kegs and stale worktree metadata
+were cleaned. Four real Shape-B samples now include two failures that reached
+advice, with observed rescue 0/2 and no economic verdict because no reviewed
+price table existed. The fresh 24-prompt blind direction check found policy-4
+agreement 10/24, high recall 1/9, and over-routing 6/24; it is spent direction
+evidence, not a tuning set. Never infer prices, read vendor credentials/config,
+backfill task/session data, or reuse a published version or tag.`

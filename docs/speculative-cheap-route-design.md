@@ -248,7 +248,15 @@ The first three are real expansions.
 There is also a new failure mode with no V1 analogue: **the workspace outlives
 the process.** A crash between step 2 and step 3 leaves a directory holding a
 half-finished agent run. Cleanup must be crash-safe — a registry of live
-workspaces plus a `wclass workspaces prune`, not a `finally` block.
+workspaces plus a `wclass workspaces prune`, not a `finally` block. Pruning is
+fail-closed: it only removes resolved, non-symlink directories that are direct
+children of `out_dir/.work` and whose names begin with one of the runner's
+exact prefixes (`spec-cheap-`, `spec-expensive-`, `spec-home-`, or
+`spec-retry-`), plus the advisor arm's `spec-advice-` prefix.
+Each attempt registers one directory before creating the next. If that
+registration fails, the just-created directory is removed before the attempt
+returns an infrastructure failure, closing the otherwise untracked setup
+window.
 
 ## The question worth asking before building any of it
 
