@@ -16,22 +16,16 @@ _Last updated: 2026-08-19 KST by Codex_
 ## Current Status
 
 - Project root: `/Users/jinhongan/Desktop/subscription-agent-router`.
-- Root worktree: branch `release/0.15.1-routing-followups`, based on `a489044`
-  (`origin/main`). The pre-existing `HANDOFF.md` rewrite remains intentional and
-  is now being integrated with the follow-up fixes below.
-- The current change set fixes cross-vendor counterfactual accounting without
-  persisting the source vendor, and prevents repeated whitespace from hiding a
-  costly outcome across scan windows. It also adds classification policy 4's
-  structural two-imperative guard and paired intermittent/root-cause rule. Ruff,
-  formatting, strict mypy, pytest and release-style unittest (1,122 tests),
-  build/Twine checks, and extracted-sdist tests pass locally; final release
-  gates must be rerun after the version bump and review.
-- PRs **#40 through #51 are all merged**. Merge commits: `c8a3311` (#40),
+- Root worktree: branch `release/homebrew-0.15.1`, based on `origin/main` at
+  `1cf2f6a` (PR #52). The only repository change is the 0.15.1 Homebrew formula
+  plus this final handoff refresh.
+- PRs **#40 through #52 are all merged**. Merge commits: `c8a3311` (#40),
   `1a7c91f` (#41), `fe93a5c` (#42), `ec5eb29` (#43), `a763d9c` (#44),
   `887159a` (#45), `bf1ad11` (#46, version bump), `4145745` (#47, downward
   result), `77802ed` (#48, speculative-run measurement tooling), `8ae5a8f`
   (#49, measured cheap-path cost from API-key billing), `7ff2917` (#50, the
-  vendor-neutral advisor arm), `a489044` (#51, the release-gate fix below).
+  vendor-neutral advisor arm), `a489044` (#51, the release-gate fix below), and
+  `1cf2f6a` (#52, the 0.15.1 routing/accounting fixes and policy 4).
   Every merge was gated on an `ultra-review-loop` run and full CI.
 - A linked worktree remains at `/private/tmp/weightclass-ralplan.7coU17/worktree`
   (detached at `a763d9c`; merged, safe to remove).
@@ -41,12 +35,17 @@ _Last updated: 2026-08-19 KST by Codex_
   approved the `pypi` environment. PyPI holds exactly two artifacts, the wheel
   and the sdist. A PyPI version can never be reused, replaced, or deleted — a
   defect needs `0.15.1`, never a re-upload of `0.15.0`.
-- **`0.15.1` is the current candidate; it is not published yet.** The declared
-  version is being bumped only after the behavior and policy-4 gates pass.
-- **The Homebrew formula still points to `0.14.0`.** Do not spend a tap update
-  on `0.15.0` now that a corrective candidate exists; after `0.15.1` is
-  published, update the source-of-truth formula and the tap directly to that
-  immutable artifact.
+- **`weightclass 0.15.1` is published (2026-08-19).** Annotated tag `v0.15.1`
+  points at `1cf2f6a`; Release run `32217717269` passed every job and published
+  the exact reviewed candidate after the `pypi` environment approval. PyPI has
+  exactly one wheel and one sdist, neither yanked. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/db/94/533630e84006e7fec7561b99aa1b0a9b0ed9bee46df4d42d411910de6213/weightclass-0.15.1.tar.gz`
+  - sha256: `684cedcaa3a3ec75edb9ff44d6f37eba972a2fdf6ffbeafe86c7e1b3d50000dc`
+- **The 0.15.1 Homebrew formula is locally verified but not pushed to the tap
+  yet.** The source formula and copied tap formula pass Ruby syntax, formula-only
+  `brew style`, strict audit, source upgrade, and `brew test`. Homebrew now has
+  0.15.1 installed while the old 0.14.0 keg is retained. The user-level
+  `~/.local/bin/wclass` remains 0.14.0 and still shadows Homebrew by design.
   `packaging/homebrew/weightclass.rb` in this repo is the source of truth; copy
   it into `ictechgy/homebrew-tap` rather than editing the tap by hand, because
   `brew style`/`brew audit` only apply tap rules to a file already inside a tap.
@@ -159,9 +158,9 @@ human to read.
 
 ## Completed
 
-- Released state is `weightclass 0.15.0`. Both `v0.14.0` and `v0.15.0` are
-  protected tags; neither they nor their published artifacts may be moved,
-  reused, relabelled, or republished.
+- Released state is `weightclass 0.15.1`. Tags `v0.14.0`, `v0.15.0`, and
+  `v0.15.1` and their published artifacts must never be moved, reused,
+  relabelled, or republished.
 - The in-progress follow-up passes the already validated source vendor to usage
   accounting only for the model-free `medium` counterfactual lookup. Actual
   usage remains in the destination-agent bucket; schema 2 and its persisted key
@@ -383,14 +382,10 @@ human to read.
 
 ## Next Steps
 
-1. **Finish `0.15.1`.** Review the complete diff, rerun both test runners and
-   distribution isolation after the version bump, merge to `main`, then create
-   `v0.15.1`. Wait for every Release job and the `pypi` environment approval;
-   never reuse the existing `0.15.0` tag or artifacts.
-2. **Update Homebrew only after PyPI.** Read the canonical `0.15.1` sdist URL
-   and SHA-256 from PyPI JSON, update `packaging/homebrew/weightclass.rb`, copy
-   it into `ictechgy/homebrew-tap`, and run style, strict audit, source install,
-   and formula tests before pushing the tap commit.
+1. **Finish the Homebrew publication.** Merge the source formula/handoff PR,
+   then commit and push the already verified copied formula in
+   `ictechgy/homebrew-tap`. Read back both repositories and keep the unrelated
+   pre-existing `relay.rb` whole-tap style finding untouched.
 3. **The default tier is not being lowered. That question is settled for now.**
    The quality instrument was built, calibrated, and run
    (`QUALITY-INSTRUMENT.md`, `PRE-REGISTRATION-quality.md`, `QUALITY-RESULT.md`
@@ -445,14 +440,14 @@ human to read.
 ## Resume Prompt
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
-applicable `AGENTS.md` files, then continue from: `release/0.15.1-routing-followups
-contains the cross-vendor counterfactual fix, whitespace-safe outcome scanning,
-and classification policy 4. The first corrected real Shape-B pilot produced
-q=1 and s=0/1 and abstained economically because no user price table existed;
-it does not justify product integration. Before publishing 0.15.1, review the
-full diff and rerun unittest discover, pytest, Ruff, format, strict mypy, build,
-Twine, and extracted-sdist isolation. Merge before tagging because the release
-workflow rejects a tag not reachable from reviewed main. After PyPI succeeds,
-point the source-of-truth Homebrew formula and tap directly from 0.14.0 to the
-canonical 0.15.1 sdist. Never infer prices, read vendor credentials/config,
-backfill task/session data, or reuse a published version/tag.`
+applicable `AGENTS.md` files, then continue from: `0.15.1 is merged, tagged, and
+published from main commit 1cf2f6a; every Release job passed. The canonical
+sdist URL and SHA are recorded above. The Homebrew 0.15.1 formula is source-built
+and tested locally, and the old 0.14.0 keg remains installed, but the source
+formula/handoff PR and tap commit still need to be pushed. The user-level
+~/.local/bin/wclass remains 0.14.0 and shadows /opt/homebrew/bin/wclass 0.15.1;
+do not reinstall it without explicit approval. The corrected Shape-B pilot had
+q=1 and s=0/1 and no economic verdict because no user price table existed, so it
+does not justify product integration. Never infer prices, read vendor
+credentials/config, backfill task/session data, or reuse a published version or
+tag.`
