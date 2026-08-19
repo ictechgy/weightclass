@@ -52,9 +52,14 @@ class VacuityLeafRecorderTests(unittest.TestCase):
         self.assertEqual(sum(not ok for _, ok in leaves), 3)
         self.assertEqual(result.missing_test_ids(), set())
         self.assertTrue(
-            any(not ok and identifier.endswith("test_subtest_then_parent_error") for identifier, ok in leaves)
+            any(
+                not ok and identifier.endswith("test_subtest_then_parent_error")
+                for identifier, ok in leaves
+            )
         )
-        self.assertTrue(any(not ok and identifier.endswith("test_skip") for identifier, ok in leaves))
+        self.assertTrue(
+            any(not ok and identifier.endswith("test_skip") for identifier, ok in leaves)
+        )
 
 
 if __name__ == "__main__":
