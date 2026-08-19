@@ -16,19 +16,20 @@ _Last updated: 2026-08-19 KST by Codex_
 ## Current Status
 
 - Project root: `/Users/jinhongan/Desktop/subscription-agent-router`.
-- Root worktree baseline: `main` at `97b83c5` (PR #54), equal to `origin/main`
-  before the advisory follow-up branch. The 0.15.1 release, source-of-truth
-  Homebrew formula, and final release handoff are merged.
-- PRs **#40 through #54 are all merged**. Merge commits: `c8a3311` (#40),
+- Root worktree: `main` at `dddf804` (PR #55), equal to `origin/main`. The
+  0.15.1 release, source-of-truth Homebrew formula, release handoff, advisory
+  measurement hardening, and fresh blind direction check are merged.
+- PRs **#40 through #55 are all merged**. Merge commits: `c8a3311` (#40),
   `1a7c91f` (#41), `fe93a5c` (#42), `ec5eb29` (#43), `a763d9c` (#44),
   `887159a` (#45), `bf1ad11` (#46, version bump), `4145745` (#47, downward
   result), `77802ed` (#48, speculative-run measurement tooling), `8ae5a8f`
   (#49, measured cheap-path cost from API-key billing), `7ff2917` (#50, the
   vendor-neutral advisor arm), `a489044` (#51, the release-gate fix below), and
   `1cf2f6a` (#52, the 0.15.1 routing/accounting fixes and policy 4), and
-  `59acd7b` (#53, the Homebrew source formula), and `97b83c5` (#54, the final
-  0.15.1 handoff). PRs #40-#51 used the recorded review loops; #52 had an
-  independent Sol review plus full CI, and #53 had full CI plus
+  `59acd7b` (#53, the Homebrew source formula), `97b83c5` (#54, the final
+  0.15.1 handoff), and `dddf804` (#55, advisory measurement hardening and blind
+  evidence). PRs #40-#51 used the recorded review loops; #52 and #55 had
+  independent Sol reviews plus full CI, and #53 had full CI plus
   formula-specific Homebrew verification.
 - The stale linked-worktree metadata for the old detached study worktree was
   pruned. Only the root worktree remains.
@@ -289,7 +290,7 @@ human to read.
   under the release gate, because unittest does not collect module-level
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
-- Verified on the advisory follow-up branch: `unittest discover` runs **1131**
+- Verified on merged `main` (`dddf804`): `unittest discover` runs **1131**
   tests and `pytest -q` reports 1131 passed; Ruff check/format is clean on 155
   files; `mypy --strict src tests` is clean on 126 source files; strict mypy is
   also clean on the three measurement tools; and an isolated sdist/wheel build
@@ -482,11 +483,12 @@ Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
 applicable `AGENTS.md` files, then continue from: `0.15.1 is merged, tagged, and
 published from main commit 1cf2f6a; every Release job passed. The canonical
 sdist URL and SHA are recorded above. Source formula PR #53, Homebrew tap PR
-#14, and release handoff PR #54 are merged. Both ~/.local/bin/wclass and
-/opt/homebrew/bin/wclass report 0.15.1; old kegs and stale worktree metadata
-were cleaned. Four real Shape-B samples now include two failures that reached
-advice, with observed rescue 0/2 and no economic verdict because no reviewed
-price table existed. The fresh 24-prompt blind direction check found policy-4
-agreement 10/24, high recall 1/9, and over-routing 6/24; it is spent direction
-evidence, not a tuning set. Never infer prices, read vendor credentials/config,
-backfill task/session data, or reuse a published version or tag.`
+#14, release handoff PR #54, and advisory follow-up PR #55 are merged. Both
+~/.local/bin/wclass and /opt/homebrew/bin/wclass report 0.15.1; old kegs and
+stale worktree metadata were cleaned. Four real Shape-B samples now include two
+failures that reached advice, with observed rescue 0/2 and no economic verdict
+because no reviewed price table existed. The fresh 24-prompt blind direction
+check found policy-4 agreement 10/24, high recall 1/9, and over-routing 6/24;
+it is spent direction evidence, not a tuning set. Never infer prices, read
+vendor credentials/config, backfill task/session data, or reuse a published
+version or tag.`
