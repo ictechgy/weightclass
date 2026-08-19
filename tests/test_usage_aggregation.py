@@ -122,6 +122,53 @@ class UsageAggregationTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
         self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_input"})
 
+    def test_over_limit_integer_store_is_a_redacted_validation_error(self) -> None:
+        """Breaks if CPython's integer digit limit escapes as a traceback."""
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory) / "usage-v1.json"
+            store.write_text('{"schema_version":' + "9" * 10_000 + "}", encoding="ascii")
+            store.chmod(0o600)
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = cli.main(["usage", "report", "--store", str(store)])
+
+        self.assertEqual(status, 2)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_input"})
+
+    def test_duplicate_store_key_is_a_redacted_validation_error(self) -> None:
+        """Breaks if aggregate state uses JSON's last-key-wins behavior."""
+        usage = importlib.import_module("weightclass.usage_aggregation")
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory) / "usage-v1.json"
+            usage.ensure_usage_store(store)
+            payload = store.read_text(encoding="ascii")
+            duplicates = {
+                "top-level": payload.replace(
+                    '"schema_version":2',
+                    '"schema_version":2,"schema_version":2',
+                    1,
+                ),
+                "nested": payload.replace(
+                    '"tasks":0',
+                    '"tasks":0,"tasks":0',
+                    1,
+                ),
+            }
+            for name, duplicated in duplicates.items():
+                with self.subTest(name=name):
+                    self.assertNotEqual(duplicated, payload)
+                    store.write_text(duplicated, encoding="ascii")
+                    stdout = io.StringIO()
+                    stderr = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        status = cli.main(["usage", "report", "--store", str(store)])
+
+                    self.assertEqual(status, 2)
+                    self.assertEqual(stdout.getvalue(), "")
+                    self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_input"})
+
     def test_report_aggregates_relative_cost_status_and_self_reported_rework(self) -> None:
         """Breaks if one run becomes an event log or aggregate ratios use inferred pricing."""
         usage = importlib.import_module("weightclass.usage_aggregation")

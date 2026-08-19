@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Final
 
 from .adapter_registry import BUILT_IN_AGENT_IDS
+from .json_input import json_object_pairs_without_duplicates
 
 STORE_SCHEMA_VERSION: Final = 2
 MAX_STORE_BYTES: Final = 262_144
@@ -380,15 +381,13 @@ def _load_store(path: Path) -> dict[str, object]:
     finally:
         os.close(descriptor)
     try:
-        return _validate_store(json.loads(payload.decode("ascii")))
-    except (UnicodeDecodeError, json.JSONDecodeError, UsageAggregationError):
-        raise UsageAggregationError() from None
-    except RecursionError:
-        # 깊게 중첩된 JSON 은 JSONDecodeError 가 아니라 RecursionError 로 끝난다.
-        # RecursionError 는 ValueError 가 아니라 RuntimeError 계열이라 위 튜플에
-        # 걸리지 않고, 상한(MAX_STORE_BYTES) 안에서도 재귀 한도를 넘길 수 있다.
-        # 잡지 않으면 적대적 저장소 하나가 라우터를 진단 없는 크래시로 끝낸다.
-        # CPython 버전에 따라 한도가 달라 3.10/3.11 에서만 드러났다.
+        return _validate_store(
+            json.loads(
+                payload.decode("ascii"),
+                object_pairs_hook=json_object_pairs_without_duplicates,
+            )
+        )
+    except (UnicodeDecodeError, ValueError, RecursionError, UsageAggregationError):
         raise UsageAggregationError() from None
 
 

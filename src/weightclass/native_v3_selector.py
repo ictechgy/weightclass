@@ -33,6 +33,8 @@ class _SelectorCancelled(Exception):
     """Internal EOF signal; cancellation never emits a policy."""
 
 
+MAX_CONSOLE_LINE_CHARACTERS = 4_096
+MAX_NUMERIC_CHOICE_CHARACTERS = 32
 _EFFORT_CHOICES = ("low", "medium", "high")
 _BUILDER_FOR = {
     "agy": "agy-print-v1",
@@ -45,10 +47,13 @@ _BUILDER_FOR = {
 def _read(source: TextIO, sink: TextIO, prompt: str) -> str | None:
     sink.write(prompt)
     sink.flush()
-    value = source.readline()
+    value = source.readline(MAX_CONSOLE_LINE_CHARACTERS + 2)
     if value == "":
         return None
-    return value.rstrip("\r\n")
+    stripped = value.rstrip("\r\n")
+    if len(stripped) > MAX_CONSOLE_LINE_CHARACTERS:
+        raise InteractiveSelectorError()
+    return stripped
 
 
 def _numeric_choice(
@@ -64,7 +69,11 @@ def _numeric_choice(
         return None
     if optional and raw == "":
         return ""
-    if not raw or any(character not in "0123456789" for character in raw):
+    if (
+        not raw
+        or len(raw) > MAX_NUMERIC_CHOICE_CHARACTERS
+        or any(character not in "0123456789" for character in raw)
+    ):
         raise InteractiveSelectorError()
     index = int(raw) - 1
     if not 0 <= index < len(options):

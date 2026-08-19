@@ -8,6 +8,11 @@ from collections.abc import Sequence
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments == ["--version"]:
+        from . import __version__
+
+        print(f"weightclass {__version__}")
+        return 0
     if arguments[:1] == ["classify"]:
         from .classification_cli import main as classify_main
 

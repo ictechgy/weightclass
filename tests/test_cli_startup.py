@@ -59,6 +59,42 @@ print(json.dumps({"exit_code": exit_code, "forbidden": forbidden}))
         self.assertEqual(json.loads(lines[1]), {"exit_code": 0, "forbidden": []})
         self.assertEqual(result.stderr, "")
 
+    def test_version_does_not_load_the_full_command_dispatcher(self) -> None:
+        """Breaks if a metadata query pays for every runtime protocol import."""
+        program = """
+import json
+import sys
+
+from weightclass.entrypoint import main
+
+exit_code = main(["--version"])
+forbidden = sorted(
+    name
+    for name in sys.modules
+    if name in {
+        "weightclass.cli",
+        "weightclass.delegation_runtime",
+        "weightclass.native_v2_compile",
+        "weightclass.triage",
+        "weightclass.v2",
+    }
+)
+print(json.dumps({"exit_code": exit_code, "forbidden": forbidden}))
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", program],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertRegex(lines[0], r"^weightclass [0-9]+\.[0-9]+\.[0-9]+$")
+        self.assertEqual(json.loads(lines[1]), {"exit_code": 0, "forbidden": []})
+        self.assertEqual(result.stderr, "")
+
 
 if __name__ == "__main__":
     unittest.main()

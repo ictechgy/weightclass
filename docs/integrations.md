@@ -41,7 +41,9 @@ a policy, or in vendor-global configuration. Task text is a deliberate
 exception to that rule, not an oversight: the built-in `agy` and `grok` routes,
 and any policy route that declares the reserved `{{task}}` token, put the task
 on the command line by design, because those CLIs accept a prompt only as an
-argument. Command lines are readable by every user on the machine — anyone who
+argument. The token may occupy one prompt-value element but never `argv[0]`;
+the executable must remain fixed in the reviewed policy. Command lines are
+readable by every user on the machine — anyone who
 can run `ps` sees the task for as long as the child runs. On a single-user
 machine this is inconsequential; on a shared host it is not. This is a real
 exposure you accept each time you write `{{task}}` into a policy or select an
