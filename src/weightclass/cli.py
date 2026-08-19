@@ -2091,6 +2091,7 @@ def _execute_native_v3(
                 child_returncode=return_code,
                 rework=usage_rework,
                 escalation=usage_escalation,
+                source_vendor=validated_vendor,
             )
         except (OSError, UsageAggregationError):
             print(

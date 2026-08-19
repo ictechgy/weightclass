@@ -278,10 +278,10 @@ run itself used a model override, because the route a task would have taken
 without routing is the vendor's own default model. Pricing a model-routed task
 against that same routed model would compare it to a counterfactual that never
 existed, and would cancel out exactly the saving model routing was meant to
-produce. One limitation follows from the aggregate-only contract: the store does
-not record a source vendor, so if a reviewed cross-vendor opt-in changed the
-agent, the baseline is that *destination* agent's default route, not the
-vendor you would otherwise have used.
+produce. For a reviewed cross-vendor route, the already validated source vendor
+is passed transiently to accounting, so the baseline uses that source vendor's
+default route while the actual run remains in the destination agent's bucket.
+No per-run source-vendor field is added to the aggregate store.
 
 Given that baseline:
 

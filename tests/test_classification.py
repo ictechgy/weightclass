@@ -624,6 +624,17 @@ class BacktrackingBoundTests(unittest.TestCase):
                 self.assertEqual(classify_task("x" * filler + " " + outcome), "high")
         self.assertEqual(classify_task("가" * 3_000 + " " + korean), "high")
 
+    def test_repeated_whitespace_cannot_hide_a_harmful_outcome_at_a_window_boundary(
+        self,
+    ) -> None:
+        """Breaks if unbounded separators stretch one outcome across two windows."""
+        stretched_outcome = (
+            "account " + "y" * 78 + " is" + " " * 500 + "charged " + "z" * 30 + " twice"
+        )
+        task = "x" * 700 + " " + stretched_outcome
+
+        self.assertEqual(classify_task(task), "high")
+
     def test_patterns_stay_cheap_at_the_maximum_accepted_input(self) -> None:
         """Breaks if windowing the whole task makes hostile input superlinear.
 

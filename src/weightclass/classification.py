@@ -223,9 +223,9 @@ MAX_TASK_CHARACTERS: Final = 20_000
 # 결과 패턴에 한 번에 넘기는 최대 길이. 난이도 판정이 아니라 되추적 비용의
 # 상한으로만 쓴다. 아래 classify_task_with_reason 의 설명을 참조할 것.
 PATTERN_SCAN_CHARACTERS: Final = 1_200
-# 창을 겹치는 폭. 결과 패턴이 걸치는 최대 거리보다 넉넉해야 한다. 가장 긴 패턴이
-# 유계 와일드카드 80 + 32 자에 앞뒤 단어를 더한 정도이고, 중복 작업 규칙은 매치
-# 앞뒤로 160 자를 더 본다. 이 값이 그보다 작으면 창 경계에 걸친 서술이 사라진다.
+# 창을 겹치는 폭. 결과 패턴을 훑기 전에 연속 공백을 한 칸으로 접으므로, 정규식의
+# ``\s+``/``\s*`` 가 의미 없는 공백만으로 한 결과를 창보다 길게 늘릴 수 없다.
+# 그 뒤 남는 유계 와일드카드와 중복 작업 문맥이 창 경계에서 함께 보이도록 겹친다.
 PATTERN_SCAN_OVERLAP: Final = 400
 # 이 길이를 넘으면 low 자격만 잃는다. 길이는 "기계적이지 않다"의 증거는 되지만
 # "위험하다"의 증거는 아니다. 예전 정책은 이 값을 high 바닥으로 썼고, 그래서 파일
@@ -579,10 +579,15 @@ def _scan_windows(task: str) -> Iterator[str]:
 
 def _has_high_risk_outcome(task: str) -> bool:
     """Report whether a narrowly defined costly outcome is described."""
+    # 결과 패턴의 공백 구분자는 표기 차이를 받아들이기 위한 것이지 거리를 무한히
+    # 늘리기 위한 것이 아니다. 그대로 창을 내면 반복 공백만으로 의미상 한 문장을
+    # 두 창에 갈라 위험 결과를 숨길 수 있다. 결과 검사에만 공백을 접어 길이·기계적
+    # 쌍 거리 같은 다른 분류 계약은 바꾸지 않는다.
+    compact_task = re.sub(r"\s+", " ", task)
     return any(
         any(pattern.search(window) for pattern in _HIGH_RISK_OUTCOME_PATTERNS)
         or _has_duplicate_work_outcome(window)
-        for window in _scan_windows(task)
+        for window in _scan_windows(compact_task)
     )
 
 

@@ -537,7 +537,7 @@ def _weight_micros(
 
 def _baseline_micros(
     weights: list[dict[str, object]],
-    dimensions: Mapping[str, object],
+    source_agent: str,
 ) -> int | None:
     """Return what one task would have cost on the fixed route it skipped.
 
@@ -547,11 +547,10 @@ def _baseline_micros(
     존재한 적 없는 반사실의 가격을 매기게 된다. 싼 모델로 보냈다면 기준선까지
     같이 싸져 절감이 사라지고, 비싼 모델로 보냈다면 초과 지출이 가려진다.
 
-    에이전트는 그대로 쓴다. 기본 라우팅은 소스 벤더를 고정하므로 같은 에이전트의
-    기본 경로가 그 태스크의 반사실이다. 크로스 벤더 옵트인으로 에이전트가 바뀐
-    경우에는 저장소가 소스 벤더를 알지 못해 이 값이 정확하지 않다.
+    에이전트는 라우팅 전 소스 벤더를 쓴다. 기본 라우팅에서는 실행 에이전트와
+    같고, 명시적으로 허용한 크로스 벤더 라우팅에서는 실행 에이전트와 다르다.
     """
-    return _weight_micros(weights, str(dimensions["agent"]), None, BASELINE_EFFORT)
+    return _weight_micros(weights, source_agent, None, BASELINE_EFFORT)
 
 
 def record_usage(
@@ -561,12 +560,16 @@ def record_usage(
     child_returncode: int,
     rework: bool,
     escalation: bool,
+    source_vendor: str | None = None,
 ) -> None:
     """Record one finished child.
 
     ``rework`` 는 이 실행이 이미 센 태스크의 재시도라는 뜻이다. 참이면 실행 수만
     늘고 태스크 수와 기준선은 늘지 않는다. 그래서 저비용 라우팅이 실패해 다시
     도는 비용이 기준선에 흡수되지 않고 초과 지출로 남는다.
+
+    ``source_vendor`` 는 라우팅하지 않았을 때의 기준선 조회에만 쓰며 저장하지
+    않는다. 생략하면 실행 에이전트와 같은 벤더에서 시작한 것으로 본다.
     """
     if not isinstance(rework, bool) or not isinstance(escalation, bool):
         raise UsageAggregationError()
@@ -576,6 +579,7 @@ def record_usage(
         "effort": _effort(dimensions.effort),
         "tier": _tier(dimensions.tier),
     }
+    baseline_agent = _agent(dimensions.agent if source_vendor is None else source_vendor)
     status = _status_key(child_returncode)
 
     def update(value: dict[str, object]) -> None:
@@ -633,7 +637,7 @@ def record_usage(
         # 그 자리에서 확정해 둔다. 나중에 가중치가 바뀌어도 이미 쌓인 기준선은
         # 다시 쓰이지 않는다. 실제 비용과 같은 규칙이다.
         baseline["tasks"] = _increment(int(baseline["tasks"]))
-        baseline_weight = _baseline_micros(weights, normalized)
+        baseline_weight = _baseline_micros(weights, baseline_agent)
         if baseline_weight is not None:
             baseline["counted_tasks"] = _increment(int(baseline["counted_tasks"]))
             baseline["relative_cost_micros_total"] = _increment(
