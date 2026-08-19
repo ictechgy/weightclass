@@ -15,6 +15,8 @@ RUNNER = REPO_ROOT / "tools" / "speculative_run.py"
 
 
 def load_runner() -> types.ModuleType:
+    if not RUNNER.is_file():
+        raise unittest.SkipTest("repository-only speculative runner unavailable")
     spec = importlib.util.spec_from_file_location("speculative_run_workspace", RUNNER)
     if spec is None or spec.loader is None:
         raise unittest.SkipTest("speculative runner unavailable")

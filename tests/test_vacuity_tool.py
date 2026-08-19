@@ -13,6 +13,8 @@ TOOL = REPO_ROOT / "tools" / "check_test_vacuity.py"
 
 
 def load_tool() -> types.ModuleType:
+    if not TOOL.is_file():
+        raise unittest.SkipTest("repository-only vacuity tool unavailable")
     spec = importlib.util.spec_from_file_location("check_test_vacuity", TOOL)
     if spec is None or spec.loader is None:
         raise unittest.SkipTest("vacuity tool unavailable")
