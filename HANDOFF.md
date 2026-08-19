@@ -16,11 +16,10 @@ _Last updated: 2026-08-19 KST by Codex_
 ## Current Status
 
 - Project root: `/Users/jinhongan/Desktop/subscription-agent-router`.
-- Root worktree baseline: `main` at `5265501` (PR #56), equal to `origin/main`
-  before the current security/performance follow-up branch. The 0.15.1 release,
-  advisory measurement hardening, blind direction check, and final handoff are
-  merged.
-- PRs **#40 through #56 are all merged**. Merge commits: `c8a3311` (#40),
+- Root worktree baseline: `main` at `84826cb` (PR #57), equal to `origin/main`.
+  The 0.15.1 release, advisory measurement hardening, blind direction check,
+  security/performance follow-up, and final handoff are merged.
+- PRs **#40 through #57 are all merged**. Merge commits: `c8a3311` (#40),
   `1a7c91f` (#41), `fe93a5c` (#42), `ec5eb29` (#43), `a763d9c` (#44),
   `887159a` (#45), `bf1ad11` (#46, version bump), `4145745` (#47, downward
   result), `77802ed` (#48, speculative-run measurement tooling), `8ae5a8f`
@@ -28,11 +27,11 @@ _Last updated: 2026-08-19 KST by Codex_
   vendor-neutral advisor arm), `a489044` (#51, the release-gate fix below), and
   `1cf2f6a` (#52, the 0.15.1 routing/accounting fixes and policy 4), and
   `59acd7b` (#53, the Homebrew source formula), `97b83c5` (#54, the final
-  0.15.1 handoff), and `dddf804` (#55, advisory measurement hardening and blind
-  evidence), and `5265501` (#56, the advisory follow-up handoff). PRs #40-#51
-  used the recorded review loops; #52 and #55 had
-  independent Sol reviews plus full CI, and #53 had full CI plus
-  formula-specific Homebrew verification.
+  0.15.1 handoff), `dddf804` (#55, advisory measurement hardening and blind
+  evidence), `5265501` (#56, the advisory follow-up handoff), and `84826cb`
+  (#57, security/performance hardening). PRs #40-#51 used the recorded review
+  loops; #52, #55, and #57 had independent Sol reviews plus full CI, and #53
+  had full CI plus formula-specific Homebrew verification.
 - The stale linked-worktree metadata for the old detached study worktree was
   pruned. Only the root worktree remains.
 - **The paired token study is closed.** See "The routing-economics result" below.
@@ -321,7 +320,7 @@ human to read.
   under the release gate, because unittest does not collect module-level
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
-- Verified on the current follow-up branch based on `5265501`: `unittest
+- Verified on merged `main` at `84826cb`: `unittest
   discover` runs **1137** tests and `pytest -q` reports 1137 passed; Ruff
   check/format is clean on 156
   files; `mypy --strict src tests` is clean on 126 source files; strict mypy is
@@ -528,8 +527,8 @@ Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
 applicable `AGENTS.md` files, then continue from: `0.15.1 is merged, tagged, and
 published from main commit 1cf2f6a; every Release job passed. The canonical
 sdist URL and SHA are recorded above. Source formula PR #53, Homebrew tap PR
-#14, release handoff PR #54, advisory follow-up PR #55, and handoff PR #56 are
-merged. Both
+#14, release handoff PR #54, advisory follow-up PR #55, handoff PR #56, and
+security/performance PR #57 are merged. Both
 ~/.local/bin/wclass and /opt/homebrew/bin/wclass report 0.15.1; old kegs and
 stale worktree metadata were cleaned. Four real Shape-B samples now include two
 failures that reached advice, with observed rescue 0/2 and no economic verdict
@@ -537,8 +536,8 @@ because no reviewed price table existed. The fresh 24-prompt blind direction
 check found policy-4 agreement 10/24, high recall 1/9, and over-routing 6/24;
 it is spent direction evidence, not a tuning set. Security scan
 d2175938-1f01-47e6-b0f2-8d5089f5d839 found two medium and two low findings;
-argv[0] task substitution and usage JSON fail-closed parsing are fixed in the
-current branch, while verified-object execution and directory-fd usage state
+argv[0] task substitution and usage JSON fail-closed parsing are fixed on
+`main`, while verified-object execution and directory-fd usage state
 remain design work with compatibility decisions recorded in the hardening
 portfolio. Never infer prices, read vendor credentials/config, backfill
 task/session data, or reuse a published version or tag.`
