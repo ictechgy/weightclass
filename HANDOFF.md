@@ -16,10 +16,12 @@ _Last updated: 2026-08-19 KST by Codex_
 ## Current Status
 
 - Project root: `/Users/jinhongan/Desktop/subscription-agent-router`.
-- Root worktree baseline: `main` at `84826cb` (PR #57), equal to `origin/main`.
-  The 0.15.1 release, advisory measurement hardening, blind direction check,
-  security/performance follow-up, and final handoff are merged.
-- PRs **#40 through #57 are all merged**. Merge commits: `c8a3311` (#40),
+- Latest substantive implementation: PR #57, merged as `84826cb`. Later
+  handoff-only commits do not change product behavior. The 0.15.1 release,
+  advisory measurement hardening, blind direction check, security/performance
+  follow-up, and final handoff are merged.
+- Implementation/release PRs **#40 through #57 are all merged**. Merge commits:
+  `c8a3311` (#40),
   `1a7c91f` (#41), `fe93a5c` (#42), `ec5eb29` (#43), `a763d9c` (#44),
   `887159a` (#45), `bf1ad11` (#46, version bump), `4145745` (#47, downward
   result), `77802ed` (#48, speculative-run measurement tooling), `8ae5a8f`
