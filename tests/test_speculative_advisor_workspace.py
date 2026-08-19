@@ -8,7 +8,6 @@ import types
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNNER = REPO_ROOT / "tools" / "speculative_run.py"
 
