@@ -649,6 +649,66 @@ class UsageAggregationTests(unittest.TestCase):
         self.assertEqual(report["totals"]["savings_reason_code"], "no_tasks")
         self.assertIsNone(report["totals"]["relative_cost_savings_ratio"])
 
+    def test_cross_vendor_run_prices_the_baseline_on_the_source_vendor(self) -> None:
+        """Breaks if a cross-vendor route compares itself with its destination."""
+        usage = importlib.import_module("weightclass.usage_aggregation")
+        first = observation("/opt/grok")
+        selected = compile_static_native_policy_v3(
+            parse_native_policy_v3(valid_policy()),
+            source_vendor="codex",
+            source_profile_id="source",
+            tier="low",
+            purpose="native_route",
+        )
+        fingerprint = bind_native_observation_v3(selected, first)["route_fingerprint"]
+        assert isinstance(fingerprint, str)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = root / "policy.json"
+            policy.write_text(json.dumps(valid_policy()), encoding="utf-8")
+            store = root / "usage-v1.json"
+            usage.ensure_usage_store(store)
+            usage.set_relative_cost_weight(store, "grok", None, "low", "0.25")
+            # The old implementation incorrectly chose this destination baseline.
+            usage.set_relative_cost_weight(store, "grok", None, "medium", "0.4")
+            usage.set_relative_cost_weight(store, "codex", None, "medium", "1.0")
+            with (
+                patch.object(sys, "stdin", HostileOneReadStream(b"task")),
+                patch("weightclass.cli.validate_runtime_process_context"),
+                patch("weightclass.cli.observe_executable", return_value=first),
+                patch("weightclass.native_v3_runtime.observe_executable", return_value=first),
+                patch(
+                    "weightclass.native_v3_runtime.run_owned_foreground_redacted",
+                    return_value=0,
+                ),
+            ):
+                status = cli.main(
+                    [
+                        "run",
+                        "--policy",
+                        str(policy),
+                        "--source-vendor",
+                        "codex",
+                        "--source-profile",
+                        "source",
+                        "--tier",
+                        "low",
+                        "--confirm-endpoint-transition",
+                        "--ack-route-fingerprint",
+                        fingerprint,
+                        "--usage-store",
+                        str(store),
+                    ]
+                )
+            report = usage.render_usage_report(store)
+
+        self.assertEqual(status, 0)
+        self.assertEqual(report["buckets"][0]["agent"], "grok")
+        self.assertEqual(report["totals"]["relative_cost_units"], "0.250000")
+        self.assertEqual(report["totals"]["relative_cost_baseline_units"], "1.000000")
+        self.assertEqual(report["totals"]["relative_cost_savings_ratio"], "0.750000")
+
     def test_accounting_write_failure_reports_that_the_child_already_completed(self) -> None:
         """Breaks if an accounting error makes callers retry an already executed task."""
         usage = importlib.import_module("weightclass.usage_aggregation")

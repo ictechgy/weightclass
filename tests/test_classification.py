@@ -21,7 +21,7 @@ class ClassificationPolicyContractTests(unittest.TestCase):
         classify_with_reason = getattr(classification, "classify_task_with_reason", None)
 
         self.assertTrue(callable(classify_with_reason))
-        self.assertEqual(getattr(classification, "CLASSIFICATION_POLICY_VERSION", None), "3")
+        self.assertEqual(getattr(classification, "CLASSIFICATION_POLICY_VERSION", None), "4")
         self.assertIsInstance(classification.classify_task("Fix the typo."), str)
 
     def test_high_signals_have_distinct_static_english_and_korean_reason_codes(self) -> None:
@@ -89,7 +89,7 @@ class ClassificationPolicyContractTests(unittest.TestCase):
             {
                 "tier": "low",
                 "reason_code": "low.mechanical",
-                "policy_version": "3",
+                "policy_version": "4",
             },
         )
 
@@ -241,6 +241,33 @@ class ThresholdTests(unittest.TestCase):
 
 
 class ClassificationRegressionTests(unittest.TestCase):
+    def test_intermittent_root_cause_investigations_route_high(self) -> None:
+        """Breaks if symptom-described diagnostic uncertainty stays unreachable."""
+        cases = (
+            "Investigate why this cache sometimes returns a stale entry after a refresh.",
+            "간헐적으로 작업 결과가 이전 값으로 돌아가는 원인을 찾아줘.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                decision = classification.classify_task_with_reason(task)
+                self.assertEqual(
+                    (decision.tier, decision.reason_code),
+                    ("high", "high.uncertain_diagnostic"),
+                )
+
+    def test_diagnostic_intent_or_instability_alone_does_not_route_high(self) -> None:
+        """Breaks if one broad word makes routine work expensive."""
+        cases = (
+            ("Investigate why this unit test fails.", "standard"),
+            ("Rename the intermittent-failure test.", "low"),
+            ("간헐적 장애 대응 문서의 오타를 고쳐줘.", "low"),
+        )
+
+        for task, expected in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classification.classify_task(task), expected)
+
     def test_classifies_explicit_high_impact_outcomes_as_high(self) -> None:
         """Breaks if costly duplicate-work or balance-integrity failures stay standard.
 
@@ -464,6 +491,18 @@ class CheapTierRecallTests(unittest.TestCase):
             with self.subTest(task=task):
                 self.assertEqual(classification.classify_task(task), "standard")
 
+    def test_two_imperative_sentences_are_multiple_instructions(self) -> None:
+        """Breaks if only connective words can close the mechanical cheap path."""
+        cases = (
+            "Remove the unused import. Rewrite the retry loop.",
+            "Change the page size from 20 to 50. Add pagination validation.",
+            "Fix the typo. Implement pagination validation.",
+        )
+
+        for task in cases:
+            with self.subTest(task=task):
+                self.assertEqual(classification.classify_task(task), "standard")
+
     def test_an_ordinary_two_sentence_request_is_not_multiple_instructions(self) -> None:
         """Breaks if the guard goes back to treating a full stop as a second request.
 
@@ -623,6 +662,17 @@ class BacktrackingBoundTests(unittest.TestCase):
             with self.subTest(filler=filler):
                 self.assertEqual(classify_task("x" * filler + " " + outcome), "high")
         self.assertEqual(classify_task("가" * 3_000 + " " + korean), "high")
+
+    def test_repeated_whitespace_cannot_hide_a_harmful_outcome_at_a_window_boundary(
+        self,
+    ) -> None:
+        """Breaks if unbounded separators stretch one outcome across two windows."""
+        stretched_outcome = (
+            "account " + "y" * 78 + " is" + " " * 500 + "charged " + "z" * 30 + " twice"
+        )
+        task = "x" * 700 + " " + stretched_outcome
+
+        self.assertEqual(classify_task(task), "high")
 
     def test_patterns_stay_cheap_at_the_maximum_accepted_input(self) -> None:
         """Breaks if windowing the whole task makes hostile input superlinear.
