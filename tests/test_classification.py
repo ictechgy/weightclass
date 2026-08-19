@@ -496,6 +496,7 @@ class CheapTierRecallTests(unittest.TestCase):
         cases = (
             "Remove the unused import. Rewrite the retry loop.",
             "Change the page size from 20 to 50. Add pagination validation.",
+            "Fix the typo. Implement pagination validation.",
         )
 
         for task in cases:

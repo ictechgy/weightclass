@@ -11,6 +11,7 @@ ReasonCode = Literal[
     "high.risk_floor",
     "high.complexity_signal",
     "high.harmful_outcome",
+    "high.uncertain_diagnostic",
     "high.cautious_ambiguity",
     "low.mechanical",
     "low.mechanical_pair",
@@ -18,7 +19,7 @@ ReasonCode = Literal[
     "standard.length_floor",
     "standard.not_clearly_mechanical",
 ]
-CLASSIFICATION_POLICY_VERSION: Final = "3"
+CLASSIFICATION_POLICY_VERSION: Final = "4"
 
 
 @dataclass(frozen=True)
@@ -335,8 +336,8 @@ _LOW_SUBSTITUTION_PATTERNS: Final = (
 
 # 여러 지시가 이어 붙은 요청. 기계적 증거가 그중 한 조각에만 걸려 있어도 규칙은
 # 전체를 low 로 내린다. 실제 작업은 나머지 절에 있을 수 있으므로, 지시가 하나가
-# 아니면 아래 두 규칙을 아예 적용하지 않는다. 명시적 LOW 어휘는 요청 전체의
-# 성격을 말해주므로 이 제약을 받지 않는다.
+# 아니면 어느 low 규칙도 적용하지 않는다. `typo` 같은 명시적 어휘도 다른 절의
+# 구현 요청을 설명하지 못하므로 같은 제약을 받는다.
 _MULTI_INSTRUCTION_PATTERN: Final = re.compile(
     r",\s*(?:then|and|also)\b"
     r"|\band\s+(?:make|add|remove|delete|update|fix|rewrite|refactor|move|check)\b"
@@ -345,6 +346,16 @@ _MULTI_INSTRUCTION_PATTERN: Final = re.compile(
     r"(?!\s)(?!싶[다은어었으습겠])(?!있[다어었으는습])(?!계[시신셔세실십])(?!나서)"
     r"|그리고|그다음|그 다음"
 )
+# A full stop alone is not evidence of a second instruction: ordinary task
+# descriptions commonly use one sentence for the symptom and one for the
+# requested change. Count only English sentences that begin with a reviewed
+# imperative verb, so two explicit requests close the inferred mechanical and
+# substitution paths without closing them for "problem. fix" prompts.
+_ENGLISH_IMPERATIVE_PREFIX_PATTERN: Final = re.compile(
+    r"^(?:please\s+)?(?:add|bump|change|check|create|delete|drop|fix|implement|insert|"
+    r"make|move|remove|rename|reorder|replace|rewrite|sort|update|write)\b"
+)
+_ENGLISH_SENTENCE_BOUNDARY_PATTERN: Final = re.compile(r"(?<=[.!?])\s+")
 # 여기서 뺀 두 가지를 다시 넣지 말 것.
 #
 # `\.\s+\S` 는 지시가 둘인 요청이 아니라 문장이 둘인 요청을 잡는다. 실제 태스크
@@ -420,6 +431,26 @@ _DUPLICATE_WORK_QUALIFIER_PATTERN: Final = re.compile(
 _INTENTIONAL_DUPLICATE_CONTEXT_PATTERN: Final = re.compile(r"\bintegration\s+test\b")
 _DUPLICATE_WORK_CONTEXT_CHARACTERS: Final = 160
 
+# Symptom-described debugging reaches high only when the request contains both
+# explicit root-cause investigation intent and evidence that the symptom is
+# intermittent or nondeterministic. Neither vocabulary group is a high signal
+# by itself. These patterns are deliberately phrases (or inflected stems in
+# Korean), not additions to the broad HIGH_SIGNALS word list.
+_ROOT_CAUSE_INTENT_PATTERNS: Final = (
+    re.compile(
+        r"\b(?:investigate|investigating|determine|identify|find)\s+"
+        r"(?:the\s+)?(?:root[\s-]+cause|cause\s+of|why)\b"
+    ),
+    re.compile(r"(?:근본\s*)?원인(?:을|를|이|가)?\s*(?:찾|조사|분석|규명|파악)"),
+)
+_NONDETERMINISTIC_SYMPTOM_PATTERNS: Final = (
+    re.compile(
+        r"\b(?:sometimes|intermittent(?:ly)?|non[\s-]?deterministic(?:ally)?|"
+        r"sporadic(?:ally)?|flaky|unpredictab(?:le|ly))\b"
+    ),
+    re.compile(r"(?:간헐적(?:으로|인)?|비결정적(?:으로|인)?|때때로|가끔|종종)"),
+)
+
 
 def validate_task(task: str) -> str:
     """Return the normalized task, rejecting input that must not be routed.
@@ -474,10 +505,15 @@ def classify_task_with_reason(task: str) -> ClassificationDecision:
         return ClassificationDecision("high", "high.complexity_signal")
     if _has_high_risk_outcome(normalized_task):
         return ClassificationDecision("high", "high.harmful_outcome")
+    if _has_uncertain_diagnostic(normalized_task):
+        return ClassificationDecision("high", "high.uncertain_diagnostic")
     if len(normalized_task) <= LOW_TASK_CHARACTERS:
-        if _has_signal(normalized_task, _LOW_ASCII_PATTERN, _LOW_NON_ASCII_SIGNALS):
+        has_multiple_instructions = _has_multiple_instructions(normalized_task)
+        if not has_multiple_instructions and _has_signal(
+            normalized_task, _LOW_ASCII_PATTERN, _LOW_NON_ASCII_SIGNALS
+        ):
             return ClassificationDecision("low", "low.mechanical")
-        if not _has_multiple_instructions(normalized_task):
+        if not has_multiple_instructions:
             if _has_mechanical_pair(normalized_task):
                 return ClassificationDecision("low", "low.mechanical_pair")
             if _has_low_substitution(normalized_task):
@@ -545,7 +581,22 @@ def _has_mechanical_pair(task: str) -> bool:
 
 def _has_multiple_instructions(task: str) -> bool:
     """Report whether the task carries more than one instruction."""
-    return _MULTI_INSTRUCTION_PATTERN.search(task) is not None
+    if _MULTI_INSTRUCTION_PATTERN.search(task) is not None:
+        return True
+    imperative_sentences = 0
+    for sentence in _ENGLISH_SENTENCE_BOUNDARY_PATTERN.split(task):
+        if _ENGLISH_IMPERATIVE_PREFIX_PATTERN.match(sentence.lstrip()):
+            imperative_sentences += 1
+            if imperative_sentences == 2:
+                return True
+    return False
+
+
+def _has_uncertain_diagnostic(task: str) -> bool:
+    """Match root-cause intent paired with a nondeterministic symptom."""
+    return any(pattern.search(task) for pattern in _ROOT_CAUSE_INTENT_PATTERNS) and any(
+        pattern.search(task) for pattern in _NONDETERMINISTIC_SYMPTOM_PATTERNS
+    )
 
 
 def _has_low_substitution(task: str) -> bool:

@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-18 KST by Claude_
+_Last updated: 2026-08-19 KST by Codex_
 
 ## Goal
 
@@ -21,9 +21,11 @@ _Last updated: 2026-08-18 KST by Claude_
   is now being integrated with the follow-up fixes below.
 - The current change set fixes cross-vendor counterfactual accounting without
   persisting the source vendor, and prevents repeated whitespace from hiding a
-  costly outcome across scan windows. Focused tests, Ruff, formatting, strict
-  mypy, a 1,119-test pytest run, build/Twine checks, and extracted-sdist tests
-  pass locally; final release gates must be rerun after the remaining work.
+  costly outcome across scan windows. It also adds classification policy 4's
+  structural two-imperative guard and paired intermittent/root-cause rule. Ruff,
+  formatting, strict mypy, pytest and release-style unittest (1,122 tests),
+  build/Twine checks, and extracted-sdist tests pass locally; final release
+  gates must be rerun after the version bump and review.
 - PRs **#40 through #51 are all merged**. Merge commits: `c8a3311` (#40),
   `1a7c91f` (#41), `fe93a5c` (#42), `ec5eb29` (#43), `a763d9c` (#44),
   `887159a` (#45), `bf1ad11` (#46, version bump), `4145745` (#47, downward
@@ -39,7 +41,12 @@ _Last updated: 2026-08-18 KST by Claude_
   approved the `pypi` environment. PyPI holds exactly two artifacts, the wheel
   and the sdist. A PyPI version can never be reused, replaced, or deleted — a
   defect needs `0.15.1`, never a re-upload of `0.15.0`.
-- **The Homebrew formula is the one remaining release step.**
+- **`0.15.1` is the current candidate; it is not published yet.** The declared
+  version is being bumped only after the behavior and policy-4 gates pass.
+- **The Homebrew formula still points to `0.14.0`.** Do not spend a tap update
+  on `0.15.0` now that a corrective candidate exists; after `0.15.1` is
+  published, update the source-of-truth formula and the tap directly to that
+  immutable artifact.
   `packaging/homebrew/weightclass.rb` in this repo is the source of truth; copy
   it into `ictechgy/homebrew-tap` rather than editing the tap by hand, because
   `brew style`/`brew audit` only apply tap rules to a file already inside a tap.
@@ -133,6 +140,23 @@ Baseline on `a489044`: **227 leaves fail, 107 pass, 334 total**. Passing is not
 by itself a defect (preservation tests are supposed to pass); the list is for a
 human to read.
 
+### First real Shape-B measurement (2026-08-19)
+
+- One pre-registered real policy-4 implementation task was run with a cheap
+  Codex route, prompt-only strong Codex advisor, and strong Codex escalation.
+- The first attempt exposed an infrastructure mistake: prompt-only Codex advice
+  needs `--skip-git-repo-check` in its empty directory. It returned no advice
+  and is excluded as an advisor-effectiveness sample.
+- The corrected run reached the full Shape-B path. Cheap failed; the advisor
+  returned 1,889 redacted characters; the advised retry failed; escalation also
+  failed in that run. Thus `q=1` and `s=0/1` (95% interval [0.0%, 79.3%]). A
+  separate strong-route attempt produced the independently verified patch used
+  for policy 4.
+- Descriptive tokens were 795,825 cheap, 69,290 advisor, 1,259,310 retry, and
+  1,117,130 escalation. No user-supplied price table was available, so the
+  report correctly abstained from `a`, `r`, and the economic verdict. One task
+  cannot support a product decision.
+
 ## Completed
 
 - Released state is `weightclass 0.15.0`. Both `v0.14.0` and `v0.15.0` are
@@ -145,6 +169,13 @@ human to read.
 - Harmful-outcome scanning now collapses consecutive whitespace only for the
   outcome matcher. This closes a window-boundary evasion caused by unbounded
   `\s+`/`\s*` separators without changing task length or mechanical-pair distance.
+- Classification policy 4 adds two narrowly paired structures without tuning
+  against the visible fixture: two English imperative sentences close every
+  inferred cheap path, while description plus one imperative stays eligible;
+  explicit root-cause intent plus an intermittent/nondeterministic symptom uses
+  `high.uncertain_diagnostic`, while either signal alone does not escalate.
+  The public fixture remains a direction check only: 21/40 agreement, high
+  recall 5/15, over-routing 9/40 (22.5%).
 - The schema-3 branch adds installed-agent discovery, interactive selection,
   reviewed cross-vendor/profile grants, observation-bound execution, and
   `wclass delegate native route|run` for one bounded child.
@@ -352,23 +383,14 @@ human to read.
 
 ## Next Steps
 
-1. **Finish the release: update the Homebrew formula.** This is the only
-   outstanding step for `0.15.0`. Put the published `url`/`sha256` recorded
-   under Current Status into `packaging/homebrew/weightclass.rb`, then copy that
-   file into the tap and verify there: `brew style ictechgy/tap`,
-   `brew audit --strict --tap=ictechgy/tap weightclass`,
-   `brew install --build-from-source ictechgy/tap/weightclass`, and
-   `brew test ictechgy/tap/weightclass`. Confirming the published artifact from
-   a clean environment (`uv tool install weightclass`) is worth doing first.
-   Any fetch, push, PR, review-loop, tag, or publish needs purpose/target/scope
-   stated and network approval per `AGENTS.md`. Do not reinstall
-   `~/.local/bin/wclass` without asking.
-2. **Run the first real advisor measurement.** The tooling is merged and gated
-   but has never been pointed at real work. Both shapes need the same task
-   measured under two configurations before the report will state `a`, `q`, `r`,
-   or `s`; it abstains rather than mix populations. Shape B is the one worth
-   trying first, because its benefit condition contains no `c` and so can be
-   decided from a subscription log.
+1. **Finish `0.15.1`.** Review the complete diff, rerun both test runners and
+   distribution isolation after the version bump, merge to `main`, then create
+   `v0.15.1`. Wait for every Release job and the `pypi` environment approval;
+   never reuse the existing `0.15.0` tag or artifacts.
+2. **Update Homebrew only after PyPI.** Read the canonical `0.15.1` sdist URL
+   and SHA-256 from PyPI JSON, update `packaging/homebrew/weightclass.rb`, copy
+   it into `ictechgy/homebrew-tap`, and run style, strict audit, source install,
+   and formula tests before pushing the tap commit.
 3. **The default tier is not being lowered. That question is settled for now.**
    The quality instrument was built, calibrated, and run
    (`QUALITY-INSTRUMENT.md`, `PRE-REGISTRATION-quality.md`, `QUALITY-RESULT.md`
@@ -400,18 +422,18 @@ human to read.
    distribution) do exactly that. If `p` lands under 20% the saving justifies
    moving the V1 boundary; near 69% the idea is dead. Note this recovers safety,
    not quality — the defects in `QUALITY-RESULT.md` all passed their tests.
-5. Known follow-ups the reviews surfaced but did not gate a merge (all
-   single-track or MEDIUM, recorded in the loop ledgers):
-   - The multi-instruction guard is a connective word list, not a parse.
+5. **Advisor adoption remains undecided.** The first corrected Shape-B task had
+   `s=0/1` and no price-derived `a` or `r`. A later study needs a user-supplied
+   single-origin price table, more real failed tasks, and the pre-registered
+   interval rule. Do not integrate retry/advice into `wclass` from this pilot.
 6. If the study is ever reopened, fix the three acceptance tests first
    (`p13`, `p26`, `p27`). They reject correct implementations that chose a
    different interface, which would mark a correct arm `completed: false` and
    fail the study's completion gate for reasons unrelated to routing.
-7. `high` recall is still 5/15 on the public fixture. The misses are
-   symptom-describing debugging requests a vocabulary classifier cannot reach.
-   Treat as a separate design task, not a tuning pass. Note the calibration
-   result reframes its urgency: on work of this shape, missing `high` cost
-   nothing measurable.
+7. `high` recall is still 5/15 on the public fixture. Policy 4 makes one
+   independently specified symptom/diagnostic structure reachable, but the
+   visible fixture cannot establish an accuracy gain. Any broader work needs a
+   fresh, independently rated corpus; do not add words to chase the 40 rows.
 8. If measuring routing economics, set the `medium` weight first — it is the
    counterfactual the report compares against, and without it the report
    abstains with `missing_baseline_weight`. Pass `--usage-rework` on any retry of
@@ -423,15 +445,14 @@ human to read.
 ## Resume Prompt
 
 Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
-applicable `AGENTS.md` files, then continue from: `main is a489044 with PRs #40
-through #51 merged and CI green. weightclass 0.15.0 is published to PyPI under
-tag v0.15.0; the only unfinished release step is the Homebrew formula, whose url
-and sha256 are recorded in HANDOFF.md. The paired token study is closed: Phase 1b
-found 0 tier-sensitive tasks against a pre-registered floor of 9, so routing up
-is measured to buy nothing on small well-specified tasks. The one cheap lever
-still standing is model grade, and the advisor tooling merged in #50 exists to
-measure it but has not yet been run on real work. Before tagging anything run
-python -m unittest discover -s tests and mypy --strict src tests — pytest alone
-is CI's runner, not the release gate's. Never infer prices, read vendor
-credentials/config, backfill task/session data, or run a vendor just to create
-metrics; get network approval before any fetch, push, PR, tag, or publish.`
+applicable `AGENTS.md` files, then continue from: `release/0.15.1-routing-followups
+contains the cross-vendor counterfactual fix, whitespace-safe outcome scanning,
+and classification policy 4. The first corrected real Shape-B pilot produced
+q=1 and s=0/1 and abstained economically because no user price table existed;
+it does not justify product integration. Before publishing 0.15.1, review the
+full diff and rerun unittest discover, pytest, Ruff, format, strict mypy, build,
+Twine, and extracted-sdist isolation. Merge before tagging because the release
+workflow rejects a tag not reachable from reviewed main. After PyPI succeeds,
+point the source-of-truth Homebrew formula and tap directly from 0.14.0 to the
+canonical 0.15.1 sdist. Never infer prices, read vendor credentials/config,
+backfill task/session data, or reuse a published version/tag.`

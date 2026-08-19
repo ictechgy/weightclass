@@ -468,18 +468,22 @@ By default, classification is local, deterministic, and offline: security,
 authentication, authorization, data, migration, concurrency, performance,
 production, and architecture signals route to `high`, as do narrowly defined
 high-impact outcomes such as duplicate charges, duplicate work, and balances
-becoming negative. Short typo, spelling, formatting, and rename tasks route to
-`low`; other valid tasks route to `standard`. Outcome patterns require their
-full context, so a request merely to display a negative balance or deliberately
-repeat a test job is not escalated. Unknown or oversized task input fails
-closed.
+becoming negative. An explicit root-cause investigation routes to `high` with
+`high.uncertain_diagnostic` only when the task also describes an intermittent
+or nondeterministic symptom; either signal alone does not escalate. Short typo,
+spelling, formatting, and rename tasks route to `low`; other valid tasks route
+to `standard`. No inferred cheap rule routes two separate English imperative
+sentences to `low`, while a problem description followed by one imperative
+remains eligible. Outcome patterns require their full context, so a request
+merely to display a negative balance or deliberately repeat a test job is not
+escalated. Unknown or oversized task input fails closed.
 
 Add `--explain` to a local classification to include its versioned static
 reason code:
 
 ```sh
 printf '%s' 'Fix a spelling typo.' | wclass classify --explain
-# {"tier": "low", "reason_code": "low.mechanical", "policy_version": "3"}
+# {"tier": "low", "reason_code": "low.mechanical", "policy_version": "4"}
 ```
 
 The explanation contains policy metadata only: it never includes task text,
@@ -519,14 +523,14 @@ without over-rating. The vendor result still under-rated 7 of the 15 genuinely
 hard tasks, so it was better, not solved. Models change, and those recorded
 tiers are not a current provider claim. The current offline command
 `PYTHONPATH=src python3 tests/eval/score.py` re-derives only the local public
-regression result, now 22/40 under classification policy 3. Read that number
+regression result, now 21/40 under classification policy 4. Read that number
 as a direction check, not an accuracy claim: the fixture is visible, so a score
-against it measures the tuner as much as the classifier. What policy 3 changed
-is documented below and in `src/weightclass/classification.py`; its stated aim
-was to stop over-routing mechanical work, and on this fixture over-routing fell
-from 32.5% to 17.5% while high-tier recall stayed at 5/15. A supported vendor
-comparison requires a fresh
-evaluator-supplied corpus and `--compare-triage`, as documented in
+against it measures the tuner as much as the classifier. Policy 4 adds only the
+paired diagnostic rule and the two-imperative guard described above; on this
+fixture over-routing is 22.5% and high-tier recall remains 5/15. The broader
+cheap-path changes made by policy 3 are documented in
+`src/weightclass/classification.py`. A supported vendor comparison requires a
+fresh evaluator-supplied corpus and `--compare-triage`, as documented in
 [`tests/eval/README.md`](tests/eval/README.md).
 
 This does not make weightclass an API client. It runs one vendor CLI in the
