@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+
+if ! git diff --cached --quiet -- .weightclass/verify tests/test_speculative_task_input.py; then
+  echo "protected acceptance files changed"
+  exit 1
+fi
+
+set +e
+WCLASS_CAMPAIGN_ACCEPTANCE=1 PYTHONPATH="$PWD/src" \
+  python3 -m unittest tests.test_speculative_task_input
+focused_code=$?
+set -e
+
+if [ "$focused_code" -eq 0 ]; then
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/src" \
+    python3 -W error::ResourceWarning -m unittest discover -s tests
+  python3 -m compileall -q src tests tools
+  exit 0
+fi
+
+if [ "$focused_code" -ne 1 ]; then
+  exit 1
+fi
+
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/src" \
+  python3 -W error::ResourceWarning -m unittest discover -s tests
+python3 -m compileall -q src tests tools
+exit 42

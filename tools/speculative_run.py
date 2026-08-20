@@ -57,6 +57,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -312,6 +313,63 @@ _CLAUDE_USAGE_FIELDS = (
 
 class RunFailure(RuntimeError):
     """A step failed in a way that makes the rest of the run meaningless."""
+
+
+class TaskInputError(ValueError):
+    """Value-free rejection of an unsafe or invalid task file."""
+
+
+MAX_TASK_FILE_BYTES = 80_000
+_TASK_READ_CHUNK_BYTES = 65_536
+
+
+def read_task_file(path: Path, *, require_private: bool) -> str:
+    """Read a bounded task from one no-follow, nonblocking file descriptor.
+
+    The descriptor is the authority for both metadata and bytes. No pathname
+    read or second open occurs after the initial open, so replacing ``path``
+    cannot change the task being read. Egressing routes additionally require
+    a file owned by the invoking user with no group or other permissions.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nofollow is None or nonblock is None:
+        raise TaskInputError()
+    flags = os.O_RDONLY | nofollow | nonblock | getattr(os, "O_CLOEXEC", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise TaskInputError()
+        if require_private:
+            getuid = getattr(os, "getuid", None)
+            if getuid is None or metadata.st_uid != getuid() or metadata.st_mode & 0o077:
+                raise TaskInputError()
+
+        chunks: list[bytes] = []
+        remaining = MAX_TASK_FILE_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(_TASK_READ_CHUNK_BYTES, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) > MAX_TASK_FILE_BYTES:
+            raise TaskInputError()
+        return payload.decode("utf-8")
+    except TaskInputError:
+        raise
+    except (OSError, UnicodeDecodeError, ValueError):
+        raise TaskInputError() from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                if sys.exc_info()[0] is None:
+                    raise TaskInputError() from None
 
 
 def _kill_group(child: subprocess.Popen[str]) -> None:
@@ -3585,9 +3643,9 @@ def main() -> int:
     # 모든 task-free 설정과 campaign 결속이 성공한 뒤에만 task 에 접근한다.
     task_file = arguments.task_file.expanduser()
     try:
-        task = task_file.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        parser.error(f"--task-file is not readable as UTF-8 text: {error}")
+        task = read_task_file(task_file, require_private=needs_egress_confirmation)
+    except TaskInputError:
+        parser.error("--task-file is invalid")
     commit = head_commit(repo)
     print(f"기준 커밋 {commit[:12]}  저장소 {repo}")
     print(f"싼 경로: {cheap_argv[0]} (인자 {len(cheap_argv) - 1}개)")
