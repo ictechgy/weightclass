@@ -985,7 +985,10 @@ is the whole point of rendering the command. Rejected are every Unicode `C`
 category — control characters, format characters such as zero-width space and
 the bidirectional overrides, surrogates, private-use and unassigned code points
 — along with any whitespace other than the ASCII space, and leading or trailing
-whitespace. The same rule applies to V2's `model` and `effort` labels.
+whitespace. The same visibility rule applies to V2's `model` and `effort`
+labels; because those values occupy reviewed option-value positions, they also
+cannot begin with `-`. Internal ASCII spaces remain one argv token and are
+accepted for schema-2 compatibility.
 
 ## Bind a run to the selection you reviewed
 

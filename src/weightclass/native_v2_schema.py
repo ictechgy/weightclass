@@ -109,6 +109,14 @@ def _opaque(value: object) -> str:
     return result
 
 
+def _model_effort_label(value: object) -> str:
+    """Validate one reviewable argv value without interpreting the label."""
+    result = _opaque(value)
+    if result.startswith("-") or result != result.strip(" "):
+        raise V2ValidationError()
+    return result
+
+
 def _vendor(value: object) -> Vendor:
     if value not in ("codex", "claude"):
         raise V2ValidationError()
@@ -218,7 +226,12 @@ def parse_native_policy_v2(value: object) -> NativePolicyV2:
         pairs: list[ModelEffortPairV2] = []
         for raw_pair in _sequence(item["allowed_model_effort_pairs"], lower=1, upper=64):
             pair = require_exact_keys(raw_pair, {"model", "effort"})
-            pairs.append(ModelEffortPairV2(_opaque(pair["model"]), _opaque(pair["effort"])))
+            pairs.append(
+                ModelEffortPairV2(
+                    _model_effort_label(pair["model"]),
+                    _model_effort_label(pair["effort"]),
+                )
+            )
         _unique([(pair.model, pair.effort) for pair in pairs])
         targets.append(
             NativeTargetV2(
@@ -254,8 +267,8 @@ def parse_native_policy_v2(value: object) -> NativePolicyV2:
                 _identifier(item["id"]),
                 tuple(eligibility),
                 _identifier(item["target_id"]),
-                _opaque(item["model"]),
-                _opaque(item["effort"]),
+                _model_effort_label(item["model"]),
+                _model_effort_label(item["effort"]),
             )
         )
 

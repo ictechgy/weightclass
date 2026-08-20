@@ -37,6 +37,13 @@ The named guarded runtime suites provide only current test process evidence: dir
 
 Native schema 2 and delegation protocol 2 have no argv task-delivery surface at all: `Vendor` is the closed `codex`/`claude` vocabulary, argv is compiled from executable, model, and effort with no caller-supplied `command` field for a `{{task}}` token to occupy, and task delivery is always standard input for native schema 2 or the exact WCD2 frame for delegation protocol 2 — never argv. A `{{task}}` route cannot be constructed here. The reserved-argv-slot residual — review binding the shape of a command rather than the exact string reaching `execve` — belongs to native schema-1 policies and the built-in routes, which `README.md` documents.
 
+Native schema-2 model and effort declarations are validated at the policy
+boundary before task access. They remain opaque and may contain internal ASCII
+spaces as one argv token, but leading option-like `-`, leading/trailing ASCII
+spaces, non-ASCII whitespace, and invisible/control characters fail as
+value-free `invalid_input`. The allowlist pair and selected route pass through
+the same validator before either value reaches a closed builder.
+
 ## Planning and rollback truth
 
 The five-round RALPLAN history ended `max_rounds/ITERATE`. Its Critic findings were mandatory implementation input; it was never consensus approval.
