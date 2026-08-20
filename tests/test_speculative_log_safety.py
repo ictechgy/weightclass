@@ -9,6 +9,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 RUNNER = Path(__file__).resolve().parent.parent / "tools" / "speculative_run.py"
 if str(RUNNER.parent) not in sys.path:
@@ -78,6 +79,38 @@ class SpeculativeLogSafetyTests(unittest.TestCase):
                         runner.append_run_record(candidate, {"ordinal": 1})
                     if before is not None:
                         self.assertEqual(candidate.read_bytes(), before)
+
+    def test_unsupported_flags_and_serialization_fail_before_open(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "runs.jsonl"
+            with (
+                mock.patch.object(os, "O_NOFOLLOW", None),
+                mock.patch("os.open") as opened,
+                self.assertRaisesRegex(runner.RunLogError, "^$"),
+            ):
+                runner.append_run_record(log, {"ordinal": 1})
+            opened.assert_not_called()
+
+            with (
+                mock.patch("os.open") as opened,
+                self.assertRaisesRegex(runner.RunLogError, "^$"),
+            ):
+                runner.append_run_record(log, {"invalid": object()})
+            opened.assert_not_called()
+
+    def test_zero_byte_write_fails_without_spinning(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "runs.jsonl"
+            with (
+                mock.patch("os.write", return_value=0),
+                self.assertRaisesRegex(runner.RunLogError, "^$"),
+            ):
+                runner.append_run_record(log, {"ordinal": 1})
+
+            self.assertEqual(log.read_bytes(), b"")
+            self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
 
 
 if __name__ == "__main__":
