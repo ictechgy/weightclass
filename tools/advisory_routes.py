@@ -202,7 +202,7 @@ def build_routes(profile: Mapping[str, object]) -> AdvisoryRoutes:
             "--model",
             models[role],
             "-c",
-            f"model_reasoning_effort={json.dumps(efforts[role])}",
+            f"model_reasoning_effort={json.dumps(efforts[role], ensure_ascii=False)}",
             "-",
         )
 

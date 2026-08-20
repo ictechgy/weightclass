@@ -99,6 +99,15 @@ class AdvisoryRouteProfileTests(unittest.TestCase):
             "workspace-write",
         )
 
+        profile["efforts"] = {
+            "cheap": "🧠",
+            "advisor": "high",
+            "expensive": "high",
+        }
+        unicode_routes = build_routes(profile)
+        self.assertIn('model_reasoning_effort="🧠"', unicode_routes.cheap)
+        self.assertNotIn("\\ud83e", unicode_routes.cheap[-2])
+
     def test_profile_is_strict_bounded_duplicate_safe_and_redacts_invalid_values(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -59,6 +59,17 @@ def _safe(text: str, limit: int = 200) -> str:
 # 값이 하나만 추가돼도 모든 지문이 달라져, 단일 설정 로그가 "혼합" 으로
 # 잡힌다. 화이트리스트가 그 사고를 막는다.
 ADVISOR_CONFIG_KEYS = frozenset({"route", "advise_first", "advise_on_failure", "context"})
+PRICING_ERROR_CODES = frozenset(
+    {
+        "invalid_input_partition",
+        "invalid_token_count",
+        "missing_rate_fields",
+        "missing_usage_breakdown",
+        "no_rate_fields_matched",
+        "nonfinite_price",
+        "overlapping_rate_fields",
+    }
+)
 
 
 def wilson(successes: int, total: int, z: float = 1.96) -> tuple[float, float]:
@@ -427,7 +438,21 @@ def main() -> int:
         if not isinstance(child, dict):
             return False
         usage = child.get("usage")
-        return isinstance(usage, dict) and bool(usage.get("priced_fields_missing"))
+        return isinstance(usage, dict) and bool(
+            usage.get("priced_fields_missing") or pricing_error_of(attempt)
+        )
+
+    def pricing_error_of(attempt: object) -> str | None:
+        if not isinstance(attempt, dict):
+            return None
+        child = attempt.get("child")
+        if not isinstance(child, dict):
+            return None
+        usage = child.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        code = usage.get("pricing_error")
+        return code if isinstance(code, str) and code in PRICING_ERROR_CODES else None
 
     # c 는 (싼 비용 평균) / (비싼 비용 평균) 이다. **두 평균이 같은 기준으로
     # 걸러진 모집단에서 나와야 한다.** 예전에는 분자가 "비용이 있으면 무엇이든"
@@ -465,6 +490,16 @@ def main() -> int:
             # 다르게 판정하는 자리가 된다.
             if cost_of(r.get(key)) is not None:
                 origins.add(cost_origin(r.get(key)))
+    pricing_errors = sorted(
+        {
+            code
+            for r in usable
+            for key in ("cheap", "expensive", "advice_first", "advice_failure", "retry")
+            if (code := pricing_error_of(r.get(key))) is not None
+        }
+    )
+    if pricing_errors:
+        print(f"  요금 계산 실패 코드: {', '.join(pricing_errors)}")
     # 세 경우를 구별한다. 출처가 실제로 섞였는가, 러너가 cost_origin 을 남기지
     # 않은 옛 로그인가, 아니면 비용 자체가 하나도 없는가. 셋 다 c 를 못 재게
     # 하지만 사용자가 할 일이 다르다.

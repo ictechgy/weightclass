@@ -403,6 +403,13 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                         "expensive": attempt(True, 1.0),
                     }
                 )
+            first_cheap = records[0]["cheap"]
+            assert isinstance(first_cheap, dict)
+            first_child = first_cheap["child"]
+            assert isinstance(first_child, dict)
+            first_usage = first_child["usage"]
+            assert isinstance(first_usage, dict)
+            first_usage["pricing_error"] = "missing_rate_fields"
             log.write_text(
                 "".join(json.dumps(record) + "\n" for record in records),
                 encoding="utf-8",
@@ -425,6 +432,7 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("사전등록 gate 미충족", completed.stdout)
         self.assertIn("sealed campaign", completed.stdout)
+        self.assertIn("요금 계산 실패 코드: missing_rate_fields", completed.stdout)
         self.assertNotIn("구간 전체가 손익분기 위", completed.stdout)
 
 
@@ -466,6 +474,64 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
             campaign = root / "campaign.json"
             write_manifest(campaign, manifest)
             private_task_name = "PRIVATE-TASK-MUST-NOT-BE-READ"
+            command = [
+                sys.executable,
+                str(RUNNER),
+                "--repo",
+                str(repo),
+                "--task-file",
+                str(root / private_task_name),
+                "--cheap",
+                "/usr/bin/true",
+                "--expensive",
+                "/usr/bin/true",
+                "--advisor",
+                "/usr/bin/true",
+                "--advise-on-failure",
+                "--verify",
+                str(verify),
+                "--campaign",
+                str(campaign),
+                "--sample-ordinal",
+                "1",
+                "--out-dir",
+                str(root / "out"),
+            ]
+            unconfirmed = subprocess.run(
+                command,
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            command.insert(command.index("--verify"), "--confirm-task-egress")
+            completed = subprocess.run(command, capture_output=True, check=False, text=True)
+
+        self.assertEqual(unconfirmed.returncode, 2)
+        self.assertIn("requires --confirm-task-egress", unconfirmed.stderr)
+        self.assertNotIn(private_task_name, unconfirmed.stderr)
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("campaign contract mismatch", completed.stderr)
+        self.assertNotIn(private_task_name, completed.stderr)
+
+    def test_overlapping_runner_prices_fail_before_task_access(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repository(root)
+            verify = root / "verify.sh"
+            verify.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            verify.chmod(0o700)
+            prices = root / "prices.json"
+            prices.write_text(
+                json.dumps(
+                    {
+                        "cheap": {"input_tokens": 1.0, "cached_input_tokens": 0.1},
+                        "expensive": {"input_tokens": 1.0},
+                        "advisor": {"input_tokens": 1.0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            private_task_name = "PRIVATE-TASK-MUST-NOT-BE-READ"
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -478,16 +544,11 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
                     "/usr/bin/true",
                     "--expensive",
                     "/usr/bin/true",
-                    "--advisor",
-                    "/usr/bin/true",
-                    "--advise-on-failure",
-                    "--confirm-task-egress",
                     "--verify",
                     str(verify),
-                    "--campaign",
-                    str(campaign),
-                    "--sample-ordinal",
-                    "1",
+                    "--prices",
+                    str(prices),
+                    "--prefer-prices",
                     "--out-dir",
                     str(root / "out"),
                 ],
@@ -497,7 +558,7 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
             )
 
         self.assertEqual(completed.returncode, 2)
-        self.assertIn("campaign contract mismatch", completed.stderr)
+        self.assertIn("overlapping token fields", completed.stderr)
         self.assertNotIn(private_task_name, completed.stderr)
 
     def test_successful_run_pins_contract_and_refuses_duplicate_ordinal(self) -> None:

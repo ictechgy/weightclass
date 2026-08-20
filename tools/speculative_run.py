@@ -463,7 +463,10 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
     typo, and it produces None rather than a plausible-looking partial number.
     """
     breakdown = usage.get("breakdown") or {}
-    if not breakdown or not rates:
+    if not rates:
+        return None
+    if not breakdown:
+        usage["pricing_error"] = "missing_usage_breakdown"
         return None
     try:
         validate_price_rate_fields(rates)
@@ -498,6 +501,7 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
         pricing_breakdown["uncached_input_tokens"] = uncached_input
     matched = [field for field in rates if field in pricing_breakdown]
     if not matched:
+        usage["pricing_error"] = "no_rate_fields_matched"
         return None
     priced = 0.0
     for field, rate in rates.items():
@@ -505,11 +509,13 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
         if not is_finite_nonnegative(count):
             # 신뢰할 수 없는 JSON 의 토큰 수를 그대로 곱하면 OverflowError 가
             # 난다. 값 하나가 이상하다고 실행을 죽이지 말고 비용을 포기한다.
+            usage["pricing_error"] = "invalid_token_count"
             return None
         priced += count * rate / 1_000_000
     # 벤더가 준 비용과 --prices 요율은 유한성과 부호를 확인하는데 계산 결과만
     # 확인하지 않으면 기준이 어긋난다.
     if not is_finite_nonnegative(priced):
+        usage["pricing_error"] = "nonfinite_price"
         return None
     if len(matched) < len(rates):
         # 값을 매기기로 한 필드 중 일부만 나타났다. 없는 캐시 필드는 실제로 0
@@ -518,6 +524,7 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
         # 조용히 넘기지 않고 어떤 필드가 없었는지 남긴다.
         missing = ",".join(sorted(set(rates) - set(matched)))
         usage["priced_fields_missing"] = missing
+        usage["pricing_error"] = "missing_rate_fields"
     return priced
 
 
