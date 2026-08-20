@@ -18,6 +18,7 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 if TYPE_CHECKING:
+    from tools.advisory_campaign import CampaignError, price_table_sha256
     from tools.advisory_routes import (
         AdvisoryRouteError,
         build_routes,
@@ -25,7 +26,8 @@ if TYPE_CHECKING:
         profile_sha256,
     )
     from tools.speculative_run import Usage, price_from_tokens
-elif ROUTES_TOOL.is_file() and RUNNER.is_file():
+elif ROUTES_TOOL.is_file() and CAMPAIGN_TOOL.is_file() and RUNNER.is_file():
+    from advisory_campaign import CampaignError, price_table_sha256  # noqa: E402
     from advisory_routes import (  # noqa: E402
         AdvisoryRouteError,
         build_routes,
@@ -35,7 +37,10 @@ elif ROUTES_TOOL.is_file() and RUNNER.is_file():
     from speculative_run import Usage, price_from_tokens  # noqa: E402
 
 
-@unittest.skipUnless(ROUTES_TOOL.is_file(), "repository-only advisory routes unavailable")
+@unittest.skipUnless(
+    ROUTES_TOOL.is_file() and CAMPAIGN_TOOL.is_file() and RUNNER.is_file(),
+    "repository-only advisory tools unavailable",
+)
 class AdvisoryRouteProfileTests(unittest.TestCase):
     def write_profile(self, directory: str, vendor: str) -> Path:
         path = Path(directory) / f"{vendor}.json"
@@ -85,6 +90,7 @@ class AdvisoryRouteProfileTests(unittest.TestCase):
             self.assertIn("--ignore-user-config", route)
             self.assertIn("--ignore-rules", route)
             self.assertIn("--json", route)
+            self.assertIn('model_reasoning_effort="high"', route)
             self.assertEqual(route[-1], "-")
         self.assertEqual(routes.cheap[routes.cheap.index("--sandbox") + 1], "workspace-write")
         self.assertEqual(routes.advisor[routes.advisor.index("--sandbox") + 1], "read-only")
@@ -104,6 +110,16 @@ class AdvisoryRouteProfileTests(unittest.TestCase):
             path.write_text(payload.replace('"high"', '"-PRIVATE-MODEL"', 1), encoding="utf-8")
             with self.assertRaisesRegex(AdvisoryRouteError, "^$"):
                 load_profile(path)
+
+            original = json.loads(payload)
+            for invalid_label in ("-option", "edge\u00a0space", "zero\u200bwidth", "x" * 241):
+                with self.subTest(invalid_label=invalid_label[:20]):
+                    changed = dict(original)
+                    changed["models"] = dict(original["models"])
+                    changed["models"]["cheap"] = invalid_label
+                    path.write_text(json.dumps(changed), encoding="utf-8")
+                    with self.assertRaisesRegex(AdvisoryRouteError, "^$"):
+                        load_profile(path)
 
             path.write_text('{"schema_version":1,"schema_version":1}', encoding="utf-8")
             with self.assertRaisesRegex(AdvisoryRouteError, "^$"):
@@ -149,7 +165,8 @@ class AdvisoryRouteProfileTests(unittest.TestCase):
             descriptor = json.loads(reviewed.stdout)
             self.assertTrue(descriptor["task_egress"])
             self.assertEqual(descriptor["task_delivery"], "stdin")
-            self.assertEqual(descriptor["attempt_bound"]["advisor"], 1)
+            self.assertEqual(descriptor["attempt_bound"]["advisor"], 2)
+            self.assertEqual(descriptor["attempt_bound"]["total_vendor_children"], 5)
 
             verify = root / "verify.sh"
             verify.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -180,6 +197,34 @@ class AdvisoryRouteProfileTests(unittest.TestCase):
             )
             self.assertEqual(sealed.returncode, 0, sealed.stderr)
             self.assertTrue(manifest.is_file())
+
+            mixed = subprocess.run(
+                [
+                    sys.executable,
+                    str(CAMPAIGN_TOOL),
+                    "--arm",
+                    "shape_b",
+                    "--planned-tasks",
+                    "60",
+                    "--max-tasks",
+                    "150",
+                    "--cost-basis",
+                    "vendor",
+                    "--route-profile",
+                    str(profile),
+                    "--cheap",
+                    "false",
+                    "--verify",
+                    str(verify),
+                    "--output",
+                    str(root / "mixed.json"),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            self.assertEqual(mixed.returncode, 2)
+            self.assertIn("cannot be mixed", mixed.stderr)
 
     def test_sealed_profile_and_runner_compile_identical_routes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -328,6 +373,63 @@ class AdvisoryRouteProfileTests(unittest.TestCase):
         self.assertIn("--confirm-task-egress", completed.stderr)
         self.assertNotIn("cheap-model", completed.stderr)
 
+        with tempfile.TemporaryDirectory() as directory:
+            profile = self.write_profile(directory, "codex")
+            baseline = subprocess.run(
+                [
+                    sys.executable,
+                    str(RUNNER),
+                    "--out-dir",
+                    str(Path(directory) / "out"),
+                    "--route-profile",
+                    str(profile),
+                    "--confirm-task-egress",
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+        self.assertEqual(baseline.returncode, 2)
+        self.assertIn("required unless --prune", baseline.stderr)
+        self.assertNotIn("--advisor does nothing", baseline.stderr)
+
+        with tempfile.TemporaryDirectory() as directory:
+            profile = self.write_profile(directory, "codex")
+            mixed = subprocess.run(
+                [
+                    sys.executable,
+                    str(RUNNER),
+                    "--out-dir",
+                    str(Path(directory) / "out"),
+                    "--route-profile",
+                    str(profile),
+                    "--cheap",
+                    "false",
+                    "--confirm-task-egress",
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+        self.assertEqual(mixed.returncode, 2)
+        self.assertIn("cannot be mixed", mixed.stderr)
+
+        with tempfile.TemporaryDirectory() as directory:
+            confirm_without_profile = subprocess.run(
+                [
+                    sys.executable,
+                    str(RUNNER),
+                    "--out-dir",
+                    str(Path(directory) / "out"),
+                    "--confirm-task-egress",
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+        self.assertEqual(confirm_without_profile.returncode, 2)
+        self.assertIn("needs --route-profile or --campaign", confirm_without_profile.stderr)
+
     def test_codex_price_table_can_name_disjoint_cached_input_components(self) -> None:
         usage: Usage = {
             "breakdown": {
@@ -349,6 +451,18 @@ class AdvisoryRouteProfileTests(unittest.TestCase):
         self.assertIsNotNone(cost)
         assert cost is not None
         self.assertAlmostEqual(cost, 3.32)
+        overlapping_usage: Usage = {
+            "breakdown": dict(usage["breakdown"]),
+            "total_tokens": usage["total_tokens"],
+            "source": usage["source"],
+        }
+        self.assertIsNone(
+            price_from_tokens(
+                overlapping_usage,
+                {"input_tokens": 2.0, "cached_input_tokens": 0.2},
+            )
+        )
+        self.assertEqual(overlapping_usage["pricing_error"], "overlapping_rate_fields")
         invalid_usage: Usage = {
             "breakdown": {
                 "input_tokens": 10,
@@ -357,6 +471,21 @@ class AdvisoryRouteProfileTests(unittest.TestCase):
             "source": "codex-json",
         }
         self.assertIsNone(price_from_tokens(invalid_usage, rates))
+        self.assertEqual(invalid_usage["pricing_error"], "invalid_input_partition")
+
+        with tempfile.TemporaryDirectory() as directory:
+            overlapping_prices = Path(directory) / "prices.json"
+            overlapping_prices.write_text(
+                json.dumps(
+                    {
+                        role: {"input_tokens": 2.0, "cached_input_tokens": 0.2}
+                        for role in ("cheap", "advisor", "expensive")
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(CampaignError, "^$"):
+                price_table_sha256(overlapping_prices)
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO unavailable")
     def test_fifo_profile_fails_closed_without_blocking(self) -> None:

@@ -41,6 +41,7 @@ python3 tools/advisory_campaign.py \
   --cheap 'codex exec --model REVIEWED_CHEAP_MODEL -' \
   --expensive 'codex exec --model REVIEWED_STRONG_MODEL -' \
   --advisor 'codex exec --model REVIEWED_ADVISOR_MODEL -' \
+  --confirm-task-egress \
   --advisor-context prompt \
   --verify ./verify.sh \
   --prices ./prices.json \

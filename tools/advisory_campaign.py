@@ -33,6 +33,11 @@ MAX_VERIFY_BYTES = 1_048_576
 MAX_PRICES_BYTES = 65_536
 MAX_CAMPAIGN_LOG_BYTES = 67_108_864
 MAX_TASKS = 500
+OVERLAPPING_PRICE_FIELDS = (
+    frozenset({"input_tokens", "uncached_input_tokens"}),
+    frozenset({"input_tokens", "cached_input_tokens"}),
+    frozenset({"output_tokens", "reasoning_output_tokens"}),
+)
 
 
 class CampaignError(ValueError):
@@ -206,7 +211,14 @@ def price_table_sha256(path: Path) -> str:
                 raise CampaignError() from error
             if not math.isfinite(numeric) or numeric < 0:
                 raise CampaignError()
+        validate_price_rate_fields(table)
     return _sha256(payload)
+
+
+def validate_price_rate_fields(fields: Mapping[str, object]) -> None:
+    names = frozenset(fields)
+    if any(overlap <= names for overlap in OVERLAPPING_PRICE_FIELDS):
+        raise CampaignError()
 
 
 def route_contract(argv: Sequence[str]) -> RouteContract:

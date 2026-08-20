@@ -77,6 +77,7 @@ if TYPE_CHECKING:
         load_manifest,
         record_binding,
         stage_bound_file,
+        validate_price_rate_fields,
         validate_record_bindings,
         validate_run_configuration,
     )
@@ -92,6 +93,7 @@ else:
         load_manifest,
         record_binding,
         stage_bound_file,
+        validate_price_rate_fields,
         validate_record_bindings,
         validate_run_configuration,
     )
@@ -138,6 +140,7 @@ class Usage(TypedDict, total=False):
     # 진짜 0 이지만 CLI 가 필드 이름을 바꾼 경우와 구별되지 않으므로, 조용히
     # 절반짜리 비용을 내지 않도록 리포트가 볼 수 있게 남긴다.
     priced_fields_missing: str
+    pricing_error: str
 
 
 class Advice(TypedDict, total=False):
@@ -462,6 +465,11 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
     breakdown = usage.get("breakdown") or {}
     if not breakdown or not rates:
         return None
+    try:
+        validate_price_rate_fields(rates)
+    except CampaignError:
+        usage["pricing_error"] = "overlapping_rate_fields"
+        return None
     pricing_breakdown = dict(breakdown)
     # Codex reports cached input as a breakout below input_tokens.
     # A non-negative rate table cannot otherwise express
@@ -481,9 +489,11 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
             or isinstance(cached_input, bool)
             or cached_input < 0
         ):
+            usage["pricing_error"] = "invalid_input_partition"
             return None
         uncached_input = total_input - cached_input
         if uncached_input < 0:
+            usage["pricing_error"] = "invalid_input_partition"
             return None
         pricing_breakdown["uncached_input_tokens"] = uncached_input
     matched = [field for field in rates if field in pricing_breakdown]
@@ -3236,7 +3246,7 @@ def main() -> int:
         action="store_true",
         help=(
             "confirm that task, diff, and verification context may be sent to the "
-            "vendor selected by --route-profile"
+            "vendor selected by --route-profile or a sealed --campaign"
         ),
     )
     parser.add_argument("--verify", type=Path, help="executable; exit code is the verdict")
@@ -3381,20 +3391,27 @@ def main() -> int:
     if arguments.route_profile is not None:
         if any(command is not None for command in exact_commands):
             parser.error("--route-profile cannot be mixed with exact route commands")
-        if not arguments.confirm_task_egress:
-            parser.error("--route-profile execution requires --confirm-task-egress")
         try:
             profile_routes = routes_from_profile(arguments.route_profile.expanduser())
         except AdvisoryRouteError:
             parser.error("invalid advisory route profile")
         arguments.cheap = shlex.join(profile_routes.cheap)
-        arguments.advisor = shlex.join(profile_routes.advisor)
+        arguments.advisor = (
+            shlex.join(profile_routes.advisor)
+            if arguments.advise_first or arguments.advise_on_failure
+            else None
+        )
         arguments.expensive = shlex.join(profile_routes.expensive)
-    elif arguments.confirm_task_egress:
-        parser.error("--confirm-task-egress is only valid with --route-profile")
 
     if (arguments.campaign is None) != (arguments.sample_ordinal is None):
         parser.error("--campaign and --sample-ordinal must be supplied together")
+    needs_egress_confirmation = (
+        arguments.route_profile is not None or arguments.campaign is not None
+    )
+    if needs_egress_confirmation and not arguments.confirm_task_egress:
+        parser.error("profile or sealed-campaign execution requires --confirm-task-egress")
+    if arguments.confirm_task_egress and not needs_egress_confirmation:
+        parser.error("--confirm-task-egress needs --route-profile or --campaign")
     if arguments.campaign is not None and arguments.label:
         parser.error("--label is not allowed in campaign mode; use only the opaque ordinal")
     pinned_campaign = arguments.out_dir / "campaign.json"
@@ -3549,6 +3566,10 @@ def main() -> int:
                 parser.error(
                     f"--prices['{arm}'] must map token field names to finite, non-negative numbers"
                 )
+            try:
+                validate_price_rate_fields(table)
+            except CampaignError:
+                parser.error(f"--prices['{arm}'] contains overlapping token fields")
             rates[arm] = {k: float(v) for k, v in table.items()}
 
     if arguments.prefer_prices and not rates:

@@ -124,6 +124,9 @@ If the selected provider has short/long-context or service-tier rates that the C
 distinguish, seal a conservative table and describe that limitation; do not call the result an
 invoice-equivalent cost.
 
+Campaign sealing rejects known overlapping pairs (`input_tokens` with either derived/cached input,
+and `output_tokens` with reasoning output) instead of relying on this prose at decision time.
+
 ## Run and report
 
 The explicit confirmation acknowledges that task text, a failed diff, and a redacted verification

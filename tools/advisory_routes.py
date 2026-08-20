@@ -202,7 +202,7 @@ def build_routes(profile: Mapping[str, object]) -> AdvisoryRoutes:
             "--model",
             models[role],
             "-c",
-            f"model_reasoning_effort={efforts[role]}",
+            f"model_reasoning_effort={json.dumps(efforts[role])}",
             "-",
         )
 
@@ -240,9 +240,10 @@ def main() -> int:
                 "task_egress": True,
                 "attempt_bound": {
                     "cheap": 1,
-                    "advisor": 1,
+                    "advisor": 2,
                     "advised_retry": 1,
                     "expensive": 1,
+                    "total_vendor_children": 5,
                 },
                 "routes": {
                     "cheap": list(routes.cheap),
