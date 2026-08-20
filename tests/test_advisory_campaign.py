@@ -696,6 +696,7 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
             expected_verify_bytes = verify.read_bytes()
             task = root / "task.txt"
             task.write_text("make the reviewed change", encoding="utf-8")
+            task.chmod(0o600)
             child = shlex.join(
                 [
                     sys.executable,

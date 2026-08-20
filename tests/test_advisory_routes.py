@@ -315,6 +315,7 @@ class AdvisoryRouteProfileTests(unittest.TestCase):
             fake_claude.chmod(0o700)
             task = root / "task.txt"
             task.write_text("PRIVATE-TASK-MATERIAL", encoding="utf-8")
+            task.chmod(0o600)
             out_dir = root / "results"
             environment = dict(os.environ)
             environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"

@@ -4,6 +4,7 @@ import importlib.util
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -13,7 +14,7 @@ if str(RUNNER.parent) not in sys.path:
     sys.path.insert(0, str(RUNNER.parent))
 
 
-def load_runner():
+def load_runner() -> types.ModuleType:
     spec = importlib.util.spec_from_file_location("speculative_task_input", RUNNER)
     if spec is None or spec.loader is None:
         raise unittest.SkipTest("repository-only speculative runner unavailable")
@@ -82,7 +83,7 @@ class SpeculativeTaskInputTests(unittest.TestCase):
             original_fstat = os.fstat
             swapped = False
 
-            def replace_after_open(descriptor: int):
+            def replace_after_open(descriptor: int) -> os.stat_result:
                 nonlocal swapped
                 metadata = original_fstat(descriptor)
                 if not swapped:
