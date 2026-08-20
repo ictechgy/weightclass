@@ -221,6 +221,15 @@ human to read.
   fail before task access with redacted `invalid_input`. Internal ASCII spaces
   remain compatible as one argv token; labels stay opaque and no availability,
   quality, price, or entitlement is inferred.
+- Advisory productization measurements now have a repository-only sealed
+  campaign contract (`docs/advisory-campaign.md`). It binds full route argv
+  digests, verifier and price-table bytes, Shape A/B configuration, the existing
+  12-advised-failure floor, and planned/max task counts before task access.
+  Campaign logs use opaque ordinals, reject mixed/damaged/duplicate records,
+  and cannot emit a decision before both sealed minimums are met. Campaign
+  inputs are nonblocking no-follow descriptor reads; verifier and price-table
+  bytes are staged privately before task access. This is measurement
+  infrastructure, not evidence that advisory should ship.
 
 ## Completed
 
@@ -327,12 +336,12 @@ human to read.
   under the release gate, because unittest does not collect module-level
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
-- Verified on the model-label hardening tree based on `74fd684`: `unittest
-  discover` runs **1140** tests and `pytest -q` reports 1140 passed; Ruff
-  check/format is clean on 156
-  files; `mypy --strict src tests` is clean on 126 source files; strict mypy is
-  also clean on the three measurement tools; and an isolated sdist/wheel build
-  succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
+- Verified on the advisory-campaign tree based on `928b333`: `unittest
+  discover` runs **1150** tests and `pytest -q` reports 1150 passed; Ruff
+  check/format is clean on 159
+  files; `mypy --strict src tests` is clean on 127 source files; strict mypy is
+  also clean on the campaign/runner/reporter tools; and an isolated sdist/wheel
+  build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
   hides real errors — that is how 139 of them once reached `main`.
 - The verification venv is not an editable project install. Full local test
   commands therefore need `PYTHONPATH=<repo>/src`; omitting it produces
@@ -509,8 +518,9 @@ human to read.
 6. **Advisor adoption remains undecided.** Two corrected Shape-B failures now
    have observed rescue `s=0/2`, and neither study had a price-derived `a` or
    `r`. A later study needs a user-supplied single-origin price table, more real
-   failed tasks, and the pre-registered interval rule. Do not integrate
-   retry/advice into `wclass` from these pilots.
+   failed tasks, and the sealed campaign/interval rule in
+   `docs/advisory-campaign.md`. Do not integrate retry/advice into `wclass` from
+   these pilots.
 7. **Policy 4 needs broader high-tier evidence before another classifier
    change.** The public fixture remains 5/15 high recall; the fresh blind
    direction check found 1/9 with a wide interval and sent the other eight to

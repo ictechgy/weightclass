@@ -314,6 +314,12 @@ invites more trust than it earns.
 tools/speculative_report.py --log ~/spec-runs/runs.jsonl
 ```
 
+That legacy form is descriptive. Evidence intended to move the product boundary
+must first seal routes, verifier bytes, pricing basis, advisory shape, and sample
+bounds with [`advisory-campaign.md`](advisory-campaign.md), pass the manifest to
+each runner invocation, and report with the same manifest. Campaign mode treats
+a damaged or mixed log as invalid instead of skipping rows.
+
 When both arms recorded a cost, `c` is **measured from your own tasks** rather
 than assumed. It is the average cheap cost per task divided by the average
 expensive cost per escalated task — not a paired per-task ratio. An earlier

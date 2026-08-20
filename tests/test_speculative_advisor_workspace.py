@@ -12,6 +12,8 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNNER = REPO_ROOT / "tools" / "speculative_run.py"
+if str(RUNNER.parent) not in sys.path:
+    sys.path.insert(0, str(RUNNER.parent))
 
 
 def load_runner() -> types.ModuleType:

@@ -48,6 +48,7 @@ import argparse
 import base64
 import binascii
 import contextlib
+import fcntl
 import hashlib
 import json
 import math
@@ -63,7 +64,21 @@ import time
 import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypedDict
+from typing import BinaryIO, TypedDict
+
+from advisory_campaign import (
+    MAX_PRICES_BYTES,
+    MAX_VERIFY_BYTES,
+    CampaignError,
+    CampaignManifest,
+    canonical_manifest_bytes,
+    load_bound_records,
+    load_manifest,
+    record_binding,
+    stage_bound_file,
+    validate_record_bindings,
+    validate_run_configuration,
+)
 
 
 class ChildResult(TypedDict):
@@ -3170,6 +3185,19 @@ def main() -> int:
     parser.add_argument("--verify", type=Path, help="executable; exit code is the verdict")
     parser.add_argument("--label", default="", help="free-text tag recorded with the run")
     parser.add_argument(
+        "--campaign",
+        type=Path,
+        help=(
+            "sealed task-free campaign manifest; requires --sample-ordinal and binds the "
+            "routes, verifier, pricing basis, advisory shape, and stopping rule"
+        ),
+    )
+    parser.add_argument(
+        "--sample-ordinal",
+        type=int,
+        help="opaque 1-based campaign ordinal; it identifies no task content",
+    )
+    parser.add_argument(
         "--child-env",
         action="append",
         default=[],
@@ -3292,6 +3320,14 @@ def main() -> int:
     if arguments.prune:
         return prune(registry, arguments.out_dir)
 
+    if (arguments.campaign is None) != (arguments.sample_ordinal is None):
+        parser.error("--campaign and --sample-ordinal must be supplied together")
+    if arguments.campaign is not None and arguments.label:
+        parser.error("--label is not allowed in campaign mode; use only the opaque ordinal")
+    pinned_campaign = arguments.out_dir / "campaign.json"
+    if arguments.campaign is None and (pinned_campaign.exists() or pinned_campaign.is_symlink()):
+        parser.error("this output directory is campaign-bound; pass its sealed --campaign")
+
     missing = [
         name
         for name, value in (
@@ -3336,20 +3372,79 @@ def main() -> int:
     if run_git(["status", "--porcelain"], repo).strip():
         parser.error(f"repository has uncommitted changes; commit or stash first: {repo}")
 
-    task_file = arguments.task_file.expanduser()
-    try:
-        task = task_file.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        parser.error(f"--task-file is not readable as UTF-8 text: {error}")
-    commit = head_commit(repo)
-
     # 라우트 명령 전문은 찍지 않는다. argv 로 넘긴 자격증명이 CI 로그나
     # 화면 캡처에 그대로 남는다. 어떤 실행 파일인지만 알리면 충분하다.
     cheap_argv = shlex.split(arguments.cheap)
     expensive_argv = shlex.split(arguments.expensive)
     advisor_argv = shlex.split(arguments.advisor) if arguments.advisor else []
-    print(f"기준 커밋 {commit[:12]}  저장소 {repo}")
-    print(f"싼 경로: {cheap_argv[0]} (인자 {len(cheap_argv) - 1}개)")
+
+    campaign_manifest: CampaignManifest | None = None
+    campaign_lock: BinaryIO | None = None
+    if arguments.campaign is not None:
+        assert arguments.sample_ordinal is not None
+        campaign_path = arguments.campaign.expanduser().resolve()
+        prices_path = arguments.prices.expanduser().resolve() if arguments.prices else None
+        try:
+            campaign_manifest = load_manifest(campaign_path)
+            validate_run_configuration(
+                campaign_manifest,
+                cheap=cheap_argv,
+                expensive=expensive_argv,
+                advisor=advisor_argv,
+                advise_first=bool(arguments.advise_first),
+                advise_on_failure=bool(arguments.advise_on_failure),
+                advisor_context=arguments.advisor_context,
+                verify=verify,
+                prices=prices_path,
+                prefer_prices=bool(arguments.prefer_prices),
+                sample_ordinal=arguments.sample_ordinal,
+            )
+            lock_flags = os.O_CREAT | os.O_RDWR
+            if hasattr(os, "O_NOFOLLOW"):
+                lock_flags |= os.O_NOFOLLOW
+            lock_descriptor = os.open(arguments.out_dir / "campaign.lock", lock_flags, 0o600)
+            campaign_lock = os.fdopen(lock_descriptor, "r+b", closefd=True)
+            fcntl.flock(campaign_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            canonical = canonical_manifest_bytes(campaign_manifest)
+            if pinned_campaign.exists() or pinned_campaign.is_symlink():
+                if canonical_manifest_bytes(load_manifest(pinned_campaign)) != canonical:
+                    raise CampaignError()
+            else:
+                descriptor = os.open(
+                    pinned_campaign,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o600,
+                )
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(canonical)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            verify = stage_bound_file(
+                verify,
+                arguments.out_dir / "campaign-verify",
+                expected_sha256=campaign_manifest["verify_sha256"],
+                maximum=MAX_VERIFY_BYTES,
+                mode=0o700,
+            )
+            if prices_path is not None:
+                prices_digest = campaign_manifest["prices_sha256"]
+                if prices_digest is None:
+                    raise CampaignError()
+                arguments.prices = stage_bound_file(
+                    prices_path,
+                    arguments.out_dir / "campaign-prices.json",
+                    expected_sha256=prices_digest,
+                    maximum=MAX_PRICES_BYTES,
+                    mode=0o600,
+                )
+            existing_records = load_bound_records(log)
+            ordinals = validate_record_bindings(campaign_manifest, existing_records)
+            if arguments.sample_ordinal != len(ordinals) + 1:
+                raise CampaignError()
+        except (CampaignError, OSError):
+            if campaign_lock is not None:
+                campaign_lock.close()
+            parser.error("campaign contract mismatch or campaign already running")
 
     rates: dict[str, dict[str, float]] = {}
     if arguments.prices:
@@ -3385,6 +3480,16 @@ def main() -> int:
 
     if arguments.prefer_prices and not rates:
         parser.error("--prefer-prices needs --prices; there is no table to price from")
+
+    # 모든 task-free 설정과 campaign 결속이 성공한 뒤에만 task 에 접근한다.
+    task_file = arguments.task_file.expanduser()
+    try:
+        task = task_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        parser.error(f"--task-file is not readable as UTF-8 text: {error}")
+    commit = head_commit(repo)
+    print(f"기준 커밋 {commit[:12]}  저장소 {repo}")
+    print(f"싼 경로: {cheap_argv[0]} (인자 {len(cheap_argv) - 1}개)")
 
     # 기본이 허용 목록이다. 모르는 비밀은 차단 목록으로 막을 수 없다.
     # arm 마다 실행 파일이 다르므로 허용 목록도 arm 마다 만든다.
@@ -3658,6 +3763,8 @@ def main() -> int:
         "advice_failure": None,
         "retry": None,
     }
+    if campaign_manifest is not None and arguments.sample_ordinal is not None:
+        record["campaign"] = record_binding(campaign_manifest, arguments.sample_ordinal)
 
     # Shape B. 검증이 실패하면 승급 전에 조언을 한 번 받고 싼 경로를 한 번 더
     # 돌린다. 승급 한 번을 짧은 조언 한 번 + 싼 실행 한 번으로 바꾸는 것이므로,
@@ -3748,6 +3855,12 @@ def main() -> int:
 
     with log.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    log.chmod(0o600)
+    if campaign_lock is not None:
+        campaign_lock.close()
+        campaign_lock = None
 
     winner: Attempt | None = None
     if cheap["accepted"]:

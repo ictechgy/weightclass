@@ -347,6 +347,9 @@ In order:
    `tools/speculative_report.py`, behind `--advisor`, `--advise-first` and
    `--advise-on-failure`. Neither tool ships in the distribution, so this needs no
    boundary change and nothing reaches users who have not asked for it.
+   Productization evidence must use the sealed, task-free campaign contract in
+   [`advisory-campaign.md`](advisory-campaign.md); an unbound legacy JSONL log is
+   descriptive only.
 2. **Run it on real work** and get `a_A`, `a_B`, `s`, and `p′`.
 3. **Only then** decide whether the pattern belongs inside `weightclass`, which
    is where the boundary above actually moves.
