@@ -2,6 +2,9 @@
 
 _Status: measurement gate implemented; advisory execution remains repository-only._
 
+For deterministic Claude and Codex CLI route profiles, including exact review and egress
+confirmation, see [Claude and Codex advisory campaign profiles](advisory-vendor-profiles.md).
+
 The advisory runner already measures Shape A and Shape B, but an ordinary JSONL
 log cannot prove that its verifier, prices, routes, stopping rule, or advisory
 context stayed fixed. A product decision must use a sealed campaign manifest.
@@ -66,6 +69,7 @@ python3 tools/speculative_run.py \
   --cheap 'codex exec --model REVIEWED_CHEAP_MODEL -' \
   --expensive 'codex exec --model REVIEWED_STRONG_MODEL -' \
   --advisor 'codex exec --model REVIEWED_ADVISOR_MODEL -' \
+  --confirm-task-egress \
   --advise-on-failure \
   --advisor-context prompt \
   --verify ./verify.sh \

@@ -336,11 +336,10 @@ human to read.
   under the release gate, because unittest does not collect module-level
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
-- Verified on the advisory-campaign tree based on `928b333`: `unittest
-  discover` runs **1150** tests and `pytest -q` reports 1150 passed; Ruff
-  check/format is clean on 159
-  files; `mypy --strict src tests` is clean on 127 source files; strict mypy is
-  also clean on the campaign/runner/reporter tools; and an isolated sdist/wheel
+- Verified on the Claude/Codex advisory-profile tree: `unittest discover`
+  runs **1159** tests and `pytest -q` reports 1159 passed; Ruff check/format is
+  clean on 162 files; `mypy --strict src tests` is clean on 128 source files;
+  strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
   build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
   hides real errors — that is how 139 of them once reached `main`.
 - The verification venv is not an editable project install. Full local test
@@ -517,10 +516,15 @@ human to read.
    `QUALITY-RESULT.md` all passed their tests.
 6. **Advisor adoption remains undecided.** Two corrected Shape-B failures now
    have observed rescue `s=0/2`, and neither study had a price-derived `a` or
-   `r`. A later study needs a user-supplied single-origin price table, more real
-   failed tasks, and the sealed campaign/interval rule in
-   `docs/advisory-campaign.md`. Do not integrate retry/advice into `wclass` from
-   these pilots.
+   `r`. Deterministic repository-only profiles now compile operator-selected
+   Claude and Codex model/effort labels into the same reviewed argv for seal and
+   run, require explicit task-egress confirmation, and support disjoint Codex
+   cached-input pricing. Current Claude Sonnet/Opus and Codex Luna/Sol synthetic
+   stdin probes exited successfully, but they are connectivity checks, not
+   evidence. The separate sealed campaigns still need at least 60 usable tasks
+   and 12 advised failures each under a user-supplied single-origin price table;
+   see `docs/advisory-vendor-profiles.md`. Do not integrate retry/advice into
+   distributed `wclass` from these pilots.
 7. **Policy 4 needs broader high-tier evidence before another classifier
    change.** The public fixture remains 5/15 high recall; the fresh blind
    direction check found 1/9 with a wide interval and sent the other eight to
@@ -549,7 +553,11 @@ security/performance PR #57 are merged. Both
 ~/.local/bin/wclass and /opt/homebrew/bin/wclass report 0.15.1; old kegs and
 stale worktree metadata were cleaned. Four real Shape-B samples now include two
 failures that reached advice, with observed rescue 0/2 and no economic verdict
-because no reviewed price table existed. The fresh 24-prompt blind direction
+because no reviewed price table existed. Claude/Codex task-free route profiles,
+exact argv review, explicit egress confirmation, and Codex disjoint cached-input
+pricing are implemented for repository-only campaigns; no product promotion is
+allowed until each separate sealed campaign reaches 60 usable tasks and 12
+advised failures. The fresh 24-prompt blind direction
 check found policy-4 agreement 10/24, high recall 1/9, and over-routing 6/24;
 it is spent direction evidence, not a tuning set. Security scan
 d2175938-1f01-47e6-b0f2-8d5089f5d839 found two medium and two low findings;

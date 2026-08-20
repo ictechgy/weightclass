@@ -329,7 +329,7 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
         self.assertNotIn("codex --model cheap", second.stderr)
         self.assertNotIn(str(verify), second.stderr)
 
-    def test_report_withholds_a_decision_until_the_sealed_minimums_are_met(self) -> None:
+    def test_report_blocks_decision_when_campaign_pricing_is_incomplete(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             verify = Path(directory) / "verify.sh"
             verify.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -380,7 +380,7 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                 }
 
             records = []
-            for ordinal in range(1, 12):
+            for ordinal in range(1, 13):
                 records.append(
                     {
                         "campaign": record_binding(manifest, ordinal),
@@ -403,6 +403,31 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                         "expensive": attempt(True, 1.0),
                     }
                 )
+            infrastructure = json.loads(json.dumps(records[-1]))
+            infrastructure["campaign"] = record_binding(manifest, 13)
+            infrastructure["cheap"]["accepted"] = False
+            infrastructure["cheap"]["failure_kind"] = "infrastructure"
+            infrastructure["cheap"]["child"]["usage"] = None
+            infrastructure["advice_failure"] = None
+            infrastructure["retry"] = None
+            infrastructure["escalated"] = False
+            infrastructure["expensive"] = None
+            records.append(infrastructure)
+            first_cheap = records[0]["cheap"]
+            assert isinstance(first_cheap, dict)
+            first_child = first_cheap["child"]
+            assert isinstance(first_child, dict)
+            first_usage = first_child["usage"]
+            assert isinstance(first_usage, dict)
+            first_usage["pricing_error"] = "missing_rate_fields"
+            first_usage["priced_fields_missing"] = "cache_read_input_tokens"
+            second_cheap = records[1]["cheap"]
+            assert isinstance(second_cheap, dict)
+            second_child = second_cheap["child"]
+            assert isinstance(second_child, dict)
+            second_usage = second_child["usage"]
+            assert isinstance(second_usage, dict)
+            second_usage["pricing_error"] = "\x1b[31mPRIVATE-CONTROL"
             log.write_text(
                 "".join(json.dumps(record) + "\n" for record in records),
                 encoding="utf-8",
@@ -421,11 +446,119 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                 check=False,
                 text=True,
             )
+            legacy = subprocess.run(
+                [sys.executable, str(REPORT), "--log", str(log)],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            first_usage.pop("pricing_error")
+            first_usage.pop("priced_fields_missing")
+            second_usage.pop("pricing_error")
+            log.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            clean_infrastructure = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPORT),
+                    "--log",
+                    str(log),
+                    "--campaign",
+                    str(campaign),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            third_cheap = records[2]["cheap"]
+            assert isinstance(third_cheap, dict)
+            third_child = third_cheap["child"]
+            assert isinstance(third_child, dict)
+            third_child["usage"] = None
+            log.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            missing_price = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPORT),
+                    "--log",
+                    str(log),
+                    "--campaign",
+                    str(campaign),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            third_child["usage"] = child(0.3)["usage"]
+            third_child["timed_out"] = True
+            log.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            campaign_timeout = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPORT),
+                    "--log",
+                    str(log),
+                    "--campaign",
+                    str(campaign),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            timeout_records = json.loads(json.dumps(records[:2]))
+            timeout_cheap = timeout_records[0]["cheap"]
+            timeout_cheap["child"]["timed_out"] = True
+            for record in timeout_records:
+                advisor_config = record.get("advisor")
+                if isinstance(advisor_config, dict):
+                    advisor_config["advise_on_failure"] = False
+                record["advice_failure"] = None
+                record["retry"] = None
+            log.write_text(
+                "".join(json.dumps(record) + "\n" for record in timeout_records),
+                encoding="utf-8",
+            )
+            timeout_only = subprocess.run(
+                [sys.executable, str(REPORT), "--log", str(log)],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("사전등록 gate 미충족", completed.stdout)
-        self.assertIn("sealed campaign", completed.stdout)
+        self.assertEqual(legacy.returncode, 0, legacy.stderr)
+        self.assertEqual(clean_infrastructure.returncode, 0, clean_infrastructure.stderr)
+        self.assertEqual(missing_price.returncode, 0, missing_price.stderr)
+        self.assertEqual(campaign_timeout.returncode, 0, campaign_timeout.stderr)
+        self.assertEqual(timeout_only.returncode, 0, timeout_only.stderr)
+        self.assertIn("캠페인: shape_b", completed.stdout)
+        self.assertIn("불완전하거나 유효하지 않은 가격 계산", completed.stdout)
+        self.assertIn("missing_rate_fields", completed.stdout)
+        self.assertIn("unknown_pricing_error", completed.stdout)
+        self.assertNotIn("PRIVATE-CONTROL", completed.stdout)
+        self.assertNotIn("\x1b", completed.stdout)
         self.assertNotIn("구간 전체가 손익분기 위", completed.stdout)
+        self.assertNotIn("구간 전체가 손익분기 아래", completed.stdout)
+        self.assertNotIn("구간 전체가 손익분기 위", legacy.stdout)
+        self.assertNotIn("구간 전체가 손익분기 아래", legacy.stdout)
+        self.assertIn("불완전하거나 유효하지 않은 가격 계산", legacy.stdout)
+        self.assertNotIn("불완전하거나 유효하지 않은 가격 계산", clean_infrastructure.stdout)
+        self.assertNotIn("가격이 없는 campaign 실행", clean_infrastructure.stdout)
+        self.assertIn("구간 전체가 손익분기 아래", clean_infrastructure.stdout)
+        self.assertIn("가격이 없는 campaign 실행", missing_price.stdout)
+        self.assertNotIn("구간 전체가 손익분기 아래", missing_price.stdout)
+        self.assertIn("타임아웃 campaign 실행", campaign_timeout.stdout)
+        self.assertNotIn("구간 전체가 손익분기 아래", campaign_timeout.stdout)
+        self.assertIn("CHILD_TIMEOUT", timeout_only.stdout)
+        self.assertNotIn("양쪽 비용이 있는 승급 과제를 더 모아야 한다", timeout_only.stdout)
 
 
 @unittest.skipUnless(RUNNER.is_file(), "repository-only speculative runner unavailable")
@@ -466,6 +599,64 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
             campaign = root / "campaign.json"
             write_manifest(campaign, manifest)
             private_task_name = "PRIVATE-TASK-MUST-NOT-BE-READ"
+            command = [
+                sys.executable,
+                str(RUNNER),
+                "--repo",
+                str(repo),
+                "--task-file",
+                str(root / private_task_name),
+                "--cheap",
+                "/usr/bin/true",
+                "--expensive",
+                "/usr/bin/true",
+                "--advisor",
+                "/usr/bin/true",
+                "--advise-on-failure",
+                "--verify",
+                str(verify),
+                "--campaign",
+                str(campaign),
+                "--sample-ordinal",
+                "1",
+                "--out-dir",
+                str(root / "out"),
+            ]
+            unconfirmed = subprocess.run(
+                command,
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            command.insert(command.index("--verify"), "--confirm-task-egress")
+            completed = subprocess.run(command, capture_output=True, check=False, text=True)
+
+        self.assertEqual(unconfirmed.returncode, 2)
+        self.assertIn("requires --confirm-task-egress", unconfirmed.stderr)
+        self.assertNotIn(private_task_name, unconfirmed.stderr)
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("campaign contract mismatch", completed.stderr)
+        self.assertNotIn(private_task_name, completed.stderr)
+
+    def test_overlapping_runner_prices_fail_before_task_access(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repository(root)
+            verify = root / "verify.sh"
+            verify.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            verify.chmod(0o700)
+            prices = root / "prices.json"
+            prices.write_text(
+                json.dumps(
+                    {
+                        "cheap": {"input_tokens": 1.0, "cached_input_tokens": 0.1},
+                        "expensive": {"input_tokens": 1.0},
+                        "advisor": {"input_tokens": 1.0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            private_task_name = "PRIVATE-TASK-MUST-NOT-BE-READ"
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -478,15 +669,11 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
                     "/usr/bin/true",
                     "--expensive",
                     "/usr/bin/true",
-                    "--advisor",
-                    "/usr/bin/true",
-                    "--advise-on-failure",
                     "--verify",
                     str(verify),
-                    "--campaign",
-                    str(campaign),
-                    "--sample-ordinal",
-                    "1",
+                    "--prices",
+                    str(prices),
+                    "--prefer-prices",
                     "--out-dir",
                     str(root / "out"),
                 ],
@@ -496,7 +683,7 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
             )
 
         self.assertEqual(completed.returncode, 2)
-        self.assertIn("campaign contract mismatch", completed.stderr)
+        self.assertIn("overlapping token fields", completed.stderr)
         self.assertNotIn(private_task_name, completed.stderr)
 
     def test_successful_run_pins_contract_and_refuses_duplicate_ordinal(self) -> None:
@@ -551,6 +738,7 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
                 "--advisor",
                 advisor,
                 "--advise-on-failure",
+                "--confirm-task-egress",
                 "--verify",
                 str(verify),
                 "--campaign",
@@ -568,6 +756,7 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
             for flag in ("--campaign", "--sample-ordinal"):
                 index = legacy.index(flag)
                 del legacy[index : index + 2]
+            legacy.remove("--confirm-task-egress")
             unbound = subprocess.run(legacy, capture_output=True, check=False, text=True)
             records = load_bound_records(out / "runs.jsonl")
             pinned = load_manifest(out / "campaign.json")

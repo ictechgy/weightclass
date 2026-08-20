@@ -64,21 +64,40 @@ import time
 import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
-from typing import BinaryIO, TypedDict
+from typing import TYPE_CHECKING, BinaryIO, TypedDict
 
-from advisory_campaign import (
-    MAX_PRICES_BYTES,
-    MAX_VERIFY_BYTES,
-    CampaignError,
-    CampaignManifest,
-    canonical_manifest_bytes,
-    load_bound_records,
-    load_manifest,
-    record_binding,
-    stage_bound_file,
-    validate_record_bindings,
-    validate_run_configuration,
-)
+if TYPE_CHECKING:
+    from tools.advisory_campaign import (
+        MAX_PRICES_BYTES,
+        MAX_VERIFY_BYTES,
+        CampaignError,
+        CampaignManifest,
+        canonical_manifest_bytes,
+        load_bound_records,
+        load_manifest,
+        record_binding,
+        stage_bound_file,
+        validate_price_rate_fields,
+        validate_record_bindings,
+        validate_run_configuration,
+    )
+    from tools.advisory_routes import AdvisoryRouteError, routes_from_profile
+else:
+    from advisory_campaign import (
+        MAX_PRICES_BYTES,
+        MAX_VERIFY_BYTES,
+        CampaignError,
+        CampaignManifest,
+        canonical_manifest_bytes,
+        load_bound_records,
+        load_manifest,
+        record_binding,
+        stage_bound_file,
+        validate_price_rate_fields,
+        validate_record_bindings,
+        validate_run_configuration,
+    )
+    from advisory_routes import AdvisoryRouteError, routes_from_profile
 
 
 class ChildResult(TypedDict):
@@ -121,6 +140,7 @@ class Usage(TypedDict, total=False):
     # 진짜 0 이지만 CLI 가 필드 이름을 바꾼 경우와 구별되지 않으므로, 조용히
     # 절반짜리 비용을 내지 않도록 리포트가 볼 수 있게 남긴다.
     priced_fields_missing: str
+    pricing_error: str
 
 
 class Advice(TypedDict, total=False):
@@ -443,22 +463,59 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
     typo, and it produces None rather than a plausible-looking partial number.
     """
     breakdown = usage.get("breakdown") or {}
-    if not breakdown or not rates:
+    if not rates:
         return None
-    matched = [field for field in rates if field in breakdown]
+    if not breakdown:
+        usage["pricing_error"] = "missing_usage_breakdown"
+        return None
+    try:
+        validate_price_rate_fields(rates)
+    except CampaignError:
+        usage["pricing_error"] = "overlapping_rate_fields"
+        return None
+    pricing_breakdown = dict(breakdown)
+    # Codex reports cached input as a breakout below input_tokens.
+    # A non-negative rate table cannot otherwise express
+    #   uncached = input - cached
+    # without charging cached tokens twice. ``uncached_input_tokens`` is the one
+    # derived field this tool defines. It is produced only when the observed
+    # counts form a valid partition; impossible vendor output fails pricing
+    # instead of producing a negative or deceptively small bill.
+    if "uncached_input_tokens" in rates:
+        total_input = breakdown.get("input_tokens")
+        cached_input = breakdown.get("cached_input_tokens", 0)
+        if (
+            not isinstance(total_input, int)
+            or isinstance(total_input, bool)
+            or total_input < 0
+            or not isinstance(cached_input, int)
+            or isinstance(cached_input, bool)
+            or cached_input < 0
+        ):
+            usage["pricing_error"] = "invalid_input_partition"
+            return None
+        uncached_input = total_input - cached_input
+        if uncached_input < 0:
+            usage["pricing_error"] = "invalid_input_partition"
+            return None
+        pricing_breakdown["uncached_input_tokens"] = uncached_input
+    matched = [field for field in rates if field in pricing_breakdown]
     if not matched:
+        usage["pricing_error"] = "no_rate_fields_matched"
         return None
     priced = 0.0
     for field, rate in rates.items():
-        count = breakdown.get(field, 0)
+        count = pricing_breakdown.get(field, 0)
         if not is_finite_nonnegative(count):
             # 신뢰할 수 없는 JSON 의 토큰 수를 그대로 곱하면 OverflowError 가
             # 난다. 값 하나가 이상하다고 실행을 죽이지 말고 비용을 포기한다.
+            usage["pricing_error"] = "invalid_token_count"
             return None
         priced += count * rate / 1_000_000
     # 벤더가 준 비용과 --prices 요율은 유한성과 부호를 확인하는데 계산 결과만
     # 확인하지 않으면 기준이 어긋난다.
     if not is_finite_nonnegative(priced):
+        usage["pricing_error"] = "nonfinite_price"
         return None
     if len(matched) < len(rates):
         # 값을 매기기로 한 필드 중 일부만 나타났다. 없는 캐시 필드는 실제로 0
@@ -467,6 +524,7 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
         # 조용히 넘기지 않고 어떤 필드가 없었는지 남긴다.
         missing = ",".join(sorted(set(rates) - set(matched)))
         usage["priced_fields_missing"] = missing
+        usage["pricing_error"] = "missing_rate_fields"
     return priced
 
 
@@ -3182,6 +3240,22 @@ def main() -> int:
     parser.add_argument("--task-file", type=Path)
     parser.add_argument("--cheap", help="exact command for the cheap route")
     parser.add_argument("--expensive", help="exact command for the escalation route")
+    parser.add_argument(
+        "--route-profile",
+        type=Path,
+        help=(
+            "task-free Claude/Codex model-and-effort profile; mutually exclusive "
+            "with --cheap/--advisor/--expensive"
+        ),
+    )
+    parser.add_argument(
+        "--confirm-task-egress",
+        action="store_true",
+        help=(
+            "confirm that task, diff, and verification context may be sent to the "
+            "vendor selected by --route-profile or a sealed --campaign"
+        ),
+    )
     parser.add_argument("--verify", type=Path, help="executable; exit code is the verdict")
     parser.add_argument("--label", default="", help="free-text tag recorded with the run")
     parser.add_argument(
@@ -3320,8 +3394,31 @@ def main() -> int:
     if arguments.prune:
         return prune(registry, arguments.out_dir)
 
+    exact_commands = (arguments.cheap, arguments.advisor, arguments.expensive)
+    if arguments.route_profile is not None:
+        if any(command is not None for command in exact_commands):
+            parser.error("--route-profile cannot be mixed with exact route commands")
+        try:
+            profile_routes = routes_from_profile(arguments.route_profile.expanduser())
+        except AdvisoryRouteError:
+            parser.error("invalid advisory route profile")
+        arguments.cheap = shlex.join(profile_routes.cheap)
+        arguments.advisor = (
+            shlex.join(profile_routes.advisor)
+            if arguments.advise_first or arguments.advise_on_failure
+            else None
+        )
+        arguments.expensive = shlex.join(profile_routes.expensive)
+
     if (arguments.campaign is None) != (arguments.sample_ordinal is None):
         parser.error("--campaign and --sample-ordinal must be supplied together")
+    needs_egress_confirmation = (
+        arguments.route_profile is not None or arguments.campaign is not None
+    )
+    if needs_egress_confirmation and not arguments.confirm_task_egress:
+        parser.error("profile or sealed-campaign execution requires --confirm-task-egress")
+    if arguments.confirm_task_egress and not needs_egress_confirmation:
+        parser.error("--confirm-task-egress needs --route-profile or --campaign")
     if arguments.campaign is not None and arguments.label:
         parser.error("--label is not allowed in campaign mode; use only the opaque ordinal")
     pinned_campaign = arguments.out_dir / "campaign.json"
@@ -3476,6 +3573,10 @@ def main() -> int:
                 parser.error(
                     f"--prices['{arm}'] must map token field names to finite, non-negative numbers"
                 )
+            try:
+                validate_price_rate_fields(table)
+            except CampaignError:
+                parser.error(f"--prices['{arm}'] contains overlapping token fields")
             rates[arm] = {k: float(v) for k, v in table.items()}
 
     if arguments.prefer_prices and not rates:
