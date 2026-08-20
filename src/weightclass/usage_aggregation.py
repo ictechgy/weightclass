@@ -25,6 +25,7 @@ MAX_WEIGHTS: Final = 1_024
 MAX_BUCKETS: Final = 4_096
 MAX_COUNTER: Final = (1 << 63) - 1
 WEIGHT_SCALE: Final = 1_000_000
+MIN_WEIGHT_MICROS: Final = 1
 MAX_WEIGHT_MICROS: Final = 1_000 * WEIGHT_SCALE
 
 # 라우팅을 하지 않았다면 태스크가 갔을 고정 경로의 노력 수준. 내장 standard
@@ -127,6 +128,10 @@ def _increment(value: int, amount: int = 1) -> int:
     return result
 
 
+def _relative_cost_total_is_feasible(total: int, count: int) -> bool:
+    return count * MIN_WEIGHT_MICROS <= total <= count * MAX_WEIGHT_MICROS
+
+
 def _relative_cost_micros(value: object) -> int:
     if not isinstance(value, str) or value != value.strip():
         raise UsageAggregationError()
@@ -177,7 +182,7 @@ def _validate_weight(value: object) -> dict[str, object]:
     if not isinstance(value, dict) or set(value) != _WEIGHT_KEYS:
         raise UsageAggregationError()
     relative_cost = _counter(value["relative_cost_micros"])
-    if not 1 <= relative_cost <= MAX_WEIGHT_MICROS:
+    if not MIN_WEIGHT_MICROS <= relative_cost <= MAX_WEIGHT_MICROS:
         raise UsageAggregationError()
     return {
         "agent": _agent(value["agent"]),
@@ -205,7 +210,7 @@ def _validate_bucket(value: object) -> dict[str, object]:
         or lower_weight_runs > weighted_runs
         or reworks > runs
         or escalations > runs
-        or (weighted_runs == 0) != (relative_cost_total == 0)
+        or not _relative_cost_total_is_feasible(relative_cost_total, weighted_runs)
     ):
         raise UsageAggregationError()
     return {
@@ -257,7 +262,7 @@ def _validate_baseline(value: object, tasks: int) -> dict[str, object]:
     if (
         recorded_tasks != tasks
         or counted_tasks > recorded_tasks
-        or (counted_tasks == 0) != (total == 0)
+        or not _relative_cost_total_is_feasible(total, counted_tasks)
     ):
         raise UsageAggregationError()
     return {
