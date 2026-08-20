@@ -496,14 +496,34 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
             )
             third_child["usage"] = child(0.3)["usage"]
             third_child["timed_out"] = True
-            for record in records:
+            log.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            campaign_timeout = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPORT),
+                    "--log",
+                    str(log),
+                    "--campaign",
+                    str(campaign),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            timeout_records = json.loads(json.dumps(records[:2]))
+            timeout_cheap = timeout_records[0]["cheap"]
+            timeout_cheap["child"]["timed_out"] = True
+            for record in timeout_records:
                 advisor_config = record.get("advisor")
                 if isinstance(advisor_config, dict):
                     advisor_config["advise_on_failure"] = False
                 record["advice_failure"] = None
                 record["retry"] = None
             log.write_text(
-                "".join(json.dumps(record) + "\n" for record in records),
+                "".join(json.dumps(record) + "\n" for record in timeout_records),
                 encoding="utf-8",
             )
             timeout_only = subprocess.run(
@@ -517,6 +537,7 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
         self.assertEqual(legacy.returncode, 0, legacy.stderr)
         self.assertEqual(clean_infrastructure.returncode, 0, clean_infrastructure.stderr)
         self.assertEqual(missing_price.returncode, 0, missing_price.stderr)
+        self.assertEqual(campaign_timeout.returncode, 0, campaign_timeout.stderr)
         self.assertEqual(timeout_only.returncode, 0, timeout_only.stderr)
         self.assertIn("캠페인: shape_b", completed.stdout)
         self.assertIn("불완전하거나 유효하지 않은 가격 계산", completed.stdout)
@@ -534,6 +555,8 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
         self.assertIn("구간 전체가 손익분기 아래", clean_infrastructure.stdout)
         self.assertIn("가격이 없는 campaign 실행", missing_price.stdout)
         self.assertNotIn("구간 전체가 손익분기 아래", missing_price.stdout)
+        self.assertIn("타임아웃 campaign 실행", campaign_timeout.stdout)
+        self.assertNotIn("구간 전체가 손익분기 아래", campaign_timeout.stdout)
         self.assertIn("CHILD_TIMEOUT", timeout_only.stdout)
         self.assertNotIn("양쪽 비용이 있는 승급 과제를 더 모아야 한다", timeout_only.stdout)
 
