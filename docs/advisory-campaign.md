@@ -78,8 +78,10 @@ python3 tools/speculative_run.py \
 The runner obtains a nonblocking campaign lock, pins one canonical copy of the
 manifest, requires the next contiguous ordinal, and validates every task-free
 input before reading `--task-file`. An unbound legacy invocation cannot append
-to that output directory. Every campaign input is opened once with no-follow,
-validated as a regular file through `fstat`, and read through that descriptor.
+to that output directory. Every campaign input is opened once with no-follow
+and nonblocking flags, validated as a regular file through `fstat`, and read
+through that descriptor; FIFO and other special-file inputs therefore fail
+instead of waiting for I/O.
 Descriptor-bound verifier and price-table bytes are staged into the owner-only
 output directory; verification and pricing use those private copies rather than
 reopening the caller paths. The JSONL record contains the campaign fingerprint,

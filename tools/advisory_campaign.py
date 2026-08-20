@@ -97,6 +97,7 @@ def _bounded_file_bytes(path: Path, maximum: int) -> bytes:
         raise CampaignError()
     flags = os.O_RDONLY | nofollow
     flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
     descriptor: int | None = None
     try:
         descriptor = os.open(path, flags)

@@ -237,6 +237,30 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
         self.assertTrue(swapped)
         self.assertEqual(observed, expected)
 
+    def test_fifo_input_fails_closed_without_blocking_before_fstat(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fifo = Path(directory) / "campaign-input"
+            os.mkfifo(fifo, 0o600)
+            child = (
+                "import sys;"
+                f"sys.path.insert(0,{str(TOOLS)!r});"
+                "from advisory_campaign import CampaignError,file_sha256;"
+                "from pathlib import Path;"
+                "\ntry:file_sha256(Path(sys.argv[1]),1024)"
+                "\nexcept CampaignError:sys.exit(0)"
+                "\nsys.exit(1)"
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", child, str(fifo)],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=2,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_progress_requires_both_preregistered_minimums_and_unique_ordinals(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manifest = self.manifest(directory)
