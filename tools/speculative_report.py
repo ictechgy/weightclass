@@ -20,17 +20,28 @@ import math
 import re
 import statistics
 from pathlib import Path
-from typing import Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
-from advisory_campaign import (
-    MINIMUM_ADVISED_FAILURES,
-    CampaignError,
-    CampaignManifest,
-    CampaignProgress,
-    campaign_progress,
-    load_bound_records,
-    load_manifest,
-)
+if TYPE_CHECKING:
+    from tools.advisory_campaign import (
+        MINIMUM_ADVISED_FAILURES,
+        CampaignError,
+        CampaignManifest,
+        CampaignProgress,
+        campaign_progress,
+        load_bound_records,
+        load_manifest,
+    )
+else:
+    from advisory_campaign import (
+        MINIMUM_ADVISED_FAILURES,
+        CampaignError,
+        CampaignManifest,
+        CampaignProgress,
+        campaign_progress,
+        load_bound_records,
+        load_manifest,
+    )
 
 
 def _safe(text: str, limit: int = 200) -> str:

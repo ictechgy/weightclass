@@ -80,7 +80,9 @@ Advisor tool as a rival mechanism that buys expensive *guidance* instead of
 expensive *output*. Both require a number nobody has yet:
 [`docs/measuring-p-at-work.md`](docs/measuring-p-at-work.md) is how to get it.
 Any evidence intended to move the product boundary must use the sealed,
-task-free [`docs/advisory-campaign.md`](docs/advisory-campaign.md) contract;
+task-free [`docs/advisory-campaign.md`](docs/advisory-campaign.md) contract. Deterministic,
+operator-selected Claude and Codex model/effort profiles are documented in
+[`docs/advisory-vendor-profiles.md`](docs/advisory-vendor-profiles.md);
 legacy unbound logs remain descriptive only.
 
 Raw tokens and estimated provider cost must be evaluated separately. The

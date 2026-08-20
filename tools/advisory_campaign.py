@@ -19,7 +19,12 @@ import stat
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import NamedTuple, TypedDict, cast
+from typing import TYPE_CHECKING, NamedTuple, TypedDict, cast
+
+if TYPE_CHECKING:
+    from tools.advisory_routes import AdvisoryRouteError, routes_from_profile
+else:
+    from advisory_routes import AdvisoryRouteError, routes_from_profile
 
 CAMPAIGN_SCHEMA_VERSION = 1
 MINIMUM_ADVISED_FAILURES = 12
@@ -578,9 +583,17 @@ def main() -> int:
     parser.add_argument("--planned-tasks", required=True, type=int)
     parser.add_argument("--max-tasks", required=True, type=int)
     parser.add_argument("--cost-basis", required=True, choices=("price_table", "vendor"))
-    parser.add_argument("--cheap", required=True)
-    parser.add_argument("--expensive", required=True)
-    parser.add_argument("--advisor", required=True)
+    parser.add_argument("--cheap")
+    parser.add_argument("--expensive")
+    parser.add_argument("--advisor")
+    parser.add_argument(
+        "--route-profile",
+        type=Path,
+        help=(
+            "task-free Claude/Codex model-and-effort profile; mutually exclusive "
+            "with --cheap/--advisor/--expensive"
+        ),
+    )
     parser.add_argument("--advisor-context", choices=("prompt", "repo"), default="prompt")
     parser.add_argument("--verify", required=True, type=Path)
     parser.add_argument("--prices", type=Path)
@@ -588,15 +601,32 @@ def main() -> int:
     arguments = parser.parse_args()
     if (arguments.cost_basis == "price_table") != (arguments.prices is not None):
         parser.error("price_table cost basis requires exactly one --prices file")
+    exact_commands = (arguments.cheap, arguments.advisor, arguments.expensive)
+    try:
+        if arguments.route_profile is None:
+            if any(command is None for command in exact_commands):
+                parser.error("supply all exact route commands or one --route-profile")
+            cheap = _command(cast(str, arguments.cheap))
+            advisor = _command(cast(str, arguments.advisor))
+            expensive = _command(cast(str, arguments.expensive))
+        else:
+            if any(command is not None for command in exact_commands):
+                parser.error("--route-profile cannot be mixed with exact route commands")
+            routes = routes_from_profile(arguments.route_profile.expanduser())
+            cheap = list(routes.cheap)
+            advisor = list(routes.advisor)
+            expensive = list(routes.expensive)
+    except (AdvisoryRouteError, CampaignError):
+        parser.error("invalid advisory routes")
     try:
         manifest = build_manifest(
             arm=arguments.arm,
             planned_tasks=arguments.planned_tasks,
             max_tasks=arguments.max_tasks,
             cost_basis=arguments.cost_basis,
-            cheap=_command(arguments.cheap),
-            expensive=_command(arguments.expensive),
-            advisor=_command(arguments.advisor),
+            cheap=cheap,
+            expensive=expensive,
+            advisor=advisor,
             advisor_context=arguments.advisor_context,
             verify=arguments.verify.expanduser().resolve(),
             prices=arguments.prices.expanduser().resolve() if arguments.prices else None,

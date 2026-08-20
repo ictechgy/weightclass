@@ -64,21 +64,38 @@ import time
 import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
-from typing import BinaryIO, TypedDict
+from typing import TYPE_CHECKING, BinaryIO, TypedDict
 
-from advisory_campaign import (
-    MAX_PRICES_BYTES,
-    MAX_VERIFY_BYTES,
-    CampaignError,
-    CampaignManifest,
-    canonical_manifest_bytes,
-    load_bound_records,
-    load_manifest,
-    record_binding,
-    stage_bound_file,
-    validate_record_bindings,
-    validate_run_configuration,
-)
+if TYPE_CHECKING:
+    from tools.advisory_campaign import (
+        MAX_PRICES_BYTES,
+        MAX_VERIFY_BYTES,
+        CampaignError,
+        CampaignManifest,
+        canonical_manifest_bytes,
+        load_bound_records,
+        load_manifest,
+        record_binding,
+        stage_bound_file,
+        validate_record_bindings,
+        validate_run_configuration,
+    )
+    from tools.advisory_routes import AdvisoryRouteError, routes_from_profile
+else:
+    from advisory_campaign import (
+        MAX_PRICES_BYTES,
+        MAX_VERIFY_BYTES,
+        CampaignError,
+        CampaignManifest,
+        canonical_manifest_bytes,
+        load_bound_records,
+        load_manifest,
+        record_binding,
+        stage_bound_file,
+        validate_record_bindings,
+        validate_run_configuration,
+    )
+    from advisory_routes import AdvisoryRouteError, routes_from_profile
 
 
 class ChildResult(TypedDict):
@@ -445,12 +462,36 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
     breakdown = usage.get("breakdown") or {}
     if not breakdown or not rates:
         return None
-    matched = [field for field in rates if field in breakdown]
+    pricing_breakdown = dict(breakdown)
+    # Codex reports cached input as a breakout below input_tokens.
+    # A non-negative rate table cannot otherwise express
+    #   uncached = input - cached
+    # without charging cached tokens twice. ``uncached_input_tokens`` is the one
+    # derived field this tool defines. It is produced only when the observed
+    # counts form a valid partition; impossible vendor output fails pricing
+    # instead of producing a negative or deceptively small bill.
+    if "uncached_input_tokens" in rates:
+        total_input = breakdown.get("input_tokens")
+        cached_input = breakdown.get("cached_input_tokens", 0)
+        if (
+            not isinstance(total_input, int)
+            or isinstance(total_input, bool)
+            or total_input < 0
+            or not isinstance(cached_input, int)
+            or isinstance(cached_input, bool)
+            or cached_input < 0
+        ):
+            return None
+        uncached_input = total_input - cached_input
+        if uncached_input < 0:
+            return None
+        pricing_breakdown["uncached_input_tokens"] = uncached_input
+    matched = [field for field in rates if field in pricing_breakdown]
     if not matched:
         return None
     priced = 0.0
     for field, rate in rates.items():
-        count = breakdown.get(field, 0)
+        count = pricing_breakdown.get(field, 0)
         if not is_finite_nonnegative(count):
             # 신뢰할 수 없는 JSON 의 토큰 수를 그대로 곱하면 OverflowError 가
             # 난다. 값 하나가 이상하다고 실행을 죽이지 말고 비용을 포기한다.
@@ -3182,6 +3223,22 @@ def main() -> int:
     parser.add_argument("--task-file", type=Path)
     parser.add_argument("--cheap", help="exact command for the cheap route")
     parser.add_argument("--expensive", help="exact command for the escalation route")
+    parser.add_argument(
+        "--route-profile",
+        type=Path,
+        help=(
+            "task-free Claude/Codex model-and-effort profile; mutually exclusive "
+            "with --cheap/--advisor/--expensive"
+        ),
+    )
+    parser.add_argument(
+        "--confirm-task-egress",
+        action="store_true",
+        help=(
+            "confirm that task, diff, and verification context may be sent to the "
+            "vendor selected by --route-profile"
+        ),
+    )
     parser.add_argument("--verify", type=Path, help="executable; exit code is the verdict")
     parser.add_argument("--label", default="", help="free-text tag recorded with the run")
     parser.add_argument(
@@ -3319,6 +3376,22 @@ def main() -> int:
 
     if arguments.prune:
         return prune(registry, arguments.out_dir)
+
+    exact_commands = (arguments.cheap, arguments.advisor, arguments.expensive)
+    if arguments.route_profile is not None:
+        if any(command is not None for command in exact_commands):
+            parser.error("--route-profile cannot be mixed with exact route commands")
+        if not arguments.confirm_task_egress:
+            parser.error("--route-profile execution requires --confirm-task-egress")
+        try:
+            profile_routes = routes_from_profile(arguments.route_profile.expanduser())
+        except AdvisoryRouteError:
+            parser.error("invalid advisory route profile")
+        arguments.cheap = shlex.join(profile_routes.cheap)
+        arguments.advisor = shlex.join(profile_routes.advisor)
+        arguments.expensive = shlex.join(profile_routes.expensive)
+    elif arguments.confirm_task_egress:
+        parser.error("--confirm-task-egress is only valid with --route-profile")
 
     if (arguments.campaign is None) != (arguments.sample_ordinal is None):
         parser.error("--campaign and --sample-ordinal must be supplied together")
