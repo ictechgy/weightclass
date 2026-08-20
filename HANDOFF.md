@@ -337,7 +337,7 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the Claude/Codex advisory-profile tree: `unittest discover`
-  runs **1158** tests and `pytest -q` reports 1158 passed; Ruff check/format is
+  runs **1159** tests and `pytest -q` reports 1159 passed; Ruff check/format is
   clean on 162 files; `mypy --strict src tests` is clean on 128 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
   build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
