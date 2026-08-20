@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-19 KST by Codex_
+_Last updated: 2026-08-20 KST by Codex_
 
 ## Goal
 
@@ -16,10 +16,10 @@ _Last updated: 2026-08-19 KST by Codex_
 ## Current Status
 
 - Project root: `/Users/jinhongan/Desktop/subscription-agent-router`.
-- Latest substantive implementation: PR #57, merged as `84826cb`. Later
-  handoff-only commits do not change product behavior. The 0.15.1 release,
-  advisory measurement hardening, blind direction check, security/performance
-  follow-up, and final handoff are merged.
+- Latest merged baseline before this model-label hardening: PR #57, merged as
+  `84826cb`. Later handoff-only commits do not change product behavior. The
+  0.15.1 release, advisory measurement hardening, blind direction check,
+  security/performance follow-up, and final handoff are merged.
 - Implementation/release PRs **#40 through #57 are all merged**. Merge commits:
   `c8a3311` (#40),
   `1a7c91f` (#41), `fe93a5c` (#42), `ec5eb29` (#43), `a763d9c` (#44),
@@ -216,6 +216,11 @@ human to read.
   admission first and capability-gated descriptor execution research, but its
   sticky-directory/group-write compatibility decisions are not silently chosen
   in this patch. See `docs/security-performance-followup.md`.
+- Native schema-2 model/effort labels now share an execution-specific boundary:
+  option-like leading `-`, edge whitespace, and invisible/non-ASCII whitespace
+  fail before task access with redacted `invalid_input`. Internal ASCII spaces
+  remain compatible as one argv token; labels stay opaque and no availability,
+  quality, price, or entitlement is inferred.
 
 ## Completed
 
@@ -322,8 +327,8 @@ human to read.
   under the release gate, because unittest does not collect module-level
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
-- Verified on merged `main` at `84826cb`: `unittest
-  discover` runs **1137** tests and `pytest -q` reports 1137 passed; Ruff
+- Verified on the model-label hardening tree based on `74fd684`: `unittest
+  discover` runs **1140** tests and `pytest -q` reports 1140 passed; Ruff
   check/format is clean on 156
   files; `mypy --strict src tests` is clean on 126 source files; strict mypy is
   also clean on the three measurement tools; and an isolated sdist/wheel build
@@ -539,7 +544,8 @@ check found policy-4 agreement 10/24, high recall 1/9, and over-routing 6/24;
 it is spent direction evidence, not a tuning set. Security scan
 d2175938-1f01-47e6-b0f2-8d5089f5d839 found two medium and two low findings;
 argv[0] task substitution and usage JSON fail-closed parsing are fixed on
-`main`, while verified-object execution and directory-fd usage state
+`main`; native schema-2 option-like/edge-whitespace model labels are hardened,
+while verified-object execution and directory-fd usage state
 remain design work with compatibility decisions recorded in the hardening
 portfolio. Never infer prices, read vendor credentials/config, backfill
 task/session data, or reuse a published version or tag.`

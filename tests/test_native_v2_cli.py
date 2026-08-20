@@ -370,6 +370,45 @@ class NativeV2CliTests(unittest.TestCase):
                     )
                     reader.assert_not_called()
 
+    def test_model_edge_whitespace_is_redacted_before_task_access(self) -> None:
+        invalid_policy = policy()
+        targets = invalid_policy["execution_targets"]
+        routes = invalid_policy["routes"]
+        assert isinstance(targets, list) and isinstance(targets[0], dict)
+        pairs = targets[0]["allowed_model_effort_pairs"]
+        assert isinstance(pairs, list) and isinstance(pairs[0], dict)
+        assert isinstance(routes, list) and isinstance(routes[0], dict)
+        pairs[0]["model"] = " private-model"
+        routes[0]["model"] = " private-model"
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_policy(directory, invalid_policy)
+            output = io.StringIO()
+            errors = io.StringIO()
+            with (
+                patch.object(sys, "stdout", output),
+                patch.object(sys, "stderr", errors),
+                patch("weightclass.cli.read_validated_task_v2") as reader,
+            ):
+                exit_code = cli.main(
+                    [
+                        "route",
+                        "--policy",
+                        str(path),
+                        "--source-vendor",
+                        "codex",
+                        "--source-profile",
+                        "p",
+                        "--tier",
+                        "low",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "invalid_input"})
+        self.assertNotIn("private-model", errors.getvalue())
+        reader.assert_not_called()
+
     def test_render_does_not_accept_source_profile(self) -> None:
         self.assertEqual(
             cli.main(["render", "--policy", "x", "--descriptor", "y", "--source-profile", "p"]), 2

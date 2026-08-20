@@ -184,6 +184,49 @@ class NativeV2SchemaTests(unittest.TestCase):
         targets[0]["executable"] = "/" + "x" * 4096
         self.assert_invalid(policy)
 
+    def test_model_and_effort_labels_reject_unsafe_argv_spellings(self) -> None:
+        for field, value in (
+            ("model", " reviewed-model"),
+            ("model", "reviewed-model "),
+            ("model", "--reviewed-model"),
+            ("model", "reviewed\u00a0model"),
+            ("effort", " reviewed-effort"),
+            ("effort", "reviewed-effort "),
+            ("effort", "--reviewed-effort"),
+            ("effort", "reviewed\u200beffort"),
+        ):
+            with self.subTest(field=field, value=value):
+                policy = valid_policy()
+                targets = copy.deepcopy(policy["execution_targets"])
+                routes = copy.deepcopy(policy["routes"])
+                assert isinstance(targets, list) and isinstance(targets[0], dict)
+                pairs = targets[0]["allowed_model_effort_pairs"]
+                assert isinstance(pairs, list) and isinstance(pairs[0], dict)
+                assert isinstance(routes, list) and isinstance(routes[0], dict)
+                pairs[0][field] = value
+                routes[0][field] = value
+                policy["execution_targets"] = targets
+                policy["routes"] = routes
+                self.assert_invalid(policy)
+
+    def test_model_and_effort_labels_preserve_internal_ascii_spaces(self) -> None:
+        policy = valid_policy()
+        targets = copy.deepcopy(policy["execution_targets"])
+        routes = copy.deepcopy(policy["routes"])
+        assert isinstance(targets, list) and isinstance(targets[0], dict)
+        pairs = targets[0]["allowed_model_effort_pairs"]
+        assert isinstance(pairs, list) and isinstance(pairs[0], dict)
+        assert isinstance(routes, list) and isinstance(routes[0], dict)
+        pairs[0].update({"model": "reviewed model", "effort": "reviewed effort"})
+        routes[0].update({"model": "reviewed model", "effort": "reviewed effort"})
+        policy["execution_targets"] = targets
+        policy["routes"] = routes
+
+        parsed = parse_native_policy_v2(policy)
+
+        self.assertEqual(parsed.routes[0].model, "reviewed model")
+        self.assertEqual(parsed.routes[0].effort, "reviewed effort")
+
 
 if __name__ == "__main__":
     unittest.main()
