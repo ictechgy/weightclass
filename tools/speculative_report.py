@@ -514,12 +514,44 @@ def main() -> int:
         for key in ("cheap", "expensive", "advice_first", "advice_failure", "retry")
         if isinstance((attempt := r.get(key)), dict) and isinstance(attempt.get("child"), dict)
     ]
-    unpriced_campaign_attempts = sum(1 for attempt in campaign_attempts if cost_of(attempt) is None)
-    campaign_pricing_blocked = campaign_manifest is not None and (
-        pricing_error_blocked or unpriced_campaign_attempts > 0
+
+    def campaign_attempt_timed_out(attempt: dict[str, object]) -> bool:
+        child = attempt.get("child")
+        return isinstance(child, dict) and bool(child.get("timed_out"))
+
+    def campaign_attempt_failed(attempt: dict[str, object]) -> bool:
+        return (
+            attempt.get("failure_kind") == "infrastructure" or attempt.get("route_failed") is True
+        )
+
+    timed_out_campaign_attempts = sum(
+        1 for attempt in campaign_attempts if campaign_attempt_timed_out(attempt)
     )
-    if campaign_manifest is not None and unpriced_campaign_attempts:
-        print(f"  가격이 없는 campaign 실행: {unpriced_campaign_attempts}건")
+    failed_campaign_attempts = sum(
+        1
+        for attempt in campaign_attempts
+        if not campaign_attempt_timed_out(attempt) and campaign_attempt_failed(attempt)
+    )
+    genuinely_unpriced_campaign_attempts = sum(
+        1
+        for attempt in campaign_attempts
+        if cost_of(attempt) is None
+        and not campaign_attempt_timed_out(attempt)
+        and not campaign_attempt_failed(attempt)
+    )
+    campaign_pricing_blocked = campaign_manifest is not None and (
+        pricing_error_blocked
+        or timed_out_campaign_attempts > 0
+        or failed_campaign_attempts > 0
+        or genuinely_unpriced_campaign_attempts > 0
+    )
+    if campaign_manifest is not None:
+        if timed_out_campaign_attempts:
+            print(f"  타임아웃 campaign 실행: {timed_out_campaign_attempts}건")
+        if failed_campaign_attempts:
+            print(f"  인프라/조언 경로 실패 campaign 실행: {failed_campaign_attempts}건")
+        if genuinely_unpriced_campaign_attempts:
+            print(f"  가격이 없는 campaign 실행: {genuinely_unpriced_campaign_attempts}건")
     # 세 경우를 구별한다. 출처가 실제로 섞였는가, 러너가 cost_origin 을 남기지
     # 않은 옛 로그인가, 아니면 비용 자체가 하나도 없는가. 셋 다 c 를 못 재게
     # 하지만 사용자가 할 일이 다르다.
@@ -1543,7 +1575,17 @@ def main() -> int:
                 "  -> 판정 없음. 불완전하거나 유효하지 않은 가격 계산이 있다."
                 " 가격표 또는 사용량을 고친 새 로그가 필요하다."
             )
-        if campaign_manifest is not None and unpriced_campaign_attempts:
+        if campaign_manifest is not None and timed_out_campaign_attempts:
+            print(
+                "  -> 판정 없음. campaign 시도에 타임아웃이 있다. 해당 시도를"
+                " 제외하거나 제한 시간을 조정해 다시 모아야 한다."
+            )
+        if campaign_manifest is not None and failed_campaign_attempts:
+            print(
+                "  -> 판정 없음. campaign 시도에 인프라 또는 조언 경로 실패가 있다."
+                " 실행 경계를 고친 뒤 새 표본을 모아야 한다."
+            )
+        if campaign_manifest is not None and genuinely_unpriced_campaign_attempts:
             print(
                 "  -> 판정 없음. usable campaign 실행 중 가격이 없는 시도가 있다."
                 " 같은 가격 기준으로 완전한 사용량을 얻어야 한다."
@@ -1627,7 +1669,7 @@ def main() -> int:
                 )
             )
         )
-    elif timed_out_tasks and c_range is not None:
+    elif timed_out_tasks:
         print(
             f"\n  -> 판정 없음. 과제 {timed_out_tasks}건이 타임아웃이라 그 비용을 모른다."
             " 타임아웃난 실행은 예산을 끝까지 태운 가장 비싼 실행이므로, 한 건만으로도"
