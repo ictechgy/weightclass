@@ -20,7 +20,17 @@ import math
 import re
 import statistics
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple, cast
+
+from advisory_campaign import (
+    MINIMUM_ADVISED_FAILURES,
+    CampaignError,
+    CampaignManifest,
+    CampaignProgress,
+    campaign_progress,
+    load_bound_records,
+    load_manifest,
+)
 
 
 def _safe(text: str, limit: int = 200) -> str:
@@ -38,9 +48,6 @@ def _safe(text: str, limit: int = 200) -> str:
 # 값이 하나만 추가돼도 모든 지문이 달라져, 단일 설정 로그가 "혼합" 으로
 # 잡힌다. 화이트리스트가 그 사고를 막는다.
 ADVISOR_CONFIG_KEYS = frozenset({"route", "advise_first", "advise_on_failure", "context"})
-# s 를 판정하려면 이만큼의 조언받은 실패가 있어야 한다. 세 건짜리 표본으로도
-# Wilson 하한이 손익분기를 넘을 수 있고, 그것을 "유리하다" 로 찍으면 안 된다.
-MINIMUM_ADVISED_FAILURES = 12
 
 
 def wilson(successes: int, total: int, z: float = 1.96) -> tuple[float, float]:
@@ -66,6 +73,11 @@ def escalated_of(record: dict[str, object]) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", required=True, type=Path)
+    parser.add_argument(
+        "--campaign",
+        type=Path,
+        help="sealed campaign manifest; malformed, mixed, duplicate, or unbound logs fail closed",
+    )
     parser.add_argument(
         "--cost-ratio",
         type=float,
@@ -94,26 +106,41 @@ def main() -> int:
     if not log_path.is_file():
         parser.error(f"no such log: {log_path}")
 
-    records = []
+    campaign_manifest: CampaignManifest | None = None
+    campaign_state: CampaignProgress | None = None
+    records: list[dict[str, Any]] = []
     damaged = 0
-    # 바이트로 읽어 줄 단위로 디코딩한다. 파일 전체를 엄격하게 디코딩하면
-    # 잘린 멀티바이트 한 곳 때문에 손상 줄을 견딘다는 약속이 무의미해진다.
-    for raw in log_path.read_bytes().splitlines():
-        line = raw.decode("utf-8", "replace")
-        if not line.strip():
-            continue
+    if arguments.campaign is not None:
         try:
-            record = json.loads(line)
-            # 손상된 줄만 견디고 필드 누락에는 죽는 것은 일관성이 없다. 이
-            # 리포트가 읽는 모양을 갖췄는지 여기서 한 번에 본다.
-            record["cheap"]["accepted"]
-            # 키가 아예 없는 줄은 .get() 으로는 통과하지만 아래에서
-            # r["expensive"] 로 역참조된다. 존재 자체를 확인한다.
-            if record["expensive"] is not None:
-                record["expensive"]["accepted"]
-            records.append(record)
-        except (ValueError, KeyError, TypeError):
-            damaged += 1
+            campaign_manifest = load_manifest(arguments.campaign.expanduser().resolve())
+            records = cast(list[dict[str, Any]], load_bound_records(log_path))
+            for record in records:
+                cheap = record.get("cheap")
+                expensive = record.get("expensive")
+                if not isinstance(cheap, dict) or "accepted" not in cheap:
+                    raise CampaignError()
+                if expensive is not None and (
+                    not isinstance(expensive, dict) or "accepted" not in expensive
+                ):
+                    raise CampaignError()
+            campaign_state = campaign_progress(campaign_manifest, records)
+        except CampaignError:
+            parser.error("invalid campaign manifest or bound log")
+    else:
+        # 레거시 연구 로그는 손상 줄을 건너뛴다. campaign 로그는 표본 ordinal을
+        # 잃으면 stopping rule을 증명할 수 없으므로 위에서 전체를 거부한다.
+        for raw in log_path.read_bytes().splitlines():
+            line = raw.decode("utf-8", "replace")
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+                record["cheap"]["accepted"]
+                if record["expensive"] is not None:
+                    record["expensive"]["accepted"]
+                records.append(record)
+            except (ValueError, KeyError, TypeError):
+                damaged += 1
     if damaged:
         print(f"경고: 손상된 줄 {damaged}개를 건너뛴다")
     if not records:
@@ -173,6 +200,18 @@ def main() -> int:
     if not total:
         print("p 를 계산할 수 있는 기록이 없다")
         return 1
+    if campaign_manifest is not None:
+        assert campaign_state is not None
+        print(
+            "캠페인:"
+            f" {campaign_manifest['arm']}  과제 {campaign_state.usable_tasks}/"
+            f"{campaign_manifest['planned_tasks']}"
+            f" (최대 {campaign_manifest['max_tasks']}), 조언받은 실패"
+            f" {campaign_state.advised_failures}/"
+            f"{campaign_manifest['minimum_advised_failures']}"
+        )
+        if not campaign_state.decision_eligible:
+            print(f"  사전등록 gate 미충족: {campaign_state.reason}")
     cheap_passed = sum(1 for r in usable if r["cheap"]["accepted"])
     failed = total - cheap_passed
 
@@ -1205,7 +1244,16 @@ def main() -> int:
                                 # 않는다 — 위쪽 `if mixed_application:` 이
                                 # 조언 구간 전체를 건너뛴다. 여기서 그것을
                                 # 다시 검사하면 언제나 거짓인 분기가 된다.
-                                if len(advised_failures) < MINIMUM_ADVISED_FAILURES:
+                                if (
+                                    campaign_state is not None
+                                    and not campaign_state.decision_eligible
+                                ):
+                                    print(
+                                        "  -> 판정 없음. sealed campaign의 task/failure"
+                                        " minimum이 아직 충족되지 않았다"
+                                        f" ({campaign_state.reason})."
+                                    )
+                                elif len(advised_failures) < MINIMUM_ADVISED_FAILURES:
                                     print(
                                         f"  -> 판정 없음. 조언받은 실패가"
                                         f" {len(advised_failures)}건뿐이다"
