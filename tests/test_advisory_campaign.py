@@ -329,7 +329,7 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
         self.assertNotIn("codex --model cheap", second.stderr)
         self.assertNotIn(str(verify), second.stderr)
 
-    def test_report_withholds_a_decision_until_the_sealed_minimums_are_met(self) -> None:
+    def test_report_blocks_decision_when_campaign_pricing_is_incomplete(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             verify = Path(directory) / "verify.sh"
             verify.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -380,7 +380,7 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                 }
 
             records = []
-            for ordinal in range(1, 12):
+            for ordinal in range(1, 13):
                 records.append(
                     {
                         "campaign": record_binding(manifest, ordinal),
@@ -410,6 +410,14 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
             first_usage = first_child["usage"]
             assert isinstance(first_usage, dict)
             first_usage["pricing_error"] = "missing_rate_fields"
+            first_usage["priced_fields_missing"] = "cache_read_input_tokens"
+            second_cheap = records[1]["cheap"]
+            assert isinstance(second_cheap, dict)
+            second_child = second_cheap["child"]
+            assert isinstance(second_child, dict)
+            second_usage = second_child["usage"]
+            assert isinstance(second_usage, dict)
+            second_usage["pricing_error"] = "\x1b[31mPRIVATE-CONTROL"
             log.write_text(
                 "".join(json.dumps(record) + "\n" for record in records),
                 encoding="utf-8",
@@ -430,10 +438,14 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
             )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("사전등록 gate 미충족", completed.stdout)
         self.assertIn("sealed campaign", completed.stdout)
-        self.assertIn("요금 계산 실패 코드: missing_rate_fields", completed.stdout)
+        self.assertIn("불완전하거나 유효하지 않은 가격 계산", completed.stdout)
+        self.assertIn("missing_rate_fields", completed.stdout)
+        self.assertIn("unknown_pricing_error", completed.stdout)
+        self.assertNotIn("PRIVATE-CONTROL", completed.stdout)
+        self.assertNotIn("\x1b", completed.stdout)
         self.assertNotIn("구간 전체가 손익분기 위", completed.stdout)
+        self.assertNotIn("구간 전체가 손익분기 아래", completed.stdout)
 
 
 @unittest.skipUnless(RUNNER.is_file(), "repository-only speculative runner unavailable")

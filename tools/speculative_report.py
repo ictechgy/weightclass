@@ -438,9 +438,7 @@ def main() -> int:
         if not isinstance(child, dict):
             return False
         usage = child.get("usage")
-        return isinstance(usage, dict) and bool(
-            usage.get("priced_fields_missing") or pricing_error_of(attempt)
-        )
+        return isinstance(usage, dict) and bool(usage.get("priced_fields_missing"))
 
     def pricing_error_of(attempt: object) -> str | None:
         if not isinstance(attempt, dict):
@@ -451,8 +449,14 @@ def main() -> int:
         usage = child.get("usage")
         if not isinstance(usage, dict):
             return None
-        code = usage.get("pricing_error")
-        return code if isinstance(code, str) and code in PRICING_ERROR_CODES else None
+        if "pricing_error" in usage:
+            code = usage["pricing_error"]
+            if isinstance(code, str) and code in PRICING_ERROR_CODES:
+                return code
+            return "unknown_pricing_error"
+        if usage.get("priced_fields_missing"):
+            return "missing_rate_fields"
+        return None
 
     # c 는 (싼 비용 평균) / (비싼 비용 평균) 이다. **두 평균이 같은 기준으로
     # 걸러진 모집단에서 나와야 한다.** 예전에는 분자가 "비용이 있으면 무엇이든"
@@ -500,6 +504,7 @@ def main() -> int:
     )
     if pricing_errors:
         print(f"  요금 계산 실패 코드: {', '.join(pricing_errors)}")
+    campaign_pricing_blocked = campaign_manifest is not None and bool(pricing_errors)
     # 세 경우를 구별한다. 출처가 실제로 섞였는가, 러너가 cost_origin 을 남기지
     # 않은 옛 로그인가, 아니면 비용 자체가 하나도 없는가. 셋 다 c 를 못 재게
     # 하지만 사용자가 할 일이 다르다.
@@ -1290,7 +1295,12 @@ def main() -> int:
                                 # 않는다 — 위쪽 `if mixed_application:` 이
                                 # 조언 구간 전체를 건너뛴다. 여기서 그것을
                                 # 다시 검사하면 언제나 거짓인 분기가 된다.
-                                if (
+                                if campaign_pricing_blocked:
+                                    print(
+                                        "  -> 판정 없음. sealed campaign에 불완전하거나"
+                                        " 유효하지 않은 가격 계산이 있다."
+                                    )
+                                elif (
                                     campaign_state is not None
                                     and not campaign_state.decision_eligible
                                 ):
@@ -1494,7 +1504,12 @@ def main() -> int:
     # **타임아웃을 먼저 본다.** 순서가 반대면 c 를 못 잰 이유가 타임아웃일 때
     # 그 사실이 안 나오고 "c 를 내지 못했다" 로만 끝난다 — 사용자가 할 일이
     # 다르다(과제를 빼거나 CHILD_TIMEOUT 을 늘리는 것).
-    if advisor_on and timed_out_tasks:
+    if campaign_pricing_blocked:
+        print(
+            "\n  -> 판정 없음. sealed campaign에 불완전하거나 유효하지 않은"
+            " 가격 계산이 있다. 가격표 또는 사용량을 고친 새 캠페인이 필요하다."
+        )
+    elif advisor_on and timed_out_tasks:
         print(
             f"\n  -> 판정 없음. 과제 {timed_out_tasks}건이 타임아웃이라 그 비용을 모른다."
             + (
