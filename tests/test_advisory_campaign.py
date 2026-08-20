@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -9,6 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS = REPO_ROOT / "tools"
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
         build_manifest,
         campaign_progress,
         canonical_manifest_bytes,
+        file_sha256,
         load_bound_records,
         load_manifest,
         record_binding,
@@ -39,6 +42,7 @@ elif CAMPAIGN_TOOL.is_file():
         build_manifest,
         campaign_progress,
         canonical_manifest_bytes,
+        file_sha256,
         load_bound_records,
         load_manifest,
         record_binding,
@@ -200,6 +204,38 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
             verify.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
             with self.assertRaisesRegex(CampaignError, "^$"):
                 validate_run_configuration(manifest, **common)
+
+    def test_descriptor_bound_reader_rejects_symlinks_and_survives_path_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected = root / "selected.bin"
+            replacement = root / "replacement.bin"
+            symlink = root / "linked.bin"
+            selected.write_bytes(b"reviewed-bytes")
+            replacement.write_bytes(b"replacement-bytes")
+            symlink.symlink_to(replacement)
+
+            with self.assertRaisesRegex(CampaignError, "^$"):
+                file_sha256(symlink, 1024)
+
+            original_fstat = os.fstat
+            swapped = False
+
+            def replace_after_open(descriptor: int) -> os.stat_result:
+                nonlocal swapped
+                metadata = original_fstat(descriptor)
+                if not swapped:
+                    selected.unlink()
+                    selected.symlink_to(replacement)
+                    swapped = True
+                return metadata
+
+            with mock.patch("os.fstat", side_effect=replace_after_open):
+                observed = file_sha256(selected, 1024)
+
+        expected = "sha256:" + hashlib.sha256(b"reviewed-bytes").hexdigest()
+        self.assertTrue(swapped)
+        self.assertEqual(observed, expected)
 
     def test_progress_requires_both_preregistered_minimums_and_unique_ordinals(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -446,6 +482,7 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
             verify = root / "verify.sh"
             verify.write_text("#!/bin/sh\ngrep -q changed README.md\n", encoding="utf-8")
             verify.chmod(0o700)
+            expected_verify_bytes = verify.read_bytes()
             task = root / "task.txt"
             task.write_text("make the reviewed change", encoding="utf-8")
             child = shlex.join(
@@ -510,11 +547,16 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
             unbound = subprocess.run(legacy, capture_output=True, check=False, text=True)
             records = load_bound_records(out / "runs.jsonl")
             pinned = load_manifest(out / "campaign.json")
+            staged_verify = out / "campaign-verify"
+            staged_verify_bytes = staged_verify.read_bytes()
+            staged_verify_mode = staged_verify.stat().st_mode & 0o777
 
         self.assertEqual(first.returncode, 0, first.stderr)
         self.assertEqual(pinned, manifest)
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["campaign"], record_binding(manifest, 1))
+        self.assertEqual(staged_verify_bytes, expected_verify_bytes)
+        self.assertEqual(staged_verify_mode, 0o700)
         self.assertEqual(duplicate.returncode, 2)
         self.assertIn("campaign contract mismatch", duplicate.stderr)
         self.assertNotIn("task.txt", duplicate.stderr)

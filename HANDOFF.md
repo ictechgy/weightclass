@@ -226,8 +226,10 @@ human to read.
   digests, verifier and price-table bytes, Shape A/B configuration, the existing
   12-advised-failure floor, and planned/max task counts before task access.
   Campaign logs use opaque ordinals, reject mixed/damaged/duplicate records,
-  and cannot emit a decision before both sealed minimums are met. This is
-  measurement infrastructure, not evidence that advisory should ship.
+  and cannot emit a decision before both sealed minimums are met. Campaign
+  inputs are no-follow descriptor reads; verifier and price-table bytes are
+  staged privately before task access. This is measurement infrastructure, not
+  evidence that advisory should ship.
 
 ## Completed
 
@@ -335,7 +337,7 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the advisory-campaign tree based on `928b333`: `unittest
-  discover` runs **1148** tests and `pytest -q` reports 1148 passed; Ruff
+  discover` runs **1149** tests and `pytest -q` reports 1149 passed; Ruff
   check/format is clean on 159
   files; `mypy --strict src tests` is clean on 127 source files; strict mypy is
   also clean on the campaign/runner/reporter tools; and an isolated sdist/wheel

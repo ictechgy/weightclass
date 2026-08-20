@@ -15,6 +15,7 @@ import json
 import math
 import os
 import shlex
+import stat
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -91,13 +92,31 @@ def _sha256(payload: bytes) -> str:
 
 
 def _bounded_file_bytes(path: Path, maximum: int) -> bytes:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise CampaignError()
+    flags = os.O_RDONLY | nofollow
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    descriptor: int | None = None
     try:
-        if not path.is_file() or path.is_symlink():
+        descriptor = os.open(path, flags)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
             raise CampaignError()
-        with path.open("rb") as handle:
-            payload = handle.read(maximum + 1)
+        chunks: list[bytes] = []
+        remaining = maximum + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
     except OSError as error:
         raise CampaignError() from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    payload = b"".join(chunks)
     if len(payload) > maximum:
         raise CampaignError()
     return payload
@@ -105,6 +124,49 @@ def _bounded_file_bytes(path: Path, maximum: int) -> bytes:
 
 def file_sha256(path: Path, maximum: int) -> str:
     return _sha256(_bounded_file_bytes(path, maximum))
+
+
+def stage_bound_file(
+    source: Path,
+    destination: Path,
+    *,
+    expected_sha256: str,
+    maximum: int,
+    mode: int,
+) -> Path:
+    payload = _bounded_file_bytes(source, maximum)
+    if _sha256(payload) != expected_sha256:
+        raise CampaignError()
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        if destination.exists() or destination.is_symlink():
+            if _bounded_file_bytes(destination, maximum) != payload:
+                raise CampaignError()
+            os.chmod(destination, mode, follow_symlinks=False)
+            return destination
+        descriptor = os.open(destination, flags, mode)
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise CampaignError()
+            view = view[written:]
+        os.fchmod(descriptor, mode)
+        os.fsync(descriptor)
+    except OSError as error:
+        raise CampaignError() from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    directory_descriptor = os.open(destination.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+    return destination
 
 
 def price_table_sha256(path: Path) -> str:

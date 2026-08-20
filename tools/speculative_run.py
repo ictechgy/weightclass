@@ -67,12 +67,15 @@ from pathlib import Path
 from typing import BinaryIO, TypedDict
 
 from advisory_campaign import (
+    MAX_PRICES_BYTES,
+    MAX_VERIFY_BYTES,
     CampaignError,
     CampaignManifest,
     canonical_manifest_bytes,
     load_bound_records,
     load_manifest,
     record_binding,
+    stage_bound_file,
     validate_record_bindings,
     validate_run_configuration,
 )
@@ -3416,6 +3419,24 @@ def main() -> int:
                     handle.write(canonical)
                     handle.flush()
                     os.fsync(handle.fileno())
+            verify = stage_bound_file(
+                verify,
+                arguments.out_dir / "campaign-verify",
+                expected_sha256=campaign_manifest["verify_sha256"],
+                maximum=MAX_VERIFY_BYTES,
+                mode=0o700,
+            )
+            if prices_path is not None:
+                prices_digest = campaign_manifest["prices_sha256"]
+                if prices_digest is None:
+                    raise CampaignError()
+                arguments.prices = stage_bound_file(
+                    prices_path,
+                    arguments.out_dir / "campaign-prices.json",
+                    expected_sha256=prices_digest,
+                    maximum=MAX_PRICES_BYTES,
+                    mode=0o600,
+                )
             existing_records = load_bound_records(log)
             ordinals = validate_record_bindings(campaign_manifest, existing_records)
             if arguments.sample_ordinal != len(ordinals) + 1:
