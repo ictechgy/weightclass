@@ -25,7 +25,7 @@ if TYPE_CHECKING:
         profile_sha256,
     )
     from tools.speculative_run import Usage, price_from_tokens
-else:
+elif ROUTES_TOOL.is_file() and RUNNER.is_file():
     from advisory_routes import (  # noqa: E402
         AdvisoryRouteError,
         build_routes,
