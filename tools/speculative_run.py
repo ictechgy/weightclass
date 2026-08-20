@@ -319,6 +319,10 @@ class TaskInputError(ValueError):
     """Value-free rejection of an unsafe or invalid task file."""
 
 
+class RunLogError(ValueError):
+    """Value-free rejection of an unsafe or failed run-log append."""
+
+
 MAX_TASK_FILE_BYTES = 80_000
 _TASK_READ_CHUNK_BYTES = 65_536
 
@@ -370,6 +374,59 @@ def read_task_file(path: Path, *, require_private: bool) -> str:
             except OSError:
                 if sys.exc_info()[0] is None:
                     raise TaskInputError() from None
+
+
+def append_run_record(path: Path, record: object) -> None:
+    """Append one complete record through a validated, private file descriptor."""
+    try:
+        payload = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+    except (TypeError, ValueError, UnicodeError, OverflowError):
+        raise RunLogError() from None
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    cloexec = getattr(os, "O_CLOEXEC", None)
+    if (
+        not isinstance(nofollow, int)
+        or nofollow == 0
+        or not isinstance(nonblock, int)
+        or nonblock == 0
+        or not isinstance(cloexec, int)
+        or cloexec == 0
+    ):
+        raise RunLogError()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | nofollow | nonblock | cloexec
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        metadata = os.fstat(descriptor)
+        getuid = getattr(os, "getuid", None)
+        if (
+            getuid is None
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != getuid()
+            or metadata.st_mode & 0o077
+        ):
+            raise RunLogError()
+
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise RunLogError()
+            view = view[written:]
+        os.fsync(descriptor)
+    except RunLogError:
+        raise
+    except (OSError, TypeError, ValueError):
+        raise RunLogError() from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                if sys.exc_info()[0] is None:
+                    raise RunLogError() from None
 
 
 def _kill_group(child: subprocess.Popen[str]) -> None:
@@ -4012,11 +4069,13 @@ def main() -> int:
         )
         print(f"  승급 경로 {'통과' if expensive['accepted'] else '실패'}{reason}")
 
-    with log.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    log.chmod(0o600)
+    try:
+        append_run_record(log, record)
+    except RunLogError:
+        if campaign_lock is not None:
+            campaign_lock.close()
+            campaign_lock = None
+        parser.error("could not append run log")
     if campaign_lock is not None:
         campaign_lock.close()
         campaign_lock = None
