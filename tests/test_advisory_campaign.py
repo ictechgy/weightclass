@@ -403,6 +403,16 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                         "expensive": attempt(True, 1.0),
                     }
                 )
+            infrastructure = json.loads(json.dumps(records[-1]))
+            infrastructure["campaign"] = record_binding(manifest, 13)
+            infrastructure["cheap"]["accepted"] = False
+            infrastructure["cheap"]["failure_kind"] = "infrastructure"
+            infrastructure["cheap"]["child"]["usage"] = None
+            infrastructure["advice_failure"] = None
+            infrastructure["retry"] = None
+            infrastructure["escalated"] = False
+            infrastructure["expensive"] = None
+            records.append(infrastructure)
             first_cheap = records[0]["cheap"]
             assert isinstance(first_cheap, dict)
             first_child = first_cheap["child"]
@@ -436,16 +446,26 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                 check=False,
                 text=True,
             )
+            legacy = subprocess.run(
+                [sys.executable, str(REPORT), "--log", str(log)],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("sealed campaign", completed.stdout)
+        self.assertEqual(legacy.returncode, 0, legacy.stderr)
+        self.assertIn("캠페인: shape_b", completed.stdout)
         self.assertIn("불완전하거나 유효하지 않은 가격 계산", completed.stdout)
+        self.assertIn("가격이 완전하지 않은 campaign 실행", completed.stdout)
         self.assertIn("missing_rate_fields", completed.stdout)
         self.assertIn("unknown_pricing_error", completed.stdout)
         self.assertNotIn("PRIVATE-CONTROL", completed.stdout)
         self.assertNotIn("\x1b", completed.stdout)
         self.assertNotIn("구간 전체가 손익분기 위", completed.stdout)
         self.assertNotIn("구간 전체가 손익분기 아래", completed.stdout)
+        self.assertNotIn("구간 전체가 손익분기 위", legacy.stdout)
+        self.assertNotIn("구간 전체가 손익분기 아래", legacy.stdout)
 
 
 @unittest.skipUnless(RUNNER.is_file(), "repository-only speculative runner unavailable")

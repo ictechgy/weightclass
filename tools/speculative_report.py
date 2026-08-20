@@ -458,6 +458,9 @@ def main() -> int:
             return "missing_rate_fields"
         return None
 
+    def has_pricing_problem(attempt: object) -> bool:
+        return has_missing_prices(attempt) or pricing_error_of(attempt) is not None
+
     # c 는 (싼 비용 평균) / (비싼 비용 평균) 이다. **두 평균이 같은 기준으로
     # 걸러진 모집단에서 나와야 한다.** 예전에는 분자가 "비용이 있으면 무엇이든"
     # 이고 분모는 출처 검증까지 통과한 것만이라, 검증에서 뺀 실행의 싼 비용이
@@ -497,14 +500,35 @@ def main() -> int:
     pricing_errors = sorted(
         {
             code
-            for r in usable
+            for r in records
             for key in ("cheap", "expensive", "advice_first", "advice_failure", "retry")
             if (code := pricing_error_of(r.get(key))) is not None
         }
     )
     if pricing_errors:
         print(f"  요금 계산 실패 코드: {', '.join(pricing_errors)}")
-    campaign_pricing_blocked = campaign_manifest is not None and bool(pricing_errors)
+    pricing_error_blocked = bool(pricing_errors)
+    campaign_attempts = [
+        attempt
+        for r in records
+        for key in ("cheap", "expensive", "advice_first", "advice_failure", "retry")
+        if isinstance((attempt := r.get(key)), dict) and isinstance(attempt.get("child"), dict)
+    ]
+    incomplete_campaign_attempts = sum(
+        1
+        for attempt in campaign_attempts
+        if cost_of(attempt) is None
+        or has_pricing_problem(attempt)
+        or (
+            isinstance(attempt.get("child"), dict)
+            and bool((attempt.get("child") or {}).get("timed_out"))
+        )
+    )
+    campaign_pricing_blocked = campaign_manifest is not None and (
+        bool(pricing_errors) or incomplete_campaign_attempts > 0
+    )
+    if campaign_manifest is not None and incomplete_campaign_attempts:
+        print(f"  가격이 완전하지 않은 campaign 실행: {incomplete_campaign_attempts}건")
     # 세 경우를 구별한다. 출처가 실제로 섞였는가, 러너가 cost_origin 을 남기지
     # 않은 옛 로그인가, 아니면 비용 자체가 하나도 없는가. 셋 다 c 를 못 재게
     # 하지만 사용자가 할 일이 다르다.
@@ -577,7 +601,7 @@ def main() -> int:
             # 중간에 끊긴 비싼 시도의 부분값이 분모를 낮춰 a 와 r 을 키운다.
             standalone_expensive = (
                 None
-                if has_missing_prices(r.get("expensive")) or timed_out(r.get("expensive"))
+                if has_pricing_problem(r.get("expensive")) or timed_out(r.get("expensive"))
                 else cost_of(r.get("expensive"))
             )
             if not reached_verify(r):
@@ -590,7 +614,14 @@ def main() -> int:
                 expensive_missing += 1
             else:
                 all_expensive_costs.append(standalone_expensive)
-        cheap_cost = cost_of(r.get("cheap")) if single_origin else None
+        cheap_attempt = r.get("cheap")
+        cheap_cost = (
+            cost_of(cheap_attempt)
+            if single_origin
+            and not has_pricing_problem(cheap_attempt)
+            and not timed_out(cheap_attempt)
+            else None
+        )
         if not cheap_cost:
             # 0 도 여기서 뺀다. 싼 쪽 0 은 c 를 끌어내려 "거의 공짜" 라는
             # 결론을 만드는데, 실제로는 요금표가 비었거나 사용량을 못 읽은
@@ -607,7 +638,7 @@ def main() -> int:
         expensive_cost = (
             None
             if not escalated
-            or has_missing_prices(r.get("expensive"))
+            or has_pricing_problem(r.get("expensive"))
             or timed_out(r.get("expensive"))
             else cost_of(r.get("expensive"))
         )
@@ -992,7 +1023,7 @@ def main() -> int:
                 # has_missing_prices 로 거르는데 여기만 안 걸러, 벤더가
                 # 일부 필드를 못 매긴 값이 완전한 비용처럼 a 에 들어갔다.
                 # 그러면 a 가 작아져 조언에 유리하게 틀린다.
-                if has_missing_prices(advice):
+                if has_pricing_problem(advice):
                     return None
                 return cost_of(advice)
 
@@ -1128,7 +1159,7 @@ def main() -> int:
                             for r in usable
                             if isinstance(r.get("retry"), dict)
                             and not timed_out(r.get("retry"))
-                            and not has_missing_prices(r.get("retry"))
+                            and not has_pricing_problem(r.get("retry"))
                             and (value := cost_of(r.get("retry"))) is not None
                         ]
                         priced_retries = len(retry_costs)
@@ -1295,10 +1326,10 @@ def main() -> int:
                                 # 않는다 — 위쪽 `if mixed_application:` 이
                                 # 조언 구간 전체를 건너뛴다. 여기서 그것을
                                 # 다시 검사하면 언제나 거짓인 분기가 된다.
-                                if campaign_pricing_blocked:
+                                if pricing_error_blocked or campaign_pricing_blocked:
                                     print(
-                                        "  -> 판정 없음. sealed campaign에 불완전하거나"
-                                        " 유효하지 않은 가격 계산이 있다."
+                                        "  -> 판정 없음. 불완전하거나 유효하지 않은"
+                                        " 가격 계산이 있다."
                                     )
                                 elif (
                                     campaign_state is not None
@@ -1504,12 +1535,7 @@ def main() -> int:
     # **타임아웃을 먼저 본다.** 순서가 반대면 c 를 못 잰 이유가 타임아웃일 때
     # 그 사실이 안 나오고 "c 를 내지 못했다" 로만 끝난다 — 사용자가 할 일이
     # 다르다(과제를 빼거나 CHILD_TIMEOUT 을 늘리는 것).
-    if campaign_pricing_blocked:
-        print(
-            "\n  -> 판정 없음. sealed campaign에 불완전하거나 유효하지 않은"
-            " 가격 계산이 있다. 가격표 또는 사용량을 고친 새 캠페인이 필요하다."
-        )
-    elif advisor_on and timed_out_tasks:
+    if advisor_on and timed_out_tasks:
         print(
             f"\n  -> 판정 없음. 과제 {timed_out_tasks}건이 타임아웃이라 그 비용을 모른다."
             + (
@@ -1518,6 +1544,18 @@ def main() -> int:
                 else " 이 로그의 c 를 c_A 로 쓰면 안 된다 — 타임아웃난 실행은"
                 " 예산을 끝까지 태운 가장 비싼 실행이므로 빠진 비용은 위쪽으로 열려 있다."
             )
+        )
+    elif not advisor_on and timed_out_tasks:
+        print(
+            f"\n  -> 판정 없음. 과제 {timed_out_tasks}건이 타임아웃이라 그 비용을 모른다."
+            " 타임아웃난 실행은 예산을 끝까지 태운 가장 비싼 실행이므로, 한 건만으로도"
+            " 결론이 뒤집힐 수 있다. 그 과제를 빼고 다시 모으거나 CHILD_TIMEOUT 을"
+            " 늘려 끝까지 돌게 한 뒤 다시 재야 한다."
+        )
+    elif pricing_error_blocked or campaign_pricing_blocked:
+        print(
+            "\n  -> 판정 없음. 불완전하거나 유효하지 않은 가격 계산이 있다."
+            " 가격표 또는 사용량을 고친 새 로그가 필요하다."
         )
     elif advisor_on and c_range is None:
         # c 를 재지 못한 로그다. 사다리 뒤쪽의 c_range is None 분기는 아래
@@ -1597,15 +1635,6 @@ def main() -> int:
                     )
                 )
             )
-        )
-    elif timed_out_tasks and c_range is not None:
-        # 판정을 내지 않는다. 빠진 비용이 위쪽으로 열려 있으면 구간도 위쪽으로
-        # 열려 있고, 닫힌 구간을 근거로 "유리하다/손해다" 를 말할 수 없다.
-        print(
-            f"\n  -> 판정 없음. 과제 {timed_out_tasks}건이 타임아웃이라 그 비용을 모른다."
-            " 타임아웃난 실행은 예산을 끝까지 태운 가장 비싼 실행이므로, 한 건만으로도"
-            " 위 결론이 뒤집힐 수 있다. 그 과제를 빼고 다시 모으거나, 러너의"
-            " CHILD_TIMEOUT 을 늘려 끝까지 돌게 한 뒤 다시 재야 한다."
         )
     elif thin_denominator:
         print("\n  -> 판정 없음. 위의 얇은 분모 경고를 보라.")
