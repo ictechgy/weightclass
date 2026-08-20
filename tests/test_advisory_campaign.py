@@ -452,12 +452,55 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                 check=False,
                 text=True,
             )
+            first_usage.pop("pricing_error")
+            first_usage.pop("priced_fields_missing")
+            second_usage.pop("pricing_error")
+            log.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            clean_infrastructure = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPORT),
+                    "--log",
+                    str(log),
+                    "--campaign",
+                    str(campaign),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            third_cheap = records[2]["cheap"]
+            assert isinstance(third_cheap, dict)
+            third_child = third_cheap["child"]
+            assert isinstance(third_child, dict)
+            third_child["usage"] = None
+            log.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            missing_price = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPORT),
+                    "--log",
+                    str(log),
+                    "--campaign",
+                    str(campaign),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(legacy.returncode, 0, legacy.stderr)
+        self.assertEqual(clean_infrastructure.returncode, 0, clean_infrastructure.stderr)
+        self.assertEqual(missing_price.returncode, 0, missing_price.stderr)
         self.assertIn("캠페인: shape_b", completed.stdout)
         self.assertIn("불완전하거나 유효하지 않은 가격 계산", completed.stdout)
-        self.assertIn("가격이 완전하지 않은 campaign 실행", completed.stdout)
         self.assertIn("missing_rate_fields", completed.stdout)
         self.assertIn("unknown_pricing_error", completed.stdout)
         self.assertNotIn("PRIVATE-CONTROL", completed.stdout)
@@ -466,6 +509,12 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
         self.assertNotIn("구간 전체가 손익분기 아래", completed.stdout)
         self.assertNotIn("구간 전체가 손익분기 위", legacy.stdout)
         self.assertNotIn("구간 전체가 손익분기 아래", legacy.stdout)
+        self.assertIn("불완전하거나 유효하지 않은 가격 계산", legacy.stdout)
+        self.assertNotIn("불완전하거나 유효하지 않은 가격 계산", clean_infrastructure.stdout)
+        self.assertNotIn("가격이 없는 campaign 실행", clean_infrastructure.stdout)
+        self.assertIn("구간 전체가 손익분기 아래", clean_infrastructure.stdout)
+        self.assertIn("가격이 없는 campaign 실행", missing_price.stdout)
+        self.assertNotIn("구간 전체가 손익분기 아래", missing_price.stdout)
 
 
 @unittest.skipUnless(RUNNER.is_file(), "repository-only speculative runner unavailable")
