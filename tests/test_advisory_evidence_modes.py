@@ -85,9 +85,7 @@ def diagnosis_result() -> dict[str, object]:
     }
 
 
-@unittest.skipUnless(
-    REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable"
-)
+@unittest.skipUnless(REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable")
 class EvidenceContractTests(unittest.TestCase):
     def test_mode_contracts_are_closed_bounded_and_prompted(self) -> None:
         self.assertTrue(CONTRACT.is_file())
@@ -157,9 +155,7 @@ class EvidenceContractTests(unittest.TestCase):
             contract.parse_evidence_result(json.dumps(research), "research")
 
 
-@unittest.skipUnless(
-    REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable"
-)
+@unittest.skipUnless(REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable")
 class EvidenceCampaignAndRouteTests(unittest.TestCase):
     def profile(self, vendor: str) -> dict[str, object]:
         return {
@@ -236,9 +232,7 @@ class EvidenceCampaignAndRouteTests(unittest.TestCase):
             )
 
 
-@unittest.skipUnless(
-    REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable"
-)
+@unittest.skipUnless(REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable")
 class EvidenceRunnerTests(unittest.TestCase):
     def repository(self, root: Path) -> Path:
         repo = root / "repo"
