@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -17,6 +18,7 @@ REPORT = TOOLS / "speculative_report.py"
 CONTRACT = TOOLS / "advisory_evidence_contract.py"
 CAMPAIGN = TOOLS / "advisory_campaign.py"
 ROUTES = TOOLS / "advisory_routes.py"
+BRAINSTORM_ASSESSMENT = ROOT / "docs" / "advisory-brainstorming-assessment.md"
 for directory in (str(ROOT), str(TOOLS)):
     if directory not in sys.path:
         sys.path.insert(0, directory)
@@ -24,6 +26,7 @@ for directory in (str(ROOT), str(TOOLS)):
 REPOSITORY_TOOLS_AVAILABLE = all(
     path.is_file() for path in (RUNNER, REPORT, CONTRACT, CAMPAIGN, ROUTES)
 )
+CAMPAIGN_ACCEPTANCE = os.environ.get("WCLASS_CAMPAIGN_ACCEPTANCE") == "1"
 
 
 def load_module(path: Path, name: str) -> types.ModuleType:
@@ -85,6 +88,30 @@ def diagnosis_result() -> dict[str, object]:
     }
 
 
+def design_result(summary: str = "DESIGN-SUMMARY") -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "mode": "design",
+        "problem": "The current interface obscures the primary action.",
+        "summary": summary,
+        "principles": ["Preserve a clear visual hierarchy."],
+        "options": [
+            {
+                "title": "Clarify the primary action",
+                "rationale": "The repository has competing actions with equal emphasis.",
+                "evidence": ["src/ui/example.tsx:10 renders both actions identically."],
+                "strengths": ["Makes the intended next step easier to identify."],
+                "risks": ["May reduce discovery of the secondary action."],
+                "affected_surfaces": ["primary form"],
+            }
+        ],
+        "recommendation": "Adopt the hierarchy change after responsive review.",
+        "acceptance_criteria": ["Primary action is identifiable without color alone."],
+        "validation": ["Check keyboard, contrast, and narrow viewport behavior."],
+        "limitations": [],
+    }
+
+
 @unittest.skipUnless(REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable")
 class EvidenceContractTests(unittest.TestCase):
     def test_mode_contracts_are_closed_bounded_and_prompted(self) -> None:
@@ -117,6 +144,30 @@ class EvidenceContractTests(unittest.TestCase):
             contract.parse_evidence_result(json.dumps(review_result()), "research")
         with self.assertRaisesRegex(contract.EvidenceResultError, "^$"):
             contract.parse_evidence_result("x" * (contract.MAX_EVIDENCE_RESULT_BYTES + 1), "review")
+
+    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective design acceptance")
+    def test_design_contract_is_closed_bounded_and_prompted(self) -> None:
+        contract = load_module(CONTRACT, "prospective_design_contract")
+        design = design_result()
+        encoded = json.dumps(design)
+        self.assertEqual(contract.parse_evidence_result(encoded, "design"), design)
+        prompt = contract.build_evidence_prompt("PRIVATE DESIGN TASK", "design")
+        self.assertIn('"mode":"design"', prompt)
+        self.assertIn("PRIVATE DESIGN TASK", prompt)
+        self.assertIn("Do not edit", prompt)
+
+        invented = dict(design)
+        invented["task_hash"] = "forbidden"
+        with self.assertRaisesRegex(contract.EvidenceResultError, "^$"):
+            contract.parse_evidence_result(json.dumps(invented), "design")
+
+        options = design["options"]
+        assert isinstance(options, list)
+        option = options[0]
+        assert isinstance(option, dict)
+        option["risks"] = []
+        with self.assertRaisesRegex(contract.EvidenceResultError, "^$"):
+            contract.parse_evidence_result(json.dumps(design), "design")
 
     def test_review_finding_and_claim_shapes_reject_unknown_or_unbounded_values(self) -> None:
         contract = load_module(CONTRACT, "prospective_evidence_shapes")
@@ -153,6 +204,19 @@ class EvidenceContractTests(unittest.TestCase):
         claim["evidence"] = ["x" * (contract.MAX_EVIDENCE_STRING_BYTES + 1)]
         with self.assertRaisesRegex(contract.EvidenceResultError, "^$"):
             contract.parse_evidence_result(json.dumps(research), "research")
+
+    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective design acceptance")
+    def test_brainstorming_assessment_keeps_divergence_separate_from_shape_b(self) -> None:
+        self.assertTrue(BRAINSTORM_ASSESSMENT.is_file())
+        assessment = BRAINSTORM_ASSESSMENT.read_text(encoding="utf-8")
+        for required in (
+            "Decision: experiment before promotion",
+            "generator-critic",
+            "constraint compliance",
+            "idea diversity",
+            "human preference",
+        ):
+            self.assertIn(required, assessment)
 
 
 @unittest.skipUnless(REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable")
@@ -231,6 +295,31 @@ class EvidenceCampaignAndRouteTests(unittest.TestCase):
                 workflow="research",
             )
 
+    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective design acceptance")
+    def test_schema_two_campaign_accepts_and_binds_design_workflow(self) -> None:
+        campaign = load_module(CAMPAIGN, "prospective_design_campaign")
+        with tempfile.TemporaryDirectory() as directory:
+            verify = Path(directory) / "verify"
+            verify.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            verify.chmod(0o700)
+            manifest = campaign.build_manifest(
+                arm="shape_b",
+                planned_tasks=12,
+                max_tasks=20,
+                cost_basis="vendor",
+                cheap=["codex", "cheap"],
+                expensive=["codex", "strong"],
+                advisor=["codex", "advisor"],
+                advisor_context="prompt",
+                verify=verify,
+                prices=None,
+                workflow="design",
+            )
+
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["workflow"], "design")
+        self.assertEqual(campaign.record_binding(manifest, 1)["workflow"], "design")
+
 
 @unittest.skipUnless(REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable")
 class EvidenceRunnerTests(unittest.TestCase):
@@ -248,14 +337,19 @@ class EvidenceRunnerTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
         return repo
 
-    def evaluator(self, root: Path, accepted_summary: str = "REVIEW-SUMMARY") -> Path:
+    def evaluator(
+        self,
+        root: Path,
+        accepted_summary: str = "REVIEW-SUMMARY",
+        workflow: str = "review",
+    ) -> Path:
         path = root / "evaluate.py"
         path.write_text(
             "#!/usr/bin/env python3\n"
             "import json, os, sys\n"
             "value=json.load(sys.stdin)\n"
             f"ok=value.get('summary') == {accepted_summary!r}\n"
-            "ok=ok and os.environ.get('WCLASS_ADVISORY_WORKFLOW') == 'review'\n"
+            f"ok=ok and os.environ.get('WCLASS_ADVISORY_WORKFLOW') == {workflow!r}\n"
             "raise SystemExit(0 if ok else 1)\n",
             encoding="utf-8",
         )
@@ -277,6 +371,8 @@ class EvidenceRunnerTests(unittest.TestCase):
         expensive: str | None = None,
         advisor: str | None = None,
         advise_on_failure: bool = False,
+        workflow: str = "review",
+        accepted_summary: str = "REVIEW-SUMMARY",
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
         repo = self.repository(root)
         task = root / "task.txt"
@@ -287,7 +383,7 @@ class EvidenceRunnerTests(unittest.TestCase):
             sys.executable,
             str(RUNNER),
             "--workflow",
-            "review",
+            workflow,
             "--repo",
             str(repo),
             "--task-file",
@@ -297,7 +393,7 @@ class EvidenceRunnerTests(unittest.TestCase):
             "--expensive",
             expensive or cheap,
             "--verify",
-            str(self.evaluator(root)),
+            str(self.evaluator(root, accepted_summary, workflow)),
             "--out-dir",
             str(out),
         ]
@@ -334,6 +430,36 @@ class EvidenceRunnerTests(unittest.TestCase):
         self.assertFalse(record["cheap"]["made_changes"])
         self.assertGreater(record["cheap"]["result_chars"], 0)
         self.assertNotIn("REVIEW-SUMMARY", persisted)
+        self.assertEqual(list(out.glob("*.patch")), [])
+        self.assertEqual(repo_status, "")
+
+    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective design acceptance")
+    def test_design_success_uses_the_same_transient_read_only_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            completed, repo, out = self.run_runner(
+                Path(directory),
+                cheap=self.executor(design_result()),
+                workflow="design",
+                accepted_summary="DESIGN-SUMMARY",
+            )
+            log = (out / "runs.jsonl").read_text(encoding="utf-8")
+            record = json.loads(log)
+            persisted = "".join(
+                path.read_text(encoding="utf-8", errors="replace")
+                for path in out.rglob("*")
+                if path.is_file()
+            )
+            repo_status = subprocess.run(
+                ["git", "-C", str(repo), "status", "--porcelain"],
+                capture_output=True,
+                check=True,
+                text=True,
+            ).stdout
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("DESIGN-SUMMARY", completed.stdout)
+        self.assertEqual(record["workflow"], "design")
+        self.assertNotIn("DESIGN-SUMMARY", persisted)
         self.assertEqual(list(out.glob("*.patch")), [])
         self.assertEqual(repo_status, "")
 
