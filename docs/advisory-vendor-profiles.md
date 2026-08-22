@@ -1,6 +1,6 @@
 # Claude and Codex advisory campaign profiles
 
-Read-only `review`, `research`, and `diagnosis` workflows compile the same
+Read-only `review`, `research`, `diagnosis`, and `design` workflows compile the same
 profile with read-only executor authority; see
 [Read-only advisory evidence workflows](advisory-evidence-workflows.md).
 

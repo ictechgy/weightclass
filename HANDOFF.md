@@ -195,13 +195,16 @@ human to read.
 
 ### Read-only advisory evidence workflows (2026-08-22)
 
-- Repository-only advisory execution now keeps four separate workflow
-  populations: `implementation`, `review`, `research`, and `diagnosis`.
-- The three evidence workflows require bounded, duplicate-key-safe, closed JSON
-  results, reject tracked, untracked, ignored, and known scaffolding changes,
-  and stream the result only to a scrubbed verifier stdin. Winning JSON is
-  printed after aggregate logging; task, result, advice, verifier output, paths,
-  and fingerprints are not added to the log or persisted as patches.
+- Repository-only advisory execution now keeps five separate workflow
+  populations: `implementation`, `review`, `research`, `diagnosis`, and
+  `design`. The four evidence workflows require bounded, duplicate-key-safe,
+  closed JSON results; design returns a problem, principles, bounded options
+  (each with evidence, strengths, risks, and affected surfaces), a
+  recommendation, acceptance criteria, validation steps, and limitations.
+  They reject tracked, untracked, ignored, and known scaffolding changes, and
+  stream the result only to a scrubbed verifier stdin. Winning JSON is printed
+  after aggregate logging; task, result, advice, verifier output, paths, and
+  fingerprints are not added to the log or persisted as patches.
 - Profile-based evidence executors compile to Claude `plan` without `Edit` or
   Codex `read-only`. Exact commands remain operator-reviewed, with filesystem
   edits rejected mechanically.
@@ -209,6 +212,10 @@ human to read.
   fingerprint and record. Existing implementation manifests remain schema 1
   and byte/shape compatible. Schema validity is not factual validity: every
   campaign still needs a pre-registered task-specific verifier.
+- Brainstorming is deliberately not a production workflow. Its separate
+  assessment is `docs/advisory-brainstorming-assessment.md`; the decision is
+  “experiment before promotion,” because binary Shape-B rescue does not measure
+  constraint compliance, idea diversity, or human preference.
 - The implementation task itself became sealed ordinal 7. Both vendors reached
   the complete Shape-B fallback and failed acceptance, so no candidate patch
   was retained; the final change was integrated manually against the unchanged

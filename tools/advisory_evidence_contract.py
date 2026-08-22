@@ -8,7 +8,7 @@ import unicodedata
 from collections.abc import Mapping
 
 EVIDENCE_SCHEMA_VERSION = 1
-EVIDENCE_WORKFLOWS = frozenset({"review", "research", "diagnosis"})
+EVIDENCE_WORKFLOWS = frozenset({"review", "research", "diagnosis", "design"})
 MAX_EVIDENCE_RESULT_BYTES = 131_072
 MAX_EVIDENCE_STRING_BYTES = 8_192
 MAX_EVIDENCE_ITEMS = 128
@@ -128,6 +128,30 @@ def _diagnostic_hypothesis(value: object) -> dict[str, object]:
     }
 
 
+def _design_option(value: object) -> dict[str, object]:
+    item = _mapping(
+        value,
+        frozenset(
+            {
+                "title",
+                "rationale",
+                "evidence",
+                "strengths",
+                "risks",
+                "affected_surfaces",
+            }
+        ),
+    )
+    return {
+        "title": _string(item["title"]),
+        "rationale": _string(item["rationale"]),
+        "evidence": _string_list(item["evidence"], minimum=1),
+        "strengths": _string_list(item["strengths"], minimum=1),
+        "risks": _string_list(item["risks"], minimum=1),
+        "affected_surfaces": _string_list(item["affected_surfaces"], minimum=1),
+    }
+
+
 def _items(value: object, validator: object, *, minimum: int) -> list[dict[str, object]]:
     if not isinstance(value, list) or not minimum <= len(value) <= MAX_EVIDENCE_ITEMS:
         raise EvidenceResultError()
@@ -175,7 +199,7 @@ def parse_evidence_result(text: str, expected_mode: str) -> dict[str, object]:
             "claims": _items(root["claims"], _research_claim, minimum=1),
             "limitations": _string_list(root["limitations"]),
         }
-    else:
+    elif expected_mode == "diagnosis":
         root = _mapping(raw, frozenset(common | {"symptom", "hypotheses", "reproduction"}))
         result = {
             "schema_version": _schema_version(root["schema_version"]),
@@ -186,6 +210,35 @@ def parse_evidence_result(text: str, expected_mode: str) -> dict[str, object]:
             "reproduction": _string_list(root["reproduction"], minimum=1),
             "limitations": _string_list(root["limitations"]),
         }
+    elif expected_mode == "design":
+        root = _mapping(
+            raw,
+            frozenset(
+                common
+                | {
+                    "problem",
+                    "principles",
+                    "options",
+                    "recommendation",
+                    "acceptance_criteria",
+                    "validation",
+                }
+            ),
+        )
+        result = {
+            "schema_version": _schema_version(root["schema_version"]),
+            "mode": _mode(root["mode"], expected_mode),
+            "problem": _string(root["problem"]),
+            "summary": _string(root["summary"]),
+            "principles": _string_list(root["principles"], minimum=1),
+            "options": _items(root["options"], _design_option, minimum=1),
+            "recommendation": _string(root["recommendation"]),
+            "acceptance_criteria": _string_list(root["acceptance_criteria"], minimum=1),
+            "validation": _string_list(root["validation"], minimum=1),
+            "limitations": _string_list(root["limitations"]),
+        }
+    else:  # pragma: no cover - guarded by EVIDENCE_WORKFLOWS above
+        raise EvidenceResultError()
     return result
 
 
@@ -202,7 +255,12 @@ def _mode(value: object, expected: str) -> str:
 
 
 def evidence_item_count(result: Mapping[str, object], workflow: str) -> int:
-    field = {"review": "findings", "research": "claims", "diagnosis": "hypotheses"}.get(workflow)
+    field = {
+        "review": "findings",
+        "research": "claims",
+        "diagnosis": "hypotheses",
+        "design": "options",
+    }.get(workflow)
     items = result.get(field) if field else None
     if not isinstance(items, list):
         raise EvidenceResultError()
@@ -263,6 +321,27 @@ def build_evidence_prompt(task: str, workflow: str) -> str:
                 }
             ],
             "reproduction": ["step"],
+            "limitations": [],
+        },
+        "design": {
+            "schema_version": 1,
+            "mode": "design",
+            "problem": "problem",
+            "summary": "summary",
+            "principles": ["principle"],
+            "options": [
+                {
+                    "title": "title",
+                    "rationale": "rationale",
+                    "evidence": ["evidence"],
+                    "strengths": ["strength"],
+                    "risks": ["risk"],
+                    "affected_surfaces": ["surface"],
+                }
+            ],
+            "recommendation": "recommendation",
+            "acceptance_criteria": ["criterion"],
+            "validation": ["validation step"],
             "limitations": [],
         },
     }

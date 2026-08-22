@@ -28,7 +28,7 @@ else:
 
 CAMPAIGN_SCHEMA_VERSION = 1
 EVIDENCE_CAMPAIGN_SCHEMA_VERSION = 2
-CAMPAIGN_WORKFLOWS = frozenset({"implementation", "review", "research", "diagnosis"})
+CAMPAIGN_WORKFLOWS = frozenset({"implementation", "review", "research", "diagnosis", "design"})
 MINIMUM_ADVISED_FAILURES = 12
 MAX_CAMPAIGN_BYTES = 16_384
 MAX_VERIFY_BYTES = 1_048_576

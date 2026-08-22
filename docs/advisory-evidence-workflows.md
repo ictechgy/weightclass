@@ -1,10 +1,10 @@
 # Read-only advisory evidence workflows
 
 `tools/speculative_run.py --workflow` keeps implementation, review, research,
-and diagnosis in separate evaluation populations. `implementation` retains the
-existing patch-and-test behavior. The other workflows require a closed JSON
-result, reject every repository edit, and pass the result to the reviewed
-verifier only through standard input.
+diagnosis, and design in separate evaluation populations. `implementation`
+retains the existing patch-and-test behavior. The other workflows require a
+closed JSON result, reject every repository edit, and pass the result to the
+reviewed verifier only through standard input.
 
 The available read-only contracts are:
 
@@ -12,6 +12,9 @@ The available read-only contracts are:
 - `research`: question, one or more evidence-backed claims, and limitations;
 - `diagnosis`: symptom, one or more hypotheses, reproduction steps, and
   limitations.
+- `design`: problem, principles, one or more bounded options, a recommendation,
+  acceptance criteria, validation steps, and limitations. Every option includes
+  evidence, strengths, risks, and affected surfaces.
 
 `tools/advisory_evidence_contract.py` defines the exact bounded shapes. Schema
 validation proves only that the result is parseable, bounded, and closed. It
@@ -21,6 +24,13 @@ from stdin and return exit zero only when the pre-registered factual or
 mechanical acceptance criteria hold. The verifier receives
 `WCLASS_ADVISORY_WORKFLOW` and runs in a clean reconstructed checkout with a
 scrubbed temporary HOME.
+
+Design is evidence, not brainstorming. It is a convergent, repository-grounded
+comparison of a bounded set of options; it does not add a production
+generator/critic loop or persist candidate ideas. A verifier can check hard
+constraints, cited repository observations, accessibility rules, or screenshot
+thresholds, but schema validity cannot establish aesthetic quality or human
+preference.
 
 Example:
 
