@@ -27,6 +27,8 @@ else:
     from advisory_routes import AdvisoryRouteError, routes_from_profile
 
 CAMPAIGN_SCHEMA_VERSION = 1
+EVIDENCE_CAMPAIGN_SCHEMA_VERSION = 2
+CAMPAIGN_WORKFLOWS = frozenset({"implementation", "review", "research", "diagnosis"})
 MINIMUM_ADVISED_FAILURES = 12
 MAX_CAMPAIGN_BYTES = 16_384
 MAX_VERIFY_BYTES = 1_048_576
@@ -50,7 +52,7 @@ class RouteContract(TypedDict):
     argv_count: int
 
 
-class CampaignManifest(TypedDict):
+class CampaignManifest(TypedDict, total=False):
     schema_version: int
     arm: str
     planned_tasks: int
@@ -65,6 +67,7 @@ class CampaignManifest(TypedDict):
     verify_sha256: str
     prices_sha256: str | None
     campaign_fingerprint: str
+    workflow: str
 
 
 class CampaignProgress(NamedTuple):
@@ -294,7 +297,7 @@ def _route(value: object) -> RouteContract:
 
 
 def _manifest_payload(raw: object) -> CampaignManifest:
-    expected = {
+    common_keys = {
         "schema_version",
         "arm",
         "planned_tasks",
@@ -310,10 +313,19 @@ def _manifest_payload(raw: object) -> CampaignManifest:
         "prices_sha256",
         "campaign_fingerprint",
     }
-    if not isinstance(raw, Mapping) or set(raw) != expected:
+    if not isinstance(raw, Mapping):
         raise CampaignError()
-    if _integer(raw["schema_version"], 1, 1) != CAMPAIGN_SCHEMA_VERSION:
+    schema_version = _integer(
+        raw.get("schema_version"), CAMPAIGN_SCHEMA_VERSION, EVIDENCE_CAMPAIGN_SCHEMA_VERSION
+    )
+    expected = common_keys | ({"workflow"} if schema_version == 2 else set())
+    if set(raw) != expected:
         raise CampaignError()
+    workflow = (
+        "implementation"
+        if schema_version == CAMPAIGN_SCHEMA_VERSION
+        else _string(raw["workflow"], CAMPAIGN_WORKFLOWS - {"implementation"})
+    )
     arm = _string(raw["arm"], frozenset({"shape_b", "shape_a_b"}))
     planned_tasks = _integer(raw["planned_tasks"], MINIMUM_ADVISED_FAILURES, MAX_TASKS)
     max_tasks = _integer(raw["max_tasks"], planned_tasks, MAX_TASKS)
@@ -346,7 +358,7 @@ def _manifest_payload(raw: object) -> CampaignManifest:
         raise CampaignError()
     fingerprint = cast(str, _digest(raw["campaign_fingerprint"]))
     manifest: CampaignManifest = {
-        "schema_version": CAMPAIGN_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "arm": arm,
         "planned_tasks": planned_tasks,
         "max_tasks": max_tasks,
@@ -361,6 +373,8 @@ def _manifest_payload(raw: object) -> CampaignManifest:
         "prices_sha256": prices_digest,
         "campaign_fingerprint": fingerprint,
     }
+    if schema_version == EVIDENCE_CAMPAIGN_SCHEMA_VERSION:
+        manifest["workflow"] = workflow
     unsigned = dict(manifest)
     del unsigned["campaign_fingerprint"]
     if _sha256(_canonical_bytes(unsigned)) != fingerprint:
@@ -415,9 +429,16 @@ def build_manifest(
     advisor_context: str,
     verify: Path,
     prices: Path | None,
+    workflow: str = "implementation",
 ) -> CampaignManifest:
+    selected_workflow = _string(workflow, CAMPAIGN_WORKFLOWS)
+    schema_version = (
+        CAMPAIGN_SCHEMA_VERSION
+        if selected_workflow == "implementation"
+        else EVIDENCE_CAMPAIGN_SCHEMA_VERSION
+    )
     unsigned: dict[str, object] = {
-        "schema_version": CAMPAIGN_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "arm": arm,
         "planned_tasks": planned_tasks,
         "max_tasks": max_tasks,
@@ -437,6 +458,8 @@ def build_manifest(
         "verify_sha256": file_sha256(verify, MAX_VERIFY_BYTES),
         "prices_sha256": price_table_sha256(prices) if prices is not None else None,
     }
+    if schema_version == EVIDENCE_CAMPAIGN_SCHEMA_VERSION:
+        unsigned["workflow"] = selected_workflow
     raw = dict(unsigned)
     raw["campaign_fingerprint"] = _sha256(_canonical_bytes(unsigned))
     return _manifest_payload(raw)
@@ -490,7 +513,12 @@ def validate_run_configuration(
     prices: Path | None,
     prefer_prices: bool,
     sample_ordinal: int,
+    workflow: str = "implementation",
 ) -> None:
+    selected_workflow = _string(workflow, CAMPAIGN_WORKFLOWS)
+    manifest_workflow = str(manifest.get("workflow", "implementation"))
+    if manifest_workflow != selected_workflow:
+        raise CampaignError()
     expected_flags = (False, True) if manifest["arm"] == "shape_b" else (True, True)
     if (advise_first, advise_on_failure) != expected_flags:
         raise CampaignError()
@@ -516,28 +544,37 @@ def validate_run_configuration(
 
 def record_binding(manifest: CampaignManifest, sample_ordinal: int) -> dict[str, object]:
     _integer(sample_ordinal, 1, manifest["max_tasks"])
-    return {
+    binding: dict[str, object] = {
         "campaign_fingerprint": manifest["campaign_fingerprint"],
         "arm": manifest["arm"],
         "sample_ordinal": sample_ordinal,
     }
+    if manifest["schema_version"] == EVIDENCE_CAMPAIGN_SCHEMA_VERSION:
+        binding["workflow"] = manifest["workflow"]
+    return binding
 
 
 def validate_record_bindings(
     manifest: CampaignManifest, records: Sequence[Mapping[str, object]]
 ) -> set[int]:
     ordinals: set[int] = set()
+    expected_binding_keys = {"campaign_fingerprint", "arm", "sample_ordinal"}
+    if manifest["schema_version"] == EVIDENCE_CAMPAIGN_SCHEMA_VERSION:
+        expected_binding_keys.add("workflow")
     for record in records:
         binding = record.get("campaign")
-        if not isinstance(binding, Mapping) or set(binding) != {
-            "campaign_fingerprint",
-            "arm",
-            "sample_ordinal",
-        }:
+        if not isinstance(binding, Mapping) or set(binding) != expected_binding_keys:
             raise CampaignError()
         if (
             binding["campaign_fingerprint"] != manifest["campaign_fingerprint"]
             or binding["arm"] != manifest["arm"]
+            or binding.get("workflow", "implementation")
+            != manifest.get("workflow", "implementation")
+        ):
+            raise CampaignError()
+        if (
+            manifest["schema_version"] == EVIDENCE_CAMPAIGN_SCHEMA_VERSION
+            and record.get("workflow") != manifest["workflow"]
         ):
             raise CampaignError()
         ordinal = _integer(binding["sample_ordinal"], 1, manifest["max_tasks"])
@@ -592,6 +629,11 @@ def _command(value: str) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arm", required=True, choices=("shape_b", "shape_a_b"))
+    parser.add_argument(
+        "--workflow",
+        choices=tuple(sorted(CAMPAIGN_WORKFLOWS)),
+        default="implementation",
+    )
     parser.add_argument("--planned-tasks", required=True, type=int)
     parser.add_argument("--max-tasks", required=True, type=int)
     parser.add_argument("--cost-basis", required=True, choices=("price_table", "vendor"))
@@ -624,7 +666,10 @@ def main() -> int:
         else:
             if any(command is not None for command in exact_commands):
                 parser.error("--route-profile cannot be mixed with exact route commands")
-            routes = routes_from_profile(arguments.route_profile.expanduser())
+            routes = routes_from_profile(
+                arguments.route_profile.expanduser(),
+                read_only_executors=arguments.workflow != "implementation",
+            )
             cheap = list(routes.cheap)
             advisor = list(routes.advisor)
             expensive = list(routes.expensive)
@@ -642,6 +687,7 @@ def main() -> int:
             advisor_context=arguments.advisor_context,
             verify=arguments.verify.expanduser().resolve(),
             prices=arguments.prices.expanduser().resolve() if arguments.prices else None,
+            workflow=arguments.workflow,
         )
         write_manifest(arguments.output.expanduser().resolve(), manifest)
     except CampaignError:

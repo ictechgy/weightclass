@@ -17,6 +17,9 @@ At the measured c = 0.31, break-even is p = 0.69. The cheap route can fail two
 times in three and still not lose money. Run this on real work, read `p` off
 the log, and only then decide.
 
+`implementation` verifies a reconstructed patch. `review`, `research`, and
+`diagnosis` verify a closed JSON result transiently and reject repository edits.
+
 What it never does:
 
 - **Touch your repository.** Every attempt happens in a clone under a temp
@@ -82,6 +85,13 @@ if TYPE_CHECKING:
         validate_record_bindings,
         validate_run_configuration,
     )
+    from tools.advisory_evidence_contract import (
+        EVIDENCE_WORKFLOWS,
+        EvidenceResultError,
+        build_evidence_prompt,
+        evidence_item_count,
+        parse_evidence_result,
+    )
     from tools.advisory_routes import AdvisoryRouteError, routes_from_profile
 else:
     from advisory_campaign import (
@@ -97,6 +107,13 @@ else:
         validate_price_rate_fields,
         validate_record_bindings,
         validate_run_configuration,
+    )
+    from advisory_evidence_contract import (
+        EVIDENCE_WORKFLOWS,
+        EvidenceResultError,
+        build_evidence_prompt,
+        evidence_item_count,
+        parse_evidence_result,
     )
     from advisory_routes import AdvisoryRouteError, routes_from_profile
 
@@ -186,6 +203,8 @@ class Attempt(TypedDict, total=False):
     patch: str
     verify: VerifyResult
     error: str
+    result_chars: int
+    result_items: int
 
 
 # 작업공간 이름의 접두사. mkdtemp 호출부와 삭제 허용 목록이 같은 상수를
@@ -2672,6 +2691,66 @@ def run_verify(verify: Path, workspace: Path, home: Path) -> tuple[VerifyResult,
     }, combined
 
 
+def run_evidence_verify(
+    verify: Path,
+    workspace: Path,
+    home: Path,
+    result_text: str,
+    workflow: str,
+) -> tuple[VerifyResult, str]:
+    """Pass one transient structured result to a scrubbed verifier on stdin."""
+    if workflow not in EVIDENCE_WORKFLOWS:
+        raise EvidenceResultError()
+    started = time.monotonic()
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name in ("PATH", "LANG", "LC_ALL", "TZ", "SHELL", "USER")
+    }
+    environment["HOME"] = str(home)
+    environment["TMPDIR"] = str(home)
+    environment["WCLASS_ADVISORY_WORKFLOW"] = workflow
+    timed_out = False
+    code: int | None = None
+    with subprocess.Popen(
+        [str(verify)],
+        cwd=workspace,
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        start_new_session=True,
+    ) as verifier:
+        try:
+            out, err = verifier.communicate(result_text, timeout=VERIFY_TIMEOUT)
+            code = verifier.returncode
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_group(verifier)
+            try:
+                out, err = verifier.communicate(timeout=30)
+            except subprocess.TimeoutExpired as second:
+                verifier.kill()
+                out = _as_text(second.output)
+                err = _as_text(second.stderr)
+    combined = join_streams(out, err)
+    if timed_out:
+        return {
+            "passed": False,
+            "exit_code": None,
+            "timed_out": True,
+            "seconds": VERIFY_TIMEOUT,
+        }, combined
+    return {
+        "passed": code == 0,
+        "exit_code": code,
+        "timed_out": False,
+        "seconds": round(time.monotonic() - started, 1),
+    }, combined
+
+
 def build_handover_tree(
     repo: Path, commit: str, workspace: Path, handover: Path, scaffolding: frozenset[str]
 ) -> list[str]:
@@ -3172,6 +3251,17 @@ def advice_text_extracted(stdout: str, command: list[str]) -> tuple[str, bool]:
     return text, False
 
 
+def extract_evidence_result(
+    stdout: str, command: list[str], workflow: str
+) -> tuple[str, dict[str, object]]:
+    """Extract and validate only the provider's final structured model message."""
+    text, extracted = advice_text_extracted(stdout, command)
+    if not extracted or not text:
+        raise EvidenceResultError()
+    parsed = parse_evidence_result(text, workflow)
+    return text, parsed
+
+
 def compose_task(task: str, advice: str) -> str:
     """조언을 과제에 붙인다. 조언은 신뢰할 수 없는 입력으로 구분해 둔다.
 
@@ -3208,13 +3298,14 @@ def attempt(
     allowed_env: frozenset[str] | None,
     child_home: Path | None,
     prefer_prices: bool,
+    workflow: str = "implementation",
 ) -> tuple[Attempt, str, bytes]:
-    """Clone, run one route, verify. The workspace survives only a pass.
+    """Clone, run one route, verify, and return only transient handoff bytes.
 
-    반환의 두 번째와 세 번째 값은 검증 명령의 출력과 이 시도가 만든 패치다.
-    둘 다 기록에는 넣지 않는다 — 조언 단계가 "무엇을 만들었고 왜 실패했는지"
-    를 알아야 해서 호출자에게만 건넨다. 실패한 시도의 패치는 디스크에 쓰이지
-    않으므로 여기서 돌려주지 않으면 어디에도 없다.
+    반환의 두 번째와 세 번째 값은 검증 명령의 출력과 이 시도가 만든 패치 또는
+    구조화 결과다. 둘 다 기록에는 넣지 않는다 — 조언 단계가 "무엇을 만들었고
+    왜 실패했는지"를 알아야 해서 호출자에게만 건넨다. evidence 성공도 작업공간을
+    남기지 않으며, 최종 선택된 JSON만 로그 기록 뒤 stdout으로 전달된다.
     """
     # 작업공간은 산출물 디렉터리 바로 아래가 아니라 그 안의 .work 에 만든다.
     # 검증 스크립트의 cwd 가 인계 트리이므로 `..` 가 곧 산출물 디렉터리가 되면,
@@ -3232,6 +3323,8 @@ def attempt(
     patch_bytes = b""
     build_scaffolding: list[str] = []
     verify_output = ""
+    evidence_result_text = ""
+    parsed_evidence: dict[str, object] | None = None
     try:
         work_root.mkdir(mode=0o700, exist_ok=True)
         # 만드는 즉시 등록한다. 등록 자체가 실패하면 방금 만든 디렉터리도
@@ -3246,9 +3339,32 @@ def attempt(
         clone_at(repo, commit, workspace)
         # attempt 는 stdout 을 쓰지 않는다. 과제 내용과 자식이 쓴 텍스트가
         # 로그로 새지 않게 여기서 버린다.
-        record["child"], _ = run_child(
+        record["child"], child_stdout = run_child(
             command, workspace, task, rates, allowed_env, child_home, prefer_prices
         )
+        if workflow != "implementation":
+            child_result = record["child"]
+            if child_result["timed_out"] or child_result["exit_code"] != 0:
+                record["error"] = "read-only route did not return a usable result"
+                record["failure_kind"] = "route"
+            else:
+                try:
+                    evidence_result_text, extracted = advice_text_extracted(child_stdout, command)
+                    if not extracted or not evidence_result_text:
+                        raise EvidenceResultError()
+                    parsed_evidence = parse_evidence_result(evidence_result_text, workflow)
+                    evidence_result_text = json.dumps(
+                        parsed_evidence,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    record["result_chars"] = len(evidence_result_text)
+                    record["result_items"] = evidence_item_count(parsed_evidence, workflow)
+                except EvidenceResultError:
+                    record["error"] = "read-only route returned an invalid result"
+                    record["failure_kind"] = "route"
         # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
         # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
         # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
@@ -3264,11 +3380,34 @@ def attempt(
         # 결과와 수치만 기록한다는 것이므로 개수만 남긴다.
         record["dropped_ignored"] = len(dropped)
         record["made_changes"] = record["patch_lines"] > 0
+        if workflow != "implementation":
+            if record["made_changes"]:
+                record["error"] = "read-only route changed the repository"
+                record["failure_kind"] = "route"
+            elif record["dropped_ignored"] or record["excluded_scaffolding"]:
+                record["error"] = "read-only route created excluded repository content"
+                record["failure_kind"] = "route"
         verify_home = create_registered_workspace("spec-home-", work_root, registry, out_dir)
         try:
             # 검증 출력은 기록에 넣지 않는다. 자식 코드가 찍은 텍스트라 무엇이든
             # 담을 수 있고, 로그는 안전해야 한다. 조언 단계에만 넘긴다.
-            record["verify"], verify_output = run_verify(verify, handover, verify_home)
+            if workflow == "implementation":
+                record["verify"], verify_output = run_verify(verify, handover, verify_home)
+            elif record.get("error") is None and parsed_evidence is not None:
+                record["verify"], verify_output = run_evidence_verify(
+                    verify,
+                    handover,
+                    verify_home,
+                    evidence_result_text,
+                    workflow,
+                )
+            else:
+                record["verify"] = {
+                    "passed": False,
+                    "exit_code": None,
+                    "timed_out": False,
+                    "seconds": 0,
+                }
         finally:
             discard(registry, verify_home, out_dir)
         # 벤더 CLI 가 0 이 아닌 코드로 죽었고 아무것도 바꾸지 않았다면, 그것이
@@ -3314,12 +3453,30 @@ def attempt(
     # `accepted` 가 이 시도의 유일한 판정이다. verify.passed 는 검증 명령이
     # 무엇을 말했는지를 남길 뿐이고, 호출자는 accepted 만 본다. 둘을 따로 보면
     # 서로 다른 답을 내는 곳이 생긴다.
-    if verdict and verdict["passed"] and not record.get("made_changes"):
+    if (
+        workflow == "implementation"
+        and verdict
+        and verdict["passed"]
+        and not record.get("made_changes")
+    ):
         record["error"] = "route made no change; not counted as a pass"
         record["failure_kind"] = "route"
-    record["accepted"] = bool(verdict and verdict["passed"] and record.get("made_changes"))
+    if workflow == "implementation":
+        record["accepted"] = bool(verdict and verdict["passed"] and record.get("made_changes"))
+    else:
+        record["accepted"] = bool(
+            verdict
+            and verdict["passed"]
+            and not record.get("made_changes")
+            and parsed_evidence is not None
+            and record.get("error") is None
+        )
     if record["accepted"]:
         assert handover is not None and patch is not None
+        if workflow != "implementation":
+            discard(registry, handover, out_dir)
+            record["workspace"] = None
+            return record, verify_output, evidence_result_text.encode("utf-8")
         # 검증을 통과한 뒤에야 디스크에 쓴다. 여기서 실패해도 이 함수의 계약은
         # 지켜야 한다 — 무슨 일이 있어도 판정을 남기고 정상 반환한다.
         try:
@@ -3340,7 +3497,10 @@ def attempt(
         if handover is not None:
             discard(registry, handover, out_dir)
         record["workspace"] = None
-    return record, verify_output, patch_bytes
+    transient = (
+        patch_bytes if workflow == "implementation" else evidence_result_text.encode("utf-8")
+    )
+    return record, verify_output, transient
 
 
 def main() -> int:
@@ -3349,6 +3509,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--prune", action="store_true", help="delete every registered workspace and exit"
+    )
+    parser.add_argument(
+        "--workflow",
+        choices=("implementation", "review", "research", "diagnosis"),
+        default="implementation",
+        help="implementation returns a patch; other workflows return transient verified JSON",
     )
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--repo", type=Path)
@@ -3514,7 +3680,10 @@ def main() -> int:
         if any(command is not None for command in exact_commands):
             parser.error("--route-profile cannot be mixed with exact route commands")
         try:
-            profile_routes = routes_from_profile(arguments.route_profile.expanduser())
+            profile_routes = routes_from_profile(
+                arguments.route_profile.expanduser(),
+                read_only_executors=arguments.workflow != "implementation",
+            )
         except AdvisoryRouteError:
             parser.error("invalid advisory route profile")
         arguments.cheap = shlex.join(profile_routes.cheap)
@@ -3536,6 +3705,8 @@ def main() -> int:
         parser.error("--confirm-task-egress needs --route-profile or --campaign")
     if arguments.campaign is not None and arguments.label:
         parser.error("--label is not allowed in campaign mode; use only the opaque ordinal")
+    if arguments.workflow != "implementation" and arguments.label:
+        parser.error("--label is not allowed in read-only evidence workflows")
     pinned_campaign = arguments.out_dir / "campaign.json"
     if arguments.campaign is None and (pinned_campaign.exists() or pinned_campaign.is_symlink()):
         parser.error("this output directory is campaign-bound; pass its sealed --campaign")
@@ -3610,6 +3781,7 @@ def main() -> int:
                 prices=prices_path,
                 prefer_prices=bool(arguments.prefer_prices),
                 sample_ordinal=arguments.sample_ordinal,
+                workflow=arguments.workflow,
             )
             lock_flags = os.O_CREAT | os.O_RDWR
             if hasattr(os, "O_NOFOLLOW"):
@@ -3703,6 +3875,11 @@ def main() -> int:
         task = read_task_file(task_file, require_private=needs_egress_confirmation)
     except TaskInputError:
         parser.error("--task-file is invalid")
+    if arguments.workflow != "implementation":
+        try:
+            task = build_evidence_prompt(task, arguments.workflow)
+        except EvidenceResultError:
+            parser.error("invalid read-only evidence workflow task")
     commit = head_commit(repo)
     print(f"기준 커밋 {commit[:12]}  저장소 {repo}")
     print(f"싼 경로: {cheap_argv[0]} (인자 {len(cheap_argv) - 1}개)")
@@ -3939,6 +4116,7 @@ def main() -> int:
         allowed_env=cheap_env,
         child_home=cheap_home,
         prefer_prices=arguments.prefer_prices,
+        workflow=arguments.workflow,
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
@@ -3979,6 +4157,8 @@ def main() -> int:
         "advice_failure": None,
         "retry": None,
     }
+    if arguments.workflow != "implementation":
+        record["workflow"] = arguments.workflow
     if campaign_manifest is not None and arguments.sample_ordinal is not None:
         record["campaign"] = record_binding(campaign_manifest, arguments.sample_ordinal)
 
@@ -3986,6 +4166,7 @@ def main() -> int:
     # 돌린다. 승급 한 번을 짧은 조언 한 번 + 싼 실행 한 번으로 바꾸는 것이므로,
     # 재시도가 s > a + c 만큼만 성공하면 이득이다.
     retry: Attempt | None = None
+    retry_payload = b""
     # 인프라 실패(클론 실패, 벤더 CLI 가 변경 없이 죽음)는 검증까지 가지도
     # 못했으므로 조언할 출력이 없다. 그때 "검증에 실패했다" 고 말하면
     # 조언자에게 거짓을 주는 것이고, 그 조언은 아무 근거가 없다.
@@ -4002,10 +4183,11 @@ def main() -> int:
             cheap_patch.decode("utf-8", errors="replace") if cheap_patch else "",
             cheap_verify_output,
         )
+        produced_label = "diff" if arguments.workflow == "implementation" else "structured result"
         prompt = (
             f"{redact_text(cheap_task)}\n\n"
             "----- WHAT A FIRST ATTEMPT PRODUCED (untrusted output) -----\n"
-            "The attempt failed its verification command. The diff it produced "
+            f"The attempt failed its verification command. The {produced_label} it produced "
             "comes first, and its verification output follows directly after.\n\n"
             f"{excerpt}\n"
             "----- END -----\n\n"
@@ -4019,7 +4201,7 @@ def main() -> int:
         failure_advice, text = advise("failure", redact_text(prompt))
         record["advice_failure"] = failure_advice
         if text:
-            retry, _, _ = attempt(
+            retry, _, retry_payload = attempt(
                 "retry",
                 cheap_argv,
                 repo,
@@ -4033,6 +4215,7 @@ def main() -> int:
                 allowed_env=cheap_env,
                 child_home=cheap_home,
                 prefer_prices=arguments.prefer_prices,
+                workflow=arguments.workflow,
             )
             record["retry"] = retry
             reason = (
@@ -4042,11 +4225,12 @@ def main() -> int:
             )
             print(f"  조언 후 재시도 {'통과' if retry['accepted'] else '실패'}{reason}")
 
+    expensive_payload = b""
     needs_escalation = not cheap["accepted"] and not (retry is not None and retry["accepted"])
     if needs_escalation:
         print(f"승급: {expensive_argv[0]} (인자 {len(expensive_argv) - 1}개)")
         record["escalated"] = True
-        expensive, _, _ = attempt(
+        expensive, _, expensive_payload = attempt(
             "expensive",
             expensive_argv,
             repo,
@@ -4060,6 +4244,7 @@ def main() -> int:
             allowed_env=expensive_env,
             child_home=expensive_home,
             prefer_prices=arguments.prefer_prices,
+            workflow=arguments.workflow,
         )
         record["expensive"] = expensive
         reason = (
@@ -4081,14 +4266,26 @@ def main() -> int:
         campaign_lock = None
 
     winner: Attempt | None = None
+    winner_payload = b""
     if cheap["accepted"]:
         winner = cheap
+        winner_payload = cheap_patch
     elif retry is not None and retry["accepted"]:
         winner = retry
+        winner_payload = retry_payload
     elif expensive is not None and expensive["accepted"]:
         winner = expensive
+        winner_payload = expensive_payload
 
     if winner:
+        if arguments.workflow != "implementation":
+            try:
+                rendered = winner_payload.decode("utf-8", errors="strict")
+            except UnicodeError:
+                parser.error("verified evidence result could not be rendered")
+            print("\n검증 통과. 구조화 결과:")
+            print(rendered)
+            return 0
         print(f"\n검증 통과. 패치: {winner['patch']}  ({winner['patch_lines']}줄)")
         print(f"적용: git -C {shlex.quote(str(repo))} apply {shlex.quote(str(winner['patch']))}")
         print(f"작업공간: {winner['workspace']}")

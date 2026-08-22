@@ -1,5 +1,9 @@
 # Claude and Codex advisory campaign profiles
 
+Read-only `review`, `research`, and `diagnosis` workflows compile the same
+profile with read-only executor authority; see
+[Read-only advisory evidence workflows](advisory-evidence-workflows.md).
+
 _Status: repository-only measurement configuration. These profiles do not enable advisory in the
 installed `wclass` command._
 

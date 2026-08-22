@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import shlex
 import subprocess
 import sys
@@ -14,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
 RUNNER = TOOLS / "speculative_run.py"
+REPORT = TOOLS / "speculative_report.py"
 CONTRACT = TOOLS / "advisory_evidence_contract.py"
 CAMPAIGN = TOOLS / "advisory_campaign.py"
 ROUTES = TOOLS / "advisory_routes.py"
@@ -81,10 +81,6 @@ def diagnosis_result() -> dict[str, object]:
     }
 
 
-@unittest.skipUnless(
-    os.environ.get("WCLASS_CAMPAIGN_ACCEPTANCE") == "1",
-    "prospective campaign acceptance only",
-)
 class EvidenceContractTests(unittest.TestCase):
     def test_mode_contracts_are_closed_bounded_and_prompted(self) -> None:
         self.assertTrue(CONTRACT.is_file())
@@ -154,10 +150,6 @@ class EvidenceContractTests(unittest.TestCase):
             contract.parse_evidence_result(json.dumps(research), "research")
 
 
-@unittest.skipUnless(
-    os.environ.get("WCLASS_CAMPAIGN_ACCEPTANCE") == "1",
-    "prospective campaign acceptance only",
-)
 class EvidenceCampaignAndRouteTests(unittest.TestCase):
     def profile(self, vendor: str) -> dict[str, object]:
         return {
@@ -208,6 +200,16 @@ class EvidenceCampaignAndRouteTests(unittest.TestCase):
         self.assertEqual(loaded, evidence)
         self.assertEqual(campaign.record_binding(evidence, 1)["workflow"], "review")
         with self.assertRaisesRegex(campaign.CampaignError, "^$"):
+            campaign.validate_record_bindings(
+                evidence,
+                [
+                    {
+                        "campaign": campaign.record_binding(evidence, 1),
+                        "workflow": "research",
+                    }
+                ],
+            )
+        with self.assertRaisesRegex(campaign.CampaignError, "^$"):
             campaign.validate_run_configuration(
                 evidence,
                 cheap=common["cheap"],
@@ -224,10 +226,6 @@ class EvidenceCampaignAndRouteTests(unittest.TestCase):
             )
 
 
-@unittest.skipUnless(
-    os.environ.get("WCLASS_CAMPAIGN_ACCEPTANCE") == "1",
-    "prospective campaign acceptance only",
-)
 class EvidenceRunnerTests(unittest.TestCase):
     def repository(self, root: Path) -> Path:
         repo = root / "repo"
@@ -314,6 +312,12 @@ class EvidenceRunnerTests(unittest.TestCase):
                 for path in out.rglob("*")
                 if path.is_file()
             )
+            repo_status = subprocess.run(
+                ["git", "-C", str(repo), "status", "--porcelain"],
+                capture_output=True,
+                check=True,
+                text=True,
+            ).stdout
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("REVIEW-SUMMARY", completed.stdout)
@@ -324,15 +328,7 @@ class EvidenceRunnerTests(unittest.TestCase):
         self.assertGreater(record["cheap"]["result_chars"], 0)
         self.assertNotIn("REVIEW-SUMMARY", persisted)
         self.assertEqual(list(out.glob("*.patch")), [])
-        self.assertEqual(
-            subprocess.run(
-                ["git", "-C", str(repo), "status", "--porcelain"],
-                capture_output=True,
-                check=True,
-                text=True,
-            ).stdout,
-            "",
-        )
+        self.assertEqual(repo_status, "")
 
     def test_repository_edit_is_rejected_even_when_result_and_verifier_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -347,6 +343,24 @@ class EvidenceRunnerTests(unittest.TestCase):
         self.assertFalse(record["expensive"]["accepted"])
         self.assertNotIn("REVIEW-SUMMARY", completed.stdout)
         self.assertEqual(list(out.glob("*.patch")), [])
+
+    def test_excluded_scaffolding_is_also_a_read_only_violation(self) -> None:
+        result = review_result()
+        program = (
+            "import json,os,sys;sys.stdin.read();"
+            "os.mkdir('.claude');open('.claude/state','w').write('changed');"
+            f"print(json.dumps({result!r}))"
+        )
+        command = shlex.join([sys.executable, "-c", program])
+        with tempfile.TemporaryDirectory() as directory:
+            completed, _repo, out = self.run_runner(
+                Path(directory), cheap=command, expensive=command
+            )
+            record = json.loads((out / "runs.jsonl").read_text(encoding="utf-8"))
+
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("excluded", record["cheap"]["error"])
+        self.assertFalse(record["cheap"]["accepted"])
 
     def test_failed_evaluation_can_be_rescued_without_persisting_any_result(self) -> None:
         first = review_result("FIRST-FAIL")
@@ -394,6 +408,88 @@ class EvidenceRunnerTests(unittest.TestCase):
                 result_text, parsed = runner.extract_evidence_result(stdout, command, "review")
                 self.assertEqual(json.loads(result_text), expected)
                 self.assertEqual(parsed, expected)
+
+    def test_sealed_workflow_runs_and_reports_without_cross_mode_reuse(self) -> None:
+        campaign_module = load_module(CAMPAIGN, "prospective_evidence_campaign_run")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repository(root)
+            task = root / "task.txt"
+            task.write_text("PRIVATE-TASK-MATERIAL", encoding="utf-8")
+            task.chmod(0o600)
+            out = root / "out"
+            evaluator = self.evaluator(root)
+            executor = self.executor(review_result())
+            advisor = shlex.join(
+                [sys.executable, "-c", "import sys;sys.stdin.read();print('unused')"]
+            )
+            manifest = campaign_module.build_manifest(
+                arm="shape_b",
+                planned_tasks=12,
+                max_tasks=12,
+                cost_basis="vendor",
+                cheap=shlex.split(executor),
+                expensive=shlex.split(executor),
+                advisor=shlex.split(advisor),
+                advisor_context="prompt",
+                verify=evaluator,
+                prices=None,
+                workflow="review",
+            )
+            campaign_path = root / "campaign.json"
+            campaign_module.write_manifest(campaign_path, manifest)
+            command = [
+                sys.executable,
+                str(RUNNER),
+                "--workflow",
+                "review",
+                "--repo",
+                str(repo),
+                "--task-file",
+                str(task),
+                "--cheap",
+                executor,
+                "--expensive",
+                executor,
+                "--advisor",
+                advisor,
+                "--advise-on-failure",
+                "--confirm-task-egress",
+                "--verify",
+                str(evaluator),
+                "--campaign",
+                str(campaign_path),
+                "--sample-ordinal",
+                "1",
+                "--out-dir",
+                str(out),
+            ]
+            completed = subprocess.run(command, capture_output=True, check=False, text=True)
+            report = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPORT),
+                    "--log",
+                    str(out / "runs.jsonl"),
+                    "--campaign",
+                    str(campaign_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            task.unlink()
+            wrong_mode = list(command)
+            wrong_mode[wrong_mode.index("review")] = "research"
+            mismatched = subprocess.run(wrong_mode, capture_output=True, check=False, text=True)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(report.returncode, 0, report.stderr)
+        self.assertIn("workflow=review", report.stdout)
+        self.assertIn("planned_tasks_not_reached", report.stdout)
+        self.assertEqual(mismatched.returncode, 2)
+        self.assertIn("campaign contract mismatch", mismatched.stderr)
+        self.assertNotIn("task.txt", mismatched.stderr)
 
 
 if __name__ == "__main__":
