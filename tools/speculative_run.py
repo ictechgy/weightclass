@@ -17,8 +17,9 @@ At the measured c = 0.31, break-even is p = 0.69. The cheap route can fail two
 times in three and still not lose money. Run this on real work, read `p` off
 the log, and only then decide.
 
-`implementation` verifies a reconstructed patch. `review`, `research`, and
-`diagnosis` verify a closed JSON result transiently and reject repository edits.
+`implementation` verifies a reconstructed patch. `review`, `research`,
+`diagnosis`, and `design` verify a closed JSON result transiently and reject
+repository edits.
 
 What it never does:
 
@@ -3512,7 +3513,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--workflow",
-        choices=("implementation", "review", "research", "diagnosis"),
+        choices=("implementation", "review", "research", "diagnosis", "design"),
         default="implementation",
         help="implementation returns a patch; other workflows return transient verified JSON",
     )

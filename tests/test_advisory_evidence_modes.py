@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import shlex
 import subprocess
 import sys
@@ -26,7 +25,6 @@ for directory in (str(ROOT), str(TOOLS)):
 REPOSITORY_TOOLS_AVAILABLE = all(
     path.is_file() for path in (RUNNER, REPORT, CONTRACT, CAMPAIGN, ROUTES)
 )
-CAMPAIGN_ACCEPTANCE = os.environ.get("WCLASS_CAMPAIGN_ACCEPTANCE") == "1"
 
 
 def load_module(path: Path, name: str) -> types.ModuleType:
@@ -145,7 +143,6 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(contract.EvidenceResultError, "^$"):
             contract.parse_evidence_result("x" * (contract.MAX_EVIDENCE_RESULT_BYTES + 1), "review")
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective design acceptance")
     def test_design_contract_is_closed_bounded_and_prompted(self) -> None:
         contract = load_module(CONTRACT, "prospective_design_contract")
         design = design_result()
@@ -205,7 +202,6 @@ class EvidenceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(contract.EvidenceResultError, "^$"):
             contract.parse_evidence_result(json.dumps(research), "research")
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective design acceptance")
     def test_brainstorming_assessment_keeps_divergence_separate_from_shape_b(self) -> None:
         self.assertTrue(BRAINSTORM_ASSESSMENT.is_file())
         assessment = BRAINSTORM_ASSESSMENT.read_text(encoding="utf-8")
@@ -295,7 +291,6 @@ class EvidenceCampaignAndRouteTests(unittest.TestCase):
                 workflow="research",
             )
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective design acceptance")
     def test_schema_two_campaign_accepts_and_binds_design_workflow(self) -> None:
         campaign = load_module(CAMPAIGN, "prospective_design_campaign")
         with tempfile.TemporaryDirectory() as directory:
@@ -433,7 +428,6 @@ class EvidenceRunnerTests(unittest.TestCase):
         self.assertEqual(list(out.glob("*.patch")), [])
         self.assertEqual(repo_status, "")
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective design acceptance")
     def test_design_success_uses_the_same_transient_read_only_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             completed, repo, out = self.run_runner(
