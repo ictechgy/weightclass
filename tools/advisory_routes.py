@@ -153,7 +153,9 @@ def profile_sha256(path: Path) -> str:
     return profile_digest(load_profile(path))
 
 
-def build_routes(profile: Mapping[str, object]) -> AdvisoryRoutes:
+def build_routes(
+    profile: Mapping[str, object], *, read_only_executors: bool = False
+) -> AdvisoryRoutes:
     if set(profile) != {"schema_version", "vendor", "models", "efforts"}:
         raise AdvisoryRouteError()
     schema_version = profile["schema_version"]
@@ -170,7 +172,8 @@ def build_routes(profile: Mapping[str, object]) -> AdvisoryRoutes:
     efforts = _role_map(profile["efforts"])
 
     def claude(role: str, *, advisor: bool) -> tuple[str, ...]:
-        permission = "plan" if advisor else "acceptEdits"
+        read_only = advisor or read_only_executors
+        permission = "plan" if read_only else "acceptEdits"
         command: tuple[str, ...] = (
             "claude",
             "--print",
@@ -179,7 +182,7 @@ def build_routes(profile: Mapping[str, object]) -> AdvisoryRoutes:
             "--permission-mode",
             permission,
         )
-        command += ("--tools", "Read,Glob,Grep" if advisor else "Read,Edit,Glob,Grep")
+        command += ("--tools", "Read,Glob,Grep" if read_only else "Read,Edit,Glob,Grep")
         return command + (
             "--output-format",
             "json",
@@ -190,6 +193,7 @@ def build_routes(profile: Mapping[str, object]) -> AdvisoryRoutes:
         )
 
     def codex(role: str, *, advisor: bool) -> tuple[str, ...]:
+        read_only = advisor or read_only_executors
         return (
             "codex",
             "exec",
@@ -197,7 +201,7 @@ def build_routes(profile: Mapping[str, object]) -> AdvisoryRoutes:
             "--ignore-user-config",
             "--ignore-rules",
             "--sandbox",
-            "read-only" if advisor else "workspace-write",
+            "read-only" if read_only else "workspace-write",
             "--json",
             "--model",
             models[role],
@@ -214,19 +218,24 @@ def build_routes(profile: Mapping[str, object]) -> AdvisoryRoutes:
     )
 
 
-def routes_from_profile(path: Path) -> AdvisoryRoutes:
-    return build_routes(load_profile(path))
+def routes_from_profile(path: Path, *, read_only_executors: bool = False) -> AdvisoryRoutes:
+    return build_routes(load_profile(path), read_only_executors=read_only_executors)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("review", choices=("review",))
     parser.add_argument("--profile", required=True, type=Path)
+    parser.add_argument(
+        "--read-only-executors",
+        action="store_true",
+        help="compile cheap and expensive routes without repository write authority",
+    )
     arguments = parser.parse_args()
     try:
         profile_path = arguments.profile.expanduser()
         profile = load_profile(profile_path)
-        routes = build_routes(profile)
+        routes = build_routes(profile, read_only_executors=arguments.read_only_executors)
         digest = profile_digest(profile)
     except AdvisoryRouteError:
         parser.error("invalid advisory route profile")
@@ -238,6 +247,9 @@ def main() -> int:
                 "profile_sha256": digest,
                 "task_delivery": "stdin",
                 "task_egress": True,
+                "executor_access": (
+                    "read_only" if arguments.read_only_executors else "workspace_write"
+                ),
                 "attempt_bound": {
                     "cheap": 1,
                     "advisor": 2,

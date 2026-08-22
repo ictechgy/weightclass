@@ -4,6 +4,8 @@ _Status: measurement gate implemented; advisory execution remains repository-onl
 
 For deterministic Claude and Codex CLI route profiles, including exact review and egress
 confirmation, see [Claude and Codex advisory campaign profiles](advisory-vendor-profiles.md).
+For separate review, research, and diagnosis result contracts, see
+[Read-only advisory evidence workflows](advisory-evidence-workflows.md).
 
 The advisory runner already measures Shape A and Shape B, but an ordinary JSONL
 log cannot prove that its verifier, prices, routes, stopping rule, or advisory

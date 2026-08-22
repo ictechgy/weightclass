@@ -193,6 +193,28 @@ human to read.
   `docs/policy4-fresh-blind-evaluation.md`; task text and per-row artifacts stay
   outside this repository.
 
+### Read-only advisory evidence workflows (2026-08-22)
+
+- Repository-only advisory execution now keeps four separate workflow
+  populations: `implementation`, `review`, `research`, and `diagnosis`.
+- The three evidence workflows require bounded, duplicate-key-safe, closed JSON
+  results, reject tracked, untracked, ignored, and known scaffolding changes,
+  and stream the result only to a scrubbed verifier stdin. Winning JSON is
+  printed after aggregate logging; task, result, advice, verifier output, paths,
+  and fingerprints are not added to the log or persisted as patches.
+- Profile-based evidence executors compile to Claude `plan` without `Edit` or
+  Codex `read-only`. Exact commands remain operator-reviewed, with filesystem
+  edits rejected mechanically.
+- Evidence campaigns use manifest schema 2 and bind the workflow into the
+  fingerprint and record. Existing implementation manifests remain schema 1
+  and byte/shape compatible. Schema validity is not factual validity: every
+  campaign still needs a pre-registered task-specific verifier.
+- The implementation task itself became sealed ordinal 7. Both vendors reached
+  the complete Shape-B fallback and failed acceptance, so no candidate patch
+  was retained; the final change was integrated manually against the unchanged
+  prospective verifier. This is useful failure/cost evidence, not evidence for
+  advisory promotion.
+
 ### Security, performance, and architecture follow-up (2026-08-19)
 
 - Codex Security Standard scan `d2175938-1f01-47e6-b0f2-8d5089f5d839`
@@ -337,9 +359,9 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the Claude/Codex advisory-profile tree: `unittest discover`
-  runs **1171** tests and `pytest -q` reports 1159 passed plus 12 skipped;
+  runs **1180** tests and `pytest -q` reports 1168 passed plus 12 skipped;
   Ruff check/format is
-  clean on 165 files; `mypy --strict src tests` is clean on 131 source files;
+  clean on 168 files; `mypy --strict src tests` is clean on 132 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
   build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
   hides real errors — that is how 139 of them once reached `main`.

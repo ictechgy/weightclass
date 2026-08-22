@@ -224,9 +224,11 @@ def main() -> int:
         return 1
     if campaign_manifest is not None:
         assert campaign_state is not None
+        workflow = campaign_manifest.get("workflow", "implementation")
         print(
             "캠페인:"
-            f" {campaign_manifest['arm']}  과제 {campaign_state.usable_tasks}/"
+            f" {campaign_manifest['arm']}  workflow={workflow}  과제"
+            f" {campaign_state.usable_tasks}/"
             f"{campaign_manifest['planned_tasks']}"
             f" (최대 {campaign_manifest['max_tasks']}), 조언받은 실패"
             f" {campaign_state.advised_failures}/"
