@@ -21,6 +21,10 @@ for directory in (str(ROOT), str(TOOLS)):
     if directory not in sys.path:
         sys.path.insert(0, directory)
 
+REPOSITORY_TOOLS_AVAILABLE = all(
+    path.is_file() for path in (RUNNER, REPORT, CONTRACT, CAMPAIGN, ROUTES)
+)
+
 
 def load_module(path: Path, name: str) -> types.ModuleType:
     spec = importlib.util.spec_from_file_location(name, path)
@@ -81,6 +85,9 @@ def diagnosis_result() -> dict[str, object]:
     }
 
 
+@unittest.skipUnless(
+    REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable"
+)
 class EvidenceContractTests(unittest.TestCase):
     def test_mode_contracts_are_closed_bounded_and_prompted(self) -> None:
         self.assertTrue(CONTRACT.is_file())
@@ -150,6 +157,9 @@ class EvidenceContractTests(unittest.TestCase):
             contract.parse_evidence_result(json.dumps(research), "research")
 
 
+@unittest.skipUnless(
+    REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable"
+)
 class EvidenceCampaignAndRouteTests(unittest.TestCase):
     def profile(self, vendor: str) -> dict[str, object]:
         return {
@@ -226,6 +236,9 @@ class EvidenceCampaignAndRouteTests(unittest.TestCase):
             )
 
 
+@unittest.skipUnless(
+    REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable"
+)
 class EvidenceRunnerTests(unittest.TestCase):
     def repository(self, root: Path) -> Path:
         repo = root / "repo"
