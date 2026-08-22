@@ -97,6 +97,40 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
 
             self.assertFalse((home / ".agents" / "skills" / "advisory").exists())
 
+    def test_destination_and_skill_root_symlinks_fail_closed(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            home.mkdir()
+            external = root / "external"
+            external.mkdir()
+            claude_root = home / ".claude" / "skills"
+            claude_root.mkdir(parents=True)
+            (claude_root / "advisory").symlink_to(external, target_is_directory=True)
+
+            with self.assertRaisesRegex(installer.SkillInstallError, "^skill_conflict$"):
+                installer.install_skill(
+                    BUNDLE,
+                    home=home,
+                    target="both",
+                    dry_run=False,
+                    advisory_command_available=True,
+                )
+            self.assertFalse((home / ".agents").exists())
+
+            (claude_root / "advisory").unlink()
+            (home / ".agents").symlink_to(external, target_is_directory=True)
+            with self.assertRaisesRegex(installer.SkillInstallError, "^unsafe_skill_root$"):
+                installer.install_skill(
+                    BUNDLE,
+                    home=home,
+                    target="codex",
+                    dry_run=False,
+                    advisory_command_available=True,
+                )
+            self.assertEqual(list(external.iterdir()), [])
+
     def test_dry_run_and_missing_command_never_create_skill_directories(self) -> None:
         installer = load_installer()
         with tempfile.TemporaryDirectory() as directory:

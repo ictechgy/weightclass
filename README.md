@@ -83,6 +83,8 @@ Any evidence intended to move the product boundary must use the sealed,
 task-free [`docs/advisory-campaign.md`](docs/advisory-campaign.md) contract. Deterministic,
 operator-selected Claude and Codex model/effort profiles are documented in
 [`docs/advisory-vendor-profiles.md`](docs/advisory-vendor-profiles.md);
+the repository-only, explicit opt-in [`advisory` Agent Skill](docs/advisory-skill.md) can be
+installed for Codex, Claude Code, or both after that local runtime is configured;
 legacy unbound logs remain descriptive only.
 
 Raw tokens and estimated provider cost must be evaluated separately. The

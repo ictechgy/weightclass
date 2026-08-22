@@ -216,11 +216,21 @@ human to read.
   assessment is `docs/advisory-brainstorming-assessment.md`; the decision is
   “experiment before promotion,” because binary Shape-B rescue does not measure
   constraint compliance, idea diversity, or human preference.
+- A portable personal Agent Skill is available as the explicit opt-in
+  `advisory` skill for Codex and Claude Code. The repository-only installer
+  preflights both destinations, refuses overwrite/symlink conflicts, copies
+  only the closed three-file bundle with owner-only permissions, and requires
+  an already configured `wclass-advisory` command. It does not ship in the
+  distribution or promote advisory into `wclass`; see `docs/advisory-skill.md`.
 - The implementation task itself became sealed ordinal 7. Both vendors reached
   the complete Shape-B fallback and failed acceptance, so no candidate patch
   was retained; the final change was integrated manually against the unchanged
   prospective verifier. This is useful failure/cost evidence, not evidence for
   advisory promotion.
+- The design-mode follow-up became sealed ordinal 8. Both cheap paths passed
+  without advice or escalation: Codex produced the smaller accepted candidate
+  and Claude independently passed the same prospective verifier. This adds
+  ordinary cheap-path evidence but no new advised-failure rescue observation.
 
 ### Security, performance, and architecture follow-up (2026-08-19)
 
@@ -366,9 +376,9 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the Claude/Codex advisory-profile tree: `unittest discover`
-  runs **1180** tests and `pytest -q` reports 1168 passed plus 12 skipped;
+  runs **1192** tests and `pytest -q` reports 1180 passed plus 12 skipped;
   Ruff check/format is
-  clean on 168 files; `mypy --strict src tests` is clean on 132 source files;
+  clean on 174 files; `mypy --strict src tests` is clean on 133 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
   build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
   hides real errors — that is how 139 of them once reached `main`.
