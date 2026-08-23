@@ -15,6 +15,10 @@ ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
 ROUTES = TOOLS / "advisory_routes.py"
 RUNNER = TOOLS / "speculative_run.py"
+REPOSITORY_TOOLS_AVAILABLE = ROUTES.is_file() and RUNNER.is_file()
+for directory in (str(ROOT), str(TOOLS)):
+    if directory not in sys.path:
+        sys.path.insert(0, directory)
 
 
 def load_module(path: Path, name: str) -> types.ModuleType:
@@ -47,6 +51,7 @@ def custom_profile(command: list[str]) -> dict[str, object]:
     }
 
 
+@unittest.skipUnless(REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable")
 class FlexibleVendorRouteTests(unittest.TestCase):
     def test_schema_one_adds_agy_and_grok_without_changing_existing_digests(self) -> None:
         routes = load_module(ROUTES, "prospective_flexible_routes")
@@ -153,6 +158,7 @@ class FlexibleVendorRouteTests(unittest.TestCase):
             self.assertTrue(value["task_process_exposure"])
 
 
+@unittest.skipUnless(REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable")
 class FlexibleVendorRunnerTests(unittest.TestCase):
     def test_run_child_materializes_stdin_argv_and_private_file_then_cleans_it(self) -> None:
         runner = load_module(RUNNER, "prospective_flexible_runner")
