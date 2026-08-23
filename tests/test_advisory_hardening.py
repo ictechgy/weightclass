@@ -90,7 +90,7 @@ class AdvisoryOrchestrationHardeningTests(unittest.TestCase):
                 check=False,
                 text=True,
             )
-        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_timeout_does_not_leave_a_descendant_running(self) -> None:
         parallel = load_parallel()

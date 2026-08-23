@@ -79,13 +79,14 @@ Normal implicit selection is available, but the description is intentionally nar
 must explicitly say advisory. Claude Code `--safe-mode` disables personal skills by design.
 
 For a machine-local wrapper configured with more vendors, `--vendor all` dispatches the same task
-to every configured profile using each campaign's independent ordinal. Independent vendor
-campaigns start concurrently, while the cheap/advisor/retry/expensive stages inside each campaign
-remain sequential. Output is captured in memory and replayed in vendor order so records and
-diagnostics do not interleave. Updated machine-local shims acquire every selected vendor's
-owner-only dispatch lock before starting any vendor; a busy campaign therefore fails the whole
-batch instead of letting another project's ordinal masquerade as this run. Each top-level job also
-has a finite outer deadline and bounded retained output. `--vendor both` remains a backward-compatible Claude+Codex alias.
+to every configured profile. Each vendor/workflow has four fixed anonymous lanes by default;
+lane 0 preserves the existing campaign root and extra lanes use bounded `.lanes/lane-XX` names
+without project-derived identifiers. Independent projects and vendors can therefore start
+concurrently, while cheap/advisor/retry/expensive stages inside one lane remain sequential. The
+shim leases one free lane for every selected vendor before any child starts and releases partial
+leases if a selected vendor has no free lane. Output is captured in memory and replayed in vendor
+order so diagnostics do not interleave. Reports automatically validate and merge every lane before
+computing promotion gates. `--vendor both` remains a backward-compatible Claude+Codex alias.
 Equal record counts do not prove paired tasks; compare vendors only when the operator deliberately
 admitted the same task to each campaign.
 

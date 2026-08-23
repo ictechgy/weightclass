@@ -10,6 +10,7 @@ or credentials.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -35,6 +36,8 @@ MAX_VERIFY_BYTES = 1_048_576
 MAX_PRICES_BYTES = 65_536
 MAX_CAMPAIGN_LOG_BYTES = 67_108_864
 MAX_TASKS = 500
+ANONYMOUS_LANE_COUNT = 4
+MAX_ANONYMOUS_LANES = 16
 OVERLAPPING_PRICE_FIELDS = (
     frozenset({"input_tokens", "uncached_input_tokens"}),
     frozenset({"input_tokens", "cached_input_tokens"}),
@@ -44,6 +47,63 @@ OVERLAPPING_PRICE_FIELDS = (
 
 class CampaignError(ValueError):
     """Value-free rejection of an invalid or mismatched campaign contract."""
+
+
+def lane_result_directories(root: Path, lane_count: int = ANONYMOUS_LANE_COUNT) -> tuple[Path, ...]:
+    """Return the fixed, anonymous result mapping, retaining the old root as lane 0."""
+    if (
+        not isinstance(lane_count, int)
+        or isinstance(lane_count, bool)
+        or not 1 <= lane_count <= MAX_ANONYMOUS_LANES
+        or not root.is_absolute()
+    ):
+        raise CampaignError()
+    return (
+        root,
+        *(root / ".lanes" / f"lane-{index:02d}" for index in range(1, lane_count)),
+    )
+
+
+def _validate_private_lane_directory(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise CampaignError() from error
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+    ):
+        raise CampaignError()
+
+
+def existing_lane_result_directories(
+    root: Path, lane_count: int = ANONYMOUS_LANE_COUNT
+) -> tuple[Path, ...]:
+    """Return lane 0 and existing members of the bounded lane set.
+
+    A lane-shaped entry outside the fixed set is rejected instead of silently
+    letting a caller report a subset of the population.
+    """
+    directories = lane_result_directories(root, lane_count)
+    lanes_root = root / ".lanes"
+    try:
+        if root.exists() or root.is_symlink():
+            _validate_private_lane_directory(root)
+        if lanes_root.exists() or lanes_root.is_symlink():
+            _validate_private_lane_directory(lanes_root)
+            allowed = {directory.name for directory in directories[1:]}
+            if any(
+                entry.name.startswith("lane-") and entry.name not in allowed
+                for entry in lanes_root.iterdir()
+            ):
+                raise CampaignError()
+        for directory in directories[1:]:
+            if directory.exists() or directory.is_symlink():
+                _validate_private_lane_directory(directory)
+    except OSError as error:
+        raise CampaignError() from error
+    return tuple(directory for directory in directories if directory == root or directory.exists())
 
 
 class RouteContract(TypedDict):
@@ -586,6 +646,54 @@ def validate_record_bindings(
     if ordinals != set(range(1, len(ordinals) + 1)):
         raise CampaignError()
     return ordinals
+
+
+def merge_lane_records(
+    manifest: CampaignManifest,
+    lane_records: Sequence[Sequence[Mapping[str, object]]],
+) -> list[dict[str, object]]:
+    """Validate lanes independently and return a copied, transient global view.
+
+    Lane ordinals are local by design. They are never rewritten in a lane log;
+    the combined view is the only place where a global sequence is created.
+    """
+    if not isinstance(lane_records, (tuple, list)) or len(lane_records) > MAX_ANONYMOUS_LANES:
+        raise CampaignError()
+    copied: list[dict[str, object]] = []
+    for records in lane_records:
+        if not isinstance(records, (tuple, list)):
+            raise CampaignError()
+        validate_record_bindings(manifest, records)
+        for record in records:
+            if not isinstance(record, Mapping):
+                raise CampaignError()
+            value = copy.deepcopy(dict(record))
+            binding = value.get("campaign")
+            if not isinstance(binding, Mapping):
+                raise CampaignError()
+            value["campaign"] = dict(binding)
+            copied.append(value)
+    if len(copied) > manifest["max_tasks"]:
+        raise CampaignError()
+    for ordinal, record in enumerate(copied, 1):
+        binding = record["campaign"]
+        assert isinstance(binding, dict)
+        binding["sample_ordinal"] = ordinal
+    return copied
+
+
+def load_merged_lane_records(
+    manifest: CampaignManifest, root: Path, lane_count: int = ANONYMOUS_LANE_COUNT
+) -> list[dict[str, object]]:
+    """Load every existing bounded lane and merge it without changing disk bytes."""
+    try:
+        lanes = existing_lane_result_directories(root, lane_count)
+        return merge_lane_records(
+            manifest,
+            tuple(load_bound_records(directory / "runs.jsonl") for directory in lanes),
+        )
+    except (OSError, CampaignError):
+        raise CampaignError() from None
 
 
 def campaign_progress(
