@@ -324,6 +324,11 @@ human to read.
   sealed global `max_tasks`, retains the legacy `dispatch.lock` for lane-0
   migration safety, rejects symlink/shared lane directories, and refuses prune
   while any lane campaign lock is active.
+- Codex Security diff scan `1940cb8d-5ac8-46b0-91d7-d618e38ef719` reviewed
+  allocator atomicity, path admission, crash recovery, legacy migration,
+  capacity reservations, merged reporting, pruning, and privacy with complete
+  changed-source coverage and found no reportable issues. Measured usage was
+  7,276,858 total tokens (7,273,054 input; 7,256,064 cached input).
 - Usage-store lock/read/temp/replace/cleanup/fsync operations are relative to
   one opened and revalidated private parent descriptor. A deterministic parent
   swap test proves that a replacement directory is not written and the staged
