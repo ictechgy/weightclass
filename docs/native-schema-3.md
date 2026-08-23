@@ -137,8 +137,9 @@ The route descriptor binds a complete `lstat` identity, and run compares that
 identity before task access and again after task-dependent materialization,
 immediately before spawn. Admission additionally rejects group- or
 other-writable executable files and non-sticky world-writable containing
-directories. Sticky directories and user-owned group-writable ancestors remain
-compatible. This narrows ordinary replacement opportunities but does not make
+directories in both the lexical and resolved target chains. Sticky directories
+and user-owned group-writable ancestors remain compatible. This narrows
+ordinary replacement opportunities but does not make
 the final observation and path-based process creation atomic: an actor able to
 replace an admitted path after the final check can still win a
 time-of-check/time-of-use race. Schema 3 therefore does not claim

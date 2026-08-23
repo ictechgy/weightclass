@@ -198,6 +198,25 @@ class SecurityBoundaryHardeningTests(unittest.TestCase):
             with self.assertRaisesRegex(V2ValidationError, "^$"):
                 observe_executable(str(executable))
 
+    def test_public_lexical_ancestor_is_checked_before_intermediate_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            target.mkdir(mode=0o700)
+            executable = target / "tool"
+            executable.write_bytes(b"x")
+            executable.chmod(0o700)
+            public = root / "public"
+            public.mkdir()
+            public.chmod(0o777)
+            (public / "link").symlink_to(target, target_is_directory=True)
+            lexical = public / "link" / executable.name
+            with self.assertRaisesRegex(V2ValidationError, "^$"):
+                observe_executable(str(lexical))
+
+            public.chmod(0o1777)
+            self.assertTrue(observe_executable(str(lexical)).executable_bit)
+
 
 if __name__ == "__main__":
     unittest.main()

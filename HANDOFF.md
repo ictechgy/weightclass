@@ -313,10 +313,17 @@ human to read.
   remains a narrower residual; the default private home location remains the
   preferred path.
 - Executable admission now rejects group/other-writable executable files and
-  non-sticky world-writable containing directories while retaining sticky
-  directories and user-owned group-writable ancestors for macOS/Homebrew
-  compatibility. Path-based spawn after the final observation remains a medium
-  residual; this change is not described as verified-object execution.
+  non-sticky world-writable containing directories in both lexical and resolved
+  target chains while retaining sticky directories and user-owned
+  group-writable ancestors for macOS/Homebrew compatibility. Security diff scan
+  `f408aeb2-976c-432d-8d8a-d7ca87defb46` found that the first implementation
+  checked only the resolved chain and accepted an intermediate symlink under a
+  public lexical ancestor; a focused reproduction confirmed the medium finding.
+  The follow-up checks both chains, rejects that reproduction, and preserves the
+  four installed executable probes. The scan used 8,768,564 total tokens
+  (8,759,893 input; 8,710,144 cached input). Path-based spawn after the final
+  observation remains a medium residual; this change is not described as
+  verified-object execution.
 - The flexible-vendor implementation became Codex implementation ordinal 11.
   Luna passed the prospective verifier without advice or escalation after a
   799.2-second child run. Claude ordinal 11 was concurrently consumed by a
@@ -467,7 +474,7 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the advisory-review-verifier tree: `unittest discover` runs
-  **1220** tests and `pytest -q` reports 1208 passed plus 12 skipped;
+  **1221** tests and `pytest -q` reports 1209 passed plus 12 skipped;
   Ruff check/format is
   clean on 182 files; `mypy --strict src tests` is clean on 138 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel

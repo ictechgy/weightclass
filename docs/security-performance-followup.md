@@ -42,9 +42,10 @@ still needs platform and migration design and is not described as fixed.
   reaches the existing value-free `invalid_input` boundary instead of an
   unbounded read or integer conversion.
 - Executable observation rejects group- or other-writable executable files and
-  rejects a non-sticky world-writable containing directory. Sticky directories
-  and user-owned group-writable ancestors remain compatible with existing
-  installations; no verified-object execution claim is made.
+  rejects a non-sticky world-writable containing directory in both the lexical
+  and resolved target chains. Sticky directories and user-owned group-writable
+  ancestors remain compatible with existing installations; no verified-object
+  execution claim is made.
 - Usage-store lock, read, temporary creation, replacement, cleanup, and
   directory fsync now use names relative to one opened and revalidated private
   parent descriptor. The aggregate schema, owner-only modes, no-follow checks,
