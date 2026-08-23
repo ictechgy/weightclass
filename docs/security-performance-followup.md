@@ -46,7 +46,10 @@ still needs platform and migration design and is not described as fixed.
   world-writable containing directory in both the lexical and resolved target
   chains. Root/current-user-owned group-writable files, sticky directories, and
   user-owned group-writable ancestors remain compatible with hosted runtimes
-  and existing installations; no verified-object execution claim is made.
+  and existing installations. GitHub Actions additionally admits only a
+  root-owned absolute `RUNNER_TOOL_CACHE` when `GITHUB_ACTIONS=true`; arbitrary
+  and user-owned caches do not receive that exception. No verified-object
+  execution claim is made.
 - Usage-store lock, read, temporary creation, replacement, cleanup, and
   directory fsync now use names relative to one opened and revalidated private
   parent descriptor. The aggregate schema, owner-only modes, no-follow checks,

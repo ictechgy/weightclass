@@ -316,8 +316,10 @@ human to read.
   group-writable files not owned by root/current user, and non-sticky
   world-writable containing directories in both lexical and resolved target
   chains. Root/current-user-owned group-writable files, sticky directories, and
-  user-owned group-writable ancestors remain compatible with hosted runtimes,
-  macOS, and Homebrew. Security diff scan
+  user-owned group-writable ancestors remain compatible with macOS and
+  Homebrew. GitHub Actions has one narrower compatibility exception for a
+  root-owned absolute `RUNNER_TOOL_CACHE` while `GITHUB_ACTIONS=true`; arbitrary
+  or user-owned caches remain rejected. Security diff scan
   `f408aeb2-976c-432d-8d8a-d7ca87defb46` found that the first implementation
   checked only the resolved chain and accepted an intermediate symlink under a
   public lexical ancestor; a focused reproduction confirmed the medium finding.
@@ -476,7 +478,7 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the advisory-review-verifier tree: `unittest discover` runs
-  **1221** tests and `pytest -q` reports 1209 passed plus 12 skipped;
+  **1222** tests and `pytest -q` reports 1210 passed plus 12 skipped;
   Ruff check/format is
   clean on 182 files; `mypy --strict src tests` is clean on 138 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel

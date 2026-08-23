@@ -24,7 +24,31 @@ class ExecutableObservation:
     executable_bit: bool
 
 
+def _trusted_hosted_toolcache() -> str | None:
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return None
+    value = os.environ.get("RUNNER_TOOL_CACHE", "")
+    if not os.path.isabs(value):
+        return None
+    resolved = os.path.realpath(value)
+    try:
+        metadata = os.lstat(resolved)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0:
+        return None
+    return resolved
+
+
+def _inside(path: str, parent: str) -> bool:
+    try:
+        return os.path.commonpath((path, parent)) == parent
+    except ValueError:
+        return False
+
+
 def _reject_public_ancestors(start: str) -> None:
+    hosted_toolcache = _trusted_hosted_toolcache()
     current = start
     while current and current != os.path.dirname(current):
         try:
@@ -35,6 +59,7 @@ def _reject_public_ancestors(start: str) -> None:
             stat.S_ISDIR(ancestor.st_mode)
             and ancestor.st_mode & stat.S_IWOTH
             and not ancestor.st_mode & stat.S_ISVTX
+            and (hosted_toolcache is None or not _inside(current, hosted_toolcache))
         ):
             raise V2ValidationError()
         current = os.path.dirname(current)

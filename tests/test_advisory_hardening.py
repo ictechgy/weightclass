@@ -217,6 +217,45 @@ class SecurityBoundaryHardeningTests(unittest.TestCase):
             public.chmod(0o1777)
             self.assertTrue(observe_executable(str(lexical)).executable_bit)
 
+    def test_only_root_owned_github_hosted_toolcache_gets_public_exception(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            root = Path(directory)
+            cache = root / "hostedtoolcache"
+            cache.mkdir()
+            cache.chmod(0o777)
+            executable = cache / "tool"
+            executable.write_bytes(b"x")
+            executable.chmod(0o700)
+            environment = {
+                "GITHUB_ACTIONS": "true",
+                "RUNNER_TOOL_CACHE": str(cache),
+            }
+            with (
+                mock.patch.dict(os.environ, environment, clear=False),
+                self.assertRaisesRegex(V2ValidationError, "^$"),
+            ):
+                observe_executable(str(executable))
+
+            real_lstat = os.lstat
+            cache_resolved = os.path.realpath(cache)
+
+            def root_owned(path: str | os.PathLike[str]) -> os.stat_result:
+                metadata = real_lstat(path)
+                if os.fspath(path) == cache_resolved:
+                    values = list(metadata)
+                    values[4] = 0
+                    return os.stat_result(values)
+                return metadata
+
+            with (
+                mock.patch.dict(os.environ, environment, clear=False),
+                mock.patch(
+                    "weightclass.executable_observation.os.lstat",
+                    side_effect=root_owned,
+                ),
+            ):
+                self.assertTrue(observe_executable(str(executable)).executable_bit)
+
 
 if __name__ == "__main__":
     unittest.main()
