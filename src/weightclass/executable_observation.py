@@ -70,6 +70,10 @@ def observe_executable(lexical_path: str) -> ExecutableObservation:
     except OSError as error:
         raise V2ValidationError() from error
     executable_bit = bool(observed.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+    hosted_toolcache = _trusted_hosted_toolcache()
+    hosted_executable = hosted_toolcache is not None and _inside(
+        os.path.realpath(lexical_path), hosted_toolcache
+    )
     untrusted_group_write = bool(observed.st_mode & stat.S_IWGRP) and observed.st_uid not in {
         0,
         os.getuid(),
@@ -77,8 +81,8 @@ def observe_executable(lexical_path: str) -> ExecutableObservation:
     if (
         not stat.S_ISREG(observed.st_mode)
         or not executable_bit
-        or observed.st_mode & stat.S_IWOTH
-        or untrusted_group_write
+        or (not hosted_executable and observed.st_mode & stat.S_IWOTH)
+        or (not hosted_executable and untrusted_group_write)
     ):
         raise V2ValidationError()
     lexical_parent = os.path.abspath(os.path.dirname(lexical_path))

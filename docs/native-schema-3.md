@@ -142,7 +142,8 @@ directories in both the lexical and resolved target chains. Sticky directories
 Root/current-user-owned group-writable files, sticky directories, and
 user-owned group-writable ancestors remain compatible. GitHub Actions receives
 one narrower exception only for the exact resolved `/opt/hostedtoolcache` while
-`GITHUB_ACTIONS=true`; arbitrary and custom caches are still rejected. This
+`GITHUB_ACTIONS=true`; its hosted writable files and ancestors are admitted,
+while arbitrary and custom caches are still rejected. This
 narrows ordinary replacement opportunities but does not make
 the final observation and path-based process creation atomic: an actor able to
 replace an admitted path after the final check can still win a

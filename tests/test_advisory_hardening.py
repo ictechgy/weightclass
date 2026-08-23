@@ -242,6 +242,7 @@ class SecurityBoundaryHardeningTests(unittest.TestCase):
                     return_value=os.path.realpath(cache),
                 ),
             ):
+                executable.chmod(0o777)
                 self.assertTrue(observe_executable(str(executable)).executable_bit)
 
             official = {
