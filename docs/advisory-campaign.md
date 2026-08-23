@@ -2,8 +2,8 @@
 
 _Status: measurement gate implemented; advisory execution remains repository-only._
 
-For deterministic Claude and Codex CLI route profiles, including exact review and egress
-confirmation, see [Claude and Codex advisory campaign profiles](advisory-vendor-profiles.md).
+For deterministic built-in and exact-command CLI route profiles, including task-delivery review
+and egress confirmation, see [Advisory campaign vendor profiles](advisory-vendor-profiles.md).
 For an explicit personal Codex/Claude skill install after that runtime is configured, see
 [Optional advisory Agent Skill](advisory-skill.md).
 For separate review, research, diagnosis, and design result contracts, see

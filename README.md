@@ -81,7 +81,7 @@ expensive *output*. Both require a number nobody has yet:
 [`docs/measuring-p-at-work.md`](docs/measuring-p-at-work.md) is how to get it.
 Any evidence intended to move the product boundary must use the sealed,
 task-free [`docs/advisory-campaign.md`](docs/advisory-campaign.md) contract. Deterministic,
-operator-selected Claude and Codex model/effort profiles are documented in
+operator-selected built-in and exact-command advisory profiles are documented in
 [`docs/advisory-vendor-profiles.md`](docs/advisory-vendor-profiles.md);
 the repository-only, explicit opt-in [`advisory` Agent Skill](docs/advisory-skill.md) can be
 installed for Codex, Claude Code, or both after that local runtime is configured;

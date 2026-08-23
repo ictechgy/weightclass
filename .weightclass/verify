@@ -1,14 +1,19 @@
 #!/bin/sh
 set -eu
 
-if ! git diff --cached --quiet -- .weightclass/verify tests/test_advisory_evidence_modes.py; then
+if ! git diff --cached --quiet -- \
+  .weightclass/verify \
+  tests/test_advisory_evidence_modes.py \
+  tests/test_advisory_flexible_vendors.py; then
   echo "protected acceptance files changed"
   exit 1
 fi
 
 set +e
 WCLASS_CAMPAIGN_ACCEPTANCE=1 PYTHONPATH="$PWD/src" \
-  python3 -m unittest tests.test_advisory_evidence_modes
+  python3 -m unittest \
+    tests.test_advisory_evidence_modes \
+    tests.test_advisory_flexible_vendors
 focused_code=$?
 set -e
 

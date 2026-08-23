@@ -1,4 +1,4 @@
-# Claude and Codex advisory campaign profiles
+# Advisory campaign vendor profiles
 
 Read-only `review`, `research`, `diagnosis`, and `design` workflows compile the same
 profile with read-only executor authority; see
@@ -7,22 +7,22 @@ profile with read-only executor authority; see
 _Status: repository-only measurement configuration. These profiles do not enable advisory in the
 installed `wclass` command._
 
-The Shape-B path is the same for both vendors:
+The Shape-B path is the same for every configured vendor:
 
 ```text
 cheap executor -> verify -> advisor -> fresh cheap retry -> verify -> expensive fallback
 ```
 
-Keep Claude and Codex in separate sealed campaigns. Their token accounting, authentication,
-billing origin, and output formats differ, so combining their rows would make the cost endpoint
-uninterpretable.
+Keep every vendor in a separate sealed campaign. Token accounting, authentication, billing origin,
+and output formats differ, so combining rows would make the cost endpoint uninterpretable.
 
 ## Task-free route profiles
 
-A route profile contains only the exact model and effort labels selected by the operator. The
-labels are opaque configuration: weightclass does not infer availability, entitlement, price, or
-relative quality. The compiler supplies a reviewed CLI shape and sends every task through standard
-input.
+A schema-1 route profile contains only the exact model and effort labels selected by the operator;
+schema 2 contains the operator's exact command matrices. Labels are opaque configuration:
+weightclass does not infer availability, entitlement, price, or relative quality. The compiler
+supplies or validates a reviewed CLI shape and sends every task through standard input unless the
+reviewed command contains the exact argv or private-file placeholder described below.
 
 Claude example:
 
@@ -82,6 +82,75 @@ remains owned by each CLI. The runner itself does not read or copy credential fi
 can still read files exposed by its HOME and sandbox. Use separate `--cheap-home`,
 `--advisor-home`, and `--expensive-home` directories when the operator has staged the minimum
 vendor authentication there; never point one arm at another arm's HOME.
+
+### Built-in agy and Grok profiles
+
+Schema 1 also accepts `agy` and `grok`. Their model and effort labels remain opaque, user-selected
+configuration; this repository does not infer model quality, availability, entitlement, price, or
+subscription usage, and it does not create active measurement profiles by guessing those values.
+
+The reviewed agy route places the exact `{{task}}` slot in argv. Its review output reports
+`"task_delivery": "argv"` and `"task_process_exposure": true`; local process inspection can see
+the task while the child runs. The executor uses `--mode accept-edits`, while advisor and evidence
+executors use `--mode plan`.
+
+The reviewed Grok route uses `--prompt-file {{task_file}}`. The runner creates an owner-only,
+transient file outside the Git workspace immediately before spawn and deletes it after success,
+failure, timeout, or a child start error. Keeping it outside the clone prevents a child that runs
+`git add -A` from staging task bytes before cleanup. Grok review therefore reports
+`"task_delivery": "file"` and no argv exposure. The route also disables subagents, web search,
+and implicit prompt rewriting so the reviewed command does not silently widen the measurement
+surface.
+
+agy JSON usage exposes `input_tokens`, `output_tokens`, `thinking_tokens`, and
+`cache_read_tokens`. Grok JSON exposes its own vendor-reported `total_cost_usd` plus
+`input_tokens`, `output_tokens`, `cache_read_input_tokens`, and
+`cache_creation_input_tokens`. The runner accepts those envelopes only when the executable basename
+identifies the corresponding vendor. A user price table may name the reported fields; do not infer
+rates or translate token fields across vendors. Structured stdout from an unknown executable is
+model-controlled text and never becomes usage or cost evidence.
+
+### Schema 2 for arbitrary vendors
+
+Schema 2 is for a vendor whose command shape is supplied and reviewed by the operator. It is
+closed and bounded: the top-level keys are exactly `schema_version`, `vendor`, and `commands`,
+where `commands` contains exactly `implementation` and `evidence`, and each workflow contains
+exactly `cheap`, `advisor`, and `expensive` command arrays.
+
+```json
+{
+  "schema_version": 2,
+  "vendor": "acme-cli",
+  "commands": {
+    "implementation": {
+      "cheap": ["acme", "--prompt-file", "{{task_file}}"],
+      "advisor": ["acme", "--prompt-file", "{{task_file}}"],
+      "expensive": ["acme", "--prompt-file", "{{task_file}}"]
+    },
+    "evidence": {
+      "cheap": ["acme", "--read-only", "{{task}}"],
+      "advisor": ["acme", "--read-only", "{{task}}"],
+      "expensive": ["acme", "--read-only", "{{task}}"]
+    }
+  }
+}
+```
+
+Each command may contain zero or one exact `{{task}}` or `{{task_file}}` token. A token cannot be
+the executable or embedded in another argument; duplicate keys, unknown keys, unbounded commands,
+and multiple delivery tokens fail closed. Zero tokens means stdin. `{{task}}` means argv and carries
+the documented process-inspection exposure. `{{task_file}}` means the same private transient-file
+delivery used by Grok. Review reports one delivery string when all roles agree, or a per-role map
+when they do not, plus whether any selected role enters argv.
+
+An executable whose basename is not a built-in vendor receives no vendor-prefixed credentials by
+default. Add only the exact required environment variable names with `--cheap-env`,
+`--advisor-env`, or `--expensive-env`; do not use `--child-env-all` merely to make an unknown CLI
+authenticate, because that hands the entire process environment to every arm.
+
+Keep every vendor and workflow in its own sealed campaign. The manifest binds the exact command
+matrices after compilation, while existing schema-1 Claude/Codex campaign bytes and fingerprints
+remain compatible.
 
 ## Seal one campaign per vendor
 

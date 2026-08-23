@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build reviewable Claude or Codex advisory routes from a task-free profile.
+"""Build reviewable advisory routes from a task-free profile.
 
-The profile contains only caller-selected opaque model and effort labels.  It
-does not contain a task, command, executable path, account, credential, price,
-or repository path.  Both campaign sealing and execution use this module so a
+Schema 1 contains caller-selected opaque model and effort labels for the four
+built-in CLIs. Schema 2 contains exact, bounded command matrices for arbitrary
+vendors. Neither schema contains a task, account, credential, price, or
+repository path. Both campaign sealing and execution use this module so a
 reviewed profile cannot silently compile to different argv in the two stages.
 """
 
@@ -15,14 +16,21 @@ import json
 import os
 import stat
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
 PROFILE_SCHEMA_VERSION = 1
+CUSTOM_PROFILE_SCHEMA_VERSION = 2
 MAX_PROFILE_BYTES = 16_384
 MAX_LABEL_BYTES = 240
+MAX_COMMANDS = 32
+MAX_COMMAND_TOKEN_BYTES = 4_096
+MAX_COMMAND_AGGREGATE_BYTES = 16_384
 ROLES = ("cheap", "advisor", "expensive")
+WORKFLOWS = ("implementation", "evidence")
+TASK_PLACEHOLDER = "{{task}}"
+TASK_FILE_PLACEHOLDER = "{{task_file}}"
 
 
 class AdvisoryRouteError(ValueError):
@@ -33,6 +41,10 @@ class AdvisoryRoutes(NamedTuple):
     cheap: tuple[str, ...]
     advisor: tuple[str, ...]
     expensive: tuple[str, ...]
+
+
+def _schema_version(value: object, expected: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value == expected
 
 
 def _object_without_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -85,6 +97,7 @@ def _label(value: object) -> str:
         raise AdvisoryRouteError() from error
     if (
         not 1 <= len(encoded) <= MAX_LABEL_BYTES
+        or value in {TASK_PLACEHOLDER, TASK_FILE_PLACEHOLDER}
         or value.startswith("-")
         or value != value.strip()
         or any(
@@ -103,6 +116,58 @@ def _role_map(value: object) -> dict[str, str]:
     return {role: _label(value[role]) for role in ROLES}
 
 
+def _command(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= MAX_COMMANDS:
+        raise AdvisoryRouteError()
+    command: list[str] = []
+    aggregate_bytes = 0
+    placeholder_count = 0
+    for token in value:
+        if not isinstance(token, str):
+            raise AdvisoryRouteError()
+        try:
+            encoded = token.encode("utf-8", errors="strict")
+        except UnicodeError as error:
+            raise AdvisoryRouteError() from error
+        if not 1 <= len(encoded) <= MAX_COMMAND_TOKEN_BYTES or any(
+            unicodedata.category(character).startswith("C")
+            or (character.isspace() and character != " ")
+            for character in token
+        ):
+            raise AdvisoryRouteError()
+        aggregate_bytes += len(encoded)
+        if aggregate_bytes > MAX_COMMAND_AGGREGATE_BYTES:
+            raise AdvisoryRouteError()
+        if TASK_PLACEHOLDER in token or TASK_FILE_PLACEHOLDER in token:
+            if token not in {TASK_PLACEHOLDER, TASK_FILE_PLACEHOLDER}:
+                raise AdvisoryRouteError()
+            placeholder_count += 1
+        command.append(token)
+    if placeholder_count > 1 or command[0] in {TASK_PLACEHOLDER, TASK_FILE_PLACEHOLDER}:
+        raise AdvisoryRouteError()
+    return tuple(command)
+
+
+def _command_matrix(value: object) -> dict[str, tuple[str, ...]]:
+    if not isinstance(value, Mapping) or set(value) != set(ROLES):
+        raise AdvisoryRouteError()
+    return {role: _command(value[role]) for role in ROLES}
+
+
+def _load_custom_profile(value: dict[str, object]) -> dict[str, object]:
+    if not _schema_version(value["schema_version"], CUSTOM_PROFILE_SCHEMA_VERSION):
+        raise AdvisoryRouteError()
+    vendor = _label(value["vendor"])
+    commands = value["commands"]
+    if not isinstance(commands, Mapping) or set(commands) != set(WORKFLOWS):
+        raise AdvisoryRouteError()
+    return {
+        "schema_version": CUSTOM_PROFILE_SCHEMA_VERSION,
+        "vendor": vendor,
+        "commands": {workflow: _command_matrix(commands[workflow]) for workflow in WORKFLOWS},
+    }
+
+
 def load_profile(path: Path) -> dict[str, object]:
     try:
         value = json.loads(
@@ -112,21 +177,23 @@ def load_profile(path: Path) -> dict[str, object]:
         )
     except (UnicodeDecodeError, ValueError, RecursionError, AdvisoryRouteError) as error:
         raise AdvisoryRouteError() from error
-    if not isinstance(value, dict) or set(value) != {
-        "schema_version",
-        "vendor",
-        "models",
-        "efforts",
-    }:
+    if not isinstance(value, dict):
+        raise AdvisoryRouteError()
+    if set(value) not in (
+        {"schema_version", "vendor", "models", "efforts"},
+        {"schema_version", "vendor", "commands"},
+    ):
         raise AdvisoryRouteError()
     schema_version = value["schema_version"]
+    if _schema_version(schema_version, CUSTOM_PROFILE_SCHEMA_VERSION):
+        if set(value) != {"schema_version", "vendor", "commands"}:
+            raise AdvisoryRouteError()
+        return _load_custom_profile(value)
     vendor = value["vendor"]
     if (
-        not isinstance(schema_version, int)
-        or isinstance(schema_version, bool)
-        or schema_version != PROFILE_SCHEMA_VERSION
+        not _schema_version(schema_version, PROFILE_SCHEMA_VERSION)
         or not isinstance(vendor, str)
-        or vendor not in {"claude", "codex"}
+        or vendor not in {"claude", "codex", "agy", "grok"}
     ):
         raise AdvisoryRouteError()
     return {
@@ -139,6 +206,8 @@ def load_profile(path: Path) -> dict[str, object]:
 
 def profile_digest(profile: Mapping[str, object]) -> str:
     build_routes(profile)
+    if profile.get("schema_version") == CUSTOM_PROFILE_SCHEMA_VERSION:
+        build_routes(profile, read_only_executors=True)
     encoded = json.dumps(
         profile,
         ensure_ascii=True,
@@ -156,17 +225,22 @@ def profile_sha256(path: Path) -> str:
 def build_routes(
     profile: Mapping[str, object], *, read_only_executors: bool = False
 ) -> AdvisoryRoutes:
+    if profile.get("schema_version") == CUSTOM_PROFILE_SCHEMA_VERSION:
+        if set(profile) != {"schema_version", "vendor", "commands"}:
+            raise AdvisoryRouteError()
+        custom = _load_custom_profile(dict(profile))
+        commands = custom["commands"]
+        assert isinstance(commands, dict)
+        matrix = commands["implementation" if not read_only_executors else "evidence"]
+        assert isinstance(matrix, dict)
+        return AdvisoryRoutes(*(matrix[role] for role in ROLES))
     if set(profile) != {"schema_version", "vendor", "models", "efforts"}:
         raise AdvisoryRouteError()
     schema_version = profile["schema_version"]
-    if (
-        not isinstance(schema_version, int)
-        or isinstance(schema_version, bool)
-        or schema_version != PROFILE_SCHEMA_VERSION
-    ):
+    if not _schema_version(schema_version, PROFILE_SCHEMA_VERSION):
         raise AdvisoryRouteError()
     vendor = profile["vendor"]
-    if not isinstance(vendor, str) or vendor not in {"claude", "codex"}:
+    if not isinstance(vendor, str) or vendor not in {"claude", "codex", "agy", "grok"}:
         raise AdvisoryRouteError()
     models = _role_map(profile["models"])
     efforts = _role_map(profile["efforts"])
@@ -210,7 +284,49 @@ def build_routes(
             "-",
         )
 
-    builder = claude if vendor == "claude" else codex
+    def agy(role: str, *, advisor: bool) -> tuple[str, ...]:
+        permission = "plan" if advisor or read_only_executors else "accept-edits"
+        return (
+            "agy",
+            "--sandbox",
+            "--mode",
+            permission,
+            "--disable-slash-commands",
+            "--output-format",
+            "json",
+            "--model",
+            models[role],
+            "--effort",
+            efforts[role],
+            "--print",
+            TASK_PLACEHOLDER,
+        )
+
+    def grok(role: str, *, advisor: bool) -> tuple[str, ...]:
+        permission = "plan" if advisor or read_only_executors else "acceptEdits"
+        return (
+            "grok",
+            "--permission-mode",
+            permission,
+            "--reasoning-effort",
+            efforts[role],
+            "--no-subagents",
+            "--disable-web-search",
+            "--output-format",
+            "json",
+            "--model",
+            models[role],
+            "--verbatim",
+            "--prompt-file",
+            TASK_FILE_PLACEHOLDER,
+        )
+
+    builder = {
+        "claude": claude,
+        "codex": codex,
+        "agy": agy,
+        "grok": grok,
+    }[vendor]
     return AdvisoryRoutes(
         cheap=builder("cheap", advisor=False),
         advisor=builder("advisor", advisor=True),
@@ -220,6 +336,21 @@ def build_routes(
 
 def routes_from_profile(path: Path, *, read_only_executors: bool = False) -> AdvisoryRoutes:
     return build_routes(load_profile(path), read_only_executors=read_only_executors)
+
+
+def command_task_delivery(command: Sequence[str]) -> str:
+    validated = _command(command)
+    if TASK_PLACEHOLDER in validated:
+        return "argv"
+    if TASK_FILE_PLACEHOLDER in validated:
+        return "file"
+    return "stdin"
+
+
+def _review_task_delivery(routes: AdvisoryRoutes) -> str | dict[str, str]:
+    deliveries = {role: command_task_delivery(getattr(routes, role)) for role in ROLES}
+    values = set(deliveries.values())
+    return next(iter(values)) if len(values) == 1 else deliveries
 
 
 def main() -> int:
@@ -242,10 +373,13 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "schema_version": PROFILE_SCHEMA_VERSION,
+                "schema_version": profile["schema_version"],
                 "vendor": profile["vendor"],
                 "profile_sha256": digest,
-                "task_delivery": "stdin",
+                "task_delivery": _review_task_delivery(routes),
+                "task_process_exposure": any(
+                    command_task_delivery(command) == "argv" for command in routes
+                ),
                 "task_egress": True,
                 "executor_access": (
                     "read_only" if arguments.read_only_executors else "workspace_write"

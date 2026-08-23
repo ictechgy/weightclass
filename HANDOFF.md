@@ -2,6 +2,8 @@
 
 _Last updated: 2026-08-20 KST by Codex_
 
+_Flexible advisory vendor support follow-up: 2026-08-23 KST._
+
 ## Goal
 
 - Maintain `weightclass` as a public, local router that can discover and let
@@ -232,6 +234,38 @@ human to read.
   and Claude independently passed the same prospective verifier. This adds
   ordinary cheap-path evidence but no new advised-failure rescue observation.
 
+### Flexible advisory vendor support (2026-08-23)
+
+- The prospective flexible-vendor acceptance is committed in
+  `tests/test_advisory_flexible_vendors.py`; do not edit it or the protected
+  verifier. The implementation keeps schema-1 Claude/Codex profile digests and
+  commands byte-compatible while adding deterministic schema-1 agy and Grok
+  builders.
+- Advisory agy routes use the reviewed `{{task}}` argv slot and disclose local
+  process-inspection exposure. Advisory Grok routes use a private transient
+  `{{task_file}}` outside the Git workspace, preventing `git add -A` from
+  staging task bytes; the runner deletes the owner-only file on success,
+  failure, timeout, and child-start errors.
+- Schema-2 profiles are closed, bounded, duplicate-key-safe arbitrary-vendor
+  profiles with exact implementation/evidence command matrices for cheap,
+  advisor, and expensive roles. Each command permits at most one exact
+  `{{task}}` or `{{task_file}}` token, never executable position or embedding.
+- Review reports uniform or per-role delivery and whether any selected task
+  enters argv. agy/Grok JSON usage is parsed only when the executable identifies
+  that vendor; unknown structured stdout remains untrusted. Their environment
+  prefixes and known `.agy`/`.grok` scaffolding directories are separately
+  bounded. An unknown custom executable receives no vendor credential prefixes
+  by default; required exact names are an explicit per-arm opt-in.
+- No active agy/Grok measurement profile is created here. Model labels remain
+  user-selected opaque configuration; do not infer quality, pricing,
+  entitlement, or subscription usage. Keep every vendor/workflow campaign
+  separate and preserve the existing schema-1 campaign/fingerprint contract.
+- The flexible-vendor implementation became Codex implementation ordinal 11.
+  Luna passed the prospective verifier without advice or escalation after a
+  799.2-second child run. Claude ordinal 11 was concurrently consumed by a
+  different project, so those equal ordinals are not a paired task and must not
+  be used for cross-vendor comparison.
+
 ### Security, performance, and architecture follow-up (2026-08-19)
 
 - Codex Security Standard scan `d2175938-1f01-47e6-b0f2-8d5089f5d839`
@@ -376,9 +410,9 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the Claude/Codex advisory-profile tree: `unittest discover`
-  runs **1192** tests and `pytest -q` reports 1180 passed plus 12 skipped;
+  runs **1199** tests and `pytest -q` reports 1187 passed plus 12 skipped;
   Ruff check/format is
-  clean on 174 files; `mypy --strict src tests` is clean on 133 source files;
+  clean on 175 files; `mypy --strict src tests` is clean on 134 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
   build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
   hides real errors — that is how 139 of them once reached `main`.

@@ -5,8 +5,18 @@ description: Run the local sealed weightclass advisory workflow when the user ex
 
 # Advisory
 
-Use the installed `wclass-advisory` command to obtain paired Claude/Codex cost
-and acceptance evidence without mixing workflow populations.
+Use the installed `wclass-advisory` command to obtain per-vendor cost and
+acceptance evidence without mixing workflow populations. Compare vendors only
+when the same admitted task was deliberately dispatched to each one.
+
+Reviewed route profiles may use schema-1 Claude, Codex, agy, or Grok, or schema-2
+arbitrary-vendor command matrices. Before execution, inspect the task-free route
+review and report its delivery contract: `stdin`, `argv`, or private file, plus
+whether any selected role puts task text in argv. An agy `{{task}}` route has the
+documented local process-inspection exposure. A Grok `{{task_file}}` route uses
+an owner-only transient file outside the Git workspace. Never guess model
+quality, cost, entitlement, or subscription availability; agy/Grok model labels
+are user-selected opaque configuration.
 
 ## Gate the run
 
@@ -58,13 +68,14 @@ candidate. Keep the verifier unchanged during the campaign.
      --workflow <workflow> \
      --repo <absolute-clean-repo> \
      --task-file <owner-only-task-file> \
-     --vendor both \
+     --vendor <configured-vendor-or-all> \
      --confirm-task-egress
    ```
 
-   Use one vendor only when the user explicitly narrows the run. Do not add
-   retries around this command; its sealed Shape-B policy owns the bounded
-   retry and fallback behavior.
+   `both` is the legacy Claude+Codex alias; `all` dispatches every configured
+   profile. Each vendor owns an independent ordinal and campaign. Use one vendor
+   only when the user narrows the run. Do not add retries around this command;
+   its sealed Shape-B policy owns the bounded retry and fallback behavior.
 4. Delete exactly the temporary task file in a finally/cleanup path, including
    on preflight or provider failure.
 
