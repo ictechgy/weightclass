@@ -147,6 +147,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("invalid campaign option")
     original_argv = sys.argv
     try:
+        if "--prune" in forwarded:
+            sys.argv = [
+                str(arguments.router_root / "tools" / "speculative_run.py"),
+                *runner_arguments,
+                "--out-dir",
+                str(campaign_root),
+            ]
+            return int(runner.main())
         request = orchestration.LaneRequest(
             arguments.vendor,
             campaign_root,
