@@ -217,42 +217,6 @@ class SecurityBoundaryHardeningTests(unittest.TestCase):
             public.chmod(0o1777)
             self.assertTrue(observe_executable(str(lexical)).executable_bit)
 
-    def test_only_official_github_hosted_toolcache_gets_public_exception(self) -> None:
-        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
-            root = Path(directory)
-            cache = root / "hostedtoolcache"
-            cache.mkdir()
-            cache.chmod(0o777)
-            executable = cache / "tool"
-            executable.write_bytes(b"x")
-            executable.chmod(0o700)
-            environment = {
-                "GITHUB_ACTIONS": "true",
-                "RUNNER_TOOL_CACHE": str(cache),
-            }
-            with (
-                mock.patch.dict(os.environ, environment, clear=False),
-                self.assertRaisesRegex(V2ValidationError, "^$"),
-            ):
-                observe_executable(str(executable))
-
-            with (
-                mock.patch(
-                    "weightclass.executable_observation._trusted_hosted_toolcache",
-                    return_value=os.path.realpath(cache),
-                ),
-            ):
-                executable.chmod(0o777)
-                self.assertTrue(observe_executable(str(executable)).executable_bit)
-
-            official = {
-                "GITHUB_ACTIONS": "true",
-                "RUNNER_TOOL_CACHE": "/opt/hostedtoolcache",
-            }
-            with mock.patch.dict(os.environ, official, clear=False):
-                module = sys.modules[observe_executable.__module__]
-                self.assertEqual(module._trusted_hosted_toolcache(), "/opt/hostedtoolcache")
-
 
 if __name__ == "__main__":
     unittest.main()

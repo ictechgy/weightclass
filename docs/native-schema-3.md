@@ -140,11 +140,9 @@ executable files, group-writable files not owned by root or the current user,
 and non-sticky world-writable containing
 directories in both the lexical and resolved target chains. Sticky directories
 Root/current-user-owned group-writable files, sticky directories, and
-user-owned group-writable ancestors remain compatible. GitHub Actions receives
-one narrower exception only for the exact resolved `/opt/hostedtoolcache` while
-`GITHUB_ACTIONS=true`; its hosted writable files and ancestors are admitted,
-while arbitrary and custom caches are still rejected. This
-narrows ordinary replacement opportunities but does not make
+user-owned group-writable ancestors remain compatible. A world-writable hosted
+tool cache is not implicitly trusted; automation must stage or select a private
+runtime path. This narrows ordinary replacement opportunities but does not make
 the final observation and path-based process creation atomic: an actor able to
 replace an admitted path after the final check can still win a
 time-of-check/time-of-use race. Schema 3 therefore does not claim

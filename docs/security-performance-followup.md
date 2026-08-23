@@ -45,12 +45,10 @@ still needs platform and migration design and is not described as fixed.
   group-writable files not owned by root or the current user, and a non-sticky
   world-writable containing directory in both the lexical and resolved target
   chains. Root/current-user-owned group-writable files, sticky directories, and
-  user-owned group-writable ancestors remain compatible with hosted runtimes
-  and existing installations. GitHub Actions additionally admits only a
-  resolved `/opt/hostedtoolcache` tree when `GITHUB_ACTIONS=true`, including its
-  hosted writable files and ancestors; arbitrary and custom caches do not
-  receive that exception. No verified-object
-  execution claim is made.
+  user-owned group-writable ancestors remain compatible with existing
+  installations. World-writable hosted tool caches are not implicitly trusted;
+  automation tests and deployments must stage or select a private runtime path.
+  No verified-object execution claim is made.
 - Usage-store lock, read, temporary creation, replacement, cleanup, and
   directory fsync now use names relative to one opened and revalidated private
   parent descriptor. The aggregate schema, owner-only modes, no-follow checks,

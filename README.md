@@ -1349,10 +1349,8 @@ credential management, background execution, or a bundled provider runtime.
   files not owned by root or the current user, and
   non-sticky world-writable containing directories in both the lexical and
   resolved target chains. Root/current-user-owned group-writable files, sticky
-  directories, user-owned group-writable ancestors, and GitHub Actions' exact
-  `/opt/hostedtoolcache` tree (including its hosted writable binaries) remain
-  compatible. This is incremental admission
-  hardening, not verified-object execution.
+  directories, and user-owned group-writable ancestors remain compatible. This
+  is incremental admission hardening, not verified-object execution.
 - Route selection is deterministic. Unsupported, malformed, or unsafe input
   fails closed with a redacted JSON diagnostic.
 - weightclass does not infer source vendor, model availability, subscription
