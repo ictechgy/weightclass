@@ -135,9 +135,16 @@ is outside that guarantee because the selected vendor process controls it.
 
 The route descriptor binds a complete `lstat` identity, and run compares that
 identity before task access and again after task-dependent materialization,
-immediately before spawn. This detects ordinary executable replacement across
-review/run and narrows the final pre-spawn window. The final observation and
-path-based process creation are not atomic, so an actor able to replace the path
-after the final check can still win a time-of-check/time-of-use race. Keep the
-executable and every containing directory under an appropriate ownership
-boundary; schema 3 does not claim verified-object execution.
+immediately before spawn. Admission additionally rejects other-writable
+executable files, group-writable files not owned by root or the current user,
+and non-sticky world-writable containing
+directories in both the lexical and resolved target chains. Sticky directories
+Root/current-user-owned group-writable files, sticky directories, and
+user-owned group-writable ancestors remain compatible. A world-writable hosted
+tool cache is not implicitly trusted; automation must stage or select a private
+runtime path. This narrows ordinary replacement opportunities but does not make
+the final observation and path-based process creation atomic: an actor able to
+replace an admitted path after the final check can still win a
+time-of-check/time-of-use race. Schema 3 therefore does not claim
+verified-object execution; a portable descriptor-based launcher remains future
+work.

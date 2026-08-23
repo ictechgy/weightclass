@@ -82,7 +82,10 @@ For a machine-local wrapper configured with more vendors, `--vendor all` dispatc
 to every configured profile using each campaign's independent ordinal. Independent vendor
 campaigns start concurrently, while the cheap/advisor/retry/expensive stages inside each campaign
 remain sequential. Output is captured in memory and replayed in vendor order so records and
-diagnostics do not interleave. `--vendor both` remains a backward-compatible Claude+Codex alias.
+diagnostics do not interleave. Updated machine-local shims acquire every selected vendor's
+owner-only dispatch lock before starting any vendor; a busy campaign therefore fails the whole
+batch instead of letting another project's ordinal masquerade as this run. Each top-level job also
+has a finite outer deadline and bounded retained output. `--vendor both` remains a backward-compatible Claude+Codex alias.
 Equal record counts do not prove paired tasks; compare vendors only when the operator deliberately
 admitted the same task to each campaign.
 

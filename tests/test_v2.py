@@ -51,13 +51,27 @@ def _api_policy(**overrides: object) -> dict[str, object]:
     return policy
 
 
+def _private_runtime(directory: Path) -> Path:
+    runtime = directory / "private-api-runtime"
+    runtime.write_text(
+        f"#!{sys.executable}\nimport sys\nsys.stdin.buffer.read()\n",
+        encoding="utf-8",
+    )
+    runtime.chmod(0o700)
+    return runtime
+
+
 class V2EgressGateTests(unittest.TestCase):
     """Egress를 막는 각 게이트가 실제로 단독으로 동작하는지 고정한다."""
 
     def _review(self, policy: dict[str, object], runtime: str) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            policy_path = Path(temporary_directory) / "policy.json"
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
             policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            reviewed_runtime = (
+                str(_private_runtime(directory)) if runtime == sys.executable else runtime
+            )
             return subprocess.run(
                 [
                     sys.executable,
@@ -70,7 +84,7 @@ class V2EgressGateTests(unittest.TestCase):
                     "--source-vendor",
                     "codex",
                     "--api-runtime",
-                    runtime,
+                    reviewed_runtime,
                 ],
                 capture_output=True,
                 check=False,
@@ -240,9 +254,11 @@ class V2EgressGateTests(unittest.TestCase):
     def test_missing_fingerprint_precedes_process_context_runtime_and_task_access(self) -> None:
         """Breaks if a run that cannot be bound touches runtime state or task input."""
         with tempfile.TemporaryDirectory() as temporary_directory:
-            policy_path = Path(temporary_directory) / "policy.json"
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
             policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
-            observed = observe_api_runtime(Path(sys.executable))
+            runtime_path = _private_runtime(directory)
+            observed = observe_api_runtime(runtime_path)
             errors = io.StringIO()
             with (
                 mock.patch("weightclass.cli.validate_runtime_process_context") as context_check,
@@ -255,7 +271,7 @@ class V2EgressGateTests(unittest.TestCase):
                 exit_code = cli.v2_run_from_standard_input(
                     policy_path,
                     "codex",
-                    Path(sys.executable),
+                    runtime_path,
                     True,
                     None,
                 )
@@ -498,9 +514,10 @@ class V2ExecutorResultTests(unittest.TestCase):
         """Breaks if ECHILD after API spawn is mapped to launch failure or success."""
         task = "Fix a typo."
         with tempfile.TemporaryDirectory() as temporary_directory:
-            policy_path = Path(temporary_directory) / "policy.json"
+            directory = Path(temporary_directory)
+            policy_path = directory / "policy.json"
             policy_path.write_text(json.dumps(_api_policy()), encoding="utf-8")
-            runtime_path = Path(sys.executable)
+            runtime_path = _private_runtime(directory)
             observed = observe_api_runtime(runtime_path)
             reviewed_runtime_path = Path(observed.lexical_path)
             policy = load_api_policy(policy_path)
@@ -580,7 +597,7 @@ class V2CommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path = directory / "policy.json"
-            runtime_path = Path(sys.executable)
+            runtime_path = _private_runtime(directory)
             policy_path.write_text(
                 json.dumps(
                     {
@@ -704,6 +721,7 @@ class V2CommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path = directory / "policy.json"
+            runtime_path = _private_runtime(directory)
             policy_path.write_text(
                 json.dumps(
                     {
@@ -740,7 +758,7 @@ class V2CommandLineTests(unittest.TestCase):
                     "--source-vendor",
                     "codex",
                     "--api-runtime",
-                    sys.executable,
+                    str(runtime_path),
                 ],
                 capture_output=True,
                 check=False,
@@ -909,6 +927,7 @@ class V2CommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             policy_path = directory / "policy.json"
+            runtime_path = _private_runtime(directory)
             policy = {
                 "schema_version": 2,
                 "allow_cross_provider": False,
@@ -939,7 +958,7 @@ class V2CommandLineTests(unittest.TestCase):
                 "--source-vendor",
                 "codex",
                 "--api-runtime",
-                sys.executable,
+                str(runtime_path),
             ]
             blocked = subprocess.run(
                 common_arguments,

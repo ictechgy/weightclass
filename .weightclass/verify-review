@@ -35,14 +35,14 @@ SEEDS = {
         "medium",
     ),
     "[seed:usage-store]": (
-        "src/weightclass/usage_aggregation.py:424",
-        "os.replace",
+        "src/weightclass/usage_aggregation.py:365",
+        "os.stat",
         frozenset({"reportable", "deferred"}),
         "low",
     ),
     "[seed:parallel-shell]": (
-        "tools/advisory_parallel.py:70",
-        "subprocess.run",
+        "tools/advisory_parallel.py:212",
+        "subprocess.Popen",
         frozenset({"suppressed"}),
         "info",
     ),

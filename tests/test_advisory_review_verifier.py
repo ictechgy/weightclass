@@ -47,15 +47,15 @@ def accepted_result() -> dict[str, object]:
                 "[seed:usage-store] Custom usage store ancestor race",
                 "low",
                 "deferred",
-                "src/weightclass/usage_aggregation.py:424",
-                "os.replace is pathname based rather than a dirfd transaction.",
+                "src/weightclass/usage_aggregation.py:365",
+                "os.stat still resolves the parent pathname before descriptor anchoring.",
             ),
             finding(
                 "[seed:parallel-shell] Parallel dispatcher shell-injection control",
                 "info",
                 "suppressed",
-                "tools/advisory_parallel.py:70",
-                "subprocess.run receives an exact tuple and never enables a shell.",
+                "tools/advisory_parallel.py:212",
+                "subprocess.Popen receives an exact tuple and never enables a shell.",
             ),
         ],
         "limitations": ["Runtime compatibility of deferred hardening options was not measured."],
@@ -104,7 +104,7 @@ class AdvisoryReviewVerifierTests(unittest.TestCase):
             "[new] Unsupported claim",
             "high",
             "reportable",
-            "tools/advisory_parallel.py:70",
+            "tools/advisory_parallel.py:212",
             "This cites the location but omits counterevidence.",
         )
         added["counterevidence"] = []
@@ -116,7 +116,7 @@ class AdvisoryReviewVerifierTests(unittest.TestCase):
             "missing.py:1",
             "../HANDOFF.md:1",
             "src/weightclass/foreground_process.py:260",
-            "tools/advisory_parallel.py:70",
+            "tools/advisory_parallel.py:212",
         ):
             with self.subTest(location=location):
                 value = accepted_result()

@@ -1345,7 +1345,12 @@ credential management, background execution, or a bundled provider runtime.
 - Schema-3 native route and delegation descriptors bind an `lstat` observation
   and recheck it immediately before spawn. That narrows but cannot eliminate
   executable replacement after the final check because execution is still by
-  path.
+  path. Admission rejects other-writable executable files, group-writable
+  files not owned by root or the current user, and
+  non-sticky world-writable containing directories in both the lexical and
+  resolved target chains. Root/current-user-owned group-writable files, sticky
+  directories, and user-owned group-writable ancestors remain compatible. This
+  is incremental admission hardening, not verified-object execution.
 - Route selection is deterministic. Unsupported, malformed, or unsafe input
   fails closed with a redacted JSON diagnostic.
 - weightclass does not infer source vendor, model availability, subscription

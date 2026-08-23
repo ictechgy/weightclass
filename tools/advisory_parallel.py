@@ -7,17 +7,30 @@ responsible for its own sequential advisory stages, locking, and evidence log.
 
 from __future__ import annotations
 
+import os
 import re
+import selectors
+import signal
 import subprocess
+import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import BinaryIO, cast
 
 MAX_JOBS = 16
 MAX_COMMAND_ARGUMENTS = 256
 MAX_COMMAND_BYTES = 131_072
+# One speculative campaign may legitimately run several one-hour vendor
+# children plus verification. Keep a finite outer ceiling without making the
+# coordinator shorter than the bounded workflow it supervises.
+DEFAULT_TIMEOUT_SECONDS = 28_800.0
+DEFAULT_MAX_OUTPUT_BYTES = 1_048_576
+MAX_TIMEOUT_SECONDS = 28_800.0
+MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 _LABEL = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _START_ERROR = b"advisory child start failed\n"
+_TIMEOUT_ERROR = b"advisory child timed out\n"
 
 
 @dataclass(frozen=True)
@@ -26,6 +39,8 @@ class AdvisoryJob:
 
     label: str
     command: tuple[str, ...]
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
 
 
 @dataclass(frozen=True)
@@ -37,6 +52,8 @@ class AdvisoryResult:
     stdout: bytes
     stderr: bytes
     started: bool
+    timed_out: bool = False
+    output_truncated: bool = False
 
 
 def _validate_jobs(jobs: tuple[AdvisoryJob, ...]) -> None:
@@ -63,25 +80,146 @@ def _validate_jobs(jobs: tuple[AdvisoryJob, ...]) -> None:
                 raise ValueError from error
         if command_bytes > MAX_COMMAND_BYTES:
             raise ValueError
+        if (
+            isinstance(job.timeout_seconds, bool)
+            or not isinstance(job.timeout_seconds, (int, float))
+            or not 0 < job.timeout_seconds <= MAX_TIMEOUT_SECONDS
+        ):
+            raise ValueError
+        if (
+            isinstance(job.max_output_bytes, bool)
+            or not isinstance(job.max_output_bytes, int)
+            or not 0 < job.max_output_bytes <= MAX_OUTPUT_BYTES
+        ):
+            raise ValueError
+
+
+def _signal_process_group(process: subprocess.Popen[bytes], signum: int) -> None:
+    """Signal the isolated session, without exposing process details in errors."""
+
+    try:
+        os.killpg(process.pid, signum)
+    except (OSError, ProcessLookupError):
+        pass
+
+
+def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Terminate and then kill every process in one timed-out job's session."""
+
+    _signal_process_group(process, signal.SIGTERM)
+    # Do not reap the session leader before SIGKILL. While the unreaped PID
+    # remains allocated, its process-group id cannot be recycled for an
+    # unrelated process between the graceful and forced signals.
+    time.sleep(0.1)
+    _signal_process_group(process, signal.SIGKILL)
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        _signal_process_group(process, signal.SIGKILL)
+
+
+def _capture_job(process: subprocess.Popen[bytes], job: AdvisoryJob) -> AdvisoryResult:
+    """Drain both pipes to EOF while retaining only the combined output bound."""
+
+    assert process.stdout is not None and process.stderr is not None
+    selector = selectors.DefaultSelector()
+    stdout_descriptor = process.stdout.fileno()
+    stderr_descriptor = process.stderr.fileno()
+    outputs = {stdout_descriptor: bytearray(), stderr_descriptor: bytearray()}
+    truncated = False
+    timed_out = False
+    deadline = time.monotonic() + float(job.timeout_seconds)
+    try:
+        for stream in (process.stdout, process.stderr):
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                _terminate_process_group(process)
+                break
+            for key, _ in selector.select(remaining):
+                descriptor = key.fd
+                try:
+                    chunk = os.read(descriptor, 65_536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    cast(BinaryIO, key.fileobj).close()
+                    continue
+                stored = outputs[descriptor]
+                available = job.max_output_bytes - sum(len(value) for value in outputs.values())
+                if available > 0:
+                    stored.extend(chunk[:available])
+                if len(chunk) > max(available, 0):
+                    truncated = True
+        if timed_out:
+            for key in list(selector.get_map().values()):
+                selector.unregister(key.fileobj)
+                cast(BinaryIO, key.fileobj).close()
+            return AdvisoryResult(
+                job.label,
+                124,
+                b"",
+                _TIMEOUT_ERROR,
+                True,
+                True,
+                truncated,
+            )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            _terminate_process_group(process)
+            return AdvisoryResult(
+                job.label,
+                124,
+                b"",
+                _TIMEOUT_ERROR,
+                True,
+                True,
+                truncated,
+            )
+        try:
+            returncode = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(process)
+            return AdvisoryResult(
+                job.label,
+                124,
+                b"",
+                _TIMEOUT_ERROR,
+                True,
+                True,
+                truncated,
+            )
+        return AdvisoryResult(
+            job.label,
+            returncode,
+            bytes(outputs[stdout_descriptor]),
+            bytes(outputs[stderr_descriptor]),
+            True,
+            False,
+            truncated,
+        )
+    finally:
+        selector.close()
 
 
 def _run_job(job: AdvisoryJob) -> AdvisoryResult:
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             job.command,
             stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            close_fds=True,
+            start_new_session=True,
         )
     except OSError:
         return AdvisoryResult(job.label, 2, b"", _START_ERROR, False)
-    return AdvisoryResult(
-        job.label,
-        completed.returncode,
-        completed.stdout,
-        completed.stderr,
-        True,
-    )
+    return _capture_job(process, job)
 
 
 def run_parallel(jobs: Sequence[AdvisoryJob]) -> tuple[AdvisoryResult, ...]:

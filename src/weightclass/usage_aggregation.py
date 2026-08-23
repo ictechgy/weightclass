@@ -7,8 +7,8 @@ import json
 import os
 import stat
 import sys
-import tempfile
 import unicodedata
+import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -347,17 +347,51 @@ def _require_private_regular(descriptor: int) -> None:
         raise UsageAggregationError()
 
 
-def _require_private_directory(path: Path) -> None:
-    try:
-        metadata = path.lstat()
-    except OSError:
-        raise UsageAggregationError() from None
+def _require_private_directory_metadata(metadata: os.stat_result) -> None:
     if (
         not stat.S_ISDIR(metadata.st_mode)
         or metadata.st_uid != os.getuid()
         or stat.S_IMODE(metadata.st_mode) & 0o077
     ):
         raise UsageAggregationError()
+
+
+def _open_parent_directory(path: Path) -> int:
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    flags |= getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path.parent, flags)
+        opened = os.fstat(descriptor)
+        current = os.stat(path.parent, follow_symlinks=False)
+        if (
+            opened.st_dev != current.st_dev
+            or opened.st_ino != current.st_ino
+            or opened.st_mode != current.st_mode
+            or opened.st_uid != current.st_uid
+        ):
+            raise UsageAggregationError()
+        _require_private_directory_metadata(opened)
+        return descriptor
+    except (OSError, UsageAggregationError):
+        if "descriptor" in locals():
+            os.close(descriptor)
+        raise UsageAggregationError() from None
+
+
+def _revalidate_parent(path: Path, descriptor: int) -> None:
+    try:
+        opened = os.fstat(descriptor)
+        current = os.stat(path.parent, follow_symlinks=False)
+        if (
+            opened.st_dev != current.st_dev
+            or opened.st_ino != current.st_ino
+            or opened.st_mode != current.st_mode
+            or opened.st_uid != current.st_uid
+        ):
+            raise UsageAggregationError()
+        _require_private_directory_metadata(opened)
+    except (OSError, UsageAggregationError):
+        raise UsageAggregationError() from None
 
 
 def _read_descriptor(descriptor: int) -> bytes:
@@ -373,11 +407,25 @@ def _read_descriptor(descriptor: int) -> bytes:
             raise UsageAggregationError()
 
 
-def _load_store(path: Path) -> dict[str, object]:
+def _load_store(path: Path, parent_descriptor: int | None = None) -> dict[str, object]:
+    owns_parent = parent_descriptor is None
+    if parent_descriptor is None:
+        parent_descriptor = _open_parent_directory(path)
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        _revalidate_parent(path, parent_descriptor)
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=parent_descriptor,
+        )
     except OSError:
+        if owns_parent:
+            os.close(parent_descriptor)
         raise UsageAggregationError() from None
+    except UsageAggregationError:
+        if owns_parent:
+            os.close(parent_descriptor)
+        raise
     try:
         _require_private_regular(descriptor)
         payload = _read_descriptor(descriptor)
@@ -385,6 +433,8 @@ def _load_store(path: Path) -> dict[str, object]:
         raise UsageAggregationError() from None
     finally:
         os.close(descriptor)
+        if owns_parent:
+            os.close(parent_descriptor)
     try:
         return _validate_store(
             json.loads(
@@ -406,27 +456,43 @@ def _write_descriptor(descriptor: int, payload: bytes) -> None:
     os.fsync(descriptor)
 
 
-def _replace_store(path: Path, value: object) -> None:
+def _open_temporary(parent_descriptor: int) -> tuple[int, str]:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
+    for _ in range(32):
+        name = f".weightclass-usage-{uuid.uuid4().hex}"
+        try:
+            return os.open(name, flags, 0o600, dir_fd=parent_descriptor), name
+        except FileExistsError:
+            continue
+    raise UsageAggregationError()
+
+
+def _replace_store(path: Path, value: object, parent_descriptor: int | None = None) -> None:
     payload = _canonical_bytes(_validate_store(value))
     if len(payload) > MAX_STORE_BYTES:
         raise UsageAggregationError()
+    owns_parent = parent_descriptor is None
+    if parent_descriptor is None:
+        parent_descriptor = _open_parent_directory(path)
     temporary_descriptor = -1
     temporary_name = ""
     try:
-        temporary_descriptor, temporary_name = tempfile.mkstemp(
-            prefix=".weightclass-usage-",
-            dir=path.parent,
-        )
+        _revalidate_parent(path, parent_descriptor)
+        temporary_descriptor, temporary_name = _open_temporary(parent_descriptor)
         os.fchmod(temporary_descriptor, 0o600)
         _write_descriptor(temporary_descriptor, payload)
         os.close(temporary_descriptor)
         temporary_descriptor = -1
-        os.replace(temporary_name, path)
-        directory_descriptor = os.open(path.parent, os.O_RDONLY | os.O_CLOEXEC)
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
+        _revalidate_parent(path, parent_descriptor)
+        os.replace(
+            temporary_name,
+            path.name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        temporary_name = ""
+        _revalidate_parent(path, parent_descriptor)
+        os.fsync(parent_descriptor)
     except (OSError, UsageAggregationError):
         raise UsageAggregationError() from None
     finally:
@@ -434,43 +500,53 @@ def _replace_store(path: Path, value: object) -> None:
             os.close(temporary_descriptor)
         if temporary_name:
             try:
-                os.unlink(temporary_name)
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
             except FileNotFoundError:
                 pass
             except OSError:
                 raise UsageAggregationError() from None
+        if owns_parent:
+            os.close(parent_descriptor)
 
 
 @contextmanager
-def _locked(path: Path, *, exclusive: bool) -> Iterator[None]:
-    lock_path = Path(f"{path}.lock")
+def _locked(path: Path, *, exclusive: bool) -> Iterator[int]:
+    lock_name = f"{path.name}.lock"
+    parent_descriptor = -1
+    descriptor = -1
     try:
-        _require_private_directory(path.parent)
+        parent_descriptor = _open_parent_directory(path)
+        _revalidate_parent(path, parent_descriptor)
         descriptor = os.open(
-            lock_path,
+            lock_name,
             os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
             0o600,
+            dir_fd=parent_descriptor,
         )
         _require_private_regular(descriptor)
         fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
     except (OSError, UsageAggregationError):
-        if "descriptor" in locals():
+        if descriptor >= 0:
             os.close(descriptor)
+        if parent_descriptor >= 0:
+            os.close(parent_descriptor)
         raise UsageAggregationError() from None
     try:
-        yield
+        _revalidate_parent(path, parent_descriptor)
+        yield parent_descriptor
     finally:
         try:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
             os.close(descriptor)
+            os.close(parent_descriptor)
 
 
 def _update_store(path: Path, update: Callable[[dict[str, object]], None]) -> None:
-    with _locked(path, exclusive=True):
-        value = _load_store(path)
+    with _locked(path, exclusive=True) as parent_descriptor:
+        value = _load_store(path, parent_descriptor)
         update(value)
-        _replace_store(path, value)
+        _replace_store(path, value, parent_descriptor)
 
 
 def ensure_usage_store(path: Path) -> None:
@@ -481,15 +557,15 @@ def ensure_usage_store(path: Path) -> None:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError:
         raise UsageAggregationError() from None
-    with _locked(path, exclusive=True):
+    with _locked(path, exclusive=True) as parent_descriptor:
         try:
-            path.lstat()
+            os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
         except FileNotFoundError:
-            _replace_store(path, _empty_store())
+            _replace_store(path, _empty_store(), parent_descriptor)
         except OSError:
             raise UsageAggregationError() from None
         else:
-            _load_store(path)
+            _load_store(path, parent_descriptor)
 
 
 def set_relative_cost_weight(
@@ -652,8 +728,8 @@ def record_usage(
 
 
 def render_usage_report(path: Path) -> dict[str, object]:
-    with _locked(path, exclusive=False):
-        value = _load_store(path)
+    with _locked(path, exclusive=False) as parent_descriptor:
+        value = _load_store(path, parent_descriptor)
     buckets = value["buckets"]
     weights = value["weights"]
     assert isinstance(buckets, list)
@@ -725,15 +801,30 @@ def resolve_usage_store(
     if not path.is_absolute():
         raise UsageAggregationError()
     try:
-        path.lstat()
+        parent_descriptor = _open_parent_directory(path)
+    except UsageAggregationError:
+        if explicit_path is None and not rework and not escalation:
+            try:
+                path.parent.lstat()
+            except FileNotFoundError:
+                return None
+            except OSError:
+                raise UsageAggregationError() from None
+        raise
+    try:
+        os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
     except FileNotFoundError:
+        os.close(parent_descriptor)
         if explicit_path is not None or rework or escalation:
             raise UsageAggregationError() from None
         return None
     except OSError:
+        os.close(parent_descriptor)
         raise UsageAggregationError() from None
-    with _locked(path, exclusive=False):
-        _load_store(path)
+    else:
+        os.close(parent_descriptor)
+    with _locked(path, exclusive=False) as locked_parent:
+        _load_store(path, locked_parent)
     return path
 
 
