@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
 PARALLEL = TOOLS / "advisory_parallel.py"
-CAMPAIGN_ACCEPTANCE = os.environ.get("WCLASS_CAMPAIGN_ACCEPTANCE") == "1"
+REPOSITORY_TOOLS_AVAILABLE = PARALLEL.is_file()
 
 
 def load_module(path: Path, name: str) -> types.ModuleType:
@@ -24,7 +24,7 @@ def load_module(path: Path, name: str) -> types.ModuleType:
     return module
 
 
-@unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective advisory acceptance")
+@unittest.skipUnless(REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable")
 class ParallelAdvisoryTests(unittest.TestCase):
     def test_independent_vendor_processes_start_concurrently(self) -> None:
         parallel = load_module(PARALLEL, "prospective_advisory_parallel_start")
@@ -32,8 +32,8 @@ class ParallelAdvisoryTests(unittest.TestCase):
             "import pathlib,sys,time;"
             "mine=pathlib.Path(sys.argv[1]);other=pathlib.Path(sys.argv[2]);"
             "mine.write_text('started');deadline=time.monotonic()+2;"
-            "exec(\"while not other.exists() and time.monotonic() < deadline:\\n"
-            " time.sleep(.01)\");"
+            'exec("while not other.exists() and time.monotonic() < deadline:\\n'
+            ' time.sleep(.01)");'
             "print(sys.argv[3]);sys.exit(0 if other.exists() else 9)"
         )
         with tempfile.TemporaryDirectory() as directory:
@@ -92,6 +92,16 @@ class ParallelAdvisoryTests(unittest.TestCase):
             with self.subTest(jobs=len(jobs)):
                 with self.assertRaisesRegex(ValueError, "^$"):
                     parallel.run_parallel(jobs)
+
+    def test_child_start_error_is_redacted_without_raising(self) -> None:
+        parallel = load_module(PARALLEL, "prospective_advisory_parallel_start_error")
+        job = parallel.AdvisoryJob("codex", ("missing",))
+        with mock.patch.object(parallel.subprocess, "run", side_effect=FileNotFoundError):
+            (result,) = parallel.run_parallel((job,))
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(result.started)
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"advisory child start failed\n")
 
 
 if __name__ == "__main__":

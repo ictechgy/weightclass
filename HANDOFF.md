@@ -260,6 +260,10 @@ human to read.
   user-selected opaque configuration; do not infer quality, pricing,
   entitlement, or subscription usage. Keep every vendor/workflow campaign
   separate and preserve the existing schema-1 campaign/fingerprint contract.
+- Machine-local multi-vendor advisory dispatch starts independent vendor
+  campaigns concurrently and replays their memory-captured output in stable
+  vendor order. The cheap/advisor/retry/expensive stages within one campaign
+  remain sequential, and each campaign retains its own lock, ordinal, and log.
 - The flexible-vendor implementation became Codex implementation ordinal 11.
   Luna passed the prospective verifier without advice or escalation after a
   799.2-second child run. Claude ordinal 11 was concurrently consumed by a
@@ -409,10 +413,10 @@ human to read.
   under the release gate, because unittest does not collect module-level
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
-- Verified on the Claude/Codex advisory-profile tree: `unittest discover`
-  runs **1199** tests and `pytest -q` reports 1187 passed plus 12 skipped;
+- Verified on the parallel advisory tree: `unittest discover` runs **1203**
+  tests and `pytest -q` reports 1191 passed plus 12 skipped;
   Ruff check/format is
-  clean on 175 files; `mypy --strict src tests` is clean on 134 source files;
+  clean on 177 files; `mypy --strict src tests` is clean on 135 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
   build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
   hides real errors — that is how 139 of them once reached `main`.

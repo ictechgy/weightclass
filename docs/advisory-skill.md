@@ -79,9 +79,12 @@ Normal implicit selection is available, but the description is intentionally nar
 must explicitly say advisory. Claude Code `--safe-mode` disables personal skills by design.
 
 For a machine-local wrapper configured with more vendors, `--vendor all` dispatches the same task
-to every configured profile using each campaign's independent ordinal. `--vendor both` remains a
-backward-compatible Claude+Codex alias. Equal record counts do not prove paired tasks; compare
-vendors only when the operator deliberately admitted the same task to each campaign.
+to every configured profile using each campaign's independent ordinal. Independent vendor
+campaigns start concurrently, while the cheap/advisor/retry/expensive stages inside each campaign
+remain sequential. Output is captured in memory and replayed in vendor order so records and
+diagnostics do not interleave. `--vendor both` remains a backward-compatible Claude+Codex alias.
+Equal record counts do not prove paired tasks; compare vendors only when the operator deliberately
+admitted the same task to each campaign.
 
 This installer remains in `tools/` and the skill in `skills/`; neither is included in the wheel or
 sdist while the measurement gate remains open. See the
