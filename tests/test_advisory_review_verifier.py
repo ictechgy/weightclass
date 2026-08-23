@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 VERIFIER = ROOT / ".weightclass" / "verify-review"
+REPOSITORY_VERIFIER_AVAILABLE = VERIFIER.is_file()
 
 
 def finding(
@@ -61,6 +62,7 @@ def accepted_result() -> dict[str, object]:
     }
 
 
+@unittest.skipUnless(REPOSITORY_VERIFIER_AVAILABLE, "repository-only review verifier unavailable")
 class AdvisoryReviewVerifierTests(unittest.TestCase):
     def run_verifier(self, value: dict[str, object]) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
