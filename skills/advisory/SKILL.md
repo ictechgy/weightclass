@@ -78,7 +78,8 @@ candidate. Keep the verifier unchanged during the campaign.
    its anonymous fixed lane. The machine-local shim must acquire one free lane
    for every selected vendor/workflow before it starts any child; no free lane
    fails the whole batch and releases partial allocations. Lane 0 is the
-   existing campaign root, and extra lanes are bounded `.lanes/lane-XX`
+   existing campaign root. Ten lanes are available by default; the extra lanes
+   are bounded `.lanes/lane-XX`
    directories with no project-derived names. Reports and promotion gates must
    include every existing lane after independent manifest validation and
    transient-only ordinal merging. Each top-level job has a finite outer

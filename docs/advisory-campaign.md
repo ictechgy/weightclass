@@ -29,7 +29,7 @@ python3 tools/wclass_advisory.py \
 
 The seam forwards campaign arguments to `speculative_run.py` and supplies an
 anonymous fixed lane below the campaign output root. The old root remains lane
-0; additional lanes are `.lanes/lane-01` through `.lanes/lane-03`. Lane names
+0; additional lanes are `.lanes/lane-01` through `.lanes/lane-09`. Lane names
 contain no project, repository, task, process, profile, or fingerprint data.
 The seam allocates one free lane per selected vendor/workflow under a short
 allocator lock and holds each owner-only lane lock until the complete vendor
