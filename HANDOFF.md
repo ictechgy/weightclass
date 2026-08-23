@@ -312,10 +312,12 @@ human to read.
   file is recovered. Path resolution before the parent descriptor is opened
   remains a narrower residual; the default private home location remains the
   preferred path.
-- Executable admission now rejects group/other-writable executable files and
-  non-sticky world-writable containing directories in both lexical and resolved
-  target chains while retaining sticky directories and user-owned
-  group-writable ancestors for macOS/Homebrew compatibility. Security diff scan
+- Executable admission now rejects other-writable executable files,
+  group-writable files not owned by root/current user, and non-sticky
+  world-writable containing directories in both lexical and resolved target
+  chains. Root/current-user-owned group-writable files, sticky directories, and
+  user-owned group-writable ancestors remain compatible with hosted runtimes,
+  macOS, and Homebrew. Security diff scan
   `f408aeb2-976c-432d-8d8a-d7ca87defb46` found that the first implementation
   checked only the resolved chain and accepted an intermediate symlink under a
   public lexical ancestor; a focused reproduction confirmed the medium finding.

@@ -132,8 +132,12 @@ class AdvisoryHardeningAcceptanceTests(unittest.TestCase):
             mutable = root / "mutable"
             mutable.write_bytes(b"x")
             mutable.chmod(0o770)
-            with self.assertRaisesRegex(observation.V2ValidationError, "^$"):
+            with (
+                mock.patch.object(observation.os, "getuid", return_value=os.getuid() + 1),
+                self.assertRaisesRegex(observation.V2ValidationError, "^$"),
+            ):
                 observation.observe_executable(str(mutable))
+            self.assertTrue(observation.observe_executable(str(mutable)).executable_bit)
 
             public = root / "public"
             public.mkdir()

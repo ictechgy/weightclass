@@ -135,11 +135,13 @@ is outside that guarantee because the selected vendor process controls it.
 
 The route descriptor binds a complete `lstat` identity, and run compares that
 identity before task access and again after task-dependent materialization,
-immediately before spawn. Admission additionally rejects group- or
-other-writable executable files and non-sticky world-writable containing
+immediately before spawn. Admission additionally rejects other-writable
+executable files, group-writable files not owned by root or the current user,
+and non-sticky world-writable containing
 directories in both the lexical and resolved target chains. Sticky directories
-and user-owned group-writable ancestors remain compatible. This narrows
-ordinary replacement opportunities but does not make
+Root/current-user-owned group-writable files, sticky directories, and
+user-owned group-writable ancestors remain compatible. This narrows ordinary
+replacement opportunities but does not make
 the final observation and path-based process creation atomic: an actor able to
 replace an admitted path after the final check can still win a
 time-of-check/time-of-use race. Schema 3 therefore does not claim

@@ -41,11 +41,12 @@ still needs platform and migration design and is not described as fixed.
   characters and a numeric choice at 32 characters. Oversized input therefore
   reaches the existing value-free `invalid_input` boundary instead of an
   unbounded read or integer conversion.
-- Executable observation rejects group- or other-writable executable files and
-  rejects a non-sticky world-writable containing directory in both the lexical
-  and resolved target chains. Sticky directories and user-owned group-writable
-  ancestors remain compatible with existing installations; no verified-object
-  execution claim is made.
+- Executable observation rejects other-writable executable files,
+  group-writable files not owned by root or the current user, and a non-sticky
+  world-writable containing directory in both the lexical and resolved target
+  chains. Root/current-user-owned group-writable files, sticky directories, and
+  user-owned group-writable ancestors remain compatible with hosted runtimes
+  and existing installations; no verified-object execution claim is made.
 - Usage-store lock, read, temporary creation, replacement, cleanup, and
   directory fsync now use names relative to one opened and revalidated private
   parent descriptor. The aggregate schema, owner-only modes, no-follow checks,
