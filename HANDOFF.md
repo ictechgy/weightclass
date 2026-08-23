@@ -254,7 +254,8 @@ human to read.
   enters argv. agy/Grok JSON usage is parsed only when the executable identifies
   that vendor; unknown structured stdout remains untrusted. Their environment
   prefixes and known `.agy`/`.grok` scaffolding directories are separately
-  bounded.
+  bounded. An unknown custom executable receives no vendor credential prefixes
+  by default; required exact names are an explicit per-arm opt-in.
 - No active agy/Grok measurement profile is created here. Model labels remain
   user-selected opaque configuration; do not infer quality, pricing,
   entitlement, or subscription usage. Keep every vendor/workflow campaign

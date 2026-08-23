@@ -143,6 +143,11 @@ the documented process-inspection exposure. `{{task_file}}` means the same priva
 delivery used by Grok. Review reports one delivery string when all roles agree, or a per-role map
 when they do not, plus whether any selected role enters argv.
 
+An executable whose basename is not a built-in vendor receives no vendor-prefixed credentials by
+default. Add only the exact required environment variable names with `--cheap-env`,
+`--advisor-env`, or `--expensive-env`; do not use `--child-env-all` merely to make an unknown CLI
+authenticate, because that hands the entire process environment to every arm.
+
 Keep every vendor and workflow in its own sealed campaign. The manifest binds the exact command
 matrices after compilation, while existing schema-1 Claude/Codex campaign bytes and fingerprints
 remain compatible.

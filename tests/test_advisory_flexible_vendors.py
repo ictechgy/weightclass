@@ -287,12 +287,14 @@ class FlexibleVendorRunnerTests(unittest.TestCase):
         with mock.patch.dict(os.environ, environment, clear=True):
             agy = runner.default_child_env("agy")
             grok = runner.default_child_env("grok")
+            unknown = runner.default_child_env("acme-cli")
         self.assertIn("GOOGLE_API_KEY", agy)
         self.assertIn("AGY_TOKEN", agy)
         self.assertNotIn("OPENAI_API_KEY", agy)
         self.assertIn("GROK_TOKEN", grok)
         self.assertIn("XAI_API_KEY", grok)
         self.assertNotIn("GOOGLE_API_KEY", grok)
+        self.assertEqual(unknown, frozenset({"PATH"}))
 
 
 if __name__ == "__main__":

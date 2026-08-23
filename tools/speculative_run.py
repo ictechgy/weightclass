@@ -277,18 +277,11 @@ VENDOR_ENV_PREFIXES = {
     "agy": ("GOOGLE_", "AGY_"),
     "grok": ("GROK_", "XAI_"),
 }
-# 실행 파일 이름으로 벤더를 못 알아보면 양쪽을 다 준다. 모르는 CLI 의 인증을
-# 우리가 끊어 버리는 것보다는 낫고, 그때도 AWS 나 GitHub 키는 여전히 빠진다.
-CHILD_ENV_PREFIXES = (
-    "ANTHROPIC_",
-    "OPENAI_",
-    "CLAUDE_",
-    "CODEX_",
-    "GOOGLE_",
-    "AGY_",
-    "GROK_",
-    "XAI_",
-)
+# An unknown executable receives no vendor credential family by default. The
+# operator can add exact variable names per arm with --*-env after reviewing the
+# custom command; widening to every known vendor would hand unrelated keys to a
+# newly configured CLI.
+CHILD_ENV_PREFIXES: tuple[str, ...] = ()
 
 # HOME 을 바꿔도 이것들이 남아 있으면 CLI 가 실제 홈을 먼저 본다. 접미사로
 # 훑지 않는 이유는 JAVA_HOME 처럼 홈과 무관한 이름이 같은 모양이기 때문이다.
@@ -310,8 +303,9 @@ def default_child_env(executable: str | None = None) -> frozenset[str]:
 
     When the executable names a vendor we recognise, only that vendor's
     prefixes come through — a Codex run has no business reading an Anthropic
-    key. An unrecognised CLI gets both rather than none, because guessing wrong
-    in that direction breaks authentication instead of leaking anything new.
+    key. An unrecognised CLI gets no vendor-prefixed credentials; the operator
+    must add the exact required names with the reviewed per-arm environment
+    flags.
     """
     prefixes: tuple[str, ...] = CHILD_ENV_PREFIXES
     if executable:
@@ -4103,8 +4097,9 @@ def main() -> int:
         name = Path(argv[0]).name.lower()
         if not any(vendor in name for vendor in VENDOR_ENV_PREFIXES):
             print(
-                f"  주의: {arm} 의 '{Path(argv[0]).name}' 에서 벤더를 알아보지 못해 양쪽"
-                " 벤더의 키를 모두 전달한다. --child-env 로 좁힐 수 있다."
+                f"  주의: {arm} 의 '{Path(argv[0]).name}' 에서 벤더를 알아보지 못해"
+                " 벤더별 자격증명을 전달하지 않는다. 필요한 정확한 이름만"
+                " --cheap-env/--advisor-env/--expensive-env 로 추가하라."
             )
         return default_child_env(argv[0]) | frozenset(extra)
 
