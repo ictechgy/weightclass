@@ -73,11 +73,13 @@ from typing import TYPE_CHECKING, BinaryIO, TypedDict
 
 if TYPE_CHECKING:
     from tools.advisory_campaign import (
+        ANONYMOUS_LANE_COUNT,
         MAX_PRICES_BYTES,
         MAX_VERIFY_BYTES,
         CampaignError,
         CampaignManifest,
         canonical_manifest_bytes,
+        existing_lane_result_directories,
         load_bound_records,
         load_manifest,
         record_binding,
@@ -100,11 +102,13 @@ if TYPE_CHECKING:
     )
 else:
     from advisory_campaign import (
+        ANONYMOUS_LANE_COUNT,
         MAX_PRICES_BYTES,
         MAX_VERIFY_BYTES,
         CampaignError,
         CampaignManifest,
         canonical_manifest_bytes,
+        existing_lane_result_directories,
         load_bound_records,
         load_manifest,
         record_binding,
@@ -3245,6 +3249,42 @@ def prune(registry: Path, out_dir: Path) -> int:
     return 0
 
 
+def prune_all_lanes(out_dir: Path) -> int:
+    """Prune every lane only when no campaign in the population is active."""
+    root = out_dir
+    if out_dir.parent.name == ".lanes" and out_dir.name.startswith("lane-"):
+        root = out_dir.parent.parent
+    lanes = existing_lane_result_directories(root, ANONYMOUS_LANE_COUNT)
+    descriptors: list[int] = []
+    try:
+        for lane in lanes:
+            flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(lane / "campaign.lock", flags, 0o600)
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or stat.S_IMODE(metadata.st_mode) & 0o077
+            ):
+                os.close(descriptor)
+                raise CampaignError()
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(descriptor)
+                raise CampaignError() from None
+            descriptors.append(descriptor)
+        return sum(prune(lane / "workspaces.txt", lane) for lane in lanes)
+    except OSError:
+        raise CampaignError() from None
+    finally:
+        for descriptor in reversed(descriptors):
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+
 # 조언 본문을 executor 의 과제에 붙이므로 상한이 필요하다. 상한이 없으면 한
 # 번의 장황한 조언이 executor 의 컨텍스트를 밀어내고 돈으로 갚는다.
 ADVICE_MAX_CHARS = 8000
@@ -3876,7 +3916,10 @@ def main() -> int:
     log = arguments.out_dir / "runs.jsonl"
 
     if arguments.prune:
-        return prune(registry, arguments.out_dir)
+        try:
+            return prune_all_lanes(arguments.out_dir)
+        except CampaignError:
+            parser.error("invalid anonymous lane layout")
 
     exact_commands = (arguments.cheap, arguments.advisor, arguments.expensive)
     if arguments.route_profile is not None:

@@ -27,17 +27,23 @@ python3 tools/wclass_advisory.py \
   --prune
 ```
 
-The seam forwards campaign arguments to `speculative_run.py` and supplies the
-campaign output root. It does not reinterpret task delivery, campaign
-ordinals, egress confirmation, result replay, or per-vendor locking; those
-contracts remain in the reviewed repository runner.
+The seam forwards campaign arguments to `speculative_run.py` and supplies an
+anonymous fixed lane below the campaign output root. The old root remains lane
+0; additional lanes are `.lanes/lane-01` through `.lanes/lane-03`. Lane names
+contain no project, repository, task, process, profile, or fingerprint data.
+The seam allocates one free lane per selected vendor/workflow under a short
+allocator lock and holds each owner-only lane lock until the complete vendor
+run exits. A failed allocation releases every partial lease before task input
+is read. It does not reinterpret task delivery, campaign ordinals, egress
+confirmation, or result replay; those contracts remain in the reviewed runner.
 
-Machine-local multi-vendor shims use `advisory_orchestration.run_campaign_jobs`.
-It acquires a separate owner-only dispatch lock for every selected vendor
-before starting any process, so two updated shims cannot consume or attribute
-the same campaign ordinal across projects. A collision fails the whole batch
-before partial dispatch. Every job runs in its own process session with an
-eight-hour outer deadline and a 1 MiB combined stdout/stderr retention ceiling;
+Machine-local multi-vendor shims use `advisory_orchestration.acquire_campaign_lanes`
+before dispatch. Every selected vendor/workflow receives a distinct anonymous
+lane, so projects sharing a campaign root do not share a live ordinal or
+campaign lock. If every bounded lane for one selected vendor is busy, the whole
+batch fails before partial dispatch and every partial lease is released.
+Every job runs in its own process session with an eight-hour outer deadline and a
+1 MiB combined stdout/stderr retention ceiling;
 the inner runner's narrower per-child and verifier limits still apply. Timeout
 cleanup signals the complete process group, and results remain replayed in
 deterministic vendor order.
@@ -131,10 +137,13 @@ python3 tools/speculative_report.py \
 ```
 
 Legacy logs may skip a damaged trailing line for descriptive recovery. A sealed
-campaign cannot: malformed rows, duplicate JSON keys, missing bindings, repeated
-ordinals, mixed fingerprints, or out-of-range ordinals fail closed. Even a
+campaign discovers lane 0 and every existing bounded lane automatically, then
+validates each log independently against the exact manifest. Malformed rows,
+duplicate JSON keys, missing bindings, repeated/local gaps, mixed fingerprints,
+or a combined population over the sealed maximum fail closed. The merged
+ordinals exist only in memory; lane records are never rewritten. Even a
 statistically decisive point estimate is withheld until the sealed task and
-failure minimums are both met.
+failure minimums are both met. `--prune` cleans every existing lane.
 
 The campaign receipt is necessary but not sufficient for productization. A
 promotion also requires independent blind quality review, zero new critical

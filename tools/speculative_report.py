@@ -29,8 +29,8 @@ if TYPE_CHECKING:
         CampaignManifest,
         CampaignProgress,
         campaign_progress,
-        load_bound_records,
         load_manifest,
+        load_merged_lane_records,
     )
 else:
     from advisory_campaign import (
@@ -39,8 +39,8 @@ else:
         CampaignManifest,
         CampaignProgress,
         campaign_progress,
-        load_bound_records,
         load_manifest,
+        load_merged_lane_records,
     )
 
 
@@ -92,6 +92,14 @@ def escalated_of(record: dict[str, object]) -> bool:
     return isinstance(record.get("expensive"), dict)
 
 
+def _campaign_root(log_path: Path) -> Path:
+    """Map a lane log back to the anonymous lane-0 root."""
+    parent = log_path.parent
+    if parent.parent.name == ".lanes" and parent.name.startswith("lane-"):
+        return parent.parent.parent
+    return parent
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", required=True, type=Path)
@@ -125,7 +133,13 @@ def main() -> int:
     # 한 줄이 손상됐다고 이미 수집한 측정 전체를 버릴 이유는 없다. 러너는
     # append 만 하고 잠금이 없어, 크래시나 동시 실행이 잘린 줄을 남길 수 있다.
     log_path = arguments.log.expanduser()
-    if not log_path.is_file():
+    if not log_path.is_file() and not (
+        arguments.campaign is not None
+        and any(
+            (candidate / "runs.jsonl").is_file()
+            for candidate in (_campaign_root(log_path) / ".lanes").glob("lane-*")
+        )
+    ):
         parser.error(f"no such log: {log_path}")
 
     campaign_manifest: CampaignManifest | None = None
@@ -135,7 +149,10 @@ def main() -> int:
     if arguments.campaign is not None:
         try:
             campaign_manifest = load_manifest(arguments.campaign.expanduser().resolve())
-            records = cast(list[dict[str, Any]], load_bound_records(log_path))
+            records = cast(
+                list[dict[str, Any]],
+                load_merged_lane_records(campaign_manifest, _campaign_root(log_path)),
+            )
             for record in records:
                 cheap = record.get("cheap")
                 expensive = record.get("expensive")

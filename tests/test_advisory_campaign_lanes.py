@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import stat
 import subprocess
 import sys
@@ -14,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
 ORCHESTRATION = TOOLS / "advisory_orchestration.py"
 CAMPAIGN = TOOLS / "advisory_campaign.py"
-CAMPAIGN_ACCEPTANCE = os.environ.get("WCLASS_CAMPAIGN_ACCEPTANCE") == "1"
+REPOSITORY_LANES_AVAILABLE = ORCHESTRATION.is_file() and CAMPAIGN.is_file()
 
 
 def load_module(path: Path, name: str) -> types.ModuleType:
@@ -60,7 +59,7 @@ def close_child(child: subprocess.Popen[str]) -> None:
             stream.close()
 
 
-@unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective anonymous campaign lanes")
+@unittest.skipUnless(REPOSITORY_LANES_AVAILABLE, "repository-only anonymous campaign lanes")
 class AdvisoryCampaignLaneAcceptanceTests(unittest.TestCase):
     def test_same_campaign_allocates_distinct_anonymous_lanes_concurrently(self) -> None:
         orchestration = load_module(ORCHESTRATION, "prospective_lane_orchestration")

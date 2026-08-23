@@ -306,6 +306,24 @@ human to read.
   narrower. The repository-owned CLI seam and orchestration core contain no
   machine paths; the Mac shim supplies its roots and is strict-mypy/import
   checked against them.
+- Same-vendor/workflow advisory now uses four fixed anonymous lanes by default.
+  Lane 0 is the byte-compatible existing result root; lanes 1-3 live under
+  owner-only `.lanes/lane-XX` directories. Allocation atomically leases one
+  free lane for every selected vendor before any child starts, releases partial
+  leases on exhaustion, and stores no project, repository, task, PID, timestamp,
+  profile, or fingerprint-derived lane identity. A crashed owner releases its
+  OS locks without a reservation file.
+- Each lane retains its own local contiguous ordinal, campaign lock, registry,
+  workspaces, and log. Reporting discovers every bounded lane, validates each
+  independently against the exact sealed manifest, rejects mixed/damaged/gapped
+  or aggregate-over-cap inputs, and renumbers only an in-memory copied view for
+  combined task/failure/rescue/cost gates. Prune covers every existing lane.
+- The lane implementation became Codex implementation ordinal 16 and passed on
+  the cheap route after a 925.7-second child and 145.1-second verifier. Fixed
+  lane allocation counts both completed records and live leases against the
+  sealed global `max_tasks`, retains the legacy `dispatch.lock` for lane-0
+  migration safety, rejects symlink/shared lane directories, and refuses prune
+  while any lane campaign lock is active.
 - Usage-store lock/read/temp/replace/cleanup/fsync operations are relative to
   one opened and revalidated private parent descriptor. A deterministic parent
   swap test proves that a replacement directory is not written and the staged
@@ -478,9 +496,9 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the advisory-review-verifier tree: `unittest discover` runs
-  **1221** tests and `pytest -q` reports 1209 passed plus 12 skipped;
+  **1229** tests and `pytest -q` reports 1217 passed plus 12 skipped;
   Ruff check/format is
-  clean on 182 files; `mypy --strict src tests` is clean on 138 source files;
+  clean on 184 files; `mypy --strict src tests` is clean on 140 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
   build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
   hides real errors — that is how 139 of them once reached `main`.
