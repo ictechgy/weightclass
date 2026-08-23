@@ -6,7 +6,9 @@ distributed `wclass` runtime and does not change the one-child V1 boundary._
 The portable [`advisory` skill bundle](../skills/advisory/SKILL.md) teaches Codex or Claude Code to
 select the existing implementation, review, research, diagnosis, or design campaign; fix a
 prospective verifier before dispatch; keep task content in a private temporary file; and preserve
-separate sealed populations. It deliberately refuses ordinary non-advisory requests and
+separate sealed populations. It supports reviewed schema-1 Claude/Codex/agy/Grok profiles and
+schema-2 arbitrary-vendor command matrices, but it must report whether delivery is stdin, argv, or
+a private file before a run. It deliberately refuses ordinary non-advisory requests and
 brainstorming.
 
 ## Prerequisite
@@ -21,6 +23,13 @@ Review the routes before installing or using the skill:
 ```sh
 wclass-advisory review
 ```
+
+The review is task-free. An agy `{{task}}` route explicitly exposes task text to local process
+inspection; a Grok `{{task_file}}` route uses an owner-only transient file outside the Git
+workspace. Schema-2 profiles must
+declare exact `implementation` and `evidence` matrices for `cheap`, `advisor`, and `expensive`.
+Do not invent model quality, pricing, entitlement, or subscription availability for agy or Grok;
+their labels are user-selected opaque configuration.
 
 ## Preview and install
 
@@ -68,6 +77,11 @@ Claude Code:
 
 Normal implicit selection is available, but the description is intentionally narrow: the user
 must explicitly say advisory. Claude Code `--safe-mode` disables personal skills by design.
+
+For a machine-local wrapper configured with more vendors, `--vendor all` dispatches the same task
+to every configured profile using each campaign's independent ordinal. `--vendor both` remains a
+backward-compatible Claude+Codex alias. Equal record counts do not prove paired tasks; compare
+vendors only when the operator deliberately admitted the same task to each campaign.
 
 This installer remains in `tools/` and the skill in `skills/`; neither is included in the wheel or
 sdist while the measurement gate remains open. See the

@@ -93,7 +93,11 @@ if TYPE_CHECKING:
         evidence_item_count,
         parse_evidence_result,
     )
-    from tools.advisory_routes import AdvisoryRouteError, routes_from_profile
+    from tools.advisory_routes import (
+        AdvisoryRouteError,
+        command_task_delivery,
+        routes_from_profile,
+    )
 else:
     from advisory_campaign import (
         MAX_PRICES_BYTES,
@@ -116,7 +120,11 @@ else:
         evidence_item_count,
         parse_evidence_result,
     )
-    from advisory_routes import AdvisoryRouteError, routes_from_profile
+    from advisory_routes import (
+        AdvisoryRouteError,
+        command_task_delivery,
+        routes_from_profile,
+    )
 
 
 class ChildResult(TypedDict):
@@ -266,10 +274,21 @@ CHILD_ENV_NAMES = frozenset(
 VENDOR_ENV_PREFIXES = {
     "codex": ("OPENAI_", "CODEX_"),
     "claude": ("ANTHROPIC_", "CLAUDE_"),
+    "agy": ("GOOGLE_", "AGY_"),
+    "grok": ("GROK_", "XAI_"),
 }
 # 실행 파일 이름으로 벤더를 못 알아보면 양쪽을 다 준다. 모르는 CLI 의 인증을
 # 우리가 끊어 버리는 것보다는 낫고, 그때도 AWS 나 GitHub 키는 여전히 빠진다.
-CHILD_ENV_PREFIXES = ("ANTHROPIC_", "OPENAI_", "CLAUDE_", "CODEX_")
+CHILD_ENV_PREFIXES = (
+    "ANTHROPIC_",
+    "OPENAI_",
+    "CLAUDE_",
+    "CODEX_",
+    "GOOGLE_",
+    "AGY_",
+    "GROK_",
+    "XAI_",
+)
 
 # HOME 을 바꿔도 이것들이 남아 있으면 CLI 가 실제 홈을 먼저 본다. 접미사로
 # 훑지 않는 이유는 JAVA_HOME 처럼 홈과 무관한 이름이 같은 모양이기 때문이다.
@@ -311,7 +330,19 @@ def default_child_env(executable: str | None = None) -> frozenset[str]:
 # 검증 트리에 섞인다. 목록은 틀릴 수 있으므로 --exclude-dir 로 늘릴 수 있고,
 # 무엇을 뺐는지는 매번 기록에 남긴다.
 AGENT_SCAFFOLDING = frozenset(
-    {".serena", ".omc", ".claude", ".codex", ".aider", ".cursor", ".windsurf", ".continue"}
+    {
+        ".serena",
+        ".omc",
+        ".claude",
+        ".codex",
+        ".agy",
+        ".grok",
+        ".gemini",
+        ".aider",
+        ".cursor",
+        ".windsurf",
+        ".continue",
+    }
 )
 
 # 자식 하나가 걸려도 스크립트가 영원히 매달리지 않게 한다. 벤더 CLI 는 스스로
@@ -663,6 +694,64 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
     return priced
 
 
+_TASK_PLACEHOLDER = "{{task}}"
+_TASK_FILE_PLACEHOLDER = "{{task_file}}"
+
+
+def _prepare_task_command(command: list[str], task: str) -> tuple[list[str], str, Path | None]:
+    """Materialize one reviewed task-delivery slot immediately before spawn."""
+    slots = [
+        (index, token)
+        for index, token in enumerate(command)
+        if token in {_TASK_PLACEHOLDER, _TASK_FILE_PLACEHOLDER}
+    ]
+    embedded = any(
+        marker in token and token not in {_TASK_PLACEHOLDER, _TASK_FILE_PLACEHOLDER}
+        for token in command
+        for marker in (_TASK_PLACEHOLDER, _TASK_FILE_PLACEHOLDER)
+    )
+    if embedded or len(slots) > 1 or (slots and slots[0][0] == 0):
+        raise RunFailure("invalid task-delivery route")
+    if not slots:
+        return list(command), task, None
+
+    index, marker = slots[0]
+    if marker == _TASK_PLACEHOLDER:
+        if "\x00" in task:
+            raise RunFailure("invalid task-delivery input")
+        prepared = list(command)
+        prepared[index] = task
+        return prepared, "", None
+
+    path: Path | None = None
+    try:
+        encoded = task.encode("utf-8", errors="strict")
+        # Keep prompt material outside the Git workspace. A child commonly runs
+        # `git add -A`; if this file lived in the clone, deleting it after the
+        # child returned would still leave its task bytes staged in the index.
+        descriptor, name = tempfile.mkstemp(prefix="wclass-child-task-")
+        path = Path(name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            view = memoryview(encoded)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError()
+                view = view[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except (OSError, UnicodeError):
+        if path is not None:
+            with contextlib.suppress(OSError):
+                path.unlink()
+        raise RunFailure("could not materialize task file") from None
+    prepared = list(command)
+    prepared[index] = str(path)
+    return prepared, "", path
+
+
 def run_child(
     command: list[str],
     workspace: Path,
@@ -702,6 +791,7 @@ def run_child(
     runs code the *agent wrote*, which nobody chose and nobody reviewed.
     """
     started = time.monotonic()
+    prepared_command, delivered_task, transient_task_file = _prepare_task_command(command, task)
     # 자체 프로세스 그룹에서 돌린다. subprocess 의 타임아웃은 직계 자식만
     # 죽이므로, 벤더 CLI 가 띄운 손자들은 "타임아웃" 을 보고한 뒤에도 계속
     # 돌며 작업공간에 쓴다 — 곧 지울 디렉터리에.
@@ -725,7 +815,7 @@ def run_child(
             environment.pop(name, None)
     try:
         with subprocess.Popen(
-            command,
+            prepared_command,
             cwd=workspace,
             env=environment,
             stdin=subprocess.PIPE,
@@ -736,7 +826,7 @@ def run_child(
             start_new_session=True,
         ) as child:
             try:
-                stdout, stderr = child.communicate(task, timeout=CHILD_TIMEOUT)
+                stdout, stderr = child.communicate(delivered_task, timeout=CHILD_TIMEOUT)
             except subprocess.TimeoutExpired:
                 # kill 중에 자식이 스스로 끝나면 ProcessLookupError 가 난다.
                 # 정상적인 경합이므로 무시한다 — 그것 때문에 측정을 죽이면,
@@ -765,7 +855,11 @@ def run_child(
         # OSError 를 낸다. 하위형만 잡으면 그것들이 빠져나가 측정 실행 전체가
         # 죽고 작업공간도 정리되지 않는다. 다만 kill 경로에서 나는
         # ProcessLookupError 는 위에서 이미 삼켰으므로 여기 오지 않는다.
-        raise RunFailure(f"could not start the route: {error}") from error
+        raise RunFailure("could not start the route") from error
+    finally:
+        if transient_task_file is not None:
+            with contextlib.suppress(OSError):
+                transient_task_file.unlink()
     if timed_out:
         # 시간이 다 됐어도 토큰은 이미 쓰였다. 부분 출력에서 건질 수 있으면
         # 건진다 — 비용에서 빼면 싼 경로가 실제보다 좋아 보인다.
@@ -775,7 +869,9 @@ def run_child(
         # 결과 객체도 마지막에만 나오므로 중간에 죽은 실행에는 없다. 그래도
         # 시도하는 것은 다른 형태로 부르는 사용자를 위해서이고, 못 건진
         # 타임아웃은 cost_usd 없이 기록되어 리포트의 c 표본에서 빠진다.
-        partial = extract_usage(stdout, stderr, command[0], wants_structured_output(command))
+        partial = extract_usage(
+            stdout, stderr, prepared_command[0], wants_structured_output(prepared_command)
+        )
         if partial is not None and prefer_prices and not rates:
             # 정상 경로와 같은 fail-closed 규칙. 타임아웃에서만 벤더 숫자를
             # 남기면, 그 arm 만 다른 기준이 되는 것을 여기서 허용하게 된다.
@@ -802,8 +898,8 @@ def run_child(
             "tokens": partial.get("total_tokens") if partial else None,
             "usage": dict(partial) if partial else None,
         }, stdout
-    structured = wants_structured_output(command)
-    usage = extract_usage(stdout, stderr, command[0], structured)
+    structured = wants_structured_output(prepared_command)
+    usage = extract_usage(stdout, stderr, prepared_command[0], structured)
     if usage is not None and prefer_prices and not rates:
         # 공통 기준을 약속해 놓고 표가 없어 지키지 못했다. 벤더 숫자를 그대로
         # 두면 사용자는 양쪽이 같은 기준이라고 믿는다. 비용을 버린다 —
@@ -965,6 +1061,97 @@ def _codex_usage(stdout: str) -> Usage | None:
     }
 
 
+def _json_candidates(stdout: str) -> list[dict[str, object]]:
+    candidates: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for candidate in (stdout, *stdout.splitlines()):
+        text = candidate.strip()
+        if not text.startswith("{") or text in seen:
+            continue
+        seen.add(text)
+        try:
+            value = json.loads(text)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(value, dict):
+            candidates.append(value)
+    return candidates
+
+
+def _nonnegative_int(value: object) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _agy_usage(stdout: str) -> Usage | None:
+    for payload in reversed(_json_candidates(stdout)):
+        nested = payload.get("result")
+        if payload.get("event") == "result" and isinstance(nested, dict):
+            payload = nested
+        raw = payload.get("usage")
+        if not isinstance(raw, dict):
+            continue
+        fields = (
+            "input_tokens",
+            "output_tokens",
+            "thinking_tokens",
+            "cache_read_tokens",
+        )
+        breakdown = {
+            field: value
+            for field in fields
+            if (value := _nonnegative_int(raw.get(field))) is not None
+        }
+        total = _nonnegative_int(raw.get("total_tokens"))
+        if total is None and breakdown:
+            total = sum(breakdown.values())
+        if total is None:
+            continue
+        return {
+            "breakdown": breakdown,
+            "total_tokens": total,
+            "source": "agy-json",
+        }
+    return None
+
+
+def _grok_usage(stdout: str) -> Usage | None:
+    fields = (
+        "input_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "output_tokens",
+    )
+    for payload in reversed(_json_candidates(stdout)):
+        raw = payload.get("usage")
+        if not isinstance(raw, dict):
+            continue
+        breakdown = {
+            field: value
+            for field in fields
+            if (value := _nonnegative_int(raw.get(field))) is not None
+        }
+        total = _nonnegative_int(raw.get("total_tokens"))
+        cost = payload.get("total_cost_usd")
+        if not breakdown and not is_finite_nonnegative(cost):
+            continue
+        usage: Usage = {"breakdown": breakdown, "source": "grok-json"}
+        if total is not None:
+            usage["total_tokens"] = total
+        elif breakdown:
+            usage["total_tokens"] = sum(breakdown.values())
+        if (
+            isinstance(cost, (int, float))
+            and not isinstance(cost, bool)
+            and is_finite_nonnegative(cost)
+        ):
+            usage["cost_usd"] = float(cost)
+            usage["cost_origin"] = "vendor"
+        return usage
+    return None
+
+
 def wants_structured_output(command: list[str]) -> bool:
     """이 호출이 구조화된 사용량 출력을 요청했는가.
 
@@ -977,10 +1164,17 @@ def wants_structured_output(command: list[str]) -> bool:
     # 같은 글자가 걸린다. --append-system-prompt "... --output-format json ..."
     # 하나로 구조화 파서가 켜지고, 그러면 자식의 산문에서 비용을 읽는다 —
     # 이 함수가 막으려던 바로 그 일이다. 토큰 위치로 판정한다.
+    formats = {"json", "stream-json", "streaming-json", "streaming-messages-json"}
     for index, token in enumerate(command):
         if token in ("--json", "--output-format=json"):
             return True
-        if token == "--output-format" and command[index + 1 : index + 2] == ["json"]:
+        if token.startswith("--output-format=") and token.split("=", 1)[1] in formats:
+            return True
+        if (
+            token == "--output-format"
+            and command[index + 1 : index + 2]
+            and command[index + 1] in formats
+        ):
             return True
     return False
 
@@ -998,8 +1192,10 @@ def extract_usage(
     readers: tuple[Callable[[str], Usage | None], ...] = ()
     if structured and executable:
         name = Path(executable).name.lower()
-        is_codex = "codex" in name
-        is_claude = "claude" in name
+        is_codex = name == "codex" or name.startswith("codex-")
+        is_claude = name == "claude" or name.startswith("claude-")
+        is_agy = name == "agy" or name.startswith("agy-")
+        is_grok = name == "grok" or name.startswith("grok-")
         # 순서만 바꾸면 여전히 다른 벤더의 파서로 떨어진다. codex 실행의
         # stdout 에 claude 모양 한 줄이 섞이는 것만으로 그 줄의 total_cost_usd
         # 가 채택된다. 자식이 통제하는 값이다. 벤더를 알면 그 파서만 쓴다.
@@ -1007,12 +1203,24 @@ def extract_usage(
             readers = (_codex_usage,)
         elif is_claude and not is_codex:
             readers = (_claude_usage,)
+        elif is_agy and not (is_codex or is_claude or is_grok):
+            readers = (_agy_usage,)
+        elif is_grok and not (is_codex or is_claude or is_agy):
+            readers = (_grok_usage,)
     for reader in readers:
         usage = reader(stdout)
         if usage:
             return usage
-    # 구형 경로: --json 없이 돌린 codex 는 stderr 에 누적 토큰만 찍는다.
-    total = extract_tokens(stdout, stderr)
+    # A structured-looking object from an unrecognised executable is model
+    # controlled. It never becomes cost evidence merely because it uses keys
+    # that resemble a known provider envelope.
+    if structured:
+        return None
+    name = Path(executable).name.lower() if executable else ""
+    if not (name == "codex" or name.startswith("codex-")):
+        return None
+    # Historical Codex without --json reports one cumulative counter on stderr.
+    total = extract_tokens("", stderr)
     # `if total` 이면 진짜 0 토큰이 결측으로 바뀐다. 0 은 관측된 값이다.
     if total is None:
         return None
@@ -3737,8 +3945,10 @@ def main() -> int:
     for name, raw in checked:
         try:
             parsed = shlex.split(raw)
-        except ValueError as error:
-            parser.error(f"{name} is not a parseable command: {error}")
+            if parsed:
+                command_task_delivery(parsed)
+        except (ValueError, AdvisoryRouteError):
+            parser.error(f"{name} is not a safe parseable command")
         if not parsed:
             parser.error(f"{name} is empty; it must name an executable command")
 
