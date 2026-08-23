@@ -29,19 +29,19 @@ FINDING_KEYS = frozenset(
 )
 SEEDS = {
     "[seed:exec-path]": (
-        "src/weightclass/foreground_process.py",
+        "src/weightclass/foreground_process.py:262",
         "subprocess.Popen",
         frozenset({"reportable", "deferred"}),
         "medium",
     ),
     "[seed:usage-store]": (
-        "src/weightclass/usage_aggregation.py",
+        "src/weightclass/usage_aggregation.py:424",
         "os.replace",
         frozenset({"reportable", "deferred"}),
         "low",
     ),
     "[seed:parallel-shell]": (
-        "tools/advisory_parallel.py",
+        "tools/advisory_parallel.py:70",
         "subprocess.run",
         frozenset({"suppressed"}),
         "info",
@@ -80,6 +80,8 @@ def tracked_source(location: str) -> tuple[Path, int, str]:
         raise ReviewVerificationError
     relative = Path(matched.group(1))
     line_number = int(matched.group(2))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ReviewVerificationError
     try:
         metadata = relative.lstat()
     except OSError:
@@ -141,13 +143,13 @@ def validate_finding(value: object) -> tuple[str, str]:
 
     seed_id = title.split(" ", 1)[0]
     if seed_id in SEEDS:
-        expected_path, expected_token, dispositions, expected_severity = SEEDS[seed_id]
+        expected_location, expected_token, dispositions, expected_severity = SEEDS[seed_id]
         if disposition not in dispositions or severity != expected_severity:
             raise ReviewVerificationError
-        if not any(
-            str(path) == expected_path and expected_token in excerpt
-            for path, _, excerpt in resolved
-        ):
+        if expected_location not in locations:
+            raise ReviewVerificationError
+        expected_index = locations.index(expected_location)
+        if expected_token not in resolved[expected_index][2]:
             raise ReviewVerificationError
     elif not title.startswith("[new] "):
         raise ReviewVerificationError
@@ -162,7 +164,7 @@ def validate(payload: object) -> int:
     if payload["mode"] != "review":
         raise ReviewVerificationError
     summary = text(payload["summary"], minimum=20)
-    limitations = text_list(payload["limitations"])
+    limitations = text_list(payload["limitations"], minimum=1)
     findings = payload["findings"]
     if findings == [] and limitations == ["baseline_probe"] and "baseline probe" in summary.lower():
         return 42
@@ -170,6 +172,9 @@ def validate(payload: object) -> int:
         raise ReviewVerificationError
     validated = [validate_finding(finding) for finding in findings]
     seed_ids = [seed_id for seed_id, _ in validated if seed_id in SEEDS]
+    titles = [finding["title"] for finding in findings if isinstance(finding, dict)]
+    if len(titles) != len(set(titles)):
+        raise ReviewVerificationError
     if len(seed_ids) != len(set(seed_ids)) or set(seed_ids) != set(SEEDS):
         raise ReviewVerificationError
     return 0

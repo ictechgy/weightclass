@@ -110,7 +110,12 @@ class AdvisoryReviewVerifierTests(unittest.TestCase):
         self.assertEqual(self.run_verifier(unsupported).returncode, 1)
 
     def test_untracked_or_uncited_location_is_rejected(self) -> None:
-        for location in ("missing.py:1", "tools/advisory_parallel.py:70"):
+        for location in (
+            "missing.py:1",
+            "../HANDOFF.md:1",
+            "src/weightclass/foreground_process.py:260",
+            "tools/advisory_parallel.py:70",
+        ):
             with self.subTest(location=location):
                 value = accepted_result()
                 findings = value["findings"]
@@ -119,6 +124,17 @@ class AdvisoryReviewVerifierTests(unittest.TestCase):
                 assert isinstance(first, dict)
                 first["locations"] = [location]
                 self.assertEqual(self.run_verifier(value).returncode, 1)
+
+    def test_empty_limitations_or_duplicate_titles_are_rejected(self) -> None:
+        no_limits = accepted_result()
+        no_limits["limitations"] = []
+        self.assertEqual(self.run_verifier(no_limits).returncode, 1)
+
+        duplicate = accepted_result()
+        findings = duplicate["findings"]
+        assert isinstance(findings, list)
+        findings.append(dict(findings[-1]))
+        self.assertEqual(self.run_verifier(duplicate).returncode, 1)
 
 
 if __name__ == "__main__":

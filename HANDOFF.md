@@ -273,6 +273,24 @@ human to read.
   parallel process, validation, output, and campaign-boundary change and found
   no reportable security issues. Its complete measured usage was 2,060,279
   total tokens (2,055,059 input; 2,020,864 cached input).
+- A task-specific `.weightclass/verify-review` now preregisters three factual
+  controls for the current repository-improvement review: the two documented
+  pathname residuals must remain open, while the parallel shell-injection claim
+  must be suppressed. New findings need tracked exact locations, direct
+  location citations, counterevidence, and concrete recommendations. Replace
+  this verifier deliberately for a different review task; schema validity is
+  still not a reusable factual oracle.
+- The deliberately paired Claude/Codex review became each vendor's review
+  ordinal 4. Claude's cheap result was invalid and its advised retry passed;
+  Codex passed on the cheap route. The validated synthesis found no immediate
+  new vulnerability. A repository-owned overall cancellation/deadline contract
+  and CI coverage for the machine-local wrapper remain productization work.
+  The generic output-cap concern is not reachable through today's exact wrapper,
+  which launches only the bounded `speculative_run.py`; revisit it if the helper
+  becomes a general or distributed API.
+- Review campaign totals are still below every promotion gate: Claude has 4
+  tasks, 3 advised failures, and 1 advised rescue; Codex has 4 tasks, 1 advised
+  failure, and 0 advised rescues. No cost/effectiveness decision is licensed.
 - The flexible-vendor implementation became Codex implementation ordinal 11.
   Luna passed the prospective verifier without advice or escalation after a
   799.2-second child run. Claude ordinal 11 was concurrently consumed by a
@@ -422,10 +440,10 @@ human to read.
   under the release gate, because unittest does not collect module-level
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
-- Verified on the parallel advisory tree: `unittest discover` runs **1203**
-  tests and `pytest -q` reports 1191 passed plus 12 skipped;
+- Verified on the advisory-review-verifier tree: `unittest discover` runs
+  **1208** tests and `pytest -q` reports 1196 passed plus 12 skipped;
   Ruff check/format is
-  clean on 177 files; `mypy --strict src tests` is clean on 135 source files;
+  clean on 178 files; `mypy --strict src tests` is clean on 136 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
   build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
   hides real errors — that is how 139 of them once reached `main`.
