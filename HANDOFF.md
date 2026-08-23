@@ -264,6 +264,15 @@ human to read.
   campaigns concurrently and replays their memory-captured output in stable
   vendor order. The cheap/advisor/retry/expensive stages within one campaign
   remain sequential, and each campaign retains its own lock, ordinal, and log.
+- The prospective parallel-dispatch task was offered to the sealed
+  implementation campaign, but admission failed because another campaign run
+  held the lock. No ordinal or evidence record was appended, and the attempt is
+  not an effectiveness sample. The fixed prospective acceptance was integrated
+  manually without retrying the campaign.
+- Codex Security diff scan `d41c9731-3c2f-4547-8eb1-07c46bdb8b08` reviewed the
+  parallel process, validation, output, and campaign-boundary change and found
+  no reportable security issues. Its complete measured usage was 2,060,279
+  total tokens (2,055,059 input; 2,020,864 cached input).
 - The flexible-vendor implementation became Codex implementation ordinal 11.
   Luna passed the prospective verifier without advice or escalation after a
   799.2-second child run. Claude ordinal 11 was concurrently consumed by a
