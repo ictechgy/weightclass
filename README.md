@@ -1349,8 +1349,8 @@ credential management, background execution, or a bundled provider runtime.
   files not owned by root or the current user, and
   non-sticky world-writable containing directories in both the lexical and
   resolved target chains. Root/current-user-owned group-writable files, sticky
-  directories, user-owned group-writable ancestors, and a root-owned GitHub
-  hosted `RUNNER_TOOL_CACHE` remain compatible. This is incremental admission
+  directories, user-owned group-writable ancestors, and GitHub Actions' exact
+  `/opt/hostedtoolcache` remain compatible. This is incremental admission
   hardening, not verified-object execution.
 - Route selection is deterministic. Unsupported, malformed, or unsafe input
   fails closed with a redacted JSON diagnostic.

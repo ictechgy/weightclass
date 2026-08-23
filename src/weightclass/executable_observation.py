@@ -27,15 +27,11 @@ class ExecutableObservation:
 def _trusted_hosted_toolcache() -> str | None:
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return None
-    value = os.environ.get("RUNNER_TOOL_CACHE", "")
+    value = os.environ.get("RUNNER_TOOL_CACHE", "/opt/hostedtoolcache")
     if not os.path.isabs(value):
         return None
     resolved = os.path.realpath(value)
-    try:
-        metadata = os.lstat(resolved)
-    except OSError:
-        return None
-    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0:
+    if resolved != "/opt/hostedtoolcache":
         return None
     return resolved
 

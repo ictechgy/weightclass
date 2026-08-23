@@ -318,8 +318,8 @@ human to read.
   chains. Root/current-user-owned group-writable files, sticky directories, and
   user-owned group-writable ancestors remain compatible with macOS and
   Homebrew. GitHub Actions has one narrower compatibility exception for a
-  root-owned absolute `RUNNER_TOOL_CACHE` while `GITHUB_ACTIONS=true`; arbitrary
-  or user-owned caches remain rejected. Security diff scan
+  resolved `/opt/hostedtoolcache` while `GITHUB_ACTIONS=true`; arbitrary or
+  custom caches remain rejected. Security diff scan
   `f408aeb2-976c-432d-8d8a-d7ca87defb46` found that the first implementation
   checked only the resolved chain and accepted an intermediate symlink under a
   public lexical ancestor; a focused reproduction confirmed the medium finding.

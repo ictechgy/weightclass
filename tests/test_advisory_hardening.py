@@ -217,7 +217,7 @@ class SecurityBoundaryHardeningTests(unittest.TestCase):
             public.chmod(0o1777)
             self.assertTrue(observe_executable(str(lexical)).executable_bit)
 
-    def test_only_root_owned_github_hosted_toolcache_gets_public_exception(self) -> None:
+    def test_only_official_github_hosted_toolcache_gets_public_exception(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             root = Path(directory)
             cache = root / "hostedtoolcache"
@@ -236,25 +236,21 @@ class SecurityBoundaryHardeningTests(unittest.TestCase):
             ):
                 observe_executable(str(executable))
 
-            real_lstat = os.lstat
-            cache_resolved = os.path.realpath(cache)
-
-            def root_owned(path: str | os.PathLike[str]) -> os.stat_result:
-                metadata = real_lstat(path)
-                if os.fspath(path) == cache_resolved:
-                    values = list(metadata)
-                    values[4] = 0
-                    return os.stat_result(values)
-                return metadata
-
             with (
-                mock.patch.dict(os.environ, environment, clear=False),
                 mock.patch(
-                    "weightclass.executable_observation.os.lstat",
-                    side_effect=root_owned,
+                    "weightclass.executable_observation._trusted_hosted_toolcache",
+                    return_value=os.path.realpath(cache),
                 ),
             ):
                 self.assertTrue(observe_executable(str(executable)).executable_bit)
+
+            official = {
+                "GITHUB_ACTIONS": "true",
+                "RUNNER_TOOL_CACHE": "/opt/hostedtoolcache",
+            }
+            with mock.patch.dict(os.environ, official, clear=False):
+                module = sys.modules[observe_executable.__module__]
+                self.assertEqual(module._trusted_hosted_toolcache(), "/opt/hostedtoolcache")
 
 
 if __name__ == "__main__":
