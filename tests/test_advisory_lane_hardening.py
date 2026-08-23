@@ -12,9 +12,23 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
+CAMPAIGN = TOOLS / "advisory_campaign.py"
 ORCHESTRATION = TOOLS / "advisory_orchestration.py"
 RUNNER = TOOLS / "speculative_run.py"
-REPOSITORY_TOOLS_AVAILABLE = ORCHESTRATION.is_file() and RUNNER.is_file()
+REPOSITORY_TOOLS_AVAILABLE = CAMPAIGN.is_file() and ORCHESTRATION.is_file() and RUNNER.is_file()
+
+
+def load_campaign(name: str) -> types.ModuleType:
+    tools = str(TOOLS)
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    spec = importlib.util.spec_from_file_location(name, CAMPAIGN)
+    if spec is None or spec.loader is None:
+        raise AssertionError("could not load advisory campaign")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def load_orchestration(name: str) -> types.ModuleType:
@@ -51,6 +65,14 @@ def close_child(child: subprocess.Popen[str]) -> None:
 
 @unittest.skipUnless(REPOSITORY_TOOLS_AVAILABLE, "repository-only advisory tools unavailable")
 class AdvisoryLaneHardeningTests(unittest.TestCase):
+    def test_default_lane_population_is_ten(self) -> None:
+        campaign = load_campaign("ten_lane_default")
+        root = Path("/private/results")
+        lanes = campaign.lane_result_directories(root)
+        self.assertEqual(len(lanes), 10)
+        self.assertEqual(lanes[0], root)
+        self.assertEqual(lanes[-1], root / ".lanes" / "lane-09")
+
     def test_prune_fails_closed_while_any_lane_campaign_is_active(self) -> None:
         runner = load_runner("lane_prune_hardening")
         with tempfile.TemporaryDirectory() as directory:
