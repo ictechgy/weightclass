@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""Prospective factual gate for the repository improvement review."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+MAX_RESULT_BYTES = 131_072
+MAX_FINDINGS = 12
+LOCATION = re.compile(r"([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*):([1-9][0-9]{0,5})\Z")
+ROOT_KEYS = frozenset({"schema_version", "mode", "summary", "findings", "limitations"})
+FINDING_KEYS = frozenset(
+    {
+        "title",
+        "severity",
+        "confidence",
+        "disposition",
+        "locations",
+        "evidence",
+        "counterevidence",
+        "recommendation",
+    }
+)
+SEEDS = {
+    "[seed:exec-path]": (
+        "src/weightclass/foreground_process.py:262",
+        "subprocess.Popen",
+        frozenset({"reportable", "deferred"}),
+        "medium",
+    ),
+    "[seed:usage-store]": (
+        "src/weightclass/usage_aggregation.py:424",
+        "os.replace",
+        frozenset({"reportable", "deferred"}),
+        "low",
+    ),
+    "[seed:parallel-shell]": (
+        "tools/advisory_parallel.py:70",
+        "subprocess.run",
+        frozenset({"suppressed"}),
+        "info",
+    ),
+}
+
+
+class ReviewVerificationError(ValueError):
+    """Value-free rejection of an unsupported review result."""
+
+
+def object_without_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ReviewVerificationError
+        result[key] = value
+    return result
+
+
+def text(value: object, *, minimum: int = 1) -> str:
+    if not isinstance(value, str) or not minimum <= len(value.encode("utf-8")) <= 8_192:
+        raise ReviewVerificationError
+    return value
+
+
+def text_list(value: object, *, minimum: int = 0) -> list[str]:
+    if not isinstance(value, list) or not minimum <= len(value) <= 64:
+        raise ReviewVerificationError
+    return [text(item) for item in value]
+
+
+def tracked_source(location: str) -> tuple[Path, int, str]:
+    matched = LOCATION.fullmatch(location)
+    if matched is None:
+        raise ReviewVerificationError
+    relative = Path(matched.group(1))
+    line_number = int(matched.group(2))
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ReviewVerificationError
+    try:
+        metadata = relative.lstat()
+    except OSError:
+        raise ReviewVerificationError from None
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ReviewVerificationError
+    tracked = subprocess.run(
+        [
+            "git",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            str(relative),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=10,
+    )
+    if tracked.returncode != 0:
+        raise ReviewVerificationError
+    try:
+        lines = relative.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        raise ReviewVerificationError from None
+    if line_number > len(lines):
+        raise ReviewVerificationError
+    lower = max(0, line_number - 8)
+    upper = min(len(lines), line_number + 7)
+    return relative, line_number, "\n".join(lines[lower:upper])
+
+
+def validate_finding(value: object) -> tuple[str, str]:
+    if not isinstance(value, dict) or set(value) != FINDING_KEYS:
+        raise ReviewVerificationError
+    title = text(value["title"])
+    severity = text(value["severity"])
+    confidence = text(value["confidence"])
+    disposition = text(value["disposition"])
+    locations = text_list(value["locations"], minimum=1)
+    evidence = text_list(value["evidence"], minimum=1)
+    text_list(value["counterevidence"], minimum=1)
+    recommendation = text(value["recommendation"], minimum=12)
+    if severity not in {"critical", "high", "medium", "low", "info"}:
+        raise ReviewVerificationError
+    if confidence not in {"high", "medium", "low"}:
+        raise ReviewVerificationError
+    if disposition not in {"reportable", "suppressed", "deferred"}:
+        raise ReviewVerificationError
+    if len(set(locations)) != len(locations) or len(set(evidence)) != len(evidence):
+        raise ReviewVerificationError
+    combined_evidence = "\n".join(evidence)
+    resolved = [tracked_source(location) for location in locations]
+    if any(location not in combined_evidence for location in locations):
+        raise ReviewVerificationError
+
+    seed_id = title.split(" ", 1)[0]
+    if seed_id in SEEDS:
+        expected_location, expected_token, dispositions, expected_severity = SEEDS[seed_id]
+        if disposition not in dispositions or severity != expected_severity:
+            raise ReviewVerificationError
+        if expected_location not in locations:
+            raise ReviewVerificationError
+        expected_index = locations.index(expected_location)
+        if expected_token not in resolved[expected_index][2]:
+            raise ReviewVerificationError
+    elif not title.startswith("[new] "):
+        raise ReviewVerificationError
+    return seed_id, recommendation
+
+
+def validate(payload: object) -> int:
+    if not isinstance(payload, dict) or set(payload) != ROOT_KEYS:
+        raise ReviewVerificationError
+    if payload["schema_version"] != 1 or isinstance(payload["schema_version"], bool):
+        raise ReviewVerificationError
+    if payload["mode"] != "review":
+        raise ReviewVerificationError
+    summary = text(payload["summary"], minimum=20)
+    limitations = text_list(payload["limitations"], minimum=1)
+    findings = payload["findings"]
+    if findings == [] and limitations == ["baseline_probe"] and "baseline probe" in summary.lower():
+        return 42
+    if not isinstance(findings, list) or not 3 <= len(findings) <= MAX_FINDINGS:
+        raise ReviewVerificationError
+    validated = [validate_finding(finding) for finding in findings]
+    seed_ids = [seed_id for seed_id, _ in validated if seed_id in SEEDS]
+    titles = [finding["title"] for finding in findings if isinstance(finding, dict)]
+    if len(titles) != len(set(titles)):
+        raise ReviewVerificationError
+    if len(seed_ids) != len(set(seed_ids)) or set(seed_ids) != set(SEEDS):
+        raise ReviewVerificationError
+    return 0
+
+
+def main() -> int:
+    if os.environ.get("WCLASS_ADVISORY_WORKFLOW") != "review":
+        return 1
+    data = sys.stdin.buffer.read(MAX_RESULT_BYTES + 1)
+    if not data or len(data) > MAX_RESULT_BYTES:
+        return 1
+    try:
+        payload = json.loads(
+            data.decode("utf-8", errors="strict"),
+            object_pairs_hook=object_without_duplicates,
+            parse_constant=lambda _value: (_ for _ in ()).throw(ReviewVerificationError()),
+        )
+        return validate(payload)
+    except (UnicodeError, ValueError, RecursionError, OSError, subprocess.SubprocessError):
+        print("review verification failed")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
