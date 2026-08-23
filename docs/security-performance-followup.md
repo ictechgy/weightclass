@@ -23,8 +23,9 @@ The scan recorded two medium and two low findings:
   retained directory descriptor across lock and replace operations.
 
 The first and third findings have narrow compatible fixes in this change. The
-second and fourth need platform and migration design; they are not described as
-fixed.
+usage-store transaction is now anchored to one opened, revalidated parent
+descriptor. The executable race is narrowed by admission checks below, but it
+still needs platform and migration design and is not described as fixed.
 
 ## Implemented improvements
 
@@ -40,6 +41,14 @@ fixed.
   characters and a numeric choice at 32 characters. Oversized input therefore
   reaches the existing value-free `invalid_input` boundary instead of an
   unbounded read or integer conversion.
+- Executable observation rejects group- or other-writable executable files and
+  rejects a non-sticky world-writable containing directory. Sticky directories
+  and user-owned group-writable ancestors remain compatible with existing
+  installations; no verified-object execution claim is made.
+- Usage-store lock, read, temporary creation, replacement, cleanup, and
+  directory fsync now use names relative to one opened and revalidated private
+  parent descriptor. The aggregate schema, owner-only modes, no-follow checks,
+  and public API are unchanged.
 
 Python documents that the default JSON integer conversion has a digit limit
 from Python 3.11 and that `object_pairs_hook` is the supported way to inspect
@@ -103,7 +112,12 @@ for the platform-dependent descriptor behavior. Until a design passes
 macOS/Linux compatibility and process-status tests, the existing double
 observation remains defense in depth, not proof of exact bytes at exec.
 
-The usage-store directory race similarly needs descriptor-relative lock,
-temporary, replace, and fsync operations or a stricter custom-path admission
-contract. The default private home location remains the low-risk path. Neither
-deferred item changes the aggregate-only schema or authorizes task persistence.
+The usage-store transaction race is closed for the operations covered by that
+descriptor, but an unsafe ancestor can still affect pathname resolution before
+the parent is opened; the default private home location remains the low-risk
+path. The executable check is admission hardening only: an actor that replaces
+an admitted path after the final observation can still win the path-based
+time-of-check/time-of-use race. A portable descriptor launcher is still a
+separate design. Neither residual changes the aggregate-only schema or
+authorizes task persistence, credential management, background execution, or a
+bundled provider runtime.

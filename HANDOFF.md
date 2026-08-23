@@ -291,6 +291,32 @@ human to read.
 - Review campaign totals are still below every promotion gate: Claude has 4
   tasks, 3 advised failures, and 1 advised rescue; Codex has 4 tasks, 1 advised
   failure, and 0 advised rescues. No cost/effectiveness decision is licensed.
+- The five-item hardening batch became Codex implementation ordinal 14 and
+  passed on the cheap route. Claude did not admit this task because another
+  project already held implementation ordinal 15; it was not retried and is
+  not this task's evidence. That collision exposed an attribution bug in the
+  machine shim: checking only that an ordinal advanced could mistake another
+  project's record for its own, and one post-processing error hid later vendor
+  output. Repository-owned owner-only dispatch locks now cover every selected
+  vendor before partial launch, and all completed results are replayed before a
+  record-binding error is returned.
+- Parallel advisory jobs now have an eight-hour outer ceiling, a 1 MiB combined
+  retained-output limit, concurrent pipe draining, isolated process sessions,
+  and timeout process-group cleanup. Inner Shape-B child/verifier limits remain
+  narrower. The repository-owned CLI seam and orchestration core contain no
+  machine paths; the Mac shim supplies its roots and is strict-mypy/import
+  checked against them.
+- Usage-store lock/read/temp/replace/cleanup/fsync operations are relative to
+  one opened and revalidated private parent descriptor. A deterministic parent
+  swap test proves that a replacement directory is not written and the staged
+  file is recovered. Path resolution before the parent descriptor is opened
+  remains a narrower residual; the default private home location remains the
+  preferred path.
+- Executable admission now rejects group/other-writable executable files and
+  non-sticky world-writable containing directories while retaining sticky
+  directories and user-owned group-writable ancestors for macOS/Homebrew
+  compatibility. Path-based spawn after the final observation remains a medium
+  residual; this change is not described as verified-object execution.
 - The flexible-vendor implementation became Codex implementation ordinal 11.
   Luna passed the prospective verifier without advice or escalation after a
   799.2-second child run. Claude ordinal 11 was concurrently consumed by a
@@ -441,9 +467,9 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the advisory-review-verifier tree: `unittest discover` runs
-  **1208** tests and `pytest -q` reports 1196 passed plus 12 skipped;
+  **1220** tests and `pytest -q` reports 1208 passed plus 12 skipped;
   Ruff check/format is
-  clean on 178 files; `mypy --strict src tests` is clean on 136 source files;
+  clean on 182 files; `mypy --strict src tests` is clean on 138 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
   build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
   hides real errors — that is how 139 of them once reached `main`.

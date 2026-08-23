@@ -15,6 +15,33 @@ context stayed fixed. A product decision must use a sealed campaign manifest.
 The manifest is task-free: it contains no task text, task hash, repository path,
 timestamp, account/profile, credential, or full command.
 
+## Repository-owned entry point
+
+Machine-local shims may delegate to the repository-owned seam while keeping
+their paths explicit:
+
+```sh
+python3 tools/wclass_advisory.py \
+  --router-root /path/to/weightclass \
+  --campaign-root /private/path/shape-b-results \
+  --prune
+```
+
+The seam forwards campaign arguments to `speculative_run.py` and supplies the
+campaign output root. It does not reinterpret task delivery, campaign
+ordinals, egress confirmation, result replay, or per-vendor locking; those
+contracts remain in the reviewed repository runner.
+
+Machine-local multi-vendor shims use `advisory_orchestration.run_campaign_jobs`.
+It acquires a separate owner-only dispatch lock for every selected vendor
+before starting any process, so two updated shims cannot consume or attribute
+the same campaign ordinal across projects. A collision fails the whole batch
+before partial dispatch. Every job runs in its own process session with an
+eight-hour outer deadline and a 1 MiB combined stdout/stderr retention ceiling;
+the inner runner's narrower per-child and verifier limits still apply. Timeout
+cleanup signals the complete process group, and results remain replayed in
+deterministic vendor order.
+
 ## Fixed decision contract
 
 - Primary endpoint: cost per passing task.

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
 PARALLEL = TOOLS / "advisory_parallel.py"
 WRAPPER = TOOLS / "wclass_advisory.py"
-CAMPAIGN_ACCEPTANCE = os.environ.get("WCLASS_CAMPAIGN_ACCEPTANCE") == "1"
+REPOSITORY_HARDENING_AVAILABLE = PARALLEL.is_file() and WRAPPER.is_file()
 
 
 def load_module(path: Path, name: str) -> types.ModuleType:
@@ -30,7 +30,7 @@ def load_module(path: Path, name: str) -> types.ModuleType:
     return module
 
 
-@unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective advisory hardening acceptance")
+@unittest.skipUnless(REPOSITORY_HARDENING_AVAILABLE, "repository-only hardening unavailable")
 class AdvisoryHardeningAcceptanceTests(unittest.TestCase):
     def test_parallel_jobs_have_deadlines_and_combined_output_bounds(self) -> None:
         parallel = load_module(PARALLEL, "prospective_bounded_parallel")

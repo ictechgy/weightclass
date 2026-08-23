@@ -75,10 +75,13 @@ candidate. Keep the verifier unchanged during the campaign.
    `both` is the legacy Claude+Codex alias; `all` dispatches every configured
    profile. Multi-vendor runs start independent vendor campaigns concurrently;
    each vendor's cheap/advisor/retry/expensive stages remain sequential under
-   that campaign's own lock. Each vendor owns an independent ordinal and
-   campaign. Use one vendor only when the user narrows the run. Do not add
-   retries around this command; its sealed Shape-B policy owns the bounded retry
-   and fallback behavior.
+   that campaign's own lock. The machine-local shim must acquire every selected
+   vendor's repository-owned dispatch lock before it starts any child; a busy
+   campaign fails the whole batch. Each top-level job has a finite outer
+   deadline and bounded retained output. Each vendor owns an independent
+   ordinal and campaign. Use one vendor only when the user narrows the run. Do
+   not add retries around this command; its sealed Shape-B policy owns the
+   bounded retry and fallback behavior.
 4. Delete exactly the temporary task file in a finally/cleanup path, including
    on preflight or provider failure.
 
