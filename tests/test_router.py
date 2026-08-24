@@ -14,6 +14,7 @@ from unittest import mock
 
 from tests.runtime_guard import guarded_launch
 from weightclass import cli, router
+from weightclass.agent_discovery import resolve_builtin_executable
 from weightclass.classification import Tier
 from weightclass.process_context import ChildStatusLostError
 from weightclass.router import (
@@ -26,6 +27,36 @@ from weightclass.router import (
     select_route,
     select_tier_route,
 )
+
+_ROUTER_TEST_BIN: Path | None = None
+_ORIGINAL_PATH: str | None = None
+
+
+def setUpModule() -> None:
+    """Keep built-in route tests independent of locally installed vendor CLIs."""
+    global _ORIGINAL_PATH, _ROUTER_TEST_BIN
+    _ORIGINAL_PATH = os.environ.get("PATH")
+    _ROUTER_TEST_BIN = Path(tempfile.mkdtemp(prefix="weightclass-router-bin-"))
+    for vendor in BUILT_IN_VENDORS:
+        executable = _ROUTER_TEST_BIN / vendor
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o700)
+    suffix = _ORIGINAL_PATH if _ORIGINAL_PATH is not None else os.defpath
+    os.environ["PATH"] = f"{_ROUTER_TEST_BIN}{os.pathsep}{suffix}"
+
+
+def tearDownModule() -> None:
+    global _ORIGINAL_PATH, _ROUTER_TEST_BIN
+    if _ORIGINAL_PATH is None:
+        os.environ.pop("PATH", None)
+    else:
+        os.environ["PATH"] = _ORIGINAL_PATH
+    if _ROUTER_TEST_BIN is not None:
+        for vendor in BUILT_IN_VENDORS:
+            (_ROUTER_TEST_BIN / vendor).unlink(missing_ok=True)
+        _ROUTER_TEST_BIN.rmdir()
+    _ORIGINAL_PATH = None
+    _ROUTER_TEST_BIN = None
 
 
 def _weightclass(*arguments: str, task: str) -> subprocess.CompletedProcess[str]:
@@ -350,6 +381,25 @@ class PolicyRunBindingTests(unittest.TestCase):
         errors = io.StringIO()
         completed = subprocess.CompletedProcess[bytes]((), 0)
         task_input = io.TextIOWrapper(io.BytesIO(b"Fix a typo."), encoding="utf-8")
+        expected_command = (
+            resolve_builtin_executable("codex"),
+            "exec",
+            "--ephemeral",
+            "--sandbox",
+            "workspace-write",
+            "--model",
+            "reviewed-codex-model",
+            "-c",
+            "model_reasoning_effort=medium",
+            "-",
+        )
+        expected_route = Route(
+            route_id="codex-cost-experiment-standard",
+            vendor="codex",
+            workflow="",
+            command=expected_command,
+            tier="standard",
+        )
         with (
             mock.patch.object(sys, "stdin", task_input),
             mock.patch.object(cli, "run_owned_foreground", return_value=completed) as spawn,
@@ -366,24 +416,13 @@ class PolicyRunBindingTests(unittest.TestCase):
                     "--tier",
                     "standard",
                     "--ack-route-fingerprint",
-                    "sha256:195c5c54f3332910ccf8113540d0251b3495977110ff226754fea1e4ecf83c8d",
+                    native_route_fingerprint(expected_route, False, "balanced"),
                 ]
             )
 
         self.assertEqual(exit_code, 0, errors.getvalue())
         spawn.assert_called_once_with(
-            (
-                "codex",
-                "exec",
-                "--ephemeral",
-                "--sandbox",
-                "workspace-write",
-                "--model",
-                "reviewed-codex-model",
-                "-c",
-                "model_reasoning_effort=medium",
-                "-",
-            ),
+            expected_command,
             b"Fix a typo.",
             cleanup_grace_seconds=0,
             terminate_grace_seconds=0,
@@ -450,7 +489,7 @@ class PolicyRunBindingTests(unittest.TestCase):
             descriptor,
             {
                 "command": [
-                    "grok",
+                    resolve_builtin_executable("grok"),
                     "-p",
                     "{{task}}",
                     "--permission-mode",
@@ -493,7 +532,7 @@ class PolicyRunBindingTests(unittest.TestCase):
         self.assertEqual(exit_code, 0, errors.getvalue())
         spawn.assert_called_once_with(
             (
-                "grok",
+                resolve_builtin_executable("grok"),
                 "-p",
                 task,
                 "--permission-mode",
@@ -1271,6 +1310,7 @@ class CommandSurfaceTests(unittest.TestCase):
                 descriptor = json.loads(result.stdout)
                 self.assertEqual(descriptor["route"], expected_route)
                 self.assertEqual(descriptor["vendor"], vendor)
+                expected_command[0] = resolve_builtin_executable(vendor)
                 self.assertEqual(descriptor["command"], expected_command)
                 self.assertTrue(descriptor["route_fingerprint"].startswith("sha256:"))
                 self.assertNotIn("private task text", result.stdout)
@@ -1292,10 +1332,11 @@ class CommandSurfaceTests(unittest.TestCase):
         descriptor = json.loads(result.stdout)
         self.assertEqual(descriptor["route"], "codex-cost-experiment-standard")
         self.assertEqual(descriptor["vendor"], "codex")
+        expected_executable = resolve_builtin_executable("codex")
         self.assertEqual(
             descriptor["command"],
             [
-                "codex",
+                expected_executable,
                 "exec",
                 "--ephemeral",
                 "--sandbox",
@@ -2010,6 +2051,21 @@ class CommandLineTests(unittest.TestCase):
         fingerprint = str(rendered.pop("route_fingerprint"))
         self.assertTrue(fingerprint.startswith("sha256:"), fingerprint)
         self.assertEqual(len(fingerprint), len("sha256:") + 64)
+        route_id = rendered.get("route")
+        vendor = rendered.get("vendor")
+        command = rendered.get("command")
+        if (
+            isinstance(route_id, str)
+            and isinstance(vendor, str)
+            and route_id.startswith(f"{vendor}-")
+            and isinstance(command, list)
+            and command
+            and isinstance(command[0], str)
+            and os.path.isabs(command[0])
+        ):
+            # Built-in/default routes now bind an admitted absolute PATH target;
+            # the historical route-shape assertions below compare only argv shape.
+            command[0] = vendor
         return rendered
 
     def test_classifies_a_short_spelling_fix_as_low_effort(self) -> None:
@@ -2083,7 +2139,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stderr), {"error": "invalid_task"})
         self.assertEqual(result.stdout, "")
 
-    def test_default_outputs_remain_byte_for_byte_compatible_without_explain(self) -> None:
+    def test_default_outputs_keep_the_same_route_shape_without_explain(self) -> None:
         classify = subprocess.run(
             [sys.executable, "-m", "weightclass", "classify"],
             capture_output=True,
@@ -2101,11 +2157,22 @@ class CommandLineTests(unittest.TestCase):
 
         self.assertEqual(classify.stdout, '{"tier": "low"}\n')
         self.assertEqual(
-            route.stdout,
-            '{"command": ["codex", "exec", "--ephemeral", "--sandbox", "workspace-write", "-c", '
-            '"model_reasoning_effort=low", "-"], "route": "codex-low", "tier": "low", '
-            '"vendor": "codex", "route_fingerprint": '
-            f'"{json.loads(route.stdout)["route_fingerprint"]}"}}\n',
+            self._rendered_route(route),
+            {
+                "command": [
+                    "codex",
+                    "exec",
+                    "--ephemeral",
+                    "--sandbox",
+                    "workspace-write",
+                    "-c",
+                    "model_reasoning_effort=low",
+                    "-",
+                ],
+                "route": "codex-low",
+                "tier": "low",
+                "vendor": "codex",
+            },
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
             policy_path = Path(temporary_directory, "policy.json")

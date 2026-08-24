@@ -20,10 +20,33 @@ from weightclass.cost_recommendation import (
 )
 from weightclass.router import Route
 
+_ROUTE_BIN: Path | None = None
+
+
+def setUpModule() -> None:
+    global _ROUTE_BIN
+    _ROUTE_BIN = Path(tempfile.mkdtemp(prefix="weightclass-cost-route-"))
+    for vendor in ("agy", "claude", "codex", "grok"):
+        executable = _ROUTE_BIN / vendor
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o700)
+
+
+def tearDownModule() -> None:
+    global _ROUTE_BIN
+    if _ROUTE_BIN is None:
+        return
+    for vendor in ("agy", "claude", "codex", "grok"):
+        (_ROUTE_BIN / vendor).unlink(missing_ok=True)
+    _ROUTE_BIN.rmdir()
+    _ROUTE_BIN = None
+
 
 def _weightclass(*arguments: str, task: str) -> subprocess.CompletedProcess[str]:
+    if _ROUTE_BIN is None:
+        raise AssertionError("test route directory was not initialized")
     environment = os.environ.copy()
-    environment["PATH"] = "/nonexistent"
+    environment["PATH"] = str(_ROUTE_BIN)
     return subprocess.run(
         [sys.executable, "-m", "weightclass", *arguments],
         capture_output=True,

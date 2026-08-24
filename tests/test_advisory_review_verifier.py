@@ -37,25 +37,32 @@ def accepted_result() -> dict[str, object]:
         "summary": "The seeded controls and residual risks were checked against tracked source.",
         "findings": [
             finding(
-                "[seed:exec-path] Executable path replacement residual",
-                "medium",
-                "deferred",
-                "src/weightclass/foreground_process.py:262",
-                "subprocess.Popen still resolves the observed path at spawn time.",
-            ),
-            finding(
-                "[seed:usage-store] Custom usage store ancestor race",
-                "low",
-                "deferred",
-                "src/weightclass/usage_aggregation.py:365",
-                "os.stat still resolves the parent pathname before descriptor anchoring.",
-            ),
-            finding(
-                "[seed:parallel-shell] Parallel dispatcher shell-injection control",
+                "[seed:default-admission] Default executable admission control",
                 "info",
                 "suppressed",
-                "tools/advisory_parallel.py:212",
-                "subprocess.Popen receives an exact tuple and never enables a shell.",
+                "src/weightclass/agent_discovery.py:71",
+                "observe_executable applies the shared admission boundary.",
+            ),
+            finding(
+                "[seed:default-binding] Default review and run binding residual",
+                "low",
+                "deferred",
+                "src/weightclass/cli.py:1870",
+                "_resolve_default_route_executable runs again unless acknowledgement binds review.",
+            ),
+            finding(
+                "[seed:preset-wiring] Shared preset override registration",
+                "info",
+                "suppressed",
+                "src/weightclass/cli.py:865",
+                "_add_preset_override_arguments keeps example-policy aligned with other commands.",
+            ),
+            finding(
+                "[seed:distribution-isolation] Repository-only artifact rejection",
+                "info",
+                "suppressed",
+                "tests/verify_distribution_isolation.py:1367",
+                "_reject_forbidden_top_level_content checks every wheel member.",
             ),
         ],
         "limitations": ["Runtime compatibility of deferred hardening options was not measured."],
@@ -115,8 +122,8 @@ class AdvisoryReviewVerifierTests(unittest.TestCase):
         for location in (
             "missing.py:1",
             "../HANDOFF.md:1",
-            "src/weightclass/foreground_process.py:260",
-            "tools/advisory_parallel.py:212",
+            "src/weightclass/agent_discovery.py:70",
+            "tests/verify_distribution_isolation.py:1367",
         ):
             with self.subTest(location=location):
                 value = accepted_result()

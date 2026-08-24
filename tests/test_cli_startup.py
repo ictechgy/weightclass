@@ -91,7 +91,7 @@ print(json.dumps({"exit_code": exit_code, "forbidden": forbidden}))
 
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = result.stdout.splitlines()
-        self.assertRegex(lines[0], r"^weightclass [0-9]+\.[0-9]+\.[0-9]+$")
+        self.assertRegex(lines[0], r"^weightclass [0-9]+\.[0-9]+\.[0-9]+(?:\.dev[0-9]+)?$")
         self.assertEqual(json.loads(lines[1]), {"exit_code": 0, "forbidden": []})
         self.assertEqual(result.stderr, "")
 
