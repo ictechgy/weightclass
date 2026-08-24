@@ -3434,6 +3434,18 @@ def _first_text(payload: object, depth: int = 0) -> str:
             # **필드를 보기 전에 막는다.** 뒤에 두면 `result` 나 `text` 로
             # 실려 온 도구 페이로드가 먼저 반환된다.
             return ""
+        structured = payload.get("structured_output")
+        if isinstance(structured, (dict, list)):
+            try:
+                return json.dumps(
+                    structured,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            except (TypeError, ValueError):
+                return ""
         # 벤더마다 본문 필드의 이름이 다르다. `response` 는 Gemini CLI 다.
         for field in ("result", "text", "content", "message", "output_text", "response"):
             value = payload.get(field)
