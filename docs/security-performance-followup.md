@@ -116,6 +116,13 @@ for the platform-dependent descriptor behavior. Until a design passes
 macOS/Linux compatibility and process-status tests, the existing double
 observation remains defense in depth, not proof of exact bytes at exec.
 
+A repository-owned, test-only compatibility probe now exercises native
+descriptor execution, shebang-script descriptor execution, and an opened-object
+pathname-swap case only where `os.execve` advertises fd support. Its result is
+bounded and task-free. Unsupported platforms return an explicit status without
+attempting descriptor execution. The probe does not change the production
+observation or foreground spawn path and cannot close the finding by itself.
+
 The usage-store transaction race is closed for the operations covered by that
 descriptor, but an unsafe ancestor can still affect pathname resolution before
 the parent is opened; the default private home location remains the low-risk
