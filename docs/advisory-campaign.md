@@ -136,6 +136,22 @@ python3 tools/speculative_report.py \
   --campaign ./shape-b-campaign.json
 ```
 
+For a task-free overview of several independently sealed populations, repeat
+`--campaign` with the public vendor/workflow labels and each population's
+private inputs. Output is canonical aggregate-only JSON; manifest and result
+paths are used for loading but are never rendered.
+
+```sh
+python3 tools/advisory_portfolio.py \
+  --campaign claude review /private/claude-review.json /private/claude-review-results \
+  --campaign codex review /private/codex-review.json /private/codex-review-results
+```
+
+The portfolio sorts populations deterministically, rejects duplicate labels or
+inputs, and reports the sealed task/failure floors, abstention reason, and next
+collection action. It does not combine populations or make a promotion
+decision; `speculative_report.py` remains the per-campaign statistical gate.
+
 Legacy logs may skip a damaged trailing line for descriptive recovery. A sealed
 campaign discovers lane 0 and every existing bounded lane automatically, then
 validates each log independently against the exact manifest. Malformed rows,
