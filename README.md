@@ -12,6 +12,59 @@ provider usage data, infer pricing, or know whether an effort label reduces
 the total tokens needed to finish a task. Retries and rework happen outside the
 router and can outweigh a cheaper first attempt.
 
+The heuristic classifier is experimental. Treat its tier as a deterministic
+local suggestion, review the selected command, and keep the source vendor and
+model choices explicit.
+
+## Install
+
+weightclass has no runtime dependencies beyond Python 3.10 or later.
+
+```sh
+uv tool install weightclass      # or: pipx install weightclass
+brew install ictechgy/tap/weightclass
+```
+
+Or from a local checkout:
+
+```sh
+git clone https://github.com/ictechgy/weightclass.git
+cd weightclass
+python3 -m pip install .
+```
+
+All three install the `wclass` command. weightclass bundles no vendor CLI
+itself: whichever built-in route you use — `codex`, `claude`, `agy`, or
+`grok` — that vendor's own CLI must already be installed and authenticated on
+the machine that runs it. weightclass never reads or changes their
+authentication or subscription state.
+
+## Quick start
+
+```sh
+printf '%s' 'Fix a spelling typo.' | wclass classify
+printf '%s' 'Fix a spelling typo.' | wclass route --source-vendor codex
+```
+
+The first command classifies locally; the second reviews the selected command.
+Releases are cut by pushing a tag; see [RELEASING.md](RELEASING.md). See
+[Native integrations](docs/integrations.md) for reviewed Codex and Claude Code
+examples. Current security status, including the still-open path-based spawn
+boundary, is documented in [the security follow-up](docs/security-performance-followup.md).
+
+Native schema 2 and delegation protocol 2 add explicit source/account profiles,
+closed model-and-effort builders, directional profile/vendor authorization, and
+fingerprint-bound review before one foreground execution. All profile, account,
+recipient, billing, subscription, entitlement, model, effort, permission, and
+ownership labels remain opaque caller declarations. See the
+[protocol 2 security boundary](docs/protocol-v2-security.md) and
+[migration guide](docs/protocol-v2-migration.md).
+
+Native schema 3 adds observation-bound native review and an additive
+`wclass delegate native route|run` surface for exactly one bounded subtask and
+one foreground child. It is direct native execution, not an orchestration
+runtime. See [Native schema 3](docs/native-schema-3.md).
+
 That is now a measured statement, not only a cautious one. A pre-registered
 study ([`docs/paired-token-study.md`](docs/paired-token-study.md)) built a
 synthetic fixture, 36 blind-rated tasks, and a paired harness, then ran a pilot
@@ -103,47 +156,6 @@ The `delegate` surface can also compile a Claude- or Codex-native
 planner/worker/reviewer policy into one offline review descriptor. P0.5 may
 start one explicitly trusted user-supplied orchestration runtime after review;
 its manifest remains a declaration, not proof that it enforces delegation.
-
-## Install
-
-weightclass has no runtime dependencies beyond Python 3.10 or later.
-
-```sh
-uv tool install weightclass      # or: pipx install weightclass
-brew install ictechgy/tap/weightclass
-```
-
-Or from a local checkout:
-
-```sh
-git clone https://github.com/ictechgy/weightclass.git
-cd weightclass
-python3 -m pip install .
-```
-
-All three install the `wclass` command. weightclass bundles no vendor CLI
-itself: whichever built-in route you use — `codex`, `claude`, `agy`, or
-`grok` — that vendor's own CLI must already be installed and authenticated on
-the machine that runs it. weightclass never reads or changes their
-authentication or subscription state.
-
-Releases are cut by pushing a tag; see [RELEASING.md](RELEASING.md).
-
-For reviewable native Codex and Claude Code invocation examples, see
-[Native integrations](docs/integrations.md).
-
-Native schema 2 and delegation protocol 2 add explicit source/account profiles,
-closed model-and-effort builders, directional profile/vendor authorization, and
-fingerprint-bound review before one foreground execution. All profile, account,
-recipient, billing, subscription, entitlement, model, effort, permission, and
-ownership labels remain opaque caller declarations. See the
-[protocol 2 security boundary](docs/protocol-v2-security.md) and
-[migration guide](docs/protocol-v2-migration.md).
-
-Native schema 3 adds observation-bound native review and an additive
-`wclass delegate native route|run` surface for exactly one bounded subtask and
-one foreground child. It is direct native execution, not an orchestration
-runtime. See [Native schema 3](docs/native-schema-3.md).
 
 ## Run locally
 
@@ -349,7 +361,7 @@ wclass discover --agent grok
 
 The JSON result distinguishes an executable detected on the local path from a
 usable subscription or model. `executable_detected` means only that a regular
-executable file was found. A package-managed final-component symlink is resolved,
+executable file passed local admission checks. A package-managed final-component symlink is resolved,
 and discovery emits and later policy generation binds its canonical regular-file
 target rather than the mutable link name. Subscription, pricing, and quota remain
 `unknown`. The schema-1 `network_used: false` field is retained for compatibility
@@ -403,8 +415,10 @@ Review the emitted route and pass its fingerprint to the ordinary `run`
 command. Discovery and profile generation never execute the selected agent;
 `run` still starts exactly one foreground child with no retry or fallback.
 Generated `agy` and Grok policies retain `task_delivery: argv` and its local
-process-inspection exposure. Schema 1 binds the lexical executable path in the
-route fingerprint but does not provide schema-2 executable reobservation.
+process-inspection exposure. Built-in/default schema-1 route review resolves
+PATH to one admitted absolute executable; reviewed custom policies retain their
+existing compatibility behavior. Schema 1 binds the lexical executable path in
+the route fingerprint but does not provide schema-2 executable reobservation.
 
 Code `7` carries the real status in its diagnostic, as
 `{"error": "executor_failed", "executor_exit_code": N}` or, for a command killed
@@ -1386,9 +1400,11 @@ credential management, background execution, or a bundled provider runtime.
   regardless of its mode. See
   [Bind a run to the selection you reviewed](#bind-a-run-to-the-selection-you-reviewed)
   for what the binding does and does not cover.
-- The built-in routes need no acknowledgement. They live in code, cannot be
-  swapped, and there is nothing to bind them to. Treat a policy file the way you
-  treat a shell script.
+- Built-in route syntax remains executable without an acknowledgement for
+  compatibility, but its admitted absolute executable comes from the current
+  `PATH`. Pass the fingerprint from `route` to `run` when the reviewed absolute
+  path must be binding; without it, `run` resolves and admits `PATH` again.
+  Treat a policy file the way you treat a shell script.
 - weightclass ships built-in commands only for vendors whose CLI invocation was
   measured: `claude`, `codex`, `agy`, and `grok`. It will not guess another
   program's flags. Any other agent is reachable by writing its exact argv in a

@@ -7,7 +7,9 @@ import stat
 import unicodedata
 
 from .adapter_registry import BUILT_IN_ADAPTERS, BUILT_IN_AGENT_IDS, BuiltInAdapter
+from .executable_observation import observe_executable
 from .router import CLAUDE_COMMAND_PREFIX, agy_command, codex_command, grok_command
+from .v2_validation import V2ValidationError
 
 MAX_PATH_BYTES = 32_768
 MAX_PATH_ENTRIES = 256
@@ -66,10 +68,23 @@ def _find_executable(name: str, entries: tuple[str, ...]) -> str | None:
             metadata = os.stat(resolved, follow_symlinks=False)
             executable_bit = bool(metadata.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
             if stat.S_ISREG(metadata.st_mode) and executable_bit:
+                observe_executable(resolved)
                 return resolved
-        except OSError:
+        except (OSError, V2ValidationError):
             continue
     return None
+
+
+def resolve_builtin_executable(agent: str, path_value: str | None = None) -> str:
+    """Resolve one package-supported executable through the admission gate."""
+    adapter = next((item for item in AGENT_ADAPTERS if item.agent == agent), None)
+    if adapter is None:
+        raise AgentDiscoveryError()
+    entries = _path_entries(os.environ.get("PATH", "") if path_value is None else path_value)
+    executable = _find_executable(adapter.executable_name, entries)
+    if executable is None:
+        raise AgentUnavailableError()
+    return executable
 
 
 def render_agent_discovery(
@@ -180,10 +195,7 @@ def generate_selected_policy(
     adapter = next((item for item in AGENT_ADAPTERS if item.agent == agent), None)
     if adapter is None:
         raise AgentDiscoveryError()
-    entries = _path_entries(os.environ.get("PATH", "") if path_value is None else path_value)
-    executable = _find_executable(adapter.executable_name, entries)
-    if executable is None:
-        raise AgentUnavailableError()
+    executable = resolve_builtin_executable(agent, path_value)
     command = _selected_command(adapter, executable, selected_model, effort)
     return {
         "schema_version": 1,

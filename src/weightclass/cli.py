@@ -19,6 +19,7 @@ from .agent_discovery import (
     AgentUnavailableError,
     generate_selected_policy,
     render_agent_discovery,
+    resolve_builtin_executable,
 )
 from .classification import (
     InvalidTaskError,
@@ -754,6 +755,12 @@ def _add_preset_override_arguments(parser: argparse.ArgumentParser) -> None:
         )
 
 
+def _resolve_default_route_executable(route: Route) -> Route:
+    """Bind a built-in route to one admitted absolute executable from PATH."""
+    executable = resolve_builtin_executable(route.vendor)
+    return replace(route, command=(executable, *route.command[1:]))
+
+
 def _preset_overrides_from_arguments(arguments: argparse.Namespace) -> PresetOverrides:
     return PresetOverrides(
         low_model=arguments.low_model,
@@ -855,6 +862,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     example_policy.add_argument("name", choices=tuple(EXAMPLE_POLICY_RESOURCES))
     example_policy.add_argument("--model")
+    _add_preset_override_arguments(example_policy)
     review_preset = subcommands.add_parser(
         "review-preset",
         allow_abbrev=False,
@@ -1569,7 +1577,10 @@ def recommend_from_standard_input(
             source_vendor,
             explicit_tier,
         )
-        baseline_route = select_tier_route(DEFAULT_ROUTES, tier, source_vendor, False)
+        candidate_route = _resolve_default_route_executable(candidate_route)
+        baseline_route = _resolve_default_route_executable(
+            select_tier_route(DEFAULT_ROUTES, tier, source_vendor, False)
+        )
         baseline_fingerprint = native_route_fingerprint(baseline_route, False)
         candidate_fingerprint = native_route_fingerprint(
             candidate_route,
@@ -1596,6 +1607,9 @@ def recommend_from_standard_input(
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
     except RouteSelectionError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+    except (AgentDiscoveryError, AgentUnavailableError):
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
     print(json.dumps(receipt))
@@ -1694,6 +1708,8 @@ def route_from_standard_input(
         tier, reason_code, route, policy = select_task_route(
             read_task_from_standard_input(), policy, effective_source_vendor, explicit_tier
         )
+        if policy_path is None:
+            route = _resolve_default_route_executable(route)
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
@@ -1701,6 +1717,9 @@ def route_from_standard_input(
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
     except RouteSelectionError:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
+    except (AgentDiscoveryError, AgentUnavailableError):
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
     # vendor는 항상 싣는다. 생략하면 정책이 벤더를 바꿔도 리뷰 출력만 봐서는
@@ -1819,8 +1838,10 @@ def run_from_standard_input(
     # 애초에 두 번째 읽기는 첫 번째와 다른 파일일 수 있기 때문이다. 지문은 선택된
     # 명령까지 묶으므로 그 교체를 실행 직전에 잡아낸다.
     #
-    # 코드에 고정되어 교체할 수 없는 기본 라우트에는 이 요구가 없다. 검토 대상이
-    # 되는 사용자 소유 파일이 관여할 때만 적용한다.
+    # 기본 라우트의 argv 모양은 코드에 고정되어 있어 호환성을 위해 지문 없이도
+    # 직접 실행할 수 있다. 다만 실제 argv[0]은 현재 PATH에서 해석한 절대 경로다.
+    # route가 검토한 그 경로까지 묶으려면 호출자가 선택적으로 지문을 넘겨야 한다.
+    # 사용자 소유 정책이나 패키지 프리셋은 기존처럼 지문을 필수로 요구한다.
     if (policy_path is not None or automatic_policy is not None) and (
         acknowledged_fingerprint is None
     ):
@@ -1845,6 +1866,8 @@ def run_from_standard_input(
         selected_tier, _, route, policy = select_task_route(
             task, policy, effective_source_vendor, explicit_tier
         )
+        if policy_path is None:
+            route = _resolve_default_route_executable(route)
         if acknowledged_fingerprint is not None and acknowledged_fingerprint != (
             native_route_fingerprint(route, policy.allow_mixed_vendors, policy.posture)
         ):
@@ -1878,6 +1901,9 @@ def run_from_standard_input(
     except RouteSelectionError:
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
+    except (AgentDiscoveryError, AgentUnavailableError):
+        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+        return 4
     except ChildStatusLostError:
         print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
         return EXECUTOR_FAILED_EXIT_CODE
@@ -2345,7 +2371,11 @@ def main(
         )
     if arguments.command == "example-policy":
         try:
-            policy_text = _render_example_policy(arguments.name, arguments.model)
+            policy_text = _render_example_policy(
+                arguments.name,
+                arguments.model,
+                _preset_overrides_from_arguments(arguments),
+            )
         except InvalidInputError:
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2

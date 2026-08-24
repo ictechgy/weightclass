@@ -114,6 +114,7 @@ FORBIDDEN_FUZZY_PATH_PARTS = (
     "delegation_claim_map",
     "fake_conformance_driver",
 )
+FORBIDDEN_TOP_LEVEL_CONTENT = frozenset({"skills", "tools"})
 FORBIDDEN_WHEEL_TEXT = ("wcp-selftest/v1", '"qualification_eligible"')
 REQUIRED_SDIST_TEST_SUFFIXES = (
     "tests/synthetic_descendant_containment.py",
@@ -207,6 +208,11 @@ class NormalizedDistribution:
 
 def _fail(message: str) -> NoReturn:
     raise IsolationError(message)
+
+
+def _reject_forbidden_top_level_content(path: PurePosixPath, location: str) -> None:
+    if path.parts and path.parts[0].casefold() in FORBIDDEN_TOP_LEVEL_CONTENT:
+        _fail(f"{location}: forbidden top-level content: {path.as_posix()}")
 
 
 def _object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -1358,6 +1364,9 @@ def verify_wheel(
                     f"{wheel.name}:{WHEEL_REGISTRY_PATH}",
                 )
                 for member in members:
+                    _reject_forbidden_top_level_content(
+                        PurePosixPath(member.filename), wheel.name
+                    )
                     if member.is_dir():
                         continue
                     name = member.filename
@@ -1461,6 +1470,7 @@ def verify_sdist(
         _load_empty_registry(registry_raw, f"{sdist.name}:{registries[0].name}")
         for member in members:
             relative = PurePosixPath(member.name).relative_to(root)
+            _reject_forbidden_top_level_content(relative, sdist.name)
             if _is_tests_path(relative) or _has_forbidden_fuzzy_path(relative):
                 if not relative.parts or relative.parts[0] != "tests":
                     _fail(f"{sdist.name}: test-only artifact escaped tests/: {member.name}")

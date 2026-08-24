@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-20 KST by Codex_
+_Last updated: 2026-08-25 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
@@ -17,11 +17,13 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
 ## Current Status
 
-- Project root: `/Users/jinhongan/Desktop/subscription-agent-router`.
-- Latest merged baseline before this model-label hardening: PR #57, merged as
-  `84826cb`. Later handoff-only commits do not change product behavior. The
-  0.15.1 release, advisory measurement hardening, blind direction check,
-  security/performance follow-up, and final handoff are merged.
+- Project root: the current repository checkout.
+- Current development line is `0.16.0.dev0`, based on merged main `c92ddf9`
+  plus the productization acceptance commit `27a4aa7`. The published PyPI and
+  Homebrew release remains `0.15.1`; do not reuse that version or tag.
+- The published 0.15.1 hardening baseline was PR #57 (`84826cb`). Post-release
+  repository and advisory follow-ups through merged PR #82 are present on
+  `c92ddf9`; the productization work below starts from that commit.
 - Implementation/release PRs **#40 through #57 are all merged**. Merge commits:
   `c8a3311` (#40),
   `1a7c91f` (#41), `fe93a5c` (#42), `ec5eb29` (#43), `a763d9c` (#44),
@@ -54,9 +56,8 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   `59acd7b`; tap PR #14 merged as `d1c623a`. The exact copied formula passed Ruby
   syntax, formula-only `brew style`, strict audit, source upgrade, and
   `brew test`. Homebrew has 0.15.1 installed; `brew cleanup` removed the old
-  0.14.0 keg and the prior `ca-certificates` 2026-07-16 keg. The user-level
-  `~/.local/bin/wclass` was explicitly upgraded with `uv tool` to 0.15.1, so
-  both user-level and Homebrew entrypoints now report 0.15.1.
+  0.14.0 keg and the prior `ca-certificates` 2026-07-16 keg. The user-level and
+  Homebrew entrypoints now report 0.15.1.
   `packaging/homebrew/weightclass.rb` in this repo is the source of truth; copy
   it into `ictechgy/homebrew-tap` rather than editing the tap by hand, because
   `brew style`/`brew audit` only apply tap rules to a file already inside a tap.
@@ -66,6 +67,24 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   carries a `BREAKING CHANGE:` trailer: aggregate schema 1 -> 2 (a 0.14.0 build
   cannot read a schema-2 store) and classification policy 2 -> 3 (same input
   can route to a different tier).
+### Productization follow-up (2026-08-25)
+
+- The documented `example-policy --low-model` path is wired through the shared
+  tier-specific override parser and covered by prospective and ordinary tests.
+- Built-in/default schema-1 routes resolve the current `PATH` to one admitted
+  absolute executable for review and run. An optional acknowledgement binds
+  the reviewed absolute path; without it, a direct run resolves `PATH` again.
+  The path-based post-observation replacement race remains open.
+- Wheel and sdist verification explicitly reject top-level `tools/` and
+  `skills/` content, preserving the repository-only advisory boundary.
+- The README now presents identity, installation, and a quick start before the
+  long-running evidence narrative and labels the heuristic classifier
+  experimental. The stale root security report was removed; the current
+  security record remains `docs/security-performance-followup.md` plus
+  `docs/verified-object-execution.md`.
+- The advisory implementation campaign used only the Codex cheap arm; it
+  passed its prospective verifier, so advisor, retry, and expensive arms did
+  not run. Final local verification passed 57 focused and 1,263 full tests.
 
 ## The routing-economics result
 
@@ -109,7 +128,7 @@ This is the reason the study existed, so keep the conclusion with the code.
 - Full study design and the closure section: `docs/paired-token-study.md`. The
   public summary is in `README.md`. The fixture, 36 rated tasks, harness, and
   per-task verdicts live in a **separate study repository outside this repo**
-  (`~/weightclass-token-study/`), deliberately not vendored here.
+  (a separate study repository outside this repo), deliberately not vendored here.
 
 ## The advisor arm and what its redaction cost
 
@@ -547,20 +566,18 @@ human to read.
 - The verification venv is not an editable project install. Full local test
   commands therefore need `PYTHONPATH=<repo>/src`; omitting it produces
   `No module named weightclass` import failures and is not a product result.
-- The published `weightclass 0.15.1` is installed with `uv tool` at
-  `~/.local/bin/wclass`; it precedes and leaves intact the separate Homebrew
-  0.15.1 executable at `/opt/homebrew/bin/wclass`. Both entrypoints were
-  version-checked after the explicit upgrade.
-- The default macOS aggregate store is enabled at
-  `~/Library/Application Support/weightclass/usage-v1.json`.
+- The published `weightclass 0.15.1` is installed through both the user-level
+  and Homebrew entrypoints; both were version-checked after the explicit
+  upgrade.
+- The default macOS aggregate store is enabled at its platform-default private
+  application-state location.
   The directory is `0700`; store and lock are `0600`.
 - Current report is intentionally empty: `runs=0`, `weights=[]`. No historical
   provider/session data was read or backfilled.
 
 ## Key Files & State
 
-- `HANDOFF.md`: this restart-safe state; intentionally uncommitted on root main.
-  Because it is uncommitted, a rewrite that drops required strings turns
+- `HANDOFF.md`: this restart-safe state. A rewrite that drops required strings turns
   `tests/test_completion_audit_v2.py` red in the working tree while CI stays
   green. Keep the `docs/completion-audit-v2.md` line below.
 - `docs/completion-audit-v2.md`: requirement-to-test completion map.
@@ -648,8 +665,8 @@ human to read.
 - Do not read `.grok`, auth, credential, key, cookie, or token files to explain
   startup prompts. Ask for a redacted prompt excerpt if the issue recurs.
 - Do not assume plain `wclass` exercises the Homebrew build: the user-level
-  executable still shadows `/opt/homebrew/bin/wclass`, although both now report
-  0.15.1. Test an exact path when packaging provenance matters.
+  executable can shadow the separate Homebrew entrypoint, although both now
+  report 0.15.1. Test an exact entrypoint when packaging provenance matters.
 - Do not reuse/relabel the published `0.14.0` artifacts or protected tag for
   unreleased work.
 - Do not narrow `HIGH_SIGNALS` on the calibration result. `p08`/`p21` both
@@ -746,13 +763,13 @@ human to read.
 
 ## Resume Prompt
 
-Open `/Users/jinhongan/Desktop/subscription-agent-router`, read `HANDOFF.md` and
+Open the repository checkout, read `HANDOFF.md` and
 applicable `AGENTS.md` files, then continue from: `0.15.1 is merged, tagged, and
 published from main commit 1cf2f6a; every Release job passed. The canonical
 sdist URL and SHA are recorded above. Source formula PR #53, Homebrew tap PR
 #14, release handoff PR #54, advisory follow-up PR #55, handoff PR #56, and
 security/performance PR #57 are merged. Both
-~/.local/bin/wclass and /opt/homebrew/bin/wclass report 0.15.1; old kegs and
+the user-level and Homebrew wclass entrypoints report 0.15.1; old kegs and
 stale worktree metadata were cleaned. Four real Shape-B samples now include two
 failures that reached advice, with observed rescue 0/2 and no economic verdict
 because no reviewed price table existed. Claude/Codex task-free route profiles,
