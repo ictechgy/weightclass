@@ -7,7 +7,8 @@ if ! git diff --cached --quiet -- \
   tests/test_advisory_flexible_vendors.py \
   tests/test_advisory_parallel.py \
   tests/test_advisory_hardening_acceptance.py \
-  tests/test_advisory_campaign_lanes.py; then
+  tests/test_advisory_campaign_lanes.py \
+  tests/test_advisory_portfolio.py; then
   echo "protected acceptance files changed"
   exit 1
 fi
@@ -19,7 +20,8 @@ WCLASS_CAMPAIGN_ACCEPTANCE=1 PYTHONPATH="$PWD/src" \
     tests.test_advisory_flexible_vendors \
     tests.test_advisory_parallel \
     tests.test_advisory_hardening_acceptance \
-    tests.test_advisory_campaign_lanes
+    tests.test_advisory_campaign_lanes \
+    tests.test_advisory_portfolio
 focused_code=$?
 set -e
 
