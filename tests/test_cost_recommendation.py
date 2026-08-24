@@ -20,7 +20,6 @@ from weightclass.cost_recommendation import (
 )
 from weightclass.router import Route
 
-
 _ROUTE_BIN: Path | None = None
 
 

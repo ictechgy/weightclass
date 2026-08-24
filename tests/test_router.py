@@ -28,7 +28,6 @@ from weightclass.router import (
     select_tier_route,
 )
 
-
 _ROUTER_TEST_BIN: Path | None = None
 _ORIGINAL_PATH: str | None = None
 

@@ -1364,9 +1364,7 @@ def verify_wheel(
                     f"{wheel.name}:{WHEEL_REGISTRY_PATH}",
                 )
                 for member in members:
-                    _reject_forbidden_top_level_content(
-                        PurePosixPath(member.filename), wheel.name
-                    )
+                    _reject_forbidden_top_level_content(PurePosixPath(member.filename), wheel.name)
                     if member.is_dir():
                         continue
                     name = member.filename

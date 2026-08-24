@@ -8,12 +8,12 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from typing import cast
 
 from tests.test_distribution_isolation import _write_distribution_fixture
 from tests.verify_distribution_isolation import IsolationError, verify_sdist, verify_wheel
 from weightclass import __version__
 from weightclass.agent_discovery import render_agent_discovery
-
 
 ROOT = Path(__file__).resolve().parent.parent
 ACCEPTANCE_ENABLED = os.environ.get("WCLASS_PRODUCTIZATION_ACCEPTANCE") == "1"
@@ -105,7 +105,8 @@ class ProductizationFollowupTests(unittest.TestCase):
                 text=True,
             )
 
-        self.assertFalse(inventory["agents"][0]["executable_detected"])
+        agents = cast(list[dict[str, object]], inventory["agents"])
+        self.assertFalse(agents[0]["executable_detected"])
         self.assertEqual(completed.returncode, 4)
         self.assertEqual(json.loads(completed.stderr), {"error": "executor_unavailable"})
 

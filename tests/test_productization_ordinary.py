@@ -14,7 +14,6 @@ from tests.test_distribution_isolation import _write_distribution_fixture
 from tests.verify_distribution_isolation import IsolationError, verify_sdist, verify_wheel
 from weightclass.agent_discovery import render_agent_discovery
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 

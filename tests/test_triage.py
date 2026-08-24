@@ -1877,22 +1877,29 @@ class ExplicitTierTests(unittest.TestCase):
     def _route_with_tier(
         self, tier: str, task: str = "Fix a typo."
     ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "weightclass",
-                "route",
-                "--source-vendor",
-                "claude",
-                "--tier",
-                tier,
-            ],
-            capture_output=True,
-            check=False,
-            input=task,
-            text=True,
-        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            executable = Path(temporary_directory) / "claude"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o700)
+            environment = os.environ.copy()
+            environment["PATH"] = temporary_directory
+            return subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--source-vendor",
+                    "claude",
+                    "--tier",
+                    tier,
+                ],
+                capture_output=True,
+                check=False,
+                env=environment,
+                input=task,
+                text=True,
+            )
 
     def test_an_explicit_tier_selects_that_tier_route(self) -> None:
         """Breaks if the tier from `wclass classify` cannot be handed to route."""
