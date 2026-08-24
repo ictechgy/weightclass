@@ -165,6 +165,23 @@ class AdvisoryHardeningAcceptanceTests(unittest.TestCase):
         self.assertIn("--router-root", completed.stdout)
         self.assertIn("--campaign-root", completed.stdout)
 
+    def test_campaign_option_is_forwarded_without_abbreviating_campaign_root(self) -> None:
+        wrapper = load_module(WRAPPER, "exact_campaign_option_boundary")
+        campaign_root = Path("/private/results")
+        manifest = Path("/private/campaign.json")
+        arguments, forwarded = wrapper._parser().parse_known_args(
+            [
+                "--router-root",
+                str(ROOT),
+                "--campaign-root",
+                str(campaign_root),
+                "--campaign",
+                str(manifest),
+            ]
+        )
+        self.assertEqual(arguments.campaign_root, campaign_root)
+        self.assertEqual(forwarded, ["--campaign", str(manifest)])
+
 
 if __name__ == "__main__":
     unittest.main()

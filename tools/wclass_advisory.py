@@ -65,7 +65,7 @@ def _set_option(arguments: Sequence[str], name: str, value: str) -> list[str]:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument(
         "--router-root",
         required=True,
