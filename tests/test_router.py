@@ -29,6 +29,37 @@ from weightclass.router import (
 )
 
 
+_ROUTER_TEST_BIN: Path | None = None
+_ORIGINAL_PATH: str | None = None
+
+
+def setUpModule() -> None:
+    """Keep built-in route tests independent of locally installed vendor CLIs."""
+    global _ORIGINAL_PATH, _ROUTER_TEST_BIN
+    _ORIGINAL_PATH = os.environ.get("PATH")
+    _ROUTER_TEST_BIN = Path(tempfile.mkdtemp(prefix="weightclass-router-bin-"))
+    for vendor in BUILT_IN_VENDORS:
+        executable = _ROUTER_TEST_BIN / vendor
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o700)
+    suffix = _ORIGINAL_PATH if _ORIGINAL_PATH is not None else os.defpath
+    os.environ["PATH"] = f"{_ROUTER_TEST_BIN}{os.pathsep}{suffix}"
+
+
+def tearDownModule() -> None:
+    global _ORIGINAL_PATH, _ROUTER_TEST_BIN
+    if _ORIGINAL_PATH is None:
+        os.environ.pop("PATH", None)
+    else:
+        os.environ["PATH"] = _ORIGINAL_PATH
+    if _ROUTER_TEST_BIN is not None:
+        for vendor in BUILT_IN_VENDORS:
+            (_ROUTER_TEST_BIN / vendor).unlink(missing_ok=True)
+        _ROUTER_TEST_BIN.rmdir()
+    _ORIGINAL_PATH = None
+    _ROUTER_TEST_BIN = None
+
+
 def _weightclass(*arguments: str, task: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "weightclass", *arguments],

@@ -73,6 +73,22 @@ class ProductizationOrdinaryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["command"][0], str(executable))
 
+    def test_default_route_reports_an_unavailable_executable_without_starting_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
+                cwd=ROOT,
+                capture_output=True,
+                check=False,
+                env=self._environment(directory),
+                input="Fix a typo.",
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(json.loads(result.stderr), {"error": "unsupported_route"})
+        self.assertEqual(result.stdout, "")
+
     def test_admission_is_shared_by_discovery_and_distribution_verification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             executable = Path(directory) / "codex"

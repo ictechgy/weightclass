@@ -47,6 +47,9 @@ printf '%s' 'Fix a spelling typo.' | wclass route --source-vendor codex
 ```
 
 The first command classifies locally; the second reviews the selected command.
+`route` requires the selected vendor executable to be installed and to pass the
+local admission checks described below; otherwise it exits `3` without starting
+the vendor.
 Releases are cut by pushing a tag; see [RELEASING.md](RELEASING.md). See
 [Native integrations](docs/integrations.md) for reviewed Codex and Claude Code
 examples. Current security status, including the still-open path-based spawn
@@ -194,7 +197,7 @@ them:
 | `0` | Success. For `run` and `v2 run`, the selected command exited `0`. |
 | `1` | `select` was cancelled or reached terminal EOF before policy emission. |
 | `2` | `invalid_task` or `invalid_input`. |
-| `3` | `unsupported_route` — no policy route matched. |
+| `3` | `unsupported_route` — no policy route matched, or a built-in route's executable is missing or rejected during review. |
 | `4` | `executor_unavailable` — the command could not be started. |
 | `5` | A required API, runtime, endpoint-transition, or native-delegation confirmation is absent. |
 | `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
