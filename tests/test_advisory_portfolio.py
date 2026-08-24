@@ -200,7 +200,6 @@ class AdvisoryPortfolioTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("--campaign", completed.stdout)
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective separated metrics")
     def test_separates_money_tokens_and_latency(self) -> None:
         result = self.build_result(sample_records())
         campaign = first_campaign(result)
@@ -245,7 +244,6 @@ class AdvisoryPortfolioTests(unittest.TestCase):
         self.assertEqual(campaign["decision_state"], "abstain")
         self.assertEqual(campaign["abstention_reasons"], ["planned_tasks_not_reached"])
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective automatic abstention")
     def test_incomplete_metrics_force_abstention_after_sample_floors(self) -> None:
         records = sample_records()
         first = records[0]["cheap"]
