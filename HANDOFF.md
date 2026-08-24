@@ -313,6 +313,10 @@ human to read.
   leases on exhaustion, and stores no project, repository, task, PID, timestamp,
   profile, or fingerprint-derived lane identity. A crashed owner releases its
   OS locks without a reservation file.
+- The generic advisory seam disables argparse long-option abbreviation. This
+  keeps the forwarded runner `--campaign` option distinct from the seam-owned
+  `--campaign-root`; otherwise a sealed manifest path could be misparsed as the
+  result directory and every dispatch would fail before task access.
 - Each lane retains its own local contiguous ordinal, campaign lock, registry,
   workspaces, and log. Reporting discovers every bounded lane, validates each
   independently against the exact sealed manifest, rejects mixed/damaged/gapped
@@ -501,7 +505,7 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the advisory-review-verifier tree: `unittest discover` runs
-  **1230** tests and `pytest -q` reports 1218 passed plus 12 skipped;
+  **1231** tests and `pytest -q` reports 1219 passed plus 12 skipped;
   Ruff check/format is
   clean on 184 files; `mypy --strict src tests` is clean on 140 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
