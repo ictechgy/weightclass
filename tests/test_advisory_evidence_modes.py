@@ -524,17 +524,32 @@ class EvidenceRunnerTests(unittest.TestCase):
         expected = review_result()
         text = json.dumps(expected)
         claude_stdout = json.dumps({"result": text})
+        claude_structured_stdout = json.dumps({"structured_output": expected})
         codex_stdout = json.dumps(
             {"type": "item.completed", "item": {"type": "agent_message", "text": text}}
         )
         for stdout, command in (
             (claude_stdout, ["claude", "--output-format", "json"]),
+            (
+                claude_structured_stdout,
+                ["claude", "--output-format", "json", "--json-schema", "{}"],
+            ),
             (codex_stdout, ["codex", "exec", "--json"]),
         ):
             with self.subTest(command=command[0]):
                 result_text, parsed = runner.extract_evidence_result(stdout, command, "review")
                 self.assertEqual(json.loads(result_text), expected)
                 self.assertEqual(parsed, expected)
+
+        non_finite = json.dumps(
+            {"structured_output": {"schema_version": float("nan")}}, allow_nan=True
+        )
+        with self.assertRaises(runner.EvidenceResultError):
+            runner.extract_evidence_result(
+                non_finite,
+                ["claude", "--output-format", "json", "--json-schema", "{}"],
+                "review",
+            )
 
     def test_sealed_workflow_runs_and_reports_without_cross_mode_reuse(self) -> None:
         campaign_module = load_module(CAMPAIGN, "prospective_evidence_campaign_run")

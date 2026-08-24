@@ -317,6 +317,10 @@ human to read.
   keeps the forwarded runner `--campaign` option distinct from the seam-owned
   `--campaign-root`; otherwise a sealed manifest path could be misparsed as the
   result directory and every dispatch would fail before task access.
+- Evidence extraction accepts a provider's object-valued `structured_output`
+  envelope by canonically serializing only that value and then applying the
+  existing closed workflow schema. Existing text envelopes are unchanged; a
+  malformed or non-finite structured value still fails closed.
 - Each lane retains its own local contiguous ordinal, campaign lock, registry,
   workspaces, and log. Reporting discovers every bounded lane, validates each
   independently against the exact sealed manifest, rejects mixed/damaged/gapped
