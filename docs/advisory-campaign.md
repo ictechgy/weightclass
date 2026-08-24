@@ -156,6 +156,11 @@ per-stage totals. If any executed stage lacks one metric, that metric's total is
 `null` rather than a partial value and the population automatically abstains.
 Infrastructure failures also force abstention and remain included in actual
 spend/usage totals when their child reported those values.
+Even a population with complete sample floors and metrics is only
+`evaluate`-ready: its next action is `run_statistical_gate`, and the portfolio
+never sets `policy_decision_allowed`. Incomplete measurements instead direct
+the operator to `repair_measurement`. Policy changes remain outside this
+task-free status command.
 
 Legacy logs may skip a damaged trailing line for descriptive recovery. A sealed
 campaign discovers lane 0 and every existing bounded lane automatically, then

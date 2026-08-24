@@ -263,12 +263,22 @@ class AdvisoryPortfolioTests(unittest.TestCase):
             campaign["abstention_reasons"],
             ["incomplete_cost", "incomplete_tokens", "incomplete_latency"],
         )
+        self.assertEqual(campaign["next_action"], "repair_measurement")
+        self.assertEqual(campaign["policy_decision_reason"], "portfolio_abstained")
         metrics = campaign.get("metrics")
         assert isinstance(metrics, dict)
         for name in ("money_cost", "tokens", "latency_seconds"):
             metric = metrics.get(name)
             assert isinstance(metric, dict)
             self.assertIsNone(metric.get("total"))
+
+    def test_complete_sample_only_allows_separate_statistical_evaluation(self) -> None:
+        result = self.build_result(sample_records(), decision_eligible=True, reason="minimums_met")
+        campaign = first_campaign(result)
+        self.assertEqual(campaign["decision_state"], "evaluate")
+        self.assertEqual(campaign["next_action"], "run_statistical_gate")
+        self.assertIs(campaign["policy_decision_allowed"], False)
+        self.assertEqual(campaign["policy_decision_reason"], "statistical_gate_required")
 
 
 if __name__ == "__main__":

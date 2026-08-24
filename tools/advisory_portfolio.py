@@ -191,9 +191,14 @@ def _usable_records(records: Sequence[Mapping[str, object]]) -> list[Mapping[str
     return usable
 
 
-def _next_action(progress: CampaignProgress) -> str:
-    if progress.decision_eligible:
-        return "make_decision"
+def _next_action(progress: CampaignProgress, abstention_reasons: Sequence[str]) -> str:
+    if not abstention_reasons:
+        return "run_statistical_gate"
+    if any(
+        reason.startswith("incomplete_") or reason == "infrastructure_failures"
+        for reason in abstention_reasons
+    ):
+        return "repair_measurement"
     if progress.reached_cap:
         return "stop_at_cap"
     if progress.reason == "planned_tasks_not_reached":
@@ -224,6 +229,7 @@ def _campaign_status(
     abstention_reasons.extend(metric_abstentions)
     if infrastructure_failures:
         abstention_reasons.append("infrastructure_failures")
+    evaluate_ready = not abstention_reasons
     return {
         "vendor": vendor,
         "workflow": workflow,
@@ -241,10 +247,14 @@ def _campaign_status(
         "decision_eligible": progress.decision_eligible,
         "reached_cap": progress.reached_cap,
         "abstention_reason": progress.reason,
-        "next_action": _next_action(progress),
+        "next_action": _next_action(progress, abstention_reasons),
         "metrics": metrics,
-        "decision_state": "decide" if not abstention_reasons else "abstain",
+        "decision_state": "evaluate" if evaluate_ready else "abstain",
         "abstention_reasons": abstention_reasons,
+        "policy_decision_allowed": False,
+        "policy_decision_reason": (
+            "statistical_gate_required" if evaluate_ready else "portfolio_abstained"
+        ),
     }
 
 

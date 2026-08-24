@@ -336,6 +336,10 @@ human to read.
   separate per-stage structures. Missing observations produce `null` totals,
   and incomplete metrics or infrastructure failures automatically add explicit
   abstention reasons instead of silently reporting partial consumption.
+- Portfolio readiness never authorizes a policy change. A complete population
+  becomes only `evaluate`-ready and points to the separate statistical gate;
+  incomplete metrics point to measurement repair, while
+  `policy_decision_allowed` remains false.
 - Each lane retains its own local contiguous ordinal, campaign lock, registry,
   workspaces, and log. Reporting discovers every bounded lane, validates each
   independently against the exact sealed manifest, rejects mixed/damaged/gapped
@@ -524,7 +528,7 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the advisory-review-verifier tree: `unittest discover` runs
-  **1243** tests and `pytest -q` reports 1231 passed plus 12 skipped;
+  **1244** tests and `pytest -q` reports 1232 passed plus 12 skipped;
   Ruff check/format is
   clean on 187 files; `mypy --strict src tests` is clean on 142 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
