@@ -122,6 +122,11 @@ pathname-swap case only where `os.execve` advertises fd support. Its result is
 bounded and task-free. Unsupported platforms return an explicit status without
 attempting descriptor execution. The probe does not change the production
 observation or foreground spawn path and cannot close the finding by itself.
+Shebang descriptor execution treats only `ENOENT` and `ENOEXEC` as an
+unsupported capability; permission, descriptor exhaustion, and other
+operational errors remain failures. Timeout cleanup boundedly polls after
+`SIGKILL` and transfers an unusually slow reap to a daemon reaper instead of
+leaving a zombie or blocking the caller indefinitely.
 
 The usage-store transaction race is closed for the operations covered by that
 descriptor, but an unsafe ancestor can still affect pathname resolution before

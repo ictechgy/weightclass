@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -279,6 +280,48 @@ class AdvisoryPortfolioTests(unittest.TestCase):
         self.assertEqual(campaign["next_action"], "run_statistical_gate")
         self.assertIs(campaign["policy_decision_allowed"], False)
         self.assertEqual(campaign["policy_decision_reason"], "statistical_gate_required")
+
+    def test_discovers_existing_campaign_populations_without_persisted_config(self) -> None:
+        portfolio = load_portfolio()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "claude-profile.json").write_text("{}", encoding="utf-8")
+            (root / "codex-profile.json").write_text("{}", encoding="utf-8")
+            expected = []
+            for vendor, workflow, infix in (
+                ("claude", "implementation", ""),
+                ("claude", "review", "-review"),
+                ("codex", "review", "-review"),
+            ):
+                manifest = root / f"{vendor}{infix}-shape-b.json"
+                results = root / f"{vendor}{infix}-results"
+                manifest.write_text("{}", encoding="utf-8")
+                manifest.chmod(0o600)
+                results.mkdir(mode=0o700)
+                expected.append(portfolio.PortfolioEntry(vendor, workflow, manifest, results))
+            self.assertEqual(portfolio.discover_campaigns(root), tuple(expected))
+
+    def test_discovery_rejects_half_configured_population(self) -> None:
+        portfolio = load_portfolio()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "claude-profile.json").write_text("{}", encoding="utf-8")
+            manifest = root / "claude-review-shape-b.json"
+            manifest.write_text("{}", encoding="utf-8")
+            manifest.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "^$"):
+                portfolio.discover_campaigns(root)
+
+    def test_cli_exposes_campaign_directory_discovery(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, str(PORTFOLIO), "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--campaign-directory", completed.stdout)
 
 
 if __name__ == "__main__":

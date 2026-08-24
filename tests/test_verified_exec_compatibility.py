@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import importlib.util
 import json
 import os
@@ -94,6 +95,31 @@ class VerifiedExecCompatibilityTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout), load_probe().run_compatibility_probe())
+
+    def test_script_exec_errno_does_not_hide_operational_failure(self) -> None:
+        probe = load_probe()
+        for error_number in (errno.ENOENT, errno.ENOEXEC):
+            self.assertEqual(
+                probe._classify_script_exec_error(error_number),
+                {"status": "unsupported", "reason": "shebang_descriptor_exec_unsupported"},
+            )
+        for error_number in (errno.EACCES, errno.EMFILE, errno.EIO):
+            self.assertEqual(
+                probe._classify_script_exec_error(error_number),
+                {"status": "failed", "reason": "script_exec_failed"},
+            )
+
+    def test_timeout_cleanup_kills_and_reaps_the_owned_child(self) -> None:
+        probe = load_probe()
+        child_pid = os.fork()
+        if child_pid == 0:
+            time.sleep(60)
+            os._exit(0)
+        started = time.monotonic()
+        self.assertEqual(probe._terminate_and_reap(child_pid, timeout_seconds=1.0), "reaped")
+        self.assertLess(time.monotonic() - started, 2.0)
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(child_pid, os.WNOHANG)
 
 
 if __name__ == "__main__":
