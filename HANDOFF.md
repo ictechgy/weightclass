@@ -340,6 +340,11 @@ human to read.
   becomes only `evaluate`-ready and points to the separate statistical gate;
   incomplete metrics point to measurement repair, while
   `policy_decision_allowed` remains false.
+- Descriptor-bound execution remains unenforced. A new test-only compatibility
+  probe independently characterizes native fd exec, shebang scripts, and an
+  opened-object pathname swap where the OS advertises support; unsupported
+  platforms return a bounded task-free result. Production observation and
+  foreground Popen are unchanged.
 - Each lane retains its own local contiguous ordinal, campaign lock, registry,
   workspaces, and log. Reporting discovers every bounded lane, validates each
   independently against the exact sealed manifest, rejects mixed/damaged/gapped
@@ -528,9 +533,9 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the advisory-review-verifier tree: `unittest discover` runs
-  **1244** tests and `pytest -q` reports 1232 passed plus 12 skipped;
+  **1248** tests and `pytest -q` reports 1236 passed plus 12 skipped;
   Ruff check/format is
-  clean on 187 files; `mypy --strict src tests` is clean on 142 source files;
+  clean on 189 files; `mypy --strict src tests` is clean on 144 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
   build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
   hides real errors — that is how 139 of them once reached `main`.
