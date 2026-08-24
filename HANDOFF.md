@@ -516,7 +516,7 @@ human to read.
 - Verified on the advisory-review-verifier tree: `unittest discover` runs
   **1237** tests and `pytest -q` reports 1225 passed plus 12 skipped;
   Ruff check/format is
-  clean on 184 files; `mypy --strict src tests` is clean on 140 source files;
+  clean on 185 files; `mypy --strict src tests` is clean on 141 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
   build succeeds. Note the mypy target: `src` **and** `tests`. Checking only `tools/`
   hides real errors — that is how 139 of them once reached `main`.
