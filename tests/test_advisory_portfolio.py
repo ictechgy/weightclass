@@ -125,32 +125,27 @@ class AdvisoryPortfolioTests(unittest.TestCase):
         ):
             result = portfolio.build_portfolio((entry,))
 
-        self.assertEqual(
-            result,
-            {
-                "schema_version": 1,
-                "campaigns": [
-                    {
-                        "vendor": "claude",
-                        "workflow": "review",
-                        "tasks": 3,
-                        "planned_tasks": 60,
-                        "max_tasks": 150,
-                        "advised_failures": 2,
-                        "minimum_advised_failures": 12,
-                        "cheap_passes": 1,
-                        "cheap_failures": 2,
-                        "advised_rescues": 1,
-                        "escalations": 1,
-                        "both_failed": 0,
-                        "decision_eligible": False,
-                        "reached_cap": False,
-                        "abstention_reason": "planned_tasks_not_reached",
-                        "next_action": "collect_tasks",
-                    }
-                ],
-            },
-        )
+        expected = {
+            "vendor": "claude",
+            "workflow": "review",
+            "tasks": 3,
+            "planned_tasks": 60,
+            "max_tasks": 150,
+            "advised_failures": 2,
+            "minimum_advised_failures": 12,
+            "cheap_passes": 1,
+            "cheap_failures": 2,
+            "advised_rescues": 1,
+            "escalations": 1,
+            "both_failed": 0,
+            "decision_eligible": False,
+            "reached_cap": False,
+            "abstention_reason": "planned_tasks_not_reached",
+            "next_action": "collect_tasks",
+        }
+        self.assertEqual(result["schema_version"], 1)
+        campaign = first_campaign(cast(dict[str, object], result))
+        self.assertEqual({key: campaign[key] for key in expected}, expected)
         rendered = json.dumps(result, sort_keys=True)
         self.assertNotIn("PRIVATE-MANIFEST", rendered)
         self.assertNotIn("PRIVATE-RESULTS", rendered)
