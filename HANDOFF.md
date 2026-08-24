@@ -321,6 +321,11 @@ human to read.
   envelope by canonically serializing only that value and then applying the
   existing closed workflow schema. Existing text envelopes are unchanged; a
   malformed or non-finite structured value still fails closed.
+- Repository-grounded design advisory now has a prospective
+  `.weightclass/verify-design` gate. It requires at least three independently
+  grounded options, tracked `path:line` evidence, explicit security,
+  performance, and product/operator dimensions, a recommendation naming one
+  option, and measurable acceptance and validation criteria.
 - Each lane retains its own local contiguous ordinal, campaign lock, registry,
   workspaces, and log. Reporting discovers every bounded lane, validates each
   independently against the exact sealed manifest, rejects mixed/damaged/gapped
@@ -509,7 +514,7 @@ human to read.
   `test_*` functions. Always reproduce with `unittest discover` before tagging.
   `tests/test_suite_structure.py` now fails on either cause.
 - Verified on the advisory-review-verifier tree: `unittest discover` runs
-  **1231** tests and `pytest -q` reports 1219 passed plus 12 skipped;
+  **1237** tests and `pytest -q` reports 1225 passed plus 12 skipped;
   Ruff check/format is
   clean on 184 files; `mypy --strict src tests` is clean on 140 source files;
   strict mypy is also clean on the route/campaign/runner/reporter tools; and an isolated sdist/wheel
