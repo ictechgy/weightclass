@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -42,6 +43,91 @@ class PortfolioEntry(NamedTuple):
 MAX_PORTFOLIO_CAMPAIGNS = 64
 VENDOR_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 WORKFLOWS = frozenset({"implementation", "review", "research", "diagnosis", "design"})
+STAGES = ("cheap", "advice_first", "advice_failure", "retry", "expensive")
+
+
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) and number >= 0 else None
+
+
+def _stage_value(stage: object, metric: str) -> tuple[bool, int | float | None]:
+    """Return whether a stage ran and its one requested, independently recorded value."""
+    if stage is None:
+        return False, None
+    if not isinstance(stage, Mapping):
+        return True, None
+    child = stage.get("child")
+    if not isinstance(child, Mapping):
+        return True, None
+    if metric == "money_cost":
+        usage = child.get("usage")
+        if not isinstance(usage, Mapping):
+            return True, None
+        return True, _finite_number(usage.get("cost_usd"))
+    if metric == "tokens":
+        value = child.get("tokens")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return True, None
+        return True, value
+    value = _finite_number(child.get("seconds"))
+    return True, value
+
+
+def _normalized_metric(name: str, value: int | float) -> int | float:
+    if name == "tokens":
+        return int(value)
+    if name == "latency_seconds":
+        return round(float(value), 1)
+    return round(float(value), 12)
+
+
+def _metrics(records: Sequence[Mapping[str, object]]) -> tuple[dict[str, object], list[str]]:
+    metrics: dict[str, object] = {}
+    incomplete: list[str] = []
+    for name in ("money_cost", "tokens", "latency_seconds"):
+        by_stage: dict[str, int | float | None] = {}
+        complete = True
+        total: int | float = 0 if name == "tokens" else 0.0
+        for stage_name in STAGES:
+            stage_total: int | float = 0 if name == "tokens" else 0.0
+            stage_complete = True
+            for record in records:
+                stage = record.get(stage_name)
+                # An escalated record represents an attempted expensive stage even
+                # when a damaged record omitted its payload.
+                if stage_name == "expensive" and record.get("escalated") is True and stage is None:
+                    stage = {}
+                ran, value = _stage_value(stage, name)
+                if not ran:
+                    continue
+                if value is None:
+                    stage_complete = False
+                else:
+                    stage_total += value
+            if stage_complete:
+                normalized = _normalized_metric(name, stage_total)
+                by_stage[stage_name] = normalized
+                total += normalized
+            else:
+                by_stage[stage_name] = None
+                complete = False
+        metrics[name] = {
+            "complete": complete,
+            "total": _normalized_metric(name, total) if complete else None,
+            "by_stage": by_stage,
+        }
+        if not complete:
+            reason_name = {"money_cost": "cost", "tokens": "tokens", "latency_seconds": "latency"}[
+                name
+            ]
+            incomplete.append(f"incomplete_{reason_name}")
+    return metrics, incomplete
 
 
 def _valid_entry(entry: PortfolioEntry) -> bool:
@@ -72,6 +158,11 @@ def _both_failed(record: Mapping[str, object]) -> bool:
     )
 
 
+def _infrastructure_failure(record: Mapping[str, object]) -> bool:
+    cheap = record.get("cheap")
+    return isinstance(cheap, Mapping) and cheap.get("failure_kind") == "infrastructure"
+
+
 def _usable_records(records: Sequence[Mapping[str, object]]) -> list[Mapping[str, object]]:
     usable: list[Mapping[str, object]] = []
     for record in records:
@@ -92,6 +183,10 @@ def _usable_records(records: Sequence[Mapping[str, object]]) -> list[Mapping[str
             not isinstance(retry, Mapping) or not isinstance(retry.get("accepted"), bool)
         ):
             raise PortfolioError()
+        for stage_name in ("advice_first", "advice_failure"):
+            stage = record.get(stage_name)
+            if stage is not None and not isinstance(stage, Mapping):
+                raise PortfolioError()
         usable.append(record)
     return usable
 
@@ -114,6 +209,8 @@ def _campaign_status(
     progress: CampaignProgress,
 ) -> dict[str, object]:
     usable = _usable_records(records)
+    metrics, metric_abstentions = _metrics(records)
+    infrastructure_failures = sum(1 for record in records if _infrastructure_failure(record))
     cheap_passes = sum(1 for record in usable if _accepted(record.get("cheap")))
     cheap_failures = len(usable) - cheap_passes
     advised_rescues = sum(
@@ -123,6 +220,10 @@ def _campaign_status(
     )
     escalations = sum(1 for record in usable if record.get("escalated") is True)
     both_failed = sum(1 for record in usable if _both_failed(record))
+    abstention_reasons = [] if progress.decision_eligible else [progress.reason]
+    abstention_reasons.extend(metric_abstentions)
+    if infrastructure_failures:
+        abstention_reasons.append("infrastructure_failures")
     return {
         "vendor": vendor,
         "workflow": workflow,
@@ -136,10 +237,14 @@ def _campaign_status(
         "advised_rescues": advised_rescues,
         "escalations": escalations,
         "both_failed": both_failed,
+        "infrastructure_failures": infrastructure_failures,
         "decision_eligible": progress.decision_eligible,
         "reached_cap": progress.reached_cap,
         "abstention_reason": progress.reason,
         "next_action": _next_action(progress),
+        "metrics": metrics,
+        "decision_state": "decide" if not abstention_reasons else "abstain",
+        "abstention_reasons": abstention_reasons,
     }
 
 

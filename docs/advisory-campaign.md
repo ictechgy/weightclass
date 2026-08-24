@@ -151,6 +151,11 @@ The portfolio sorts populations deterministically, rejects duplicate labels or
 inputs, and reports the sealed task/failure floors, abstention reason, and next
 collection action. It does not combine populations or make a promotion
 decision; `speculative_report.py` remains the per-campaign statistical gate.
+Actual money cost, token volume, and child latency are separate metrics with
+per-stage totals. If any executed stage lacks one metric, that metric's total is
+`null` rather than a partial value and the population automatically abstains.
+Infrastructure failures also force abstention and remain included in actual
+spend/usage totals when their child reported those values.
 
 Legacy logs may skip a damaged trailing line for descriptive recovery. A sealed
 campaign discovers lane 0 and every existing bounded lane automatically, then
