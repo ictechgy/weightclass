@@ -13,7 +13,9 @@ import os
 import signal
 import sys
 import tempfile
+import threading
 import time
+from collections.abc import Callable
 from typing import TypeAlias
 
 Status: TypeAlias = dict[str, str]
@@ -33,6 +35,14 @@ def _unsupported() -> Status:
     return _status("unsupported", "fd_exec_not_advertised")
 
 
+def _classify_script_exec_error(error_number: int) -> Status:
+    """Classify only the platform errors that mean descriptor shebang is absent."""
+
+    if error_number in (errno.ENOENT, errno.ENOEXEC):
+        return _status("unsupported", "shebang_descriptor_exec_unsupported")
+    return _status("failed", "script_exec_failed")
+
+
 def _bounded_timeout(timeout_seconds: float) -> float:
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be finite and positive")
@@ -44,6 +54,42 @@ def _close_quietly(descriptor: int) -> None:
         os.close(descriptor)
     except OSError:
         pass
+
+
+def _terminate_and_reap(child_pid: int, timeout_seconds: float) -> str:
+    """Kill an owned child and transfer a slow reap without blocking forever."""
+
+    bounded_timeout = _bounded_timeout(timeout_seconds)
+    try:
+        os.kill(child_pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+    deadline = time.monotonic() + bounded_timeout
+    while time.monotonic() < deadline:
+        try:
+            waited_pid, _ = os.waitpid(child_pid, os.WNOHANG)
+        except ChildProcessError:
+            return "reaped"
+        except InterruptedError:
+            continue
+        if waited_pid == child_pid:
+            return "reaped"
+        time.sleep(0.005)
+
+    def reap() -> None:
+        try:
+            while True:
+                try:
+                    os.waitpid(child_pid, 0)
+                    return
+                except InterruptedError:
+                    continue
+        except ChildProcessError:
+            return
+
+    threading.Thread(target=reap, name="verified-exec-reaper", daemon=True).start()
+    return "deferred"
 
 
 def _child_error(write_fd: int, error_number: int) -> None:
@@ -60,7 +106,7 @@ def _execute_descriptor(
     timeout_seconds: float,
     success_reason: str,
     failure_reason: str,
-    exec_failure_reason: str | None = None,
+    exec_failure_classifier: Callable[[int], Status] | None = None,
 ) -> Status:
     """Execute one already-open descriptor and collect only process status.
 
@@ -113,17 +159,7 @@ def _execute_descriptor(
                 break
             if time.monotonic() >= deadline:
                 timed_out = True
-                try:
-                    os.kill(child_pid, signal.SIGKILL)
-                except OSError:
-                    pass
-                cleanup_deadline = time.monotonic() + 0.25
-                while time.monotonic() < cleanup_deadline:
-                    waited_pid, candidate_status = os.waitpid(child_pid, os.WNOHANG)
-                    if waited_pid == child_pid:
-                        wait_status = candidate_status
-                        break
-                    time.sleep(0.005)
+                cleanup = _terminate_and_reap(child_pid, 0.25)
                 break
             time.sleep(0.005)
 
@@ -132,9 +168,12 @@ def _execute_descriptor(
         except BlockingIOError:
             error_bytes = b""
         if timed_out:
-            return _status("failed", "timeout")
+            reason = "timeout" if cleanup == "reaped" else "timeout_reap_deferred"
+            return _status("failed", reason)
         if error_bytes:
-            return _status("failed", exec_failure_reason or failure_reason)
+            if exec_failure_classifier is not None:
+                return exec_failure_classifier(error_bytes[0])
+            return _status("failed", failure_reason)
         if wait_status is not None and os.WIFEXITED(wait_status):
             if os.WEXITSTATUS(wait_status) == expected_exit:
                 return _status("passed", success_reason)
@@ -201,10 +240,8 @@ def _probe_script(directory: str, timeout_seconds: float) -> Status:
             timeout_seconds,
             "shebang_descriptor_exec",
             "script_exec_failed",
-            "shebang_descriptor_exec_unsupported",
+            _classify_script_exec_error,
         )
-        if result["reason"] == "shebang_descriptor_exec_unsupported":
-            return _status("unsupported", result["reason"])
         return result
     finally:
         _close_quietly(descriptor)

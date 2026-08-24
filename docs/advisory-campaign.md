@@ -147,6 +147,19 @@ python3 tools/advisory_portfolio.py \
   --campaign codex review /private/codex-review.json /private/codex-review-results
 ```
 
+When a machine uses the documented `<vendor>[-<workflow>]-shape-b.json` and
+results naming below one owner-only campaign directory, the same task-free
+status is available without a persisted path configuration:
+
+```sh
+python3 tools/advisory_portfolio.py \
+  --campaign-directory /private/advisory-campaigns
+```
+
+Discovery uses exact profile-derived vendor names, includes only complete
+manifest/results pairs, rejects symlinks or half-configured populations, and
+never renders discovered paths.
+
 The portfolio sorts populations deterministically, rejects duplicate labels or
 inputs, and reports the sealed task/failure floors, abstention reason, and next
 collection action. It does not combine populations or make a promotion

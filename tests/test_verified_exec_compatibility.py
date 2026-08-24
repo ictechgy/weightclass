@@ -96,7 +96,6 @@ class VerifiedExecCompatibilityTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout), load_probe().run_compatibility_probe())
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective errno classification")
     def test_script_exec_errno_does_not_hide_operational_failure(self) -> None:
         probe = load_probe()
         for error_number in (errno.ENOENT, errno.ENOEXEC):
@@ -110,7 +109,6 @@ class VerifiedExecCompatibilityTests(unittest.TestCase):
                 {"status": "failed", "reason": "script_exec_failed"},
             )
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective timeout reaping")
     def test_timeout_cleanup_kills_and_reaps_the_owned_child(self) -> None:
         probe = load_probe()
         child_pid = os.fork()

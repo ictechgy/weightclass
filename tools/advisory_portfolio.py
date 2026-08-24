@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
+import stat
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -44,6 +46,8 @@ MAX_PORTFOLIO_CAMPAIGNS = 64
 VENDOR_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 WORKFLOWS = frozenset({"implementation", "review", "research", "diagnosis", "design"})
 STAGES = ("cheap", "advice_first", "advice_failure", "retry", "expensive")
+_PROFILE_NAME = re.compile(r"(?P<vendor>[a-z0-9][a-z0-9._-]{0,63})-profile\.json\Z")
+_WORKFLOW_ORDER = ("implementation", "review", "research", "diagnosis", "design")
 
 
 def _finite_number(value: object) -> float | None:
@@ -141,6 +145,73 @@ def _valid_entry(entry: PortfolioEntry) -> bool:
         and isinstance(entry.results_root, Path)
         and entry.results_root.is_absolute()
     )
+
+
+def _owner_only_directory(directory: Path) -> bool:
+    try:
+        metadata = directory.lstat()
+    except OSError:
+        return False
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) & 0o077:
+        return False
+    get_uid = getattr(os, "getuid", None)
+    return get_uid is None or metadata.st_uid == get_uid()
+
+
+def _directory_entry_kind(path: Path) -> str | None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise PortfolioError() from error
+    if stat.S_ISREG(metadata.st_mode):
+        return "file"
+    if stat.S_ISDIR(metadata.st_mode):
+        return "directory"
+    return "other"
+
+
+def _campaign_names(vendor: str, workflow: str) -> tuple[str, str]:
+    stem = vendor if workflow == "implementation" else f"{vendor}-{workflow}"
+    return f"{stem}-shape-b.json", f"{stem}-results"
+
+
+def discover_campaigns(directory: Path) -> tuple[PortfolioEntry, ...]:
+    """Discover complete, named populations below one private directory."""
+
+    if (
+        not isinstance(directory, Path)
+        or not directory.is_absolute()
+        or not _owner_only_directory(directory)
+    ):
+        raise PortfolioError()
+    try:
+        children = tuple(directory.iterdir())
+    except OSError as error:
+        raise PortfolioError() from error
+
+    vendors: list[str] = []
+    for child in children:
+        match = _PROFILE_NAME.fullmatch(child.name)
+        if match is None or _directory_entry_kind(child) != "file":
+            continue
+        vendors.append(match.group("vendor"))
+
+    entries: list[PortfolioEntry] = []
+    for vendor in sorted(set(vendors)):
+        for workflow in _WORKFLOW_ORDER:
+            manifest_name, results_name = _campaign_names(vendor, workflow)
+            manifest = directory / manifest_name
+            results_root = directory / results_name
+            manifest_kind = _directory_entry_kind(manifest)
+            results_kind = _directory_entry_kind(results_root)
+            if manifest_kind is None and results_kind is None:
+                continue
+            if manifest_kind != "file" or results_kind != "directory":
+                raise PortfolioError()
+            entries.append(PortfolioEntry(vendor, workflow, manifest, results_root))
+    return tuple(entries)
 
 
 def _accepted(value: object) -> bool:
@@ -317,17 +388,26 @@ def _entry(value: Sequence[str]) -> PortfolioEntry:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
         "--campaign",
         action="append",
         nargs=4,
         metavar=("VENDOR", "WORKFLOW", "MANIFEST", "RESULTS"),
-        required=True,
         help="campaign identity and private inputs; may be repeated",
+    )
+    source.add_argument(
+        "--campaign-directory",
+        metavar="DIRECTORY",
+        help="discover complete named campaigns below one owner-only directory",
     )
     arguments = parser.parse_args()
     try:
-        result = build_portfolio(tuple(_entry(value) for value in arguments.campaign))
+        if arguments.campaign_directory is not None:
+            entries = discover_campaigns(Path(arguments.campaign_directory))
+        else:
+            entries = tuple(_entry(value) for value in arguments.campaign)
+        result = build_portfolio(entries)
     except PortfolioError:
         parser.error("invalid campaign portfolio")
     print(json.dumps(result, ensure_ascii=True, sort_keys=True, separators=(",", ":")))

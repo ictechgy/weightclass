@@ -281,7 +281,6 @@ class AdvisoryPortfolioTests(unittest.TestCase):
         self.assertIs(campaign["policy_decision_allowed"], False)
         self.assertEqual(campaign["policy_decision_reason"], "statistical_gate_required")
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective public status discovery")
     def test_discovers_existing_campaign_populations_without_persisted_config(self) -> None:
         portfolio = load_portfolio()
         with tempfile.TemporaryDirectory() as directory:
@@ -302,7 +301,6 @@ class AdvisoryPortfolioTests(unittest.TestCase):
                 expected.append(portfolio.PortfolioEntry(vendor, workflow, manifest, results))
             self.assertEqual(portfolio.discover_campaigns(root), tuple(expected))
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective public status discovery")
     def test_discovery_rejects_half_configured_population(self) -> None:
         portfolio = load_portfolio()
         with tempfile.TemporaryDirectory() as directory:
@@ -314,7 +312,6 @@ class AdvisoryPortfolioTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "^$"):
                 portfolio.discover_campaigns(root)
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective public status discovery")
     def test_cli_exposes_campaign_directory_discovery(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(PORTFOLIO), "--help"],
