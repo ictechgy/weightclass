@@ -263,6 +263,8 @@ class AdvisoryPortfolioTests(unittest.TestCase):
             campaign["abstention_reasons"],
             ["incomplete_cost", "incomplete_tokens", "incomplete_latency"],
         )
+        self.assertEqual(campaign["next_action"], "repair_measurement")
+        self.assertEqual(campaign["policy_decision_reason"], "portfolio_abstained")
         metrics = campaign.get("metrics")
         assert isinstance(metrics, dict)
         for name in ("money_cost", "tokens", "latency_seconds"):
@@ -270,7 +272,6 @@ class AdvisoryPortfolioTests(unittest.TestCase):
             assert isinstance(metric, dict)
             self.assertIsNone(metric.get("total"))
 
-    @unittest.skipUnless(CAMPAIGN_ACCEPTANCE, "prospective policy decision boundary")
     def test_complete_sample_only_allows_separate_statistical_evaluation(self) -> None:
         result = self.build_result(sample_records(), decision_eligible=True, reason="minimums_met")
         campaign = first_campaign(result)
