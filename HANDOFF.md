@@ -18,10 +18,10 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 ## Current Status
 
 - Project root: the current repository checkout.
-- Current release candidate is `0.16.0`, based on merged main `9d2959e` plus
-  branch `codex/ship-advisory`. The published PyPI and Homebrew release remains
-  `0.15.1` until the candidate is merged, tagged, and verified; do not reuse an
-  existing version or tag.
+- Current release candidate is `0.16.1`. `v0.16.0` reached immutable candidate
+  validation but failed its first Python 3.10 installed-route smoke before
+  publication; retain that tag and never reuse it. The published PyPI and
+  Homebrew release remains `0.15.1` until 0.16.1 is merged, tagged, and verified.
 - The published 0.15.1 hardening baseline was PR #57 (`84826cb`). Post-release
   repository and advisory follow-ups through merged PR #82 are present on
   `c92ddf9`; the productization work below starts from that commit.

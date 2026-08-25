@@ -101,6 +101,12 @@ jobs:
           test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
           "$installed_venv/bin/wclass-advisory" --help >/dev/null
           "$installed_venv/bin/python" -m weightclass.advisory --help >/dev/null
+          installed_agent_bin="$RUNNER_TEMP/weightclass-installed-agent-bin"
+          mkdir -m 700 "$installed_agent_bin"
+          for agent in agy claude codex grok; do
+            ln -s "$(command -v true)" "$installed_agent_bin/$agent"
+          done
+          export PATH="$installed_agent_bin:$PATH"
           test "$(printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" classify)" = '{"tier": "low"}'
           "$installed_venv/bin/wclass" review-cost-profile --help >/dev/null
           "$installed_venv/bin/wclass" recommend --help >/dev/null
@@ -154,6 +160,12 @@ jobs:
           test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
           "$installed_venv/bin/wclass-advisory" --help >/dev/null
           "$installed_venv/bin/python" -m weightclass.advisory --help >/dev/null
+          installed_agent_bin="$RUNNER_TEMP/weightclass-installed-agent-bin"
+          mkdir -m 700 "$installed_agent_bin"
+          for agent in agy claude codex grok; do
+            ln -s "$(command -v true)" "$installed_agent_bin/$agent"
+          done
+          export PATH="$installed_agent_bin:$PATH"
           test "$(printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" classify)" = '{"tier": "low"}'
           "$installed_venv/bin/wclass" review-cost-profile --help >/dev/null
           "$installed_venv/bin/wclass" recommend --help >/dev/null
