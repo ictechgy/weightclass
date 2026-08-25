@@ -25,8 +25,8 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   - sha256: `5f6173e4fb7aeb625b2d196a8ad36b76a8ccce7e2330b3e0678c65c57c869786`
 - `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
-  before publication; retain both tags and never reuse them. Homebrew remains
-  `0.15.1` until the formula update is merged and installed.
+  before publication; retain both tags and never reuse them. Homebrew 0.16.2 is
+  published from tap PR #16 and passed source upgrade plus `brew test`.
 - The published 0.15.1 hardening baseline was PR #57 (`84826cb`). Post-release
   repository and advisory follow-ups through merged PR #82 are present on
   `c92ddf9`; the productization work below starts from that commit.
@@ -93,9 +93,9 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   passed its prospective verifier, so advisor, retry, and expensive arms did
   not run. Final local verification passed 57 focused and 1,263 full tests.
 
-### Installed advisory companion (in progress, 2026-08-25)
+### Installed advisory companion (released, 2026-08-25)
 
-- Branch `codex/ship-advisory` moves the existing advisory runtime into the
+- Release `0.16.2` moves the existing advisory runtime into the
   `weightclass.advisory` package and adds `wclass-advisory` to the same wheel as
   `wclass`; it is not a separate distribution.
 - `wclass-advisory` exposes explicit `review`, `run`, `prune`, `seal`, `report`,
@@ -106,6 +106,10 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 - Distribution availability is not an effectiveness promotion: the existing
   60-task/12-advised-failure gates, separate populations, and abstention rules
   remain unchanged.
+- Source PR #84, release-smoke fixes #85 and #86, source-formula PR #87, and
+  tap PR `ictechgy/homebrew-tap#16` are merged. PyPI Release run `32798010700`
+  and every PR CI job passed. Both user-level and Homebrew installs report
+  0.16.2 and provide `wclass` plus `wclass-advisory`.
 
 ## The routing-economics result
 
@@ -474,8 +478,8 @@ human to read.
 
 ## Completed
 
-- Released state is `weightclass 0.15.1`. Tags `v0.14.0`, `v0.15.0`, and
-  `v0.15.1` and their published artifacts must never be moved, reused,
+- Released state is `weightclass 0.16.2`. Published tags and the failed,
+  unpublished `v0.16.0`/`v0.16.1` candidates must never be moved, reused,
   relabelled, or republished.
 - The in-progress follow-up passes the already validated source vendor to usage
   accounting only for the model-free `medium` counterfactual lookup. Actual
@@ -587,9 +591,8 @@ human to read.
 - The verification venv is not an editable project install. Full local test
   commands therefore need `PYTHONPATH=<repo>/src`; omitting it produces
   `No module named weightclass` import failures and is not a product result.
-- The published `weightclass 0.15.1` is installed through both the user-level
-  and Homebrew entrypoints; both were version-checked after the explicit
-  upgrade.
+- The published `weightclass 0.16.2` is installed through both the user-level
+  and Homebrew entrypoints; both `wclass` and `wclass-advisory` were checked.
 - The default macOS aggregate store is enabled at its platform-default private
   application-state location.
   The directory is `0700`; store and lock are `0600`.
@@ -687,7 +690,7 @@ human to read.
   startup prompts. Ask for a redacted prompt excerpt if the issue recurs.
 - Do not assume plain `wclass` exercises the Homebrew build: the user-level
   executable can shadow the separate Homebrew entrypoint, although both now
-  report 0.15.1. Test an exact entrypoint when packaging provenance matters.
+  report 0.16.2. Test an exact entrypoint when packaging provenance matters.
 - Do not reuse/relabel the published `0.14.0` artifacts or protected tag for
   unreleased work.
 - Do not narrow `HIGH_SIGNALS` on the calibration result. `p08`/`p21` both
@@ -706,7 +709,7 @@ human to read.
 
 ## Next Steps
 
-1. **No 0.15.1 release work remains.** PyPI and Homebrew publication are both
+1. **No 0.16.2 release work remains.** PyPI and Homebrew publication are both
    complete. The unrelated pre-existing `relay.rb` whole-tap style finding was
    intentionally left untouched. The shadowing user-level tool is now 0.15.1,
    old kegs were cleaned, and stale linked-worktree metadata was pruned.
@@ -785,13 +788,11 @@ human to read.
 ## Resume Prompt
 
 Open the repository checkout, read `HANDOFF.md` and
-applicable `AGENTS.md` files, then continue from: `0.15.1 is merged, tagged, and
-published from main commit 1cf2f6a; every Release job passed. The canonical
-sdist URL and SHA are recorded above. Source formula PR #53, Homebrew tap PR
-#14, release handoff PR #54, advisory follow-up PR #55, handoff PR #56, and
-security/performance PR #57 are merged. Both
-the user-level and Homebrew wclass entrypoints report 0.15.1; old kegs and
-stale worktree metadata were cleaned. Four real Shape-B samples now include two
+applicable `AGENTS.md` files, then continue from: `0.16.2 is merged, tagged, and
+published from main commit d252403; Release run 32798010700 passed. The canonical
+sdist URL and SHA are recorded above. Advisory source PR #84, smoke fixes #85/#86,
+formula PR #87, and tap PR #16 are merged. Both user-level and Homebrew installs
+report 0.16.2 and provide wclass plus wclass-advisory. Four real Shape-B samples now include two
 failures that reached advice, with observed rescue 0/2 and no economic verdict
 because no reviewed price table existed. Claude/Codex task-free route profiles,
 exact argv review, explicit egress confirmation, and Codex disjoint cached-input
