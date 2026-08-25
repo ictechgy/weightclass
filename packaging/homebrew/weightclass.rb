@@ -7,8 +7,8 @@ class Weightclass < Formula
 
   desc "Local, policy-driven routing for agent CLI workflows"
   homepage "https://github.com/ictechgy/weightclass"
-  url "https://files.pythonhosted.org/packages/6c/44/5007d87eb3d17dd6d87ae23bbf9c3d56e6781895c1254215cf18777502cf/weightclass-0.16.2.tar.gz"
-  sha256 "5f6173e4fb7aeb625b2d196a8ad36b76a8ccce7e2330b3e0678c65c57c869786"
+  url "https://files.pythonhosted.org/packages/74/df/d1060ba9b4fbcde82f66bd77a041ab04ca7abfc916863499e02a434956bd/weightclass-0.17.0.tar.gz"
+  sha256 "12f2679a53314750be30d4bd2cbe225d7561c137c26279619b72b3f7912a6d88"
   license "MIT"
 
   depends_on "python@3.13"
@@ -30,6 +30,16 @@ class Weightclass < Formula
     assert_match '"schema_version": 1',
                  shell_output("#{bin}/wclass example-policy claude-cost-focused")
     assert_match "wclass-advisory", shell_output("#{bin}/wclass-advisory --help")
+    managed_root = testpath/"advisory-v1"
+    system bin/"wclass-advisory", "init", "--state-root", managed_root,
+           "--vendor", "codex",
+           "--model", "cheap=cheap", "--model", "advisor=advisor",
+           "--model", "expensive=expensive",
+           "--effort", "cheap=low", "--effort", "advisor=high",
+           "--effort", "expensive=high"
+    assert_match '"ready":true',
+                 shell_output("#{bin}/wclass-advisory doctor --state-root #{managed_root} " \
+                              "--vendor codex --workflow all")
 
     # 잘못된 입력은 닫히는 방향으로 실패하고 태스크를 되비추지 않아야 한다.
     output = pipe_output("#{bin}/wclass classify 2>&1", "", 2)
