@@ -40,6 +40,11 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   on Python 3.10/3.14, and exact trusted publication. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/4f/07/37b45d7a06c27dc300a0c170143fa053d767e3df3f66ead1833511de1fdf/weightclass-0.17.2.tar.gz`
   - sha256: `8ec81718ddc363412438e31dd9dac766e14847c6144fd46f08cfc4296ce13722`
+- **`weightclass 0.17.3` is published on PyPI and Homebrew.** Release run
+  `32861214923` passed immutable build, macOS 3.10/3.14, candidate validation
+  on Python 3.10/3.14, and exact trusted publication. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/85/e3/81a154a49de27e765f2e14ba7b2f3e4c75283eb958e9ff349ce68ed27d72/weightclass-0.17.3.tar.gz`
+  - sha256: `f54cb17162fe040428331abf7e819949d9018309816c78956dbf61d0cbd54096`
 - `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
   before publication; retain both tags and never reuse them. Homebrew 0.16.2 is
@@ -232,7 +237,7 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   both Codex and Claude and match the packaged bundle byte-for-byte. Managed
   `doctor` is ready for both vendors and reports `lane_count: 10`.
 
-### Advisory campaign-binding diagnostics (0.17.3 candidate)
+### Advisory campaign-binding diagnostics (released in 0.17.3)
 
 - The legacy machine-local implementation populations remain intentionally
   unusable when their current manifest no longer matches sealed records. No
@@ -253,8 +258,17 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   `c750fa5d-2489-4737-a10a-dd4e875440f4` found no reportable vulnerability;
   its functional coverage note exposed one remaining wrapper-level reason-code
   collapse, which is fixed by a direct `load_merged_lane_records()` regression.
-  The final source suite passes 1,295 tests with 23 skips. PR and release gates
-  remain pending.
+  The final source suite passes 1,295 tests with 23 skips.
+- Source PR #99 merged as `32fca6b`; Release run `32861214923` published the
+  exact reviewed candidate. Source-formula PR #100 merged as `091b23c`, and tap
+  PR `ictechgy/homebrew-tap#20` merged as `bca4d42`. The user-level uv tool and
+  Homebrew source install both report 0.17.3, and `brew test` passes. Exact
+  0.17.2 personal skills upgraded through `upgrade_planned` to `upgraded` for
+  both Codex and Claude and match the packaged bundle byte-for-byte. Managed
+  `doctor` remains ready for both vendors/all workflows with `lane_count: 10`.
+  A read-only installed-package probe against the unchanged legacy Codex
+  population returns `campaign_record_binding_mismatch` instead of an empty
+  message.
 
 ## The routing-economics result
 
@@ -857,8 +871,11 @@ human to read.
 1. **Collect real advisory evidence without mislabeling failures.** Ten lanes
    per vendor/workflow are available, but sample caps remain independent of
    lane availability. Treat only `managed_lane_unavailable` as contention;
-   report `managed_campaign_capacity_reached` and generic dispatch rejection by
-   their exact codes. Do not synthesize samples or merge sealed populations.
+   report `managed_campaign_capacity_reached`, `campaign_record_*`, and generic
+   dispatch rejection by their exact codes. Do not synthesize samples, repair
+   fingerprints, or merge sealed populations. The legacy local implementation
+   population is still unhealthy by design; use only an independently valid,
+   explicitly selected managed population.
 2. **Verified-object execution remains an open architecture item.** Current
    double observation narrows replacement but `Popen` still resolves a path.
    Before enforcing safe ancestors, settle sticky-directory and group-writable
