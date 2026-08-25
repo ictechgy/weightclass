@@ -61,6 +61,7 @@ class InitializationReceipt(TypedDict):
 class DoctorReceipt(TypedDict):
     schema_version: int
     ready: bool
+    lane_count: int
     vendors: list[str]
     workflows: list[str]
 
@@ -578,6 +579,7 @@ def doctor(state_root: Path, *, vendors: Sequence[str], workflows: Sequence[str]
     return {
         "schema_version": SCHEMA_VERSION,
         "ready": True,
+        "lane_count": advisory_campaign.ANONYMOUS_LANE_COUNT,
         "vendors": list(vendors),
         "workflows": list(workflows),
     }
@@ -816,6 +818,11 @@ def dispatch(
             if record_error:
                 _fail()
             return returncode
+    except (
+        advisory_orchestration.LaneUnavailableError,
+        advisory_orchestration.CampaignCapacityError,
+    ):
+        raise
     except (OSError, ValueError, advisory_campaign.CampaignError) as error:
         raise ManagedAdvisoryError() from error
 
@@ -970,6 +977,12 @@ def dispatch_main(argv: Sequence[str]) -> int:
             workflow=arguments.workflow,
             confirm_task_egress=arguments.confirm_task_egress,
         )
+    except advisory_orchestration.LaneUnavailableError:
+        print(json.dumps({"error": "managed_lane_unavailable"}), file=sys.stderr)
+        return 2
+    except advisory_orchestration.CampaignCapacityError:
+        print(json.dumps({"error": "managed_campaign_capacity_reached"}), file=sys.stderr)
+        return 2
     except (OSError, ManagedAdvisoryError):
         print(json.dumps({"error": "managed_dispatch_rejected"}), file=sys.stderr)
         return 2

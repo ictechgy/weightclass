@@ -77,3 +77,9 @@ backward compatibility. Its help labels the command as advanced, lists the
 security-critical options forwarded to the sealed runner, and points managed
 users back to `dispatch`; those forwarded options include `--repo`,
 `--task-file`, and `--confirm-task-egress`.
+
+Managed dispatch reports `managed_lane_unavailable` only when every bounded
+lane for a selected vendor/workflow is actively leased. A sealed sample cap is
+`managed_campaign_capacity_reached`; other preflight or binding failures remain
+`managed_dispatch_rejected` and are not lane contention. `doctor` reports the
+configured lane count (ten per vendor and workflow by default).
