@@ -57,7 +57,7 @@ class AdvisoryCampaignDiagnosticsAcceptanceTests(unittest.TestCase):
 
     def test_record_shape_and_ordinal_failures_have_fixed_reasons(self) -> None:
         manifest = self.manifest()
-        cases = (
+        cases: tuple[tuple[dict[str, object], str], ...] = (
             ({"campaign": {}}, "campaign_record_binding_invalid"),
             (
                 {
@@ -99,9 +99,7 @@ class AdvisoryCampaignDiagnosticsAcceptanceTests(unittest.TestCase):
                 max_tasks=150,
                 dry_run=False,
             )
-            selected = managed_advisory.campaign_paths(
-                state_root, "codex", "implementation"
-            )
+            selected = managed_advisory.campaign_paths(state_root, "codex", "implementation")
             request = advisory_orchestration.LaneRequest(
                 "codex",
                 selected.results,
@@ -137,7 +135,7 @@ class AdvisoryCampaignDiagnosticsAcceptanceTests(unittest.TestCase):
 
             with (
                 mock.patch.object(
-                    managed_advisory.advisory_campaign,
+                    advisory_campaign,
                     "load_merged_lane_records",
                     side_effect=error,
                 ),
