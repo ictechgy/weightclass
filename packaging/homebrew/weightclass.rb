@@ -7,8 +7,8 @@ class Weightclass < Formula
 
   desc "Local, policy-driven routing for agent CLI workflows"
   homepage "https://github.com/ictechgy/weightclass"
-  url "https://files.pythonhosted.org/packages/74/df/d1060ba9b4fbcde82f66bd77a041ab04ca7abfc916863499e02a434956bd/weightclass-0.17.0.tar.gz"
-  sha256 "12f2679a53314750be30d4bd2cbe225d7561c137c26279619b72b3f7912a6d88"
+  url "https://files.pythonhosted.org/packages/25/8e/0c386f5c48db429eec8874a5b8090b4387688f2bc1678188ac451a111927/weightclass-0.17.1.tar.gz"
+  sha256 "3c6f456a962537f4e3f72647c083556faa0c70854d60f01ee9766734b1837333"
   license "MIT"
 
   depends_on "python@3.13"
@@ -30,6 +30,10 @@ class Weightclass < Formula
     assert_match '"schema_version": 1',
                  shell_output("#{bin}/wclass example-policy claude-cost-focused")
     assert_match "wclass-advisory", shell_output("#{bin}/wclass-advisory --help")
+    assert_match "--confirm-task-egress", shell_output("#{bin}/wclass-advisory run --help")
+    assert_match "usage: wclass-advisory prune", shell_output("#{bin}/wclass-advisory prune --help")
+    assert_match "usage: wclass-advisory install-skill",
+                 shell_output("#{bin}/wclass-advisory install-skill --help")
     managed_root = testpath/"advisory-v1"
     system bin/"wclass-advisory", "init", "--state-root", managed_root,
            "--vendor", "codex",
