@@ -98,7 +98,39 @@ class AdvisoryDistributionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--campaign-root", result.stdout)
         self.assertIn("--workflow", result.stdout)
+        for forwarded in (
+            "--repo",
+            "--task-file",
+            "--route-profile",
+            "--campaign",
+            "--verify",
+            "--advise-on-failure",
+            "--confirm-task-egress",
+        ):
+            self.assertIn(forwarded, result.stdout)
+        self.assertIn("wclass-advisory dispatch", result.stdout)
         self.assertNotIn("--router-root", result.stdout)
+
+    def test_subcommand_help_uses_the_public_command_name(self) -> None:
+        expected = {
+            "prune": "usage: wclass-advisory prune",
+            "review": "usage: wclass-advisory review",
+            "install-skill": "usage: wclass-advisory install-skill",
+        }
+        for command, usage in expected.items():
+            with self.subTest(command=command):
+                result = self._run(command, "--help")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(usage, result.stdout)
+        review = self._run("review", "--help")
+        self.assertIn("--profile", review.stdout)
+
+    def test_skill_rejects_stale_run_instructions_instead_of_bypassing_advisory(self) -> None:
+        skill = files("weightclass.advisory").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("stale", skill.casefold())
+        self.assertIn("wclass-advisory dispatch", skill)
+        self.assertIn("Do not fall back", skill)
 
 
 if __name__ == "__main__":

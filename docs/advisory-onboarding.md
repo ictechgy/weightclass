@@ -73,4 +73,7 @@ Use `wclass-advisory status` for aggregate readiness and evidence. Use
 `wclass-advisory cleanup` only to prune registered disposable workspaces; it
 does not remove profiles, sealed campaigns, or aggregate records. The low-level
 `run --campaign-root ...` interface remains available for advanced callers and
-backward compatibility.
+backward compatibility. Its help labels the command as advanced, lists the
+security-critical options forwarded to the sealed runner, and points managed
+users back to `dispatch`; those forwarded options include `--repo`,
+`--task-file`, and `--confirm-task-egress`.

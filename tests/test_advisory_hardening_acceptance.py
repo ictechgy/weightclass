@@ -179,6 +179,51 @@ class AdvisoryHardeningAcceptanceTests(unittest.TestCase):
         self.assertEqual(arguments.campaign_root, campaign_root)
         self.assertEqual(forwarded, ["--campaign", str(manifest)])
 
+    def test_low_level_run_forwards_every_security_critical_runner_option(self) -> None:
+        wrapper = load_module(WRAPPER, "advisory_hardening_acceptance_wrapper_forwarding")
+        arguments, forwarded = wrapper._run_parser().parse_known_args(
+            [
+                "--campaign-root",
+                "/private/results",
+                "--vendor",
+                "codex",
+                "--workflow",
+                "review",
+                "--repo",
+                "/private/repo",
+                "--task-file",
+                "/private/task",
+                "--route-profile",
+                "/private/profile",
+                "--campaign",
+                "/private/campaign",
+                "--verify",
+                "/private/verify",
+                "--advise-on-failure",
+                "--confirm-task-egress",
+            ]
+        )
+
+        self.assertEqual(arguments.vendor, "codex")
+        self.assertEqual(arguments.workflow, "review")
+        self.assertEqual(
+            forwarded,
+            [
+                "--repo",
+                "/private/repo",
+                "--task-file",
+                "/private/task",
+                "--route-profile",
+                "/private/profile",
+                "--campaign",
+                "/private/campaign",
+                "--verify",
+                "/private/verify",
+                "--advise-on-failure",
+                "--confirm-task-egress",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

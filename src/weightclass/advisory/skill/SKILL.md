@@ -29,6 +29,13 @@ are user-selected opaque configuration.
   before preparing task input. Do not ask the user for profile, campaign,
   verifier-wrapper, price-table, or result-root paths when managed onboarding
   is ready.
+- This managed skill always uses `init`, `doctor`, managed `review`, and
+  `dispatch`; `run --campaign-root` is the advanced low-level compatibility
+  surface, not this skill's entry point. If loaded instructions ask for opaque
+  campaign paths, or a session claims egress confirmation is unsupported after
+  inspecting only `run --help`, treat that session or skill as stale and reload
+  the installed skill in a new session. Do not fall back to direct implementation
+  as a substitute for an explicitly requested advisory run.
 - Select one workflow from the user's outcome. Read
   [references/modes.md](references/modes.md) when choosing a mode or preparing
   its verifier.

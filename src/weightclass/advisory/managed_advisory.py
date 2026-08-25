@@ -925,7 +925,14 @@ def doctor_main(argv: Sequence[str]) -> int:
 
 
 def review_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory review --managed", allow_abbrev=False)
+    parser = argparse.ArgumentParser(
+        prog="wclass-advisory review",
+        epilog=(
+            "Advanced explicit-profile review remains available as: "
+            "wclass-advisory review --profile PROFILE [--read-only-executors]"
+        ),
+        allow_abbrev=False,
+    )
     parser.add_argument("--state-root", type=Path)
     parser.add_argument("--vendor", default="all")
     parser.add_argument("--workflow", choices=WORKFLOWS, default="implementation")
