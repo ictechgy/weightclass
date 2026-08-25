@@ -270,6 +270,33 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   population returns `campaign_record_binding_mismatch` instead of an empty
   message.
 
+### Advisory failure receipts (0.17.4 candidate)
+
+- Each failed cheap, advised-retry, or expensive attempt emits one canonical
+  `advisory_attempt_failed` JSON receipt to stderr. Its closed schema contains
+  only fixed route/kind/stage values, booleans, bounded numeric exit/timing/count
+  fields, and no task, path, model, error string, verifier stream, patch, advice,
+  profile, credential, or workspace material.
+- Ordinary nonzero verifier exits are now recorded as
+  `failure_kind=route`, `failure_stage=verification`, and
+  `error=verification_failed`; the receipt exposes the numeric verifier exit
+  code. Prospective verifiers should use distinct nonzero codes for materially
+  different acceptance phases when useful. Raw verifier output remains
+  transient for the existing advisor flow, and failed workspaces/patches are
+  still deleted.
+- Existing report compatibility is preserved: receipt fallback values are not
+  forced into stored attempt records, so an unclassified legacy failure cannot
+  become a usable effectiveness sample merely because it was rendered.
+- The implementation Advisory dispatch ran both vendors once. Codex cheap
+  passed after a 569.5-second child and 135.6-second verifier and produced the
+  retained patch. Claude cheap failed after 907.4 seconds and a 152.5-second
+  verifier; its 2,593-character advice, retry, and expensive route also failed.
+  No external retry was run.
+- Prospective acceptance, focused receipt/privacy/cleanup tests, Ruff, strict
+  mypy over 165 source files, and the final 1,298-test source suite pass with 25
+  skips. PR, Advisory review, security, distribution, and release gates remain
+  pending.
+
 ## The routing-economics result
 
 This is the reason the study existed, so keep the conclusion with the code.

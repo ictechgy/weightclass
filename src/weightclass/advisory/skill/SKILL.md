@@ -142,6 +142,15 @@ idempotent for identical inputs and refuses to overwrite a different campaign.
 - `implementation` returns a verified patch path. Inspect it and apply it only
   when repository changes are within the user's request; rerun the repository's
   ordinary checks after applying it.
+- A failed arm emits one `advisory_attempt_failed` JSON receipt. Use only its
+  fixed `failure_stage`, child/verifier exit and timeout fields, and numeric
+  candidate counts to explain where the attempt stopped. For
+  `failure_stage=verification`, compare `verify_exit_code` with the committed
+  task-specific verifier's documented exit codes. A prospective verifier should
+  use distinct nonzero exit codes for materially different acceptance phases
+  when that distinction is useful. Never request a deleted workspace, infer a
+  failure from model prose, or claim the receipt contains raw verifier output.
+  The receipt is operational evidence, not an effectiveness verdict.
 - Evidence workflows print the winning canonical JSON only after aggregate
   logging. Use that transient output to answer the user. Do not save the result
   body, verifier output, advice, task, source paths, or fingerprints elsewhere.
