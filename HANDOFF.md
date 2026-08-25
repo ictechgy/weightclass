@@ -23,6 +23,12 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   3.10/3.14, and exact trusted publication. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/6c/44/5007d87eb3d17dd6d87ae23bbf9c3d56e6781895c1254215cf18777502cf/weightclass-0.16.2.tar.gz`
   - sha256: `5f6173e4fb7aeb625b2d196a8ad36b76a8ccce7e2330b3e0678c65c57c869786`
+- **`weightclass 0.17.0` is published on PyPI and Homebrew.** Release run
+  `32807440505` passed immutable build, macOS 3.10/3.14, candidate validation
+  on Python 3.10/3.14, and exact trusted publication. PyPI has one wheel and
+  one sdist, neither yanked. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/74/df/d1060ba9b4fbcde82f66bd77a041ab04ca7abfc916863499e02a434956bd/weightclass-0.17.0.tar.gz`
+  - sha256: `12f2679a53314750be30d4bd2cbe225d7561c137c26279619b72b3f7912a6d88`
 - `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
   before publication; retain both tags and never reuse them. Homebrew 0.16.2 is
@@ -111,9 +117,9 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   and every PR CI job passed. Both user-level and Homebrew installs report
   0.16.2 and provide `wclass` plus `wclass-advisory`.
 
-### Managed advisory onboarding (0.17.0 release candidate, unreleased)
+### Managed advisory onboarding (released in 0.17.0)
 
-- The working tree is versioned `0.17.0` and adds explicit managed onboarding
+- Release `0.17.0` adds explicit managed onboarding
   without changing core `wclass`. `wclass-advisory init` accepts caller-selected
   opaque model/effort labels (or a reviewed schema-2 profile) and an optional
   price table, then creates owner-private implementation, review, research,
@@ -138,8 +144,12 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   `68974988-d4eb-4ad4-a392-6352f7fae8cd` covered all seven changed source/package
   files and found no reportable issue; it used parent-only fallback and TAC
   display status was unavailable.
-- Publication is still pending. Do not claim PyPI or Homebrew 0.17.0 until the
-  source PR, release workflow, and tap update have all completed.
+- Source PR #89, source-formula PR #90, and tap PR
+  `ictechgy/homebrew-tap#17` are merged. Release run `32807440505` succeeded;
+  the PyPI simple index reports 0.17.0 as latest. Clean exact-wheel smoke,
+  user-level uv upgrade, Homebrew source upgrade, and `brew test` all passed.
+  Both local installation paths report 0.17.0; the Mac-only
+  `wclass-advisory-local` shim and customized personal skills remain preserved.
 
 ## The routing-economics result
 
@@ -739,11 +749,10 @@ human to read.
 
 ## Next Steps
 
-1. **Publish the reviewed 0.17.0 managed-onboarding candidate.** Create a source
-   PR, wait for every CI job, merge the exact reviewed head, tag it once, and
-   let the trusted release workflow publish the immutable wheel/sdist. Then
-   update and test the source Homebrew formula and tap. Never reuse the failed
-   0.16.0/0.16.1 tags or any published version.
+1. **No 0.17.0 release work remains.** PyPI and Homebrew publication, local uv
+   and source Homebrew upgrades, managed onboarding smoke, skill preservation,
+   and formula tests are complete. Never reuse the failed 0.16.0/0.16.1 tags or
+   any published version.
 2. **Verified-object execution remains an open architecture item.** Current
    double observation narrows replacement but `Popen` still resolves a path.
    Before enforcing safe ancestors, settle sticky-directory and group-writable
@@ -821,13 +830,14 @@ human to read.
 Open the repository checkout, read `HANDOFF.md` and
 applicable `AGENTS.md` files, then continue from: `0.16.2 is merged, tagged, and
 published from main commit d252403; Release run 32798010700 passed. A local
-0.17.0 managed-advisory candidate now adds init, doctor, managed review,
+0.17.0 managed-advisory release adds init, doctor, managed review,
 dispatch, status, cleanup, the package-staged cross-project verifier, and a
 safe exact-legacy Agent Skill upgrade. It passed 1,284 tests, Ruff, strict mypy,
 distribution/clean-venv smoke, stable 227/107/334 vacuity, and Codex Security
 scan 68974988-d4eb-4ad4-a392-6352f7fae8cd with no reportable findings, but is
-not yet published. The next action is source PR -> CI -> exact merge -> v0.17.0
-release -> PyPI verification -> Homebrew source/tap update. Four real Shape-B samples now include two
+published by Release run 32807440505. Source PR #89, formula PR #90, and tap PR
+#17 are merged; PyPI, uv, Homebrew source upgrade, and brew test all report
+0.17.0. Four real Shape-B samples now include two
 failures that reached advice, with observed rescue 0/2 and no economic verdict
 because no reviewed price table existed. Claude/Codex task-free route profiles,
 exact argv review, explicit egress confirmation, and Codex disjoint cached-input
