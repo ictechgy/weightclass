@@ -265,7 +265,7 @@ class EvidenceCampaignAndRouteTests(unittest.TestCase):
         self.assertEqual(evidence["workflow"], "review")
         self.assertEqual(loaded, evidence)
         self.assertEqual(campaign.record_binding(evidence, 1)["workflow"], "review")
-        with self.assertRaisesRegex(campaign.CampaignError, "^$"):
+        with self.assertRaisesRegex(campaign.CampaignError, "^campaign_record_binding_mismatch$"):
             campaign.validate_record_bindings(
                 evidence,
                 [

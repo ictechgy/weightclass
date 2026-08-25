@@ -151,10 +151,26 @@ class AdvisoryCampaignLaneAcceptanceTests(unittest.TestCase):
         self.assertNotIn("project", repr(merged).lower())
 
         mismatched = [record(1, fingerprint="sha256:" + "b" * 64)]
-        with self.assertRaisesRegex(campaign.CampaignError, "^$"):
+        with self.assertRaisesRegex(campaign.CampaignError, "^campaign_record_binding_mismatch$"):
             campaign.merge_lane_records(value, (first, mismatched))
         with self.assertRaisesRegex(campaign.CampaignError, "^$"):
             campaign.merge_lane_records(manifest(max_tasks=2), (first, second))
+
+    def test_lane_record_loader_preserves_a_value_free_binding_reason(self) -> None:
+        campaign = load_module(CAMPAIGN, "prospective_lane_campaign_diagnostic")
+        value = manifest()
+        mismatched = [record(1, fingerprint="sha256:" + "b" * 64)]
+        root = Path("/private/results")
+        with (
+            mock.patch.object(
+                campaign,
+                "existing_lane_result_directories",
+                return_value=(root,),
+            ),
+            mock.patch.object(campaign, "load_bound_records", return_value=mismatched),
+            self.assertRaisesRegex(campaign.CampaignError, "^campaign_record_binding_mismatch$"),
+        ):
+            campaign.load_merged_lane_records(value, root)
 
     def test_lane_directory_mapping_preserves_the_existing_log_as_lane_zero(self) -> None:
         orchestration = load_module(ORCHESTRATION, "prospective_lane_paths")

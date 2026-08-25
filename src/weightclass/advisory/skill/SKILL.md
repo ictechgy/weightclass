@@ -26,9 +26,10 @@ are user-selected opaque configuration.
   research, diagnose, design, or implement is not advisory authorization.
 - Require a clean Git checkout and `command -v wclass-advisory`.
 - Run `wclass-advisory doctor --vendor <vendor-or-all> --workflow <workflow>`
-  before preparing task input. Do not ask the user for profile, campaign,
-  verifier-wrapper, price-table, or result-root paths when managed onboarding
-  is ready.
+  before preparing task input. `doctor` validates every existing anonymous lane,
+  so a record-binding error is reported before dispatch. Do not ask the user for
+  profile, campaign, verifier-wrapper, price-table, or result-root paths when
+  managed onboarding is ready.
 - This managed skill always uses `init`, `doctor`, managed `review`, and
   `dispatch`; `run --campaign-root` is the advanced low-level compatibility
   surface, not this skill's entry point. If loaded instructions ask for opaque
@@ -41,6 +42,12 @@ are user-selected opaque configuration.
   `managed_dispatch_rejected` is a non-lane preflight or binding rejection and
   must not be relabeled as contention. `doctor` reports the configured lane
   count, which is ten per vendor and workflow by default.
+- Treat `campaign_record_binding_mismatch` and the other fixed
+  `campaign_record_*`/`campaign_records_invalid` errors as an unhealthy sealed
+  population, not contention. Never rewrite records, copy a current
+  fingerprint into old records, reseal over the population, or silently start
+  a replacement campaign. Report the exact value-free code and stop. Do not
+  substitute direct implementation for the explicitly requested advisory run.
 - Select one workflow from the user's outcome. Read
   [references/modes.md](references/modes.md) when choosing a mode or preparing
   its verifier.

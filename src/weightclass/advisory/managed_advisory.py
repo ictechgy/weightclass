@@ -567,6 +567,14 @@ def _configuration(
         )
     except (OSError, advisory_campaign.CampaignError, advisory_routes.AdvisoryRouteError) as error:
         raise ManagedAdvisoryError() from error
+    try:
+        advisory_campaign.load_merged_lane_records(
+            manifest,
+            selected.results,
+            advisory_campaign.ANONYMOUS_LANE_COUNT,
+        )
+    except advisory_campaign.CampaignError as error:
+        raise advisory_orchestration.CampaignRecordsInvalidError(error) from None
     return selected, manifest, routes
 
 
@@ -821,6 +829,7 @@ def dispatch(
     except (
         advisory_orchestration.LaneUnavailableError,
         advisory_orchestration.CampaignCapacityError,
+        advisory_orchestration.CampaignRecordsInvalidError,
     ):
         raise
     except (OSError, ValueError, advisory_campaign.CampaignError) as error:
@@ -924,6 +933,9 @@ def doctor_main(argv: Sequence[str]) -> int:
             vendors=vendors,
             workflows=_selected_workflows(arguments.workflow),
         )
+    except advisory_orchestration.CampaignRecordsInvalidError as error:
+        print(json.dumps({"error": error.code}), file=sys.stderr)
+        return 2
     except (OSError, ManagedAdvisoryError):
         print(json.dumps({"error": "managed_configuration_unavailable"}), file=sys.stderr)
         return 2
@@ -982,6 +994,9 @@ def dispatch_main(argv: Sequence[str]) -> int:
         return 2
     except advisory_orchestration.CampaignCapacityError:
         print(json.dumps({"error": "managed_campaign_capacity_reached"}), file=sys.stderr)
+        return 2
+    except advisory_orchestration.CampaignRecordsInvalidError as error:
+        print(json.dumps({"error": error.code}), file=sys.stderr)
         return 2
     except (OSError, ManagedAdvisoryError):
         print(json.dumps({"error": "managed_dispatch_rejected"}), file=sys.stderr)
