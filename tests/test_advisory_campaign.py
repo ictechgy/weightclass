@@ -283,12 +283,12 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
 
         duplicate = [dict(record) for record in records]
         duplicate[-1]["campaign"] = record_binding(manifest, 1)
-        with self.assertRaisesRegex(CampaignError, "^$"):
+        with self.assertRaisesRegex(CampaignError, "^campaign_record_ordinal_duplicate$"):
             validate_record_bindings(manifest, duplicate)
 
         gap = [dict(record) for record in records]
         gap[-1]["campaign"] = record_binding(manifest, 61)
-        with self.assertRaisesRegex(CampaignError, "^$"):
+        with self.assertRaisesRegex(CampaignError, "^campaign_record_ordinal_gap$"):
             validate_record_bindings(manifest, gap)
 
     def test_cli_seals_once_and_refuses_to_overwrite_the_contract(self) -> None:

@@ -151,7 +151,7 @@ class AdvisoryCampaignLaneAcceptanceTests(unittest.TestCase):
         self.assertNotIn("project", repr(merged).lower())
 
         mismatched = [record(1, fingerprint="sha256:" + "b" * 64)]
-        with self.assertRaisesRegex(campaign.CampaignError, "^$"):
+        with self.assertRaisesRegex(campaign.CampaignError, "^campaign_record_binding_mismatch$"):
             campaign.merge_lane_records(value, (first, mismatched))
         with self.assertRaisesRegex(campaign.CampaignError, "^$"):
             campaign.merge_lane_records(manifest(max_tasks=2), (first, second))

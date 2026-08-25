@@ -232,6 +232,26 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   both Codex and Claude and match the packaged bundle byte-for-byte. Managed
   `doctor` is ready for both vendors and reports `lane_count: 10`.
 
+### Advisory campaign-binding diagnostics (0.17.3 candidate)
+
+- The legacy machine-local implementation populations remain intentionally
+  unusable when their current manifest no longer matches sealed records. No
+  record, fingerprint, manifest, or population is rewritten or synthesized.
+- Every rejection originating in `validate_record_bindings()` now carries one
+  reviewed value-free `campaign_record_*` reason. The lane allocator preserves
+  that reason as `CampaignRecordsInvalidError` instead of collapsing it into a
+  blank `ValueError`, so `wclass-advisory-local` can print an actionable code
+  without exposing paths, fingerprints, record values, or task material.
+- Managed `doctor` validates all existing anonymous lane populations before it
+  reports ready. Both `doctor` and `dispatch` return the same fixed record code;
+  lane contention and campaign capacity retain their separate 0.17.2 codes.
+- The packaged skill treats record-binding errors as an unhealthy sealed
+  population, forbids repair/reseal/implicit replacement, and recognizes the
+  exact 0.17.2 bundle for safe upgrade. Prospective acceptance, 124 advisory
+  tests, Ruff, strict mypy over 163 source files, the 1,294-test source suite,
+  and 0.17.3 wheel/sdist isolation pass. PR, security review, and release gates
+  remain pending.
+
 ## The routing-economics result
 
 This is the reason the study existed, so keep the conclusion with the code.

@@ -52,6 +52,27 @@ class CampaignError(ValueError):
     """Value-free rejection of an invalid or mismatched campaign contract."""
 
 
+CAMPAIGN_RECORD_ERROR_CODES = frozenset(
+    {
+        "campaign_record_binding_invalid",
+        "campaign_record_binding_mismatch",
+        "campaign_record_ordinal_invalid",
+        "campaign_record_ordinal_duplicate",
+        "campaign_record_capacity_exceeded",
+        "campaign_record_ordinal_gap",
+    }
+)
+CAMPAIGN_RECORDS_INVALID = "campaign_records_invalid"
+
+
+def campaign_record_error_code(error: CampaignError) -> str:
+    """Return only a reviewed value-free record rejection code."""
+    reason = str(error)
+    if reason in CAMPAIGN_RECORD_ERROR_CODES:
+        return reason
+    return CAMPAIGN_RECORDS_INVALID
+
+
 def lane_result_directories(root: Path, lane_count: int = ANONYMOUS_LANE_COUNT) -> tuple[Path, ...]:
     """Return the fixed, anonymous result mapping, retaining the old root as lane 0."""
     if (
@@ -627,27 +648,30 @@ def validate_record_bindings(
     for record in records:
         binding = record.get("campaign")
         if not isinstance(binding, Mapping) or set(binding) != expected_binding_keys:
-            raise CampaignError()
+            raise CampaignError("campaign_record_binding_invalid")
         if (
             binding["campaign_fingerprint"] != manifest["campaign_fingerprint"]
             or binding["arm"] != manifest["arm"]
             or binding.get("workflow", "implementation")
             != manifest.get("workflow", "implementation")
         ):
-            raise CampaignError()
+            raise CampaignError("campaign_record_binding_mismatch")
         if (
             manifest["schema_version"] == EVIDENCE_CAMPAIGN_SCHEMA_VERSION
             and record.get("workflow") != manifest["workflow"]
         ):
-            raise CampaignError()
-        ordinal = _integer(binding["sample_ordinal"], 1, manifest["max_tasks"])
+            raise CampaignError("campaign_record_binding_mismatch")
+        try:
+            ordinal = _integer(binding["sample_ordinal"], 1, manifest["max_tasks"])
+        except CampaignError:
+            raise CampaignError("campaign_record_ordinal_invalid") from None
         if ordinal in ordinals:
-            raise CampaignError()
+            raise CampaignError("campaign_record_ordinal_duplicate")
         ordinals.add(ordinal)
     if len(ordinals) > manifest["max_tasks"]:
-        raise CampaignError()
+        raise CampaignError("campaign_record_capacity_exceeded")
     if ordinals != set(range(1, len(ordinals) + 1)):
-        raise CampaignError()
+        raise CampaignError("campaign_record_ordinal_gap")
     return ordinals
 
 

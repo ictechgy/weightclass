@@ -16,6 +16,8 @@ if TYPE_CHECKING or __package__:
     from .advisory_campaign import (
         ANONYMOUS_LANE_COUNT,
         MAX_ANONYMOUS_LANES,
+        CampaignError,
+        campaign_record_error_code,
         lane_result_directories,
         load_manifest,
         load_merged_lane_records,
@@ -25,6 +27,8 @@ else:
     from advisory_campaign import (  # type: ignore[import-not-found]
         ANONYMOUS_LANE_COUNT,
         MAX_ANONYMOUS_LANES,
+        CampaignError,
+        campaign_record_error_code,
         lane_result_directories,
         load_manifest,
         load_merged_lane_records,
@@ -42,6 +46,16 @@ class LaneUnavailableError(ValueError):
 
 class CampaignCapacityError(ValueError):
     """The sealed campaign cannot admit another in-flight sample."""
+
+
+class CampaignRecordsInvalidError(ValueError):
+    """Existing records do not bind to the selected sealed campaign."""
+
+    code: str
+
+    def __init__(self, error: CampaignError) -> None:
+        self.code = campaign_record_error_code(error)
+        super().__init__(self.code)
 
 
 @dataclass(frozen=True)
@@ -226,6 +240,10 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
         _release_descriptors(lane_descriptors)
         _release_descriptors(allocator_descriptors)
         raise
+    except CampaignError as error:
+        _release_descriptors(lane_descriptors)
+        _release_descriptors(allocator_descriptors)
+        raise CampaignRecordsInvalidError(error) from None
     except (OSError, ValueError):
         _release_descriptors(lane_descriptors)
         _release_descriptors(allocator_descriptors)
