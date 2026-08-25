@@ -719,8 +719,10 @@ def load_merged_lane_records(
             manifest,
             tuple(load_bound_records(directory / "runs.jsonl") for directory in lanes),
         )
-    except (OSError, CampaignError):
-        raise CampaignError() from None
+    except CampaignError as error:
+        raise CampaignError(campaign_record_error_code(error)) from None
+    except OSError:
+        raise CampaignError(CAMPAIGN_RECORDS_INVALID) from None
 
 
 def campaign_progress(

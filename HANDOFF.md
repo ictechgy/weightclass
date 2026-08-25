@@ -249,8 +249,11 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   population, forbids repair/reseal/implicit replacement, and recognizes the
   exact 0.17.2 bundle for safe upgrade. Prospective acceptance, 124 advisory
   tests, Ruff, strict mypy over 163 source files, the 1,294-test source suite,
-  and 0.17.3 wheel/sdist isolation pass. PR, security review, and release gates
-  remain pending.
+  and 0.17.3 wheel/sdist isolation pass. Security diff scan
+  `c750fa5d-2489-4737-a10a-dd4e875440f4` found no reportable vulnerability;
+  its functional coverage note exposed one remaining wrapper-level reason-code
+  collapse, which is fixed by a direct `load_merged_lane_records()` regression.
+  Final full-suite, PR, and release gates remain pending.
 
 ## The routing-economics result
 
