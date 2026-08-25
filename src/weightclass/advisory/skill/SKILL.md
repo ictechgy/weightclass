@@ -25,9 +25,10 @@ are user-selected opaque configuration.
   CLI's required `--confirm-task-egress` flag. A generic request to review,
   research, diagnose, design, or implement is not advisory authorization.
 - Require a clean Git checkout and `command -v wclass-advisory`.
-- Require the operator to supply the exact owner-only route profile, sealed
-  campaign, verifier, optional price table, and campaign root. Never discover,
-  persist, or invent those paths.
+- Run `wclass-advisory doctor --vendor <vendor-or-all> --workflow <workflow>`
+  before preparing task input. Do not ask the user for profile, campaign,
+  verifier-wrapper, price-table, or result-root paths when managed onboarding
+  is ready.
 - Select one workflow from the user's outcome. Read
   [references/modes.md](references/modes.md) when choosing a mode or preparing
   its verifier.
@@ -57,32 +58,51 @@ validity alone as the oracle for factual, diagnostic, design, or review quality.
 Commit the verifier and focused failing acceptance before observing any model
 candidate. Keep the verifier unchanged during the campaign.
 
+## Initialize once when needed
+
+If `doctor` reports `managed_configuration_unavailable`, explain that one-time
+owner-private initialization is required. Ask only for the selected vendor's
+exact cheap, advisor, and expensive model and effort labels, plus an optional
+price table when the user wants comparable cost estimates. Treat every label
+and subscription entitlement as opaque user input; never infer it.
+
+After the user approves persisting that task-free configuration, run:
+
+```sh
+wclass-advisory init \
+  --vendor <codex|claude|agy|grok> \
+  --model cheap=<label> --model advisor=<label> --model expensive=<label> \
+  --effort cheap=<label> --effort advisor=<label> --effort expensive=<label>
+```
+
+Add `--prices <user-supplied-table>` only when provided. Without it, the
+campaign uses the vendor-reported cost basis and may abstain from an economic
+verdict when that vendor does not report complete cost. An arbitrary schema-2
+vendor may instead use `init --profile <reviewed-profile>`. Initialization is
+idempotent for identical inputs and refuses to overwrite a different campaign.
+
 ## Dispatch safely
 
 1. Put the task in a new owner-only regular temporary file outside the
    repository. Never put it in argv, echo it, hash it, include it in a label, or
    retain it in a diagnostic.
-2. Review the exact routes with `wclass-advisory review --profile <profile>`
+2. Review the exact routes with
+   `wclass-advisory review --vendor <vendor-or-all> --workflow <workflow>`
    when they have not already been reviewed for this machine configuration.
 3. Run:
 
    ```sh
-   wclass-advisory run \
-     --campaign-root <owner-only-results-root> \
+   wclass-advisory dispatch \
      --workflow <workflow> \
      --repo <absolute-clean-repo> \
      --task-file <owner-only-task-file> \
-     --vendor <profile-vendor> \
-     --route-profile <owner-only-profile> \
-     --campaign <sealed-campaign> \
-     --verify <prospective-verifier> \
-     --advise-on-failure --advisor-context prompt \
+     --vendor <configured-vendor-or-all> \
      --confirm-task-egress
    ```
 
-   Add the campaign's exact price-table flags when its cost basis requires
-   them. Run one command per profile; do not combine vendor populations.
-   Multi-process machine shims may start independent vendor campaigns concurrently;
+   Managed dispatch validates the bound profiles, campaigns, price tables,
+   central verifier, project verifier, and ordinals before reading task input.
+   Multiple selected vendors start independent campaigns concurrently;
    each vendor's cheap/advisor/retry/expensive stages remain sequential inside
    its anonymous fixed lane. Each command acquires one free lane for its exact
    vendor/workflow before it starts a child; no free lane fails closed. Lane 0 is the

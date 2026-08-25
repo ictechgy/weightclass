@@ -59,16 +59,27 @@ boundary, is documented in [the security follow-up](docs/security-performance-fo
 ### Advisory companion
 
 `wclass-advisory` is installed with weightclass but is never selected by
-`wclass run`. It requires caller-supplied owner-only profiles, a sealed
-campaign, a prospective verifier, a private campaign root, and explicit task
-egress confirmation. Review one profile and optionally install the Agent Skill:
+`wclass run`. Initialize each vendor once with caller-selected opaque model and
+effort labels; the command creates owner-private task-free profiles, five sealed
+workflow campaigns, and anonymous result lanes in the platform state directory.
+It never reads vendor authentication or stores task content:
 
 ```sh
-wclass-advisory review --profile ./codex-profile.json
+wclass-advisory init --vendor codex \
+  --model cheap=CHEAP --model advisor=ADVISOR --model expensive=EXPENSIVE \
+  --effort cheap=low --effort advisor=high --effort expensive=high
+wclass-advisory doctor --vendor codex --workflow all
+wclass-advisory review --vendor codex --workflow implementation
 wclass-advisory install-skill --target codex --dry-run
 ```
 
-See [Advisory campaign vendor profiles](docs/advisory-vendor-profiles.md) and
+The labels above are placeholders, not recommendations. Use only labels and
+entitlements you have reviewed. Add `--prices` when you have a single-origin
+price table; without it the campaign may abstain from a cost verdict. A project
+must commit the workflow's prospective `.weightclass/verify*` before
+`wclass-advisory dispatch` can send a private task file to a vendor. See the
+[managed onboarding guide](docs/advisory-onboarding.md),
+[Advisory campaign vendor profiles](docs/advisory-vendor-profiles.md), and
 the [campaign contract](docs/advisory-campaign.md). Distribution makes the
 tool available; it does not establish cost savings, model quality, pricing,
 entitlement, or subscription availability.
@@ -1398,7 +1409,10 @@ credential management, background execution, or a bundled provider runtime.
   requires `--confirm-task-egress`, never applies a patch automatically, and
   writes only owner-private aggregate campaign records without task content,
   task hashes, repository paths, timestamps, profiles, or fingerprints derived
-  from the task. The caller owns the task file and private campaign inputs.
+  from the task. Explicit `init` stores only caller-selected task-free profiles,
+  optional price tables, sealed contracts, and owner-private aggregate result
+  lanes under the platform advisory state root. The caller owns the task file;
+  `wclass run` never reads this advisory state.
 - Advisory children own provider authentication and may read files visible
   through their supplied HOME and sandbox. The runner narrows environment
   variables but is not a credential sandbox; use separate minimally staged

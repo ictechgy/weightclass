@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -96,6 +97,47 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
                 )
 
             self.assertFalse((home / ".agents" / "skills" / "advisory").exists())
+
+    def test_explicit_upgrade_replaces_only_a_recognized_legacy_bundle(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            installed = home / ".agents" / "skills" / "advisory"
+            (installed / "agents").mkdir(parents=True, mode=0o700)
+            (installed / "references").mkdir(mode=0o700)
+            legacy_hashes: dict[str, str] = {}
+            for relative in installer.LEGACY_FILES:
+                payload = (BUNDLE / relative).read_bytes()
+                target = installed / relative
+                target.write_bytes(payload)
+                target.chmod(0o600)
+                legacy_hashes[relative] = hashlib.sha256(payload).hexdigest()
+            installed.chmod(0o700)
+            with mock.patch.object(installer, "LEGACY_FILE_SHA256", legacy_hashes):
+                preview = installer.install_skill(
+                    BUNDLE,
+                    home=home,
+                    target="codex",
+                    dry_run=True,
+                    advisory_command_available=True,
+                    upgrade=True,
+                )
+                receipt = installer.install_skill(
+                    BUNDLE,
+                    home=home,
+                    target="codex",
+                    dry_run=False,
+                    advisory_command_available=True,
+                    upgrade=True,
+                )
+
+            self.assertEqual(preview["upgrade_planned"], ["codex"])
+            self.assertEqual(receipt["upgraded"], ["codex"])
+            self.assertEqual(
+                (installed / "manifest.json").read_bytes(),
+                (BUNDLE / "manifest.json").read_bytes(),
+            )
+            self.assertEqual(installed.stat().st_mode & 0o777, 0o700)
 
     def test_destination_and_skill_root_symlinks_fail_closed(self) -> None:
         installer = load_installer()

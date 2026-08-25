@@ -13,14 +13,19 @@ brainstorming.
 
 ## Prerequisite
 
-Install `weightclass`, then prepare reviewed local profiles, prices, a prospective verifier, and
-sealed campaigns. `wclass-advisory` is included in the distribution, but it never creates or
-discovers that private configuration. A skill is instructions, not an entitlement claim.
+Install `weightclass`, then initialize each desired vendor once with reviewed model and effort
+labels. Managed onboarding creates owner-private, task-free profiles, five sealed workflow
+campaigns, and result lanes in the platform state directory. It does not read or modify vendor
+authentication. A skill is instructions, not an entitlement claim.
 
-Review the routes before installing or using the skill:
+The labels are opaque caller input, not recommendations:
 
 ```sh
-wclass-advisory review --profile ./claude-profile.json
+wclass-advisory init --vendor claude \
+  --model cheap=CHEAP --model advisor=ADVISOR --model expensive=EXPENSIVE \
+  --effort cheap=low --effort advisor=high --effort expensive=high
+wclass-advisory doctor --vendor claude --workflow all
+wclass-advisory review --vendor claude --workflow implementation
 ```
 
 The review is task-free. An agy `{{task}}` route explicitly exposes task text to local process
@@ -32,8 +37,8 @@ their labels are user-selected opaque configuration.
 
 ## Preview and install
 
-The installer never reads task stdin, never contacts a provider, and never overwrites an existing
-skill. Preview first:
+The installer never reads task stdin or contacts a provider. Ordinary install never overwrites an
+existing skill. Preview first:
 
 ```sh
 wclass-advisory install-skill --target both --dry-run
@@ -47,6 +52,14 @@ wclass-advisory install-skill --target claude
 wclass-advisory install-skill --target both
 ```
 
+An upgrade replaces only an exact package-owned legacy bundle. A modified skill, symlink, or extra
+file still fails closed:
+
+```sh
+wclass-advisory install-skill --target both --upgrade --dry-run
+wclass-advisory install-skill --target both --upgrade
+```
+
 Targets follow the products' documented personal skill locations
 ([Codex](https://developers.openai.com/codex/skills),
 [Claude Code](https://code.claude.com/docs/en/slash-commands)):
@@ -54,7 +67,7 @@ Targets follow the products' documented personal skill locations
 - Codex: `~/.agents/skills/advisory`
 - Claude Code: `~/.claude/skills/advisory`
 
-The installer validates the exact three-file bundle, rejects symlinks and extra files, preflights
+The installer validates the exact four-file bundle, rejects symlinks and extra files, preflights
 every selected destination before writing either one, installs owner-only files, and treats an
 exact existing copy as idempotent. A different file, directory, or symlink at either destination
 returns `skill_conflict`; move or review it yourself rather than asking the installer to destroy
@@ -85,7 +98,8 @@ command leases one free lane before any child starts. Reports validate and merge
 computing promotion gates. Compare vendors only when the operator deliberately admitted the same
 task to each separate campaign.
 
-The command and exact three-file skill bundle are included in the wheel and sdist. Advisory remains
+The command and exact four-file skill bundle are included in the wheel and sdist. Advisory remains
 experimental and never becomes an automatic `wclass run` route. See the
+[managed onboarding guide](advisory-onboarding.md),
 [campaign contract](advisory-campaign.md) and
 [vendor-profile setup](advisory-vendor-profiles.md).

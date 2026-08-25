@@ -1,0 +1,445 @@
+from __future__ import annotations
+
+import json
+import os
+import stat
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from weightclass.advisory import advisory_campaign, advisory_parallel, managed_advisory
+
+ROOT = Path(__file__).resolve().parent.parent
+WORKFLOWS = ("implementation", "review", "research", "diagnosis", "design")
+
+
+def codex_profile() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "vendor": "codex",
+        "models": {"cheap": "cheap", "advisor": "advisor", "expensive": "expensive"},
+        "efforts": {"cheap": "low", "advisor": "high", "expensive": "high"},
+    }
+
+
+def custom_profile(vendor: str) -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "vendor": vendor,
+        "commands": {
+            workflow: {
+                role: [f"{vendor}-cli", "--role", role]
+                for role in ("cheap", "advisor", "expensive")
+            }
+            for workflow in ("implementation", "evidence")
+        },
+    }
+
+
+class ManagedAdvisoryInitializationTests(unittest.TestCase):
+    def test_initialization_creates_one_private_cross_project_campaign_set(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            receipt = managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+
+            self.assertEqual(
+                receipt,
+                {
+                    "already_initialized": False,
+                    "cost_basis": "vendor",
+                    "dry_run": False,
+                    "schema_version": 1,
+                    "vendor": "codex",
+                    "workflows": list(WORKFLOWS),
+                },
+            )
+            self.assertEqual(stat.S_IMODE(state_root.stat().st_mode), 0o700)
+            self.assertEqual(
+                stat.S_IMODE((state_root / "codex-profile.json").stat().st_mode), 0o600
+            )
+            self.assertEqual(stat.S_IMODE((state_root / "verify-project.py").stat().st_mode), 0o700)
+            for workflow in WORKFLOWS:
+                selected = managed_advisory.campaign_paths(state_root, "codex", workflow)
+                self.assertEqual(stat.S_IMODE(selected.results.stat().st_mode), 0o700)
+                manifest = advisory_campaign.load_manifest(selected.campaign)
+                self.assertEqual(manifest.get("workflow", "implementation"), workflow)
+                self.assertEqual(manifest["cost_basis"], "vendor")
+                self.assertIsNone(manifest["prices_sha256"])
+
+    def test_identical_initialization_is_idempotent_and_does_not_rewrite(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            first = managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+            profile_path = state_root / "codex-profile.json"
+            before = profile_path.stat().st_mtime_ns
+            second = managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+
+            self.assertFalse(first["already_initialized"])
+            self.assertTrue(second["already_initialized"])
+            self.assertEqual(profile_path.stat().st_mtime_ns, before)
+
+    def test_conflicting_profile_fails_without_changing_existing_campaigns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+            profile_path = state_root / "codex-profile.json"
+            before = profile_path.read_bytes()
+            changed = codex_profile()
+            models = changed["models"]
+            assert isinstance(models, dict)
+            models["cheap"] = "different"
+
+            with self.assertRaisesRegex(managed_advisory.ManagedAdvisoryError, "^$"):
+                managed_advisory.initialize_campaign_set(
+                    state_root,
+                    profile=changed,
+                    prices=None,
+                    planned_tasks=60,
+                    max_tasks=150,
+                    dry_run=False,
+                )
+
+            self.assertEqual(profile_path.read_bytes(), before)
+
+    def test_symlink_state_root_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            private = root / "private"
+            private.mkdir(mode=0o700)
+            linked = root / "advisory-v1"
+            linked.symlink_to(private, target_is_directory=True)
+
+            with self.assertRaisesRegex(managed_advisory.ManagedAdvisoryError, "^$"):
+                managed_advisory.initialize_campaign_set(
+                    linked,
+                    profile=codex_profile(),
+                    prices=None,
+                    planned_tasks=60,
+                    max_tasks=150,
+                    dry_run=False,
+                )
+
+    def test_dry_run_validates_without_creating_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            receipt = managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=True,
+            )
+
+            self.assertTrue(receipt["dry_run"])
+            self.assertFalse(state_root.exists())
+            with self.assertRaisesRegex(managed_advisory.ManagedAdvisoryError, "^$"):
+                managed_advisory.initialize_campaign_set(
+                    state_root,
+                    profile=codex_profile(),
+                    prices=None,
+                    planned_tasks=0,
+                    max_tasks=150,
+                    dry_run=True,
+                )
+
+    def test_price_table_and_custom_vendor_are_validated_and_reusable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_root = root / "advisory-v1"
+            prices = root / "prices.json"
+            prices.write_text(
+                json.dumps(
+                    {
+                        role: {"input_tokens": 1.0, "output_tokens": 2.0}
+                        for role in ("cheap", "advisor", "expensive")
+                    }
+                ),
+                encoding="utf-8",
+            )
+            receipt = managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=custom_profile("vendor-x"),
+                prices=prices,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+
+            self.assertEqual(receipt["cost_basis"], "price_table")
+            status = managed_advisory.doctor(
+                state_root,
+                vendors=("vendor-x",),
+                workflows=WORKFLOWS,
+            )
+            self.assertTrue(status["ready"])
+
+
+class ManagedAdvisoryOperationTests(unittest.TestCase):
+    def test_doctor_is_task_free_and_returns_no_paths_or_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+
+            status = managed_advisory.doctor(state_root, vendors=("codex",), workflows=WORKFLOWS)
+            encoded = json.dumps(status, sort_keys=True)
+
+            self.assertTrue(status["ready"])
+            self.assertNotIn(str(state_root), encoded)
+            self.assertNotIn("cheap", encoded)
+            self.assertNotIn("advisor", encoded)
+            self.assertNotIn("expensive", encoded)
+
+    def test_dispatch_rejects_missing_confirmation_before_touching_task_or_state(self) -> None:
+        secret_named_task = Path("/never/read/PRIVATE-TASK-CONTENT")
+        with (
+            mock.patch.object(Path, "lstat", side_effect=AssertionError("task was inspected")),
+            self.assertRaisesRegex(managed_advisory.ManagedAdvisoryError, "^$"),
+        ):
+            managed_advisory.dispatch(
+                Path("/never/read/state"),
+                repo=Path("/never/read/repo"),
+                task_file=secret_named_task,
+                vendors=("codex",),
+                workflow="implementation",
+                confirm_task_egress=False,
+            )
+
+    def test_default_state_root_is_platform_local_and_contains_no_profile_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            with (
+                mock.patch.object(Path, "home", return_value=home),
+                mock.patch.object(sys, "platform", "darwin"),
+            ):
+                selected = managed_advisory.default_state_root()
+
+            self.assertEqual(
+                selected,
+                home / "Library" / "Application Support" / "weightclass" / "advisory-v1",
+            )
+
+    def test_dispatch_allocates_vendors_together_and_never_places_task_content_in_argv(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_root = root / "advisory-v1"
+            for vendor in ("vendor-a", "vendor-b"):
+                managed_advisory.initialize_campaign_set(
+                    state_root,
+                    profile=custom_profile(vendor),
+                    prices=None,
+                    planned_tasks=60,
+                    max_tasks=150,
+                    dry_run=False,
+                )
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / ".weightclass").mkdir()
+            verifier = repo / ".weightclass" / "verify"
+            verifier.write_text("#!/bin/sh\nexit 42\n", encoding="utf-8")
+            verifier.chmod(0o700)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "-qm",
+                    "baseline",
+                ],
+                cwd=repo,
+                check=True,
+            )
+            task_file = root / "task.txt"
+            task_content = "PRIVATE-TASK-CONTENT-MUST-NOT-ENTER-ARGV"
+            task_file.write_text(task_content, encoding="utf-8")
+            task_file.chmod(0o600)
+            captured_jobs: list[advisory_parallel.AdvisoryJob] = []
+
+            def complete_jobs(
+                jobs: tuple[advisory_parallel.AdvisoryJob, ...],
+            ) -> tuple[advisory_parallel.AdvisoryResult, ...]:
+                captured_jobs.extend(jobs)
+                results: list[advisory_parallel.AdvisoryResult] = []
+                for job in jobs:
+                    command = list(job.command)
+                    output = Path(command[command.index("--out-dir") + 1])
+                    campaign = Path(command[command.index("--campaign") + 1])
+                    ordinal = int(command[command.index("--sample-ordinal") + 1])
+                    manifest = advisory_campaign.load_manifest(campaign)
+                    record: dict[str, object] = {
+                        "campaign": advisory_campaign.record_binding(manifest, ordinal),
+                    }
+                    if manifest["schema_version"] == 2:
+                        record["workflow"] = manifest["workflow"]
+                    with (output / "runs.jsonl").open("a", encoding="utf-8") as handle:
+                        handle.write(json.dumps(record) + "\n")
+                    results.append(advisory_parallel.AdvisoryResult(job.label, 0, b"", b"", True))
+                return tuple(results)
+
+            with mock.patch(
+                "weightclass.advisory.managed_advisory.advisory_parallel.run_parallel",
+                side_effect=complete_jobs,
+            ):
+                code = managed_advisory.dispatch(
+                    state_root,
+                    repo=repo,
+                    task_file=task_file,
+                    vendors=("vendor-a", "vendor-b"),
+                    workflow="implementation",
+                    confirm_task_egress=True,
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual([job.label for job in captured_jobs], ["vendor-a", "vendor-b"])
+            flattened = "\0".join(argument for job in captured_jobs for argument in job.command)
+            self.assertNotIn(task_content, flattened)
+            self.assertIn(str(task_file), flattened)
+
+
+class ManagedVerifierTests(unittest.TestCase):
+    def test_package_verifier_runs_only_the_committed_workflow_verifier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / ".weightclass").mkdir()
+            verifier = repo / ".weightclass" / "verify-review"
+            verifier.write_text(
+                '#!/bin/sh\nread value\n[ -n "$value" ] && exit 42\nexit 1\n',
+                encoding="utf-8",
+            )
+            verifier.chmod(0o700)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "-qm",
+                    "baseline",
+                ],
+                cwd=repo,
+                check=True,
+            )
+            environment = dict(os.environ)
+            environment["WCLASS_ADVISORY_WORKFLOW"] = "review"
+            environment["PYTHONPATH"] = str(ROOT / "src")
+            completed = subprocess.run(
+                [sys.executable, "-m", "weightclass.advisory.managed_verify"],
+                cwd=repo,
+                input=b"baseline probe\n",
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+
+            self.assertEqual(completed.returncode, 42, completed.stderr.decode())
+            verifier.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            changed = subprocess.run(
+                [sys.executable, "-m", "weightclass.advisory.managed_verify"],
+                cwd=repo,
+                input=b"baseline probe\n",
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+            self.assertEqual(changed.returncode, 1)
+
+
+class ManagedAdvisoryCliTests(unittest.TestCase):
+    def _run(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "weightclass.advisory", *arguments],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+    def test_public_help_exposes_onboarding_without_removing_explicit_run(self) -> None:
+        completed = self._run("--help")
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        for command in ("init", "doctor", "dispatch", "status", "review", "run"):
+            self.assertIn(command, completed.stdout)
+
+    def test_init_builds_builtin_profile_from_opaque_role_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            completed = self._run(
+                "init",
+                "--state-root",
+                str(state_root),
+                "--vendor",
+                "codex",
+                "--model",
+                "cheap=cheap-model",
+                "--model",
+                "advisor=advisor-model",
+                "--model",
+                "expensive=expensive-model",
+                "--effort",
+                "cheap=low",
+                "--effort",
+                "advisor=high",
+                "--effort",
+                "expensive=high",
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            receipt = json.loads(completed.stdout)
+            self.assertEqual(receipt["vendor"], "codex")
+            self.assertNotIn(str(state_root), completed.stdout)
+            self.assertNotIn("cheap-model", completed.stdout)
+            self.assertTrue((state_root / "codex-profile.json").is_file())
+
+
+if __name__ == "__main__":
+    unittest.main()

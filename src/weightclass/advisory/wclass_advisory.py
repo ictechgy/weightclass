@@ -16,6 +16,7 @@ if TYPE_CHECKING or __package__:
         advisory_portfolio,
         advisory_routes,
         install_advisory_skill,
+        managed_advisory,
         speculative_report,
         speculative_run,
     )
@@ -28,6 +29,7 @@ else:
     import advisory_portfolio  # type: ignore[import-not-found]
     import advisory_routes  # type: ignore[import-not-found]
     import install_advisory_skill  # type: ignore[import-not-found]
+    import managed_advisory  # type: ignore[import-not-found]
     import speculative_report  # type: ignore[import-not-found]
     import speculative_run  # type: ignore[import-not-found]
 
@@ -117,7 +119,20 @@ def _top_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command",
-        choices=("review", "run", "prune", "seal", "report", "portfolio", "install-skill"),
+        choices=(
+            "init",
+            "doctor",
+            "review",
+            "dispatch",
+            "status",
+            "cleanup",
+            "run",
+            "prune",
+            "seal",
+            "report",
+            "portfolio",
+            "install-skill",
+        ),
     )
     return parser
 
@@ -174,8 +189,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.parse_args(arguments)
         return 0
     command = arguments[0]
+    if command == "init":
+        return managed_advisory.init_main(arguments[1:])
+    if command == "doctor":
+        return managed_advisory.doctor_main(arguments[1:])
     if command == "review":
+        if not any(
+            argument == "--profile" or argument.startswith("--profile=")
+            for argument in arguments[1:]
+        ):
+            return managed_advisory.review_main(
+                [argument for argument in arguments[1:] if argument != "--managed"]
+            )
         return _invoke(advisory_routes.main, arguments, "wclass-advisory")
+    if command == "dispatch":
+        return managed_advisory.dispatch_main(arguments[1:])
+    if command == "status":
+        return managed_advisory.status_main(arguments[1:])
+    if command == "cleanup":
+        return managed_advisory.prune_main(arguments[1:])
     if command == "run":
         return _run(arguments[1:], prune=False)
     if command == "prune":

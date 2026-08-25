@@ -1,0 +1,76 @@
+# Managed advisory onboarding
+
+`wclass-advisory` is installed in the same distribution as `wclass`, but it is
+always explicit and never becomes a core route. Managed onboarding removes the
+need to hand-wire profile, campaign, verifier-wrapper, price-table, and result
+paths for every project.
+
+## Initialize a vendor
+
+Supply exact model and effort labels selected for the three roles. weightclass
+does not validate entitlement, availability, relative quality, or remaining
+subscription usage:
+
+```sh
+wclass-advisory init --vendor codex \
+  --model cheap=CHEAP --model advisor=ADVISOR --model expensive=EXPENSIVE \
+  --effort cheap=low --effort advisor=high --effort expensive=high
+```
+
+Repeat for another vendor. `init` creates implementation, review, research,
+diagnosis, and design campaigns with the fixed 60-task/12-advised-failure
+evidence gates and ten anonymous lanes. Identical input is idempotent. Different
+input is rejected instead of changing an existing population. Use a new state
+root deliberately when testing a different model or pricing treatment.
+
+Add `--prices /path/to/prices.json` only for a reviewed single-origin price
+table. Without it the campaign uses the vendor-reported basis; incomplete cost
+reporting causes an economic abstention rather than invented pricing. A
+schema-2 arbitrary vendor can use `init --profile /path/to/profile.json`.
+
+The default root is `~/Library/Application Support/weightclass/advisory-v1` on
+macOS and `$XDG_STATE_HOME/weightclass/advisory-v1` (or
+`~/.local/state/weightclass/advisory-v1`) on other POSIX systems. The root and
+result directories are owner-only; files are owner-only. `--state-root` is an
+advanced explicit override and is never required by the Agent Skill.
+
+## Prepare a project
+
+Commit one prospective verifier before observing a candidate:
+
+- implementation: `.weightclass/verify`
+- review: `.weightclass/verify-review`
+- research: `.weightclass/verify-research`
+- diagnosis: `.weightclass/verify-diagnosis`
+- design: `.weightclass/verify-design`
+
+It must return `42` for the documented task-free baseline probe, `0` only when
+the candidate meets the fixed acceptance criteria, and another code for an
+infrastructure failure. Managed state contains a package verifier that loads
+the workflow verifier from the clean repository's committed `HEAD`, so a model
+cannot weaken acceptance by editing the working copy.
+
+## Check, review, and dispatch
+
+```sh
+wclass-advisory doctor --vendor all --workflow review
+wclass-advisory review --vendor all --workflow review
+wclass-advisory dispatch \
+  --vendor all --workflow review \
+  --repo /absolute/clean/repository \
+  --task-file /absolute/owner-only/task-file \
+  --confirm-task-egress
+```
+
+`doctor` and `review` are task-free. `dispatch` validates every selected
+profile, manifest, price basis, result lane, ordinal, clean repository,
+committed verifier, and private task file before vendor execution. Task content
+is never stored, logged, echoed, hashed, or used in a label. Codex and Claude
+normally receive it through stdin; agy retains its reviewed argv exposure and
+Grok uses a private transient prompt file.
+
+Use `wclass-advisory status` for aggregate readiness and evidence. Use
+`wclass-advisory cleanup` only to prune registered disposable workspaces; it
+does not remove profiles, sealed campaigns, or aggregate records. The low-level
+`run --campaign-root ...` interface remains available for advanced callers and
+backward compatibility.

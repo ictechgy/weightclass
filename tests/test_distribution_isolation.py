@@ -23,6 +23,8 @@ from tests.verify_distribution_isolation import (
     MAX_ARCHIVE_MEMBER_NAME_BYTES,
     MAX_ARCHIVE_TEXT_BYTES,
     MAX_SDIST_EXTENSION_BYTES,
+    REQUIRED_SDIST_ADVISORY_PATHS,
+    REQUIRED_WHEEL_ADVISORY_PATHS,
     IsolationError,
     _fingerprint_artifact,
     _safe_members,
@@ -133,11 +135,7 @@ def _write_sdist_fixture(
         encoding="utf-8",
     )
     if include_advisory:
-        for relative_path in (
-            "src/weightclass/advisory/__init__.py",
-            "src/weightclass/advisory/wclass_advisory.py",
-            "src/weightclass/advisory/skill/SKILL.md",
-        ):
+        for relative_path in REQUIRED_SDIST_ADVISORY_PATHS:
             advisory_asset = root / relative_path
             advisory_asset.parent.mkdir(parents=True, exist_ok=True)
             advisory_asset.write_text("installed advisory\n", encoding="utf-8")
@@ -208,9 +206,8 @@ def _write_distribution_fixture(
             f"{registry_schema_version_token}"
             ',"suite_revision":"delegation-conformance-v2"}',
         )
-        archive.writestr("weightclass/advisory/__init__.py", "installed advisory\n")
-        archive.writestr("weightclass/advisory/wclass_advisory.py", "installed advisory\n")
-        archive.writestr("weightclass/advisory/skill/SKILL.md", "installed advisory\n")
+        for relative_path in REQUIRED_WHEEL_ADVISORY_PATHS:
+            archive.writestr(relative_path, "installed advisory\n")
         if include_wheel_core_metadata:
             archive.writestr(
                 f"{wheel_dist_info_root}/METADATA",

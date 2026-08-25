@@ -33,7 +33,12 @@ class AdvisoryDistributionTests(unittest.TestCase):
 
         self.assertEqual(advisory.returncode, 0, advisory.stderr)
         for command in (
+            "init",
+            "doctor",
             "review",
+            "dispatch",
+            "status",
+            "cleanup",
             "run",
             "prune",
             "seal",
@@ -76,6 +81,16 @@ class AdvisoryDistributionTests(unittest.TestCase):
         ):
             with self.subTest(relative=relative):
                 self.assertTrue(package.joinpath(relative).is_file())
+        self.assertTrue(package.joinpath("managed_verify.py").is_file())
+
+    def test_packaged_skill_uses_managed_onboarding_instead_of_opaque_paths(self) -> None:
+        skill = files("weightclass.advisory").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("wclass-advisory init", skill)
+        self.assertIn("wclass-advisory doctor", skill)
+        self.assertIn("wclass-advisory dispatch", skill)
+        self.assertNotIn("--campaign-root <", skill)
+        self.assertNotIn("--route-profile <", skill)
 
     def test_run_help_exposes_private_campaign_boundary(self) -> None:
         result = self._run("run", "--help")
