@@ -148,8 +148,17 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   `ictechgy/homebrew-tap#17` are merged. Release run `32807440505` succeeded;
   the PyPI simple index reports 0.17.0 as latest. Clean exact-wheel smoke,
   user-level uv upgrade, Homebrew source upgrade, and `brew test` all passed.
-  Both local installation paths report 0.17.0; the Mac-only
-  `wclass-advisory-local` shim and customized personal skills remain preserved.
+  Both local installation paths report 0.17.0. The active Codex and Claude
+  personal skills are byte-identical to the packaged four-file 0.17.0 bundle,
+  and the default managed root passes `doctor` for both vendors and all five
+  workflows. The Mac-only `wclass-advisory-local` shim remains executable; its
+  prior customized skills are recoverable from the Trash backups.
+- Do not append to the legacy cross-project implementation campaigns without a
+  deliberate repair. Their root Codex and Claude manifests were re-sealed by
+  another local process at 12:36 KST and no longer match the pinned August 20
+  lane manifests/records. No legacy log was changed during this release work.
+  The active 0.17.0 managed campaigns are fresh, separate populations and must
+  not be merged with those legacy records.
 
 ## The routing-economics result
 
