@@ -279,8 +279,8 @@ has been in *refusing* to act, and the measured history of this project is that
 every cheap lever cost something the gates were right to catch.
 
 **Recommendation: measure `p` with a script before deciding anything.** That
-script now exists as [`tools/speculative_run.py`](../tools/speculative_run.py),
-with [`tools/speculative_report.py`](../tools/speculative_report.py) reading `p`
+script now exists as [`weightclass.advisory.speculative_run`](../src/weightclass/advisory/speculative_run.py),
+with [`weightclass.advisory.speculative_report`](../src/weightclass/advisory/speculative_report.py) reading `p`
 and the modelled saving off its log. Neither ships in the distribution —
 `MANIFEST.in` lists what does — because both create and delete directories and
 run two vendor children, which is exactly the boundary this document is asking

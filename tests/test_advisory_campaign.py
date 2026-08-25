@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TOOLS = REPO_ROOT / "tools"
+TOOLS = REPO_ROOT / "src" / "weightclass" / "advisory"
 CAMPAIGN_TOOL = TOOLS / "advisory_campaign.py"
 RUNNER = TOOLS / "speculative_run.py"
 REPORT = TOOLS / "speculative_report.py"
@@ -21,7 +21,7 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 if TYPE_CHECKING:
-    from tools.advisory_campaign import (
+    from weightclass.advisory.advisory_campaign import (
         CampaignError,
         CampaignManifest,
         build_manifest,

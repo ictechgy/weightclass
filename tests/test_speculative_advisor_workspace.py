@@ -11,7 +11,8 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RUNNER = REPO_ROOT / "tools" / "speculative_run.py"
+RUNNER = REPO_ROOT / "src" / "weightclass" / "advisory" / "speculative_run.py"
+REPOSITORY_GIT_AVAILABLE = (REPO_ROOT / ".git").exists()
 if str(RUNNER.parent) not in sys.path:
     sys.path.insert(0, str(RUNNER.parent))
 
@@ -105,6 +106,7 @@ class PromptOnlyAdvisorWorkspaceTests(unittest.TestCase):
             self.assertEqual(json.loads(advice), {"git_names": []})
 
 
+@unittest.skipUnless(REPOSITORY_GIT_AVAILABLE, "source Git repository unavailable")
 class OwnedWorkspaceCleanupTests(unittest.TestCase):
     def test_retry_and_advice_workspaces_are_recognized_as_runner_owned(self) -> None:
         """Breaks if crash cleanup rejects a prefix that the runner creates."""

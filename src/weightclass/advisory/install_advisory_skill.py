@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import stat
 import sys
 import tempfile
@@ -319,14 +318,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", choices=("codex", "claude", "both"), default="both")
     parser.add_argument("--dry-run", action="store_true")
     arguments = parser.parse_args(argv)
-    bundle = Path(__file__).resolve().parent.parent / "skills" / SKILL_NAME
+    bundle = Path(__file__).resolve().parent / "skill"
     try:
         receipt = install_skill(
             bundle,
             home=Path.home(),
             target=arguments.target,
             dry_run=arguments.dry_run,
-            advisory_command_available=shutil.which("wclass-advisory") is not None,
+            advisory_command_available=True,
         )
     except SkillInstallError as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)

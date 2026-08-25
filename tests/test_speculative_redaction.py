@@ -28,16 +28,13 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RUNNER = REPO_ROOT / "tools" / "speculative_run.py"
+RUNNER = REPO_ROOT / "src" / "weightclass" / "advisory" / "speculative_run.py"
 if str(RUNNER.parent) not in sys.path:
     sys.path.insert(0, str(RUNNER.parent))
 
 
 def load_runner() -> types.ModuleType:
-    """tools/speculative_run.py 를 모듈로 읽어 온다.
-
-    배포본에 들어가지 않는 파일이라 패키지 경로로 import 할 수 없다.
-    """
+    """Load a fresh speculative runner module for redaction mutation tests."""
     spec = importlib.util.spec_from_file_location("speculative_run", RUNNER)
     if spec is None or spec.loader is None:  # pragma: no cover - 경로가 맞으면 안 온다
         raise unittest.SkipTest(f"cannot load {RUNNER}")
@@ -90,7 +87,7 @@ SECRET_CASES = [
 ]
 
 
-@unittest.skipUnless(RUNNER.exists(), "tools/ is not present")
+@unittest.skipUnless(RUNNER.exists(), "installed advisory runner is not present")
 class RedactionTestCase(unittest.TestCase):
     """리댁션 테스트의 공용 베이스.
 

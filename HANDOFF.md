@@ -18,9 +18,10 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 ## Current Status
 
 - Project root: the current repository checkout.
-- Current development line is `0.16.0.dev0`, based on merged main `c92ddf9`
-  plus the productization acceptance commit `27a4aa7`. The published PyPI and
-  Homebrew release remains `0.15.1`; do not reuse that version or tag.
+- Current release candidate is `0.16.0`, based on merged main `9d2959e` plus
+  branch `codex/ship-advisory`. The published PyPI and Homebrew release remains
+  `0.15.1` until the candidate is merged, tagged, and verified; do not reuse an
+  existing version or tag.
 - The published 0.15.1 hardening baseline was PR #57 (`84826cb`). Post-release
   repository and advisory follow-ups through merged PR #82 are present on
   `c92ddf9`; the productization work below starts from that commit.
@@ -76,7 +77,8 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   the reviewed absolute path; without it, a direct run resolves `PATH` again.
   The path-based post-observation replacement race remains open.
 - Wheel and sdist verification explicitly reject top-level `tools/` and
-  `skills/` content, preserving the repository-only advisory boundary.
+  `skills/` content. Installed advisory code and its closed skill bundle live
+  only below `weightclass.advisory`, preserving the core/package boundary.
 - The README now presents identity, installation, and a quick start before the
   long-running evidence narrative and labels the heuristic classifier
   experimental. The stale root security report was removed; the current
@@ -85,6 +87,20 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 - The advisory implementation campaign used only the Codex cheap arm; it
   passed its prospective verifier, so advisor, retry, and expensive arms did
   not run. Final local verification passed 57 focused and 1,263 full tests.
+
+### Installed advisory companion (in progress, 2026-08-25)
+
+- Branch `codex/ship-advisory` moves the existing advisory runtime into the
+  `weightclass.advisory` package and adds `wclass-advisory` to the same wheel as
+  `wclass`; it is not a separate distribution.
+- `wclass-advisory` exposes explicit `review`, `run`, `prune`, `seal`, `report`,
+  `portfolio`, and `install-skill` commands. Core `wclass run` remains
+  single-child and never selects advisory automatically.
+- Profiles, campaigns, verifiers, prices, task files, and campaign roots remain
+  caller-supplied. No advisory configuration is discovered or written.
+- Distribution availability is not an effectiveness promotion: the existing
+  60-task/12-advised-failure gates, separate populations, and abstention rules
+  remain unchanged.
 
 ## The routing-economics result
 
@@ -238,11 +254,11 @@ human to read.
   “experiment before promotion,” because binary Shape-B rescue does not measure
   constraint compliance, idea diversity, or human preference.
 - A portable personal Agent Skill is available as the explicit opt-in
-  `advisory` skill for Codex and Claude Code. The repository-only installer
+  `advisory` skill for Codex and Claude Code. The installed companion
   preflights both destinations, refuses overwrite/symlink conflicts, copies
   only the closed three-file bundle with owner-only permissions, and requires
-  an already configured `wclass-advisory` command. It does not ship in the
-  distribution or promote advisory into `wclass`; see `docs/advisory-skill.md`.
+  the closed package-owned bundle. It ships with `wclass-advisory` but does not
+  promote advisory into core `wclass`; see `docs/advisory-skill.md`.
 - The implementation task itself became sealed ordinal 7. Both vendors reached
   the complete Shape-B fallback and failed acceptance, so no candidate patch
   was retained; the final change was integrated manually against the unchanged
@@ -726,16 +742,16 @@ human to read.
    cheap route in a disposable clone, verifying, and escalating only on failure.
    Expected cost is `c + p`; at c = 0.31 break-even is p = 0.69, so the cheap
    route can fail two times in three and still not lose money.
-   **Measure `p` before building any of it.** `tools/speculative_run.py` and
-   `tools/speculative_report.py` (merged in #48, not shipped in the
-   distribution) do exactly that. The latest three real maintenance tasks had
+   **Measure `p` before changing core routing.** The installed
+   `weightclass.advisory.speculative_run` and `speculative_report` modules do
+   exactly that. The latest three real maintenance tasks had
    cheap acceptance 2/3, far too few to estimate `p`; if a larger sample lands
    under 20% the saving may justify moving the V1 boundary, while near 69% the
    idea is dead. Note this recovers safety, not quality — the defects in
    `QUALITY-RESULT.md` all passed their tests.
 6. **Advisor adoption remains undecided.** Two corrected Shape-B failures now
    have observed rescue `s=0/2`, and neither study had a price-derived `a` or
-   `r`. Deterministic repository-only profiles now compile operator-selected
+   `r`. Deterministic installed profiles now compile operator-selected
    Claude and Codex model/effort labels into the same reviewed argv for seal and
    run, require explicit task-egress confirmation, and support disjoint Codex
    cached-input pricing. Current Claude Sonnet/Opus and Codex Luna/Sol synthetic
@@ -743,7 +759,7 @@ human to read.
    evidence. The separate sealed campaigns still need at least 60 usable tasks
    and 12 advised failures each under a user-supplied single-origin price table;
    see `docs/advisory-vendor-profiles.md`. Do not integrate retry/advice into
-   distributed `wclass` from these pilots.
+   core `wclass` from these pilots; the companion remains explicit and experimental.
 7. **Policy 4 needs broader high-tier evidence before another classifier
    change.** The public fixture remains 5/15 high recall; the fresh blind
    direction check found 1/9 with a wide interval and sent the other eight to

@@ -17,9 +17,10 @@ from weightclass.executable_observation import observe_executable
 from weightclass.v2_validation import V2ValidationError
 
 ROOT = Path(__file__).resolve().parent.parent
-PARALLEL = ROOT / "tools" / "advisory_parallel.py"
-WRAPPER = ROOT / "tools" / "wclass_advisory.py"
-ORCHESTRATION = ROOT / "tools" / "advisory_orchestration.py"
+ADVISORY = ROOT / "src" / "weightclass" / "advisory"
+PARALLEL = ADVISORY / "advisory_parallel.py"
+WRAPPER = ADVISORY / "wclass_advisory.py"
+ORCHESTRATION = ADVISORY / "advisory_orchestration.py"
 REPOSITORY_TOOLS_AVAILABLE = all(path.is_file() for path in (PARALLEL, WRAPPER, ORCHESTRATION))
 
 
@@ -34,7 +35,7 @@ def load_parallel() -> types.ModuleType:
 
 
 def load_orchestration() -> types.ModuleType:
-    tools = str(ROOT / "tools")
+    tools = str(ADVISORY)
     if tools not in sys.path:
         sys.path.insert(0, tools)
     spec = importlib.util.spec_from_file_location("advisory_hardening_orchestration", ORCHESTRATION)
@@ -78,12 +79,10 @@ class AdvisoryOrchestrationHardeningTests(unittest.TestCase):
             completed = subprocess.run(
                 [
                     sys.executable,
-                    str(ROOT / "tools" / "wclass_advisory.py"),
-                    "--router-root",
-                    str(ROOT),
+                    str(WRAPPER),
+                    "prune",
                     "--campaign-root",
                     directory,
-                    "--prune",
                 ],
                 cwd=ROOT,
                 capture_output=True,

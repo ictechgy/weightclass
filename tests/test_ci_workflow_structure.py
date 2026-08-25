@@ -45,6 +45,7 @@ class CIWorkflowStructureTests(unittest.TestCase):
             "matrix.python-version == '3.10' || matrix.python-version == '3.14'", test_job
         )
         self.assertIn("-W error::ResourceWarning", test_job)
+        self.assertIn("wclass-advisory --help", test_job)
 
     def test_feature_branch_pushes_do_not_duplicate_pull_request_ci(self) -> None:
         """Breaks if one PR head starts both push and pull-request matrices."""

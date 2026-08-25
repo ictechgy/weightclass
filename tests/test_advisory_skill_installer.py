@@ -11,9 +11,9 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT / "tools"
+TOOLS = ROOT / "src" / "weightclass" / "advisory"
 INSTALLER = TOOLS / "install_advisory_skill.py"
-BUNDLE = ROOT / "skills" / "advisory"
+BUNDLE = TOOLS / "skill"
 
 
 def load_installer() -> types.ModuleType:
@@ -198,22 +198,17 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         installer = load_installer()
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
-            errors = io.StringIO()
+            output = io.StringIO()
             with (
                 mock.patch.object(installer.Path, "home", return_value=home),
-                mock.patch.object(installer.shutil, "which", return_value=None),
-                mock.patch("sys.stderr", errors),
+                mock.patch("sys.stdout", output),
             ):
-                self.assertEqual(installer.main(["--target", "both"]), 2)
-            self.assertEqual(
-                json.loads(errors.getvalue()),
-                {"error": "advisory_command_unavailable"},
-            )
+                self.assertEqual(installer.main(["--target", "both", "--dry-run"]), 0)
+            self.assertEqual(json.loads(output.getvalue())["planned"], ["codex", "claude"])
 
             output = io.StringIO()
             with (
                 mock.patch.object(installer.Path, "home", return_value=home),
-                mock.patch.object(installer.shutil, "which", return_value="/owned/advisory"),
                 mock.patch("sys.stdout", output),
             ):
                 self.assertEqual(installer.main(["--target", "codex", "--dry-run"]), 0)

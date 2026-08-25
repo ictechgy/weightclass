@@ -210,14 +210,14 @@ refuses to start rather than silently measure something else.
 
 ```sh
 # Codex, needs the price table and --json for structured usage
-tools/speculative_run.py \
+python3 -m weightclass.advisory.speculative_run \
   --repo ~/work/service --task-file task.txt \
   --cheap    'codex exec --sandbox workspace-write --json -c model=<cheap> -' \
   --expensive 'codex exec --sandbox workspace-write --json -c model=<expensive> -' \
   --verify ./verify.sh --prices prices.json --out-dir ~/spec-runs
 
 # Claude, reports its own cost
-tools/speculative_run.py \
+python3 -m weightclass.advisory.speculative_run \
   --repo ~/work/service --task-file task.txt \
   --cheap    'claude --print --output-format json --model sonnet --permission-mode acceptEdits' \
   --expensive 'claude --print --output-format json --model opus   --permission-mode acceptEdits' \
@@ -311,7 +311,7 @@ invites more trust than it earns.
 ### 5. Read the answer
 
 ```sh
-tools/speculative_report.py --log ~/spec-runs/runs.jsonl
+python3 -m weightclass.advisory.speculative_report --log ~/spec-runs/runs.jsonl
 ```
 
 That legacy form is descriptive. Evidence intended to move the product boundary

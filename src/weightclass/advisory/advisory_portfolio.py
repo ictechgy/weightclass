@@ -13,8 +13,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
-if TYPE_CHECKING:
-    from tools.advisory_campaign import (
+if TYPE_CHECKING or __package__:
+    from .advisory_campaign import (
         CampaignError,
         CampaignManifest,
         CampaignProgress,
@@ -23,8 +23,10 @@ if TYPE_CHECKING:
         load_merged_lane_records,
     )
 else:
-    from advisory_campaign import (
+    from advisory_campaign import (  # type: ignore[import-not-found]
         CampaignError,
+        CampaignManifest,
+        CampaignProgress,
         campaign_progress,
         load_manifest,
         load_merged_lane_records,
@@ -387,7 +389,7 @@ def _entry(value: Sequence[str]) -> PortfolioEntry:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
         "--campaign",

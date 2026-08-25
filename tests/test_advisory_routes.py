@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TOOLS = REPO_ROOT / "tools"
+TOOLS = REPO_ROOT / "src" / "weightclass" / "advisory"
 ROUTES_TOOL = TOOLS / "advisory_routes.py"
 CAMPAIGN_TOOL = TOOLS / "advisory_campaign.py"
 RUNNER = TOOLS / "speculative_run.py"
@@ -18,14 +18,14 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 if TYPE_CHECKING:
-    from tools.advisory_campaign import CampaignError, price_table_sha256
-    from tools.advisory_routes import (
+    from weightclass.advisory.advisory_campaign import CampaignError, price_table_sha256
+    from weightclass.advisory.advisory_routes import (
         AdvisoryRouteError,
         build_routes,
         load_profile,
         profile_sha256,
     )
-    from tools.speculative_run import Usage, price_from_tokens
+    from weightclass.advisory.speculative_run import Usage, price_from_tokens
 elif ROUTES_TOOL.is_file() and CAMPAIGN_TOOL.is_file() and RUNNER.is_file():
     from advisory_campaign import CampaignError, price_table_sha256  # noqa: E402
     from advisory_routes import (  # noqa: E402

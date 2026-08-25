@@ -61,7 +61,7 @@ def accepted_result() -> dict[str, object]:
                 "[seed:distribution-isolation] Repository-only artifact rejection",
                 "info",
                 "suppressed",
-                "tests/verify_distribution_isolation.py:1367",
+                "tests/verify_distribution_isolation.py:1382",
                 "_reject_forbidden_top_level_content checks every wheel member.",
             ),
         ],
@@ -123,7 +123,7 @@ class AdvisoryReviewVerifierTests(unittest.TestCase):
             "missing.py:1",
             "../HANDOFF.md:1",
             "src/weightclass/agent_discovery.py:70",
-            "tests/verify_distribution_isolation.py:1367",
+            "tests/verify_distribution_isolation.py:1382",
         ):
             with self.subTest(location=location):
                 value = accepted_result()

@@ -14,7 +14,7 @@ from typing import cast
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT / "tools"
+TOOLS = ROOT / "src" / "weightclass" / "advisory"
 PARALLEL = TOOLS / "advisory_parallel.py"
 WRAPPER = TOOLS / "wclass_advisory.py"
 REPOSITORY_HARDENING_AVAILABLE = PARALLEL.is_file() and WRAPPER.is_file()
@@ -155,24 +155,21 @@ class AdvisoryHardeningAcceptanceTests(unittest.TestCase):
         source = WRAPPER.read_text(encoding="utf-8")
         self.assertNotIn("/Users/", source)
         completed = subprocess.run(
-            [sys.executable, str(WRAPPER), "--help"],
+            [sys.executable, str(WRAPPER), "run", "--help"],
             cwd=ROOT,
             capture_output=True,
             check=False,
             text=True,
         )
         self.assertEqual(completed.returncode, 0)
-        self.assertIn("--router-root", completed.stdout)
         self.assertIn("--campaign-root", completed.stdout)
 
     def test_campaign_option_is_forwarded_without_abbreviating_campaign_root(self) -> None:
         wrapper = load_module(WRAPPER, "exact_campaign_option_boundary")
         campaign_root = Path("/private/results")
         manifest = Path("/private/campaign.json")
-        arguments, forwarded = wrapper._parser().parse_known_args(
+        arguments, forwarded = wrapper._run_parser().parse_known_args(
             [
-                "--router-root",
-                str(ROOT),
                 "--campaign-root",
                 str(campaign_root),
                 "--campaign",

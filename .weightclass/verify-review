@@ -47,7 +47,7 @@ SEEDS = {
         "info",
     ),
     "[seed:distribution-isolation]": (
-        "tests/verify_distribution_isolation.py:1367",
+        "tests/verify_distribution_isolation.py:1382",
         "_reject_forbidden_top_level_content",
         frozenset({"suppressed"}),
         "info",

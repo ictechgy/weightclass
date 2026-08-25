@@ -11,7 +11,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-RUNNER = Path(__file__).resolve().parent.parent / "tools" / "speculative_run.py"
+RUNNER = (
+    Path(__file__).resolve().parent.parent
+    / "src"
+    / "weightclass"
+    / "advisory"
+    / "speculative_run.py"
+)
 if str(RUNNER.parent) not in sys.path:
     sys.path.insert(0, str(RUNNER.parent))
 

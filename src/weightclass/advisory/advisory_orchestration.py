@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repository-owned locking and dispatch for machine-local advisory shims."""
+"""Owner-private locking and dispatch for installed advisory campaign lanes."""
 
 from __future__ import annotations
 
@@ -12,24 +12,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from tools.advisory_campaign import (
+if TYPE_CHECKING or __package__:
+    from .advisory_campaign import (
         ANONYMOUS_LANE_COUNT,
         MAX_ANONYMOUS_LANES,
         lane_result_directories,
         load_manifest,
         load_merged_lane_records,
     )
-    from tools.advisory_parallel import AdvisoryJob, AdvisoryResult, run_parallel
+    from .advisory_parallel import AdvisoryJob, AdvisoryResult, run_parallel
 else:
-    from advisory_campaign import (
+    from advisory_campaign import (  # type: ignore[import-not-found]
         ANONYMOUS_LANE_COUNT,
         MAX_ANONYMOUS_LANES,
         lane_result_directories,
         load_manifest,
         load_merged_lane_records,
     )
-    from advisory_parallel import AdvisoryJob, AdvisoryResult, run_parallel
+    from advisory_parallel import (  # type: ignore[import-not-found]
+        AdvisoryJob,
+        AdvisoryResult,
+        run_parallel,
+    )
 
 
 @dataclass(frozen=True)

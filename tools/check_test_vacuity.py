@@ -160,8 +160,12 @@ def main() -> int:
     work = pathlib.Path(tempfile.mkdtemp(prefix="vacuity-"))
     try:
         shutil.copytree(REPO / "tools", work / "tools")
+        shutil.copytree(
+            REPO / "src" / "weightclass" / "advisory",
+            work / "src" / "weightclass" / "advisory",
+        )
         shutil.copytree(REPO / "tests", work / "tests")
-        runner = work / "tools" / "speculative_run.py"
+        runner = work / "src" / "weightclass" / "advisory" / "speculative_run.py"
         source = runner.read_text(encoding="utf-8")
         neutralized = neutralize_source(source)
         if neutralized is None:

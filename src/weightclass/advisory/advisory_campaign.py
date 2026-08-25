@@ -22,10 +22,13 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, TypedDict, cast
 
-if TYPE_CHECKING:
-    from tools.advisory_routes import AdvisoryRouteError, routes_from_profile
+if TYPE_CHECKING or __package__:
+    from .advisory_routes import AdvisoryRouteError, routes_from_profile
 else:
-    from advisory_routes import AdvisoryRouteError, routes_from_profile
+    from advisory_routes import (  # type: ignore[import-not-found]
+        AdvisoryRouteError,
+        routes_from_profile,
+    )
 
 CAMPAIGN_SCHEMA_VERSION = 1
 EVIDENCE_CAMPAIGN_SCHEMA_VERSION = 2
@@ -735,7 +738,7 @@ def _command(value: str) -> list[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--arm", required=True, choices=("shape_b", "shape_a_b"))
     parser.add_argument(
         "--workflow",
