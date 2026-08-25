@@ -29,6 +29,12 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   one sdist, neither yanked. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/74/df/d1060ba9b4fbcde82f66bd77a041ab04ca7abfc916863499e02a434956bd/weightclass-0.17.0.tar.gz`
   - sha256: `12f2679a53314750be30d4bd2cbe225d7561c137c26279619b72b3f7912a6d88`
+- **`weightclass 0.17.1` is published on PyPI and Homebrew.** Release run
+  `32820191068` passed immutable build, macOS 3.10/3.14, candidate validation
+  on Python 3.10/3.14, and exact trusted publication. PyPI has one wheel and
+  one sdist, neither yanked. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/25/8e/0c386f5c48db429eec8874a5b8090b4387688f2bc1678188ac451a111927/weightclass-0.17.1.tar.gz`
+  - sha256: `3c6f456a962537f4e3f72647c083556faa0c70854d60f01ee9766734b1837333`
 - `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
   before publication; retain both tags and never reuse them. Homebrew 0.16.2 is
@@ -160,7 +166,7 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   The active 0.17.0 managed campaigns are fresh, separate populations and must
   not be merged with those legacy records.
 
-### Advisory CLI contract follow-up (0.17.1 candidate, unreleased)
+### Advisory CLI contract follow-up (released in 0.17.1)
 
 - A fresh external-use audit found that 0.17.0 managed `dispatch` and low-level
   forwarding both work, but `run --help` displayed only the three wrapper-owned
@@ -186,8 +192,14 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   0.17.0 four-file skill upgrade in a fresh HOME all pass. Codex Security diff
   scan `2459da50-526f-4360-8597-e57470ef67e3` covered all five changed
   source/package files and found no reportable issue; it used parent-only
-  fallback and TAC display status was unavailable. PR and publication gates
-  are still pending. Do not claim 0.17.1 is released yet.
+  fallback and TAC display status was unavailable.
+- Source PR #93, source-formula PR #94, and tap PR
+  `ictechgy/homebrew-tap#18` are merged. Release run `32820191068` succeeded.
+  The user-level uv tool and Homebrew source install both report 0.17.1; exact
+  0.17.0 personal skills upgraded through `upgrade_planned` to `upgraded` for
+  both Codex and Claude, then matched the packaged bundle byte-for-byte.
+  Managed `doctor` remains ready for both vendors and all five workflows, and
+  the four corrected help surfaces pass from both uv and Homebrew entrypoints.
 
 ## The routing-economics result
 
@@ -787,10 +799,10 @@ human to read.
 
 ## Next Steps
 
-1. **Publish the reviewed 0.17.1 CLI-contract fix.** Complete the full suite,
-   distribution smoke, and security review; then use the usual exact-head PR,
-   immutable tag/release, PyPI verification, and Homebrew source/tap update.
-   Never reuse the failed 0.16.0/0.16.1 tags or any published version.
+1. **No 0.17.1 release work remains.** PyPI and Homebrew publication, uv and
+   source Homebrew upgrades, exact skill upgrade, managed doctor, and all help
+   regressions are complete. Never reuse the failed 0.16.0/0.16.1 tags or any
+   published version.
 2. **Verified-object execution remains an open architecture item.** Current
    double observation narrows replacement but `Popen` still resolves a path.
    Before enforcing safe ancestors, settle sticky-directory and group-writable
@@ -875,12 +887,13 @@ distribution/clean-venv smoke, stable 227/107/334 vacuity, and Codex Security
 scan 68974988-d4eb-4ad4-a392-6352f7fae8cd with no reportable findings, but is
 published by Release run 32807440505. Source PR #89, formula PR #90, and tap PR
 #17 are merged; PyPI, uv, Homebrew source upgrade, and brew test all report
-0.17.0. An unreleased 0.17.1 candidate fixes misleading low-level run/prune,
+0.17.0. Release 0.17.1 fixes misleading low-level run/prune,
 managed review, and install-skill help; teaches the packaged skill to reject
 stale run/path instructions; and safely upgrades exact 0.17.0 four-file skills
 without overwriting customizations. Its 118 advisory and 1,288 full tests,
 distribution upgrade smoke, and Security diff scan
-2459da50-526f-4360-8597-e57470ef67e3 pass; PR and release gates remain. Four real Shape-B samples now include two
+2459da50-526f-4360-8597-e57470ef67e3 pass. Source PR #93, formula PR #94, tap
+PR #18, Release run 32820191068, PyPI, uv, and Homebrew are complete. Four real Shape-B samples now include two
 failures that reached advice, with observed rescue 0/2 and no economic verdict
 because no reviewed price table existed. Claude/Codex task-free route profiles,
 exact argv review, explicit egress confirmation, and Codex disjoint cached-input
