@@ -1,14 +1,28 @@
 from __future__ import annotations
 
+import io
+import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from weightclass.advisory.advisory_campaign import (
-    CampaignError,
-    CampaignManifest,
-    record_binding,
-    validate_record_bindings,
+from weightclass.advisory import (
+    advisory_campaign,
+    advisory_orchestration,
+    managed_advisory,
 )
+from weightclass.advisory.advisory_campaign import CampaignError, CampaignManifest
+
+
+def codex_profile() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "vendor": "codex",
+        "models": {"cheap": "cheap", "advisor": "advisor", "expensive": "expensive"},
+        "efforts": {"cheap": "low", "advisor": "high", "expensive": "high"},
+    }
 
 
 @unittest.skipUnless(
@@ -28,13 +42,13 @@ class AdvisoryCampaignDiagnosticsAcceptanceTests(unittest.TestCase):
         manifest = self.manifest()
         mismatched = {
             "campaign": {
-                **record_binding(manifest, 1),
+                **advisory_campaign.record_binding(manifest, 1),
                 "campaign_fingerprint": "sha256:" + "b" * 64,
             }
         }
 
         with self.assertRaises(CampaignError) as captured:
-            validate_record_bindings(manifest, [mismatched])
+            advisory_campaign.validate_record_bindings(manifest, [mismatched])
 
         message = str(captured.exception)
         self.assertEqual(message, "campaign_record_binding_mismatch")
@@ -48,7 +62,7 @@ class AdvisoryCampaignDiagnosticsAcceptanceTests(unittest.TestCase):
             (
                 {
                     "campaign": {
-                        **record_binding(manifest, 1),
+                        **advisory_campaign.record_binding(manifest, 1),
                         "sample_ordinal": 0,
                     }
                 },
@@ -58,21 +72,96 @@ class AdvisoryCampaignDiagnosticsAcceptanceTests(unittest.TestCase):
         for record, expected in cases:
             with self.subTest(expected=expected):
                 with self.assertRaisesRegex(CampaignError, f"^{expected}$"):
-                    validate_record_bindings(manifest, [record])
+                    advisory_campaign.validate_record_bindings(manifest, [record])
 
         duplicate = [
-            {"campaign": record_binding(manifest, 1)},
-            {"campaign": record_binding(manifest, 1)},
+            {"campaign": advisory_campaign.record_binding(manifest, 1)},
+            {"campaign": advisory_campaign.record_binding(manifest, 1)},
         ]
         with self.assertRaisesRegex(CampaignError, "^campaign_record_ordinal_duplicate$"):
-            validate_record_bindings(manifest, duplicate)
+            advisory_campaign.validate_record_bindings(manifest, duplicate)
 
         gap = [
-            {"campaign": record_binding(manifest, 1)},
-            {"campaign": record_binding(manifest, 3)},
+            {"campaign": advisory_campaign.record_binding(manifest, 1)},
+            {"campaign": advisory_campaign.record_binding(manifest, 3)},
         ]
         with self.assertRaisesRegex(CampaignError, "^campaign_record_ordinal_gap$"):
-            validate_record_bindings(manifest, gap)
+            advisory_campaign.validate_record_bindings(manifest, gap)
+
+    def test_allocator_preserves_the_fixed_record_rejection_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+            selected = managed_advisory.campaign_paths(
+                state_root, "codex", "implementation"
+            )
+            request = advisory_orchestration.LaneRequest(
+                "codex",
+                selected.results,
+                campaign_path=selected.campaign,
+            )
+            error = CampaignError("campaign_record_binding_mismatch")
+
+            with (
+                mock.patch.object(
+                    advisory_orchestration,
+                    "load_merged_lane_records",
+                    side_effect=error,
+                ),
+                self.assertRaisesRegex(ValueError, "^campaign_record_binding_mismatch$"),
+            ):
+                with advisory_orchestration.acquire_campaign_lanes((request,)):
+                    self.fail("an invalid campaign acquired a lane")
+
+    def test_doctor_rejects_invalid_records_with_the_fixed_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            error = CampaignError("campaign_record_binding_mismatch")
+
+            with (
+                mock.patch.object(
+                    managed_advisory.advisory_campaign,
+                    "load_merged_lane_records",
+                    side_effect=error,
+                ),
+                mock.patch("sys.stdout", stdout),
+                mock.patch("sys.stderr", stderr),
+            ):
+                code = managed_advisory.doctor_main(
+                    [
+                        "--state-root",
+                        str(state_root),
+                        "--vendor",
+                        "codex",
+                        "--workflow",
+                        "implementation",
+                    ]
+                )
+
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(
+                json.loads(stderr.getvalue()),
+                {"error": "campaign_record_binding_mismatch"},
+            )
+            self.assertNotIn(str(state_root), stderr.getvalue())
 
 
 if __name__ == "__main__":
