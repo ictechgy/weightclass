@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT / "tools"
+TOOLS = ROOT / "src" / "weightclass" / "advisory"
 ROUTES = TOOLS / "advisory_routes.py"
 RUNNER = TOOLS / "speculative_run.py"
 REPOSITORY_TOOLS_AVAILABLE = ROUTES.is_file() and RUNNER.is_file()

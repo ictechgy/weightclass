@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT / "tools"
+TOOLS = ROOT / "src" / "weightclass" / "advisory"
 ORCHESTRATION = TOOLS / "advisory_orchestration.py"
 CAMPAIGN = TOOLS / "advisory_campaign.py"
 REPOSITORY_LANES_AVAILABLE = ORCHESTRATION.is_file() and CAMPAIGN.is_file()

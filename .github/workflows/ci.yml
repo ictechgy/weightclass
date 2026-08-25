@@ -33,6 +33,7 @@ jobs:
         run: |
           output="$(printf '%s' 'Fix a spelling typo in the README heading.' | wclass classify)"
           test "$output" = '{"tier": "low"}'
+          wclass-advisory --help >/dev/null
       - name: Run full source suite with ResourceWarning boundary
         if: matrix.python-version == '3.10' || matrix.python-version == '3.14'
         run: python -W error::ResourceWarning -m pytest -q

@@ -50,16 +50,22 @@ def accepted_result() -> dict[str, object]:
             option(
                 "Adaptive campaign stopping",
                 "Improve measurement efficiency while preserving sealed campaign decisions.",
-                "tools/advisory_campaign.py:39 bounds anonymous campaign lanes and tasks.",
-                "tools/advisory_campaign.py",
+                (
+                    "src/weightclass/advisory/advisory_campaign.py:39 bounds anonymous "
+                    "campaign lanes and tasks."
+                ),
+                "src/weightclass/advisory/advisory_campaign.py",
                 "Reduces unnecessary cost and token consumption after decisive evidence.",
                 "Premature stopping can bias a small sample.",
             ),
             option(
                 "Verified runtime isolation",
                 "Strengthen security around provider and verifier process execution boundaries.",
-                "tools/advisory_orchestration.py:115 prepares owner-only lane directories.",
-                "tools/advisory_orchestration.py",
+                (
+                    "src/weightclass/advisory/advisory_orchestration.py:117 prepares "
+                    "owner-only lane directories."
+                ),
+                "src/weightclass/advisory/advisory_orchestration.py",
                 "Improves sandbox and credential isolation guarantees.",
                 "Additional isolation can increase latency and compatibility risk.",
             ),
@@ -69,8 +75,11 @@ def accepted_result() -> dict[str, object]:
                     "Turn aggregate evidence into a clearer product workflow without exposing "
                     "task content."
                 ),
-                "tools/speculative_report.py:1141 computes advisor and retry statistics.",
-                "tools/speculative_report.py",
+                (
+                    "src/weightclass/advisory/speculative_report.py:1141 computes advisor "
+                    "and retry statistics."
+                ),
+                "src/weightclass/advisory/speculative_report.py",
                 "Improves operator usability and integration decisions.",
                 "A dashboard can overstate uncertain estimates.",
             ),
@@ -132,7 +141,10 @@ class AdvisoryDesignVerifierTests(unittest.TestCase):
         self.assertEqual(self.run_verifier(unnamed).returncode, 1)
 
     def test_rejects_untracked_or_out_of_range_evidence(self) -> None:
-        for citation in ("missing.py:1", "tools/advisory_campaign.py:99999"):
+        for citation in (
+            "missing.py:1",
+            "src/weightclass/advisory/advisory_campaign.py:99999",
+        ):
             with self.subTest(citation=citation):
                 value = accepted_result()
                 options = value["options"]

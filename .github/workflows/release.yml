@@ -99,6 +99,8 @@ jobs:
           python -m venv "$installed_venv"
           "$installed_venv/bin/python" -m pip install --no-index --no-deps "${packages[0]}"
           test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
+          "$installed_venv/bin/wclass-advisory" --help >/dev/null
+          "$installed_venv/bin/python" -m weightclass.advisory --help >/dev/null
           test "$(printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" classify)" = '{"tier": "low"}'
           "$installed_venv/bin/wclass" review-cost-profile --help >/dev/null
           "$installed_venv/bin/wclass" recommend --help >/dev/null
@@ -150,6 +152,8 @@ jobs:
           python -m venv "$installed_venv"
           "$installed_venv/bin/python" -m pip install --no-index --no-deps "${packages[0]}"
           test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
+          "$installed_venv/bin/wclass-advisory" --help >/dev/null
+          "$installed_venv/bin/python" -m weightclass.advisory --help >/dev/null
           test "$(printf '%s' 'Fix a spelling typo.' | "$installed_venv/bin/wclass" classify)" = '{"tier": "low"}'
           "$installed_venv/bin/wclass" review-cost-profile --help >/dev/null
           "$installed_venv/bin/wclass" recommend --help >/dev/null

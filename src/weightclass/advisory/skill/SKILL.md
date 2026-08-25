@@ -25,6 +25,9 @@ are user-selected opaque configuration.
   CLI's required `--confirm-task-egress` flag. A generic request to review,
   research, diagnose, design, or implement is not advisory authorization.
 - Require a clean Git checkout and `command -v wclass-advisory`.
+- Require the operator to supply the exact owner-only route profile, sealed
+  campaign, verifier, optional price table, and campaign root. Never discover,
+  persist, or invent those paths.
 - Select one workflow from the user's outcome. Read
   [references/modes.md](references/modes.md) when choosing a mode or preparing
   its verifier.
@@ -59,25 +62,30 @@ candidate. Keep the verifier unchanged during the campaign.
 1. Put the task in a new owner-only regular temporary file outside the
    repository. Never put it in argv, echo it, hash it, include it in a label, or
    retain it in a diagnostic.
-2. Review the exact routes with `wclass-advisory review` when they have not
-   already been reviewed for this machine configuration.
+2. Review the exact routes with `wclass-advisory review --profile <profile>`
+   when they have not already been reviewed for this machine configuration.
 3. Run:
 
    ```sh
    wclass-advisory run \
+     --campaign-root <owner-only-results-root> \
      --workflow <workflow> \
      --repo <absolute-clean-repo> \
      --task-file <owner-only-task-file> \
-     --vendor <configured-vendor-or-all> \
+     --vendor <profile-vendor> \
+     --route-profile <owner-only-profile> \
+     --campaign <sealed-campaign> \
+     --verify <prospective-verifier> \
+     --advise-on-failure --advisor-context prompt \
      --confirm-task-egress
    ```
 
-   `both` is the legacy Claude+Codex alias; `all` dispatches every configured
-   profile. Multi-vendor runs start independent vendor campaigns concurrently;
+   Add the campaign's exact price-table flags when its cost basis requires
+   them. Run one command per profile; do not combine vendor populations.
+   Multi-process machine shims may start independent vendor campaigns concurrently;
    each vendor's cheap/advisor/retry/expensive stages remain sequential inside
-   its anonymous fixed lane. The machine-local shim must acquire one free lane
-   for every selected vendor/workflow before it starts any child; no free lane
-   fails the whole batch and releases partial allocations. Lane 0 is the
+   its anonymous fixed lane. Each command acquires one free lane for its exact
+   vendor/workflow before it starts a child; no free lane fails closed. Lane 0 is the
    existing campaign root. Ten lanes are available by default; the extra lanes
    are bounded `.lanes/lane-XX`
    directories with no project-derived names. Reports and promotion gates must

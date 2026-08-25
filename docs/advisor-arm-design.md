@@ -343,8 +343,8 @@ advisor had to be the vendor's server-side feature.
 
 In order:
 
-1. **Measurement first**, in `tools/speculative_run.py` and
-   `tools/speculative_report.py`, behind `--advisor`, `--advise-first` and
+1. **Measurement first**, in `weightclass.advisory.speculative_run` and
+   `weightclass.advisory.speculative_report`, behind `--advisor`, `--advise-first` and
    `--advise-on-failure`. Neither tool ships in the distribution, so this needs no
    boundary change and nothing reaches users who have not asked for it.
    Productization evidence must use the sealed, task-free campaign contract in

@@ -1,6 +1,6 @@
 # Read-only advisory evidence workflows
 
-`tools/speculative_run.py --workflow` keeps implementation, review, research,
+`wclass-advisory run --workflow` keeps implementation, review, research,
 diagnosis, and design in separate evaluation populations. `implementation`
 retains the existing patch-and-test behavior. The other workflows require a
 closed JSON result, reject every repository edit, and pass the result to the
@@ -16,7 +16,7 @@ The available read-only contracts are:
   acceptance criteria, validation steps, and limitations. Every option includes
   evidence, strengths, risks, and affected surfaces.
 
-`tools/advisory_evidence_contract.py` defines the exact bounded shapes. Schema
+`weightclass.advisory.advisory_evidence_contract` defines the exact bounded shapes. Schema
 validation proves only that the result is parseable, bounded, and closed. It
 does not prove that a finding is real, a source supports a claim, or a proposed
 root cause is correct. A task-specific executable verifier must read the JSON
@@ -35,7 +35,9 @@ preference.
 Example:
 
 ```sh
-python3 tools/speculative_run.py \
+wclass-advisory run \
+  --campaign-root /private/results \
+  --vendor codex \
   --workflow review \
   --repo /path/to/clean/repo \
   --task-file /private/path/review-task.txt \

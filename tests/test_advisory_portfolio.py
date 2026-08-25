@@ -13,7 +13,7 @@ from typing import cast
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT / "tools"
+TOOLS = ROOT / "src" / "weightclass" / "advisory"
 PORTFOLIO = TOOLS / "advisory_portfolio.py"
 CAMPAIGN_ACCEPTANCE = os.environ.get("WCLASS_CAMPAIGN_ACCEPTANCE") == "1"
 

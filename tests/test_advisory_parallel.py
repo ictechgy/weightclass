@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT / "tools"
+TOOLS = ROOT / "src" / "weightclass" / "advisory"
 PARALLEL = TOOLS / "advisory_parallel.py"
 REPOSITORY_TOOLS_AVAILABLE = PARALLEL.is_file()
 

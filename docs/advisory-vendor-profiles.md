@@ -4,8 +4,8 @@ Read-only `review`, `research`, `diagnosis`, and `design` workflows compile the 
 profile with read-only executor authority; see
 [Read-only advisory evidence workflows](advisory-evidence-workflows.md).
 
-_Status: repository-only measurement configuration. These profiles do not enable advisory in the
-installed `wclass` command._
+_Status: installed experimental measurement configuration. These profiles do not enable advisory
+in the core `wclass` command._
 
 The Shape-B path is the same for every configured vendor:
 
@@ -70,8 +70,8 @@ files, option-like labels, invisible characters, and non-ASCII whitespace. Revie
 before sealing:
 
 ```sh
-python3 tools/advisory_routes.py review --profile ./claude-profile.json
-python3 tools/advisory_routes.py review --profile ./codex-profile.json
+wclass-advisory review --profile ./claude-profile.json
+wclass-advisory review --profile ./codex-profile.json
 ```
 
 Claude executors run with safe mode, no session persistence, JSON output, the edit-capable tool
@@ -159,7 +159,7 @@ The same profile must be supplied when sealing and running; the manifest binds t
 digests.
 
 ```sh
-python3 tools/advisory_campaign.py \
+wclass-advisory seal \
   --arm shape_b \
   --planned-tasks 60 \
   --max-tasks 150 \
@@ -170,7 +170,7 @@ python3 tools/advisory_campaign.py \
   --prices ./claude-prices.json \
   --output ./claude-shape-b.json
 
-python3 tools/advisory_campaign.py \
+wclass-advisory seal \
   --arm shape_b \
   --planned-tasks 60 \
   --max-tasks 150 \
@@ -207,7 +207,9 @@ excerpt can leave the machine for the selected provider. It is required for rout
 checked before the task file is read.
 
 ```sh
-python3 tools/speculative_run.py \
+wclass-advisory run \
+  --campaign-root /private/path/claude-results \
+  --vendor claude \
   --repo /path/to/clean/repo \
   --task-file /private/path/task.txt \
   --route-profile ./claude-profile.json \
@@ -218,7 +220,6 @@ python3 tools/speculative_run.py \
   --prices ./claude-prices.json --prefer-prices \
   --campaign ./claude-shape-b.json \
   --sample-ordinal 1 \
-  --out-dir /private/path/claude-results
 ```
 
 Use the equivalent Codex profile, manifest, price table, ordinal sequence, and a different output
@@ -226,7 +227,7 @@ directory for the Codex arm. Run one task at a time. The log contains aggregate 
 duration, and usage but never task text, advice, model output, repository path, or task hash.
 
 ```sh
-python3 tools/speculative_report.py \
+wclass-advisory report \
   --log /private/path/claude-results/runs.jsonl \
   --campaign ./claude-shape-b.json
 ```
@@ -235,4 +236,4 @@ The gate remains the one in [the advisory campaign contract](advisory-campaign.m
 usable tasks and 12 advised failures, then a decisive complete interval or the sealed maximum of
 150 tasks. A separate blind patch-quality review, clean security review, zero new critical
 failures, and macOS/Linux compatibility are also required. Until those conditions pass,
-`wclass run` remains single-child and advisory remains outside the distributed package.
+`wclass run` remains single-child and advisory remains an explicitly selected companion command.

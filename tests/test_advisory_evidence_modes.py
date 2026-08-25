@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT / "tools"
+TOOLS = ROOT / "src" / "weightclass" / "advisory"
 RUNNER = TOOLS / "speculative_run.py"
 REPORT = TOOLS / "speculative_report.py"
 CONTRACT = TOOLS / "advisory_evidence_contract.py"

@@ -1,9 +1,9 @@
-# Optional advisory Agent Skill
+# Installed advisory Agent Skill
 
-_Status: repository-only, explicit opt-in. Installing the skill does not promote advisory into the
-distributed `wclass` runtime and does not change the one-child V1 boundary._
+_Status: distributed as an explicit experimental companion command. Installing
+the skill does not change the one-child `wclass` boundary._
 
-The portable [`advisory` skill bundle](../skills/advisory/SKILL.md) teaches Codex or Claude Code to
+The portable [`advisory` skill bundle](../src/weightclass/advisory/skill/SKILL.md) teaches Codex or Claude Code to
 select the existing implementation, review, research, diagnosis, or design campaign; fix a
 prospective verifier before dispatch; keep task content in a private temporary file; and preserve
 separate sealed populations. It supports reviewed schema-1 Claude/Codex/agy/Grok profiles and
@@ -13,15 +13,14 @@ brainstorming.
 
 ## Prerequisite
 
-The repository-only `wclass-advisory` command and its reviewed local profiles, prices, verifier,
-and sealed campaigns must already be configured. The installer checks `PATH` and fails with
-`advisory_command_unavailable` otherwise. A skill is instructions, not an advisory runtime or an
-entitlement claim.
+Install `weightclass`, then prepare reviewed local profiles, prices, a prospective verifier, and
+sealed campaigns. `wclass-advisory` is included in the distribution, but it never creates or
+discovers that private configuration. A skill is instructions, not an entitlement claim.
 
 Review the routes before installing or using the skill:
 
 ```sh
-wclass-advisory review
+wclass-advisory review --profile ./claude-profile.json
 ```
 
 The review is task-free. An agy `{{task}}` route explicitly exposes task text to local process
@@ -37,15 +36,15 @@ The installer never reads task stdin, never contacts a provider, and never overw
 skill. Preview first:
 
 ```sh
-python3 tools/install_advisory_skill.py --target both --dry-run
+wclass-advisory install-skill --target both --dry-run
 ```
 
 Then explicitly install for Codex, Claude Code, or both:
 
 ```sh
-python3 tools/install_advisory_skill.py --target codex
-python3 tools/install_advisory_skill.py --target claude
-python3 tools/install_advisory_skill.py --target both
+wclass-advisory install-skill --target codex
+wclass-advisory install-skill --target claude
+wclass-advisory install-skill --target both
 ```
 
 Targets follow the products' documented personal skill locations
@@ -78,19 +77,15 @@ Claude Code:
 Normal implicit selection is available, but the description is intentionally narrow: the user
 must explicitly say advisory. Claude Code `--safe-mode` disables personal skills by design.
 
-For a machine-local wrapper configured with more vendors, `--vendor all` dispatches the same task
-to every configured profile. Each vendor/workflow has ten fixed anonymous lanes by default;
+Each vendor/workflow has ten fixed anonymous lanes by default;
 lane 0 preserves the existing campaign root and extra lanes use bounded `.lanes/lane-XX` names
 without project-derived identifiers. Independent projects and vendors can therefore start
 concurrently, while cheap/advisor/retry/expensive stages inside one lane remain sequential. The
-shim leases one free lane for every selected vendor before any child starts and releases partial
-leases if a selected vendor has no free lane. Output is captured in memory and replayed in vendor
-order so diagnostics do not interleave. Reports automatically validate and merge every lane before
-computing promotion gates. `--vendor both` remains a backward-compatible Claude+Codex alias.
-Equal record counts do not prove paired tasks; compare vendors only when the operator deliberately
-admitted the same task to each campaign.
+command leases one free lane before any child starts. Reports validate and merge every lane before
+computing promotion gates. Compare vendors only when the operator deliberately admitted the same
+task to each separate campaign.
 
-This installer remains in `tools/` and the skill in `skills/`; neither is included in the wheel or
-sdist while the measurement gate remains open. See the
+The command and exact three-file skill bundle are included in the wheel and sdist. Advisory remains
+experimental and never becomes an automatic `wclass run` route. See the
 [campaign contract](advisory-campaign.md) and
 [vendor-profile setup](advisory-vendor-profiles.md).

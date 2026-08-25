@@ -354,7 +354,7 @@ def _review_task_delivery(routes: AdvisoryRoutes) -> str | dict[str, str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("review", choices=("review",))
     parser.add_argument("--profile", required=True, type=Path)
     parser.add_argument(

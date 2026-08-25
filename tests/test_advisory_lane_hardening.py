@@ -11,7 +11,7 @@ from typing import cast
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT / "tools"
+TOOLS = ROOT / "src" / "weightclass" / "advisory"
 CAMPAIGN = TOOLS / "advisory_campaign.py"
 ORCHESTRATION = TOOLS / "advisory_orchestration.py"
 RUNNER = TOOLS / "speculative_run.py"

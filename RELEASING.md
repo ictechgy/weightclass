@@ -11,9 +11,8 @@ publishes on a merge to `main`.
 
 - The version lives in exactly one place, `src/weightclass/__init__.py`.
   `pyproject.toml` reads it through `[tool.setuptools.dynamic]`.
-- Source checkouts after the `0.15.1` release identify themselves as the
-  unreleased development version `0.16.0.dev0` until the next release version
-  is deliberately merged and tagged.
+- The advisory companion first ships in `0.16.0`; its release tag must match
+  the package version exactly like every core-only release.
 - Tags are `v<version>`, e.g. `v0.1.0`. The release workflow refuses to publish
   when the tag and the declared version disagree, because PyPI never lets a
   version number be reused.

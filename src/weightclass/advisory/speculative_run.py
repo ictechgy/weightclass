@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Run a task on the cheap route first, verify it, and escalate only if it fails.
 
-This is the measurement script from `docs/speculative-cheap-route-design.md`.
-It is deliberately **not** part of the weightclass package: it creates and
-deletes directories and runs up to two vendor children, all of which V1
-forbids. Keeping it here makes it reviewable and versioned without moving that
-boundary.
+This is the explicit experimental companion from
+`docs/speculative-cheap-route-design.md`. It is packaged separately from the
+core ``wclass`` command because it creates disposable directories and may run
+the bounded cheap/advisor/retry/expensive sequence. Installing it does not
+change the one-child core routing boundary.
 
 Its job is to produce one number. `p` is the share of tasks where the cheap
 route fails verification, and `p` decides whether any of this is worth
@@ -29,17 +29,17 @@ What it never does:
 - **Persist task content or agent output.** The log records outcomes, timings,
   and token counts. Task text and the child's stdout never enter it. That is
   the same rule the router follows.
-- **Retry more than once.** Cheap, then one escalation. If the expensive route
-  also fails verification, both failures are reported and nothing is retried.
+- **Retry more than once.** A sealed campaign may use one fresh cheap retry and
+  one expensive fallback; nothing adds an unbounded retry around that sequence.
 
 Usage:
 
-    tools/speculative_run.py \\
+    wclass-advisory run \\
+      --campaign-root ~/spec-runs --vendor codex \\
       --repo ~/work/service --task-file task.txt \\
       --cheap  'codex exec --sandbox workspace-write -c model=cheap-model -' \\
       --expensive 'codex exec --sandbox workspace-write -c model=strong-model -' \\
-      --verify ./verify.sh \\
-      --out-dir ~/spec-runs
+      --verify ./verify.sh
 
 `--verify` is a path to an executable, not a shell string. Put your pipeline in
 that file. A string would need a shell, and a shell turns an auditable command
@@ -71,8 +71,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, TypedDict
 
-if TYPE_CHECKING:
-    from tools.advisory_campaign import (
+if TYPE_CHECKING or __package__:
+    from .advisory_campaign import (
         ANONYMOUS_LANE_COUNT,
         MAX_PRICES_BYTES,
         MAX_VERIFY_BYTES,
@@ -88,20 +88,20 @@ if TYPE_CHECKING:
         validate_record_bindings,
         validate_run_configuration,
     )
-    from tools.advisory_evidence_contract import (
+    from .advisory_evidence_contract import (
         EVIDENCE_WORKFLOWS,
         EvidenceResultError,
         build_evidence_prompt,
         evidence_item_count,
         parse_evidence_result,
     )
-    from tools.advisory_routes import (
+    from .advisory_routes import (
         AdvisoryRouteError,
         command_task_delivery,
         routes_from_profile,
     )
 else:
-    from advisory_campaign import (
+    from advisory_campaign import (  # type: ignore[import-not-found]
         ANONYMOUS_LANE_COUNT,
         MAX_PRICES_BYTES,
         MAX_VERIFY_BYTES,
@@ -117,14 +117,14 @@ else:
         validate_record_bindings,
         validate_run_configuration,
     )
-    from advisory_evidence_contract import (
+    from advisory_evidence_contract import (  # type: ignore[import-not-found]
         EVIDENCE_WORKFLOWS,
         EvidenceResultError,
         build_evidence_prompt,
         evidence_item_count,
         parse_evidence_result,
     )
-    from advisory_routes import (
+    from advisory_routes import (  # type: ignore[import-not-found]
         AdvisoryRouteError,
         command_task_delivery,
         routes_from_profile,
@@ -3760,7 +3760,9 @@ def attempt(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--prune", action="store_true", help="delete every registered workspace and exit"

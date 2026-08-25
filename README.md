@@ -33,8 +33,9 @@ cd weightclass
 python3 -m pip install .
 ```
 
-All three install the `wclass` command. weightclass bundles no vendor CLI
-itself: whichever built-in route you use — `codex`, `claude`, `agy`, or
+All three install the core `wclass` command and the explicit experimental
+`wclass-advisory` companion. weightclass bundles no vendor CLI itself:
+whichever built-in route you use — `codex`, `claude`, `agy`, or
 `grok` — that vendor's own CLI must already be installed and authenticated on
 the machine that runs it. weightclass never reads or changes their
 authentication or subscription state.
@@ -54,6 +55,23 @@ Releases are cut by pushing a tag; see [RELEASING.md](RELEASING.md). See
 [Native integrations](docs/integrations.md) for reviewed Codex and Claude Code
 examples. Current security status, including the still-open path-based spawn
 boundary, is documented in [the security follow-up](docs/security-performance-followup.md).
+
+### Advisory companion
+
+`wclass-advisory` is installed with weightclass but is never selected by
+`wclass run`. It requires caller-supplied owner-only profiles, a sealed
+campaign, a prospective verifier, a private campaign root, and explicit task
+egress confirmation. Review one profile and optionally install the Agent Skill:
+
+```sh
+wclass-advisory review --profile ./codex-profile.json
+wclass-advisory install-skill --target codex --dry-run
+```
+
+See [Advisory campaign vendor profiles](docs/advisory-vendor-profiles.md) and
+the [campaign contract](docs/advisory-campaign.md). Distribution makes the
+tool available; it does not establish cost savings, model quality, pricing,
+entitlement, or subscription availability.
 
 Native schema 2 and delegation protocol 2 add explicit source/account profiles,
 closed model-and-effort builders, directional profile/vendor authorization, and
@@ -139,8 +157,8 @@ Any evidence intended to move the product boundary must use the sealed,
 task-free [`docs/advisory-campaign.md`](docs/advisory-campaign.md) contract. Deterministic,
 operator-selected built-in and exact-command advisory profiles are documented in
 [`docs/advisory-vendor-profiles.md`](docs/advisory-vendor-profiles.md);
-the repository-only, explicit opt-in [`advisory` Agent Skill](docs/advisory-skill.md) can be
-installed for Codex, Claude Code, or both after that local runtime is configured;
+the installed, explicit opt-in [`advisory` Agent Skill](docs/advisory-skill.md) can be
+installed for Codex, Claude Code, or both after private campaign inputs are configured;
 legacy unbound logs remain descriptive only.
 
 Raw tokens and estimated provider cost must be evaluated separately. The
@@ -1338,14 +1356,14 @@ credential management, background execution, or a bundled provider runtime.
 
 ## Security boundary and non-goals
 
-- No persistence: weightclass writes no router artifacts or vendor
+- Core `wclass` has no persistence: it writes no router artifacts or vendor
   configuration.
 - Task text is read only from standard input, held in memory to classify and
   pass to the selected child process, then discarded. `delegate route` does not
   read it; `delegate run` and `delegate native run` read it only after their
   static execution gates.
   weightclass never logs, stores, echoes, hashes, or places it in diagnostics.
-- weightclass never reads credentials, subscription balances, pricing, cookies,
+- Core `wclass` never reads credentials, subscription balances, pricing, cookies,
   or vendor configuration. It does not capture or process vendor output. V2
   does not issue provider HTTP requests; a separately installed runtime may do
   so only after the explicit acknowledgement described above.
@@ -1375,6 +1393,17 @@ credential management, background execution, or a bundled provider runtime.
   arguments in a reviewed policy's `command` when model routing is required.
 - `wclass run` starts exactly one configured command in the foreground without
   a shell, retry, backgrounding, recovery, or process supervision.
+- The separately selected `wclass-advisory` companion may start the bounded
+  cheap/advisor/retry/expensive sequence described by a sealed campaign. It
+  requires `--confirm-task-egress`, never applies a patch automatically, and
+  writes only owner-private aggregate campaign records without task content,
+  task hashes, repository paths, timestamps, profiles, or fingerprints derived
+  from the task. The caller owns the task file and private campaign inputs.
+- Advisory children own provider authentication and may read files visible
+  through their supplied HOME and sandbox. The runner narrows environment
+  variables but is not a credential sandbox; use separate minimally staged
+  `--cheap-home`, `--advisor-home`, and `--expensive-home` directories when
+  credential isolation is required.
 - weightclass is not an API proxy, credential manager, cloud service,
   subscription checker, bundled provider runtime, or unattended multi-agent
   supervisor.

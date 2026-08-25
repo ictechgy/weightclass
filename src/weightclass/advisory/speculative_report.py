@@ -22,8 +22,8 @@ import statistics
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
-if TYPE_CHECKING:
-    from tools.advisory_campaign import (
+if TYPE_CHECKING or __package__:
+    from .advisory_campaign import (
         MINIMUM_ADVISED_FAILURES,
         CampaignError,
         CampaignManifest,
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
         load_merged_lane_records,
     )
 else:
-    from advisory_campaign import (
+    from advisory_campaign import (  # type: ignore[import-not-found]
         MINIMUM_ADVISED_FAILURES,
         CampaignError,
         CampaignManifest,
@@ -101,7 +101,7 @@ def _campaign_root(log_path: Path) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--log", required=True, type=Path)
     parser.add_argument(
         "--campaign",

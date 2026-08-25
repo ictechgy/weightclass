@@ -12,6 +12,8 @@ weightclass is intended to be a public, local tool that classifies a task and se
 
 V1 may run exactly one selected vendor process in the foreground; it does not retry, recover, background, or supervise that process. V2 API routing is intentionally narrower than an API proxy: weightclass selects a declarative policy and starts at most one reviewed, user-supplied external runtime. weightclass never reads credentials, resolves authentication, makes HTTP requests, verifies the intended recipient or billing account, or persists task content. The external runtime owns all provider authentication, network, billing, and output behavior.
 
+The separately installed `wclass-advisory` command is an explicit, experimental campaign surface, not a `wclass run` mode. It may execute the bounded cheap/advisor/retry/expensive sequence sealed by a campaign, but it must never be selected automatically, weaken the one-child `wclass` contract, or claim effectiveness before the documented evidence gates pass. It requires explicit task-egress confirmation, caller-supplied profiles and campaign inputs, private output state, and patch-only handoff for implementation work.
+
 ## Engineering rules
 
 - Make the smallest safe change; preserve user edits and unrelated files.

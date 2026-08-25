@@ -1,6 +1,6 @@
 # Advisory productization campaign
 
-_Status: measurement gate implemented; advisory execution remains repository-only._
+_Status: distributed as the explicit experimental `wclass-advisory` companion command._
 
 For deterministic built-in and exact-command CLI route profiles, including task-delivery review
 and egress confirmation, see [Advisory campaign vendor profiles](advisory-vendor-profiles.md).
@@ -15,16 +15,14 @@ context stayed fixed. A product decision must use a sealed campaign manifest.
 The manifest is task-free: it contains no task text, task hash, repository path,
 timestamp, account/profile, credential, or full command.
 
-## Repository-owned entry point
+## Installed entry point
 
-Machine-local shims may delegate to the repository-owned seam while keeping
-their paths explicit:
+The installed command keeps private campaign paths explicit:
 
 ```sh
-python3 tools/wclass_advisory.py \
-  --router-root /path/to/weightclass \
+wclass-advisory prune \
   --campaign-root /private/path/shape-b-results \
-  --prune
+  --vendor codex
 ```
 
 The seam forwards campaign arguments to `speculative_run.py` and supplies an
@@ -70,7 +68,7 @@ Use one manifest and output directory per arm. The example labels below are
 opaque caller configuration; weightclass does not assert availability or price.
 
 ```sh
-python3 tools/advisory_campaign.py \
+wclass-advisory seal \
   --arm shape_b \
   --planned-tasks 60 \
   --max-tasks 150 \
@@ -100,7 +98,9 @@ Campaign mode rejects `--label`; the only persisted task handle is an opaque
 ordinal within the sealed maximum. It is not a task name or content hash.
 
 ```sh
-python3 tools/speculative_run.py \
+wclass-advisory run \
+  --campaign-root /private/path/shape-b-results \
+  --vendor codex \
   --repo /path/to/clean/repo \
   --task-file /private/path/current-task.txt \
   --cheap 'codex exec --model REVIEWED_CHEAP_MODEL -' \
@@ -113,7 +113,6 @@ python3 tools/speculative_run.py \
   --prices ./prices.json --prefer-prices \
   --campaign ./shape-b-campaign.json \
   --sample-ordinal 1 \
-  --out-dir /private/path/shape-b-results
 ```
 
 The runner obtains a nonblocking campaign lock, pins one canonical copy of the
@@ -131,7 +130,7 @@ arm, and ordinal but never task/advice/output text. Run only one task at a time.
 ## Report and promotion gate
 
 ```sh
-python3 tools/speculative_report.py \
+wclass-advisory report \
   --log /private/path/shape-b-results/runs.jsonl \
   --campaign ./shape-b-campaign.json
 ```
@@ -142,7 +141,7 @@ private inputs. Output is canonical aggregate-only JSON; manifest and result
 paths are used for loading but are never rendered.
 
 ```sh
-python3 tools/advisory_portfolio.py \
+wclass-advisory portfolio \
   --campaign claude review /private/claude-review.json /private/claude-review-results \
   --campaign codex review /private/codex-review.json /private/codex-review-results
 ```
@@ -152,7 +151,7 @@ results naming below one owner-only campaign directory, the same task-free
 status is available without a persisted path configuration:
 
 ```sh
-python3 tools/advisory_portfolio.py \
+wclass-advisory portfolio \
   --campaign-directory /private/advisory-campaigns
 ```
 
