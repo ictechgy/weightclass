@@ -35,6 +35,11 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   one sdist, neither yanked. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/25/8e/0c386f5c48db429eec8874a5b8090b4387688f2bc1678188ac451a111927/weightclass-0.17.1.tar.gz`
   - sha256: `3c6f456a962537f4e3f72647c083556faa0c70854d60f01ee9766734b1837333`
+- **`weightclass 0.17.2` is published on PyPI and Homebrew.** Release run
+  `32839986511` passed immutable build, macOS 3.10/3.14, candidate validation
+  on Python 3.10/3.14, and exact trusted publication. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/4f/07/37b45d7a06c27dc300a0c170143fa053d767e3df3f66ead1833511de1fdf/weightclass-0.17.2.tar.gz`
+  - sha256: `8ec81718ddc363412438e31dd9dac766e14847c6144fd46f08cfc4296ce13722`
 - `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
   before publication; retain both tags and never reuse them. Homebrew 0.16.2 is
@@ -201,7 +206,7 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   Managed `doctor` remains ready for both vendors and all five workflows, and
   the four corrected help surfaces pass from both uv and Homebrew entrypoints.
 
-### Advisory contention diagnostics (0.17.2 candidate, unreleased)
+### Advisory contention diagnostics (released in 0.17.2)
 
 - Managed lane allocation remains ten lanes per vendor/workflow. A live probe
   with one Codex and one Claude implementation job active observed nine free
@@ -218,7 +223,14 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   for safe upgrade. All 120 advisory and 1,290 full tests pass with 19 skips;
   Ruff, strict mypy, wheel/sdist isolation, actual 0.17.1 skill upgrade, and
   Codex Security diff scan `05fcc392-ae12-4aa0-9f86-1226334789c4` pass with no
-  reportable finding. PR and release gates remain pending.
+  reportable finding.
+- Source PR #96 merged as `268dd2e`; Release run `32839986511` published the
+  exact reviewed candidate. Source-formula PR #97 merged as `6689cb7`, and tap
+  PR `ictechgy/homebrew-tap#19` merged as `c5658f3`. The user-level uv tool and
+  Homebrew source install both report 0.17.2, and `brew test` passes. Exact
+  0.17.1 personal skills upgraded through `upgrade_planned` to `upgraded` for
+  both Codex and Claude and match the packaged bundle byte-for-byte. Managed
+  `doctor` is ready for both vendors and reports `lane_count: 10`.
 
 ## The routing-economics result
 
@@ -799,7 +811,7 @@ human to read.
   startup prompts. Ask for a redacted prompt excerpt if the issue recurs.
 - Do not assume plain `wclass` exercises the Homebrew build: the user-level
   executable can shadow the separate Homebrew entrypoint, although both now
-  report 0.16.2. Test an exact entrypoint when packaging provenance matters.
+  report 0.17.2. Test an exact entrypoint when packaging provenance matters.
 - Do not reuse/relabel the published `0.14.0` artifacts or protected tag for
   unreleased work.
 - Do not narrow `HIGH_SIGNALS` on the calibration result. `p08`/`p21` both
@@ -818,9 +830,11 @@ human to read.
 
 ## Next Steps
 
-1. **Publish the reviewed 0.17.2 diagnostic fix.** Complete full, artifact, and
-   security gates, then exact-head PR, immutable release, PyPI, and Homebrew.
-   Never reuse the failed 0.16.0/0.16.1 tags or any published version.
+1. **Collect real advisory evidence without mislabeling failures.** Ten lanes
+   per vendor/workflow are available, but sample caps remain independent of
+   lane availability. Treat only `managed_lane_unavailable` as contention;
+   report `managed_campaign_capacity_reached` and generic dispatch rejection by
+   their exact codes. Do not synthesize samples or merge sealed populations.
 2. **Verified-object execution remains an open architecture item.** Current
    double observation narrows replacement but `Popen` still resolves a path.
    Before enforcing safe ancestors, settle sticky-directory and group-writable
@@ -917,8 +931,15 @@ because no reviewed price table existed. Claude/Codex task-free route profiles,
 exact argv review, explicit egress confirmation, and Codex disjoint cached-input
 pricing are implemented for repository-only campaigns; no product promotion is
 allowed until each separate sealed campaign reaches 60 usable tasks and 12
-advised failures. The fresh 24-prompt blind direction
-check found policy-4 agreement 10/24, high recall 1/9, and over-routing 6/24;
+advised failures. Release 0.17.2 preserves ten lanes per vendor/workflow and
+separates true lane exhaustion (`managed_lane_unavailable`), sealed sample-cap
+exhaustion (`managed_campaign_capacity_reached`), and generic dispatch failure.
+Its 120 advisory and 1,290 full tests, artifact isolation, exact 0.17.1 skill
+upgrade, and Security diff scan pass. Source PR #96, formula PR #97, tap PR #19,
+Release run 32839986511, PyPI, uv, Homebrew, and exact Codex/Claude skill
+upgrades are complete; managed doctor is ready with `lane_count: 10`. The fresh
+24-prompt blind direction check found policy-4 agreement 10/24, high recall
+1/9, and over-routing 6/24;
 it is spent direction evidence, not a tuning set. Security scan
 d2175938-1f01-47e6-b0f2-8d5089f5d839 found two medium and two low findings;
 argv[0] task substitution and usage JSON fail-closed parsing are fixed on
