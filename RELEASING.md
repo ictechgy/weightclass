@@ -11,8 +11,8 @@ publishes on a merge to `main`.
 
 - The version lives in exactly one place, `src/weightclass/__init__.py`.
   `pyproject.toml` reads it through `[tool.setuptools.dynamic]`.
-- The advisory companion first ships in `0.16.0`; its release tag must match
-  the package version exactly like every core-only release.
+- The advisory companion first publishes in `0.16.1`; the failed, unpublished
+  `v0.16.0` candidate is retained and must not be moved or reused.
 - Tags are `v<version>`, e.g. `v0.1.0`. The release workflow refuses to publish
   when the tag and the declared version disagree, because PyPI never lets a
   version number be reused.
