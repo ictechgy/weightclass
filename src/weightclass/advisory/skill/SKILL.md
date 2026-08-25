@@ -36,6 +36,11 @@ are user-selected opaque configuration.
   inspecting only `run --help`, treat that session or skill as stale and reload
   the installed skill in a new session. Do not fall back to direct implementation
   as a substitute for an explicitly requested advisory run.
+- Report lane contention only for the exact `managed_lane_unavailable` error.
+  `managed_campaign_capacity_reached` means the sealed sample cap was reached;
+  `managed_dispatch_rejected` is a non-lane preflight or binding rejection and
+  must not be relabeled as contention. `doctor` reports the configured lane
+  count, which is ten per vendor and workflow by default.
 - Select one workflow from the user's outcome. Read
   [references/modes.md](references/modes.md) when choosing a mode or preparing
   its verifier.

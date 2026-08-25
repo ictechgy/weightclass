@@ -8,6 +8,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "src" / "weightclass" / "advisory"
@@ -101,11 +102,35 @@ class AdvisoryCampaignLaneAcceptanceTests(unittest.TestCase):
             first = orchestration.LaneRequest("first", root / "first", 1)
             second = orchestration.LaneRequest("second", root / "second", 1)
             with orchestration.acquire_campaign_lanes((second,)):
-                with self.assertRaisesRegex(ValueError, "^$"):
+                with self.assertRaisesRegex(orchestration.LaneUnavailableError, "^$"):
                     with orchestration.acquire_campaign_lanes((first, second)):
                         self.fail("partial lane allocation started")
             with orchestration.acquire_campaign_lanes((first,)) as leases:
                 self.assertEqual(leases[0].lane_index, 0)
+
+    def test_campaign_capacity_is_not_reported_as_live_lane_contention(self) -> None:
+        orchestration = load_module(ORCHESTRATION, "prospective_lane_capacity_reason")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "results"
+            campaign = Path(directory) / "campaign.json"
+            campaign.write_text("{}", encoding="utf-8")
+            request = orchestration.LaneRequest(
+                "vendor",
+                root,
+                1,
+                campaign_path=campaign,
+            )
+            with (
+                mock.patch.object(orchestration, "load_manifest", return_value=manifest(1)),
+                mock.patch.object(
+                    orchestration,
+                    "load_merged_lane_records",
+                    return_value=[record(1)],
+                ),
+                self.assertRaisesRegex(orchestration.CampaignCapacityError, "^$"),
+            ):
+                with orchestration.acquire_campaign_lanes((request,)):
+                    self.fail("capacity-reached campaign admitted another lane")
 
     def test_lane_records_merge_without_persisting_lane_or_project_identity(self) -> None:
         campaign = load_module(CAMPAIGN, "prospective_lane_campaign_merge")

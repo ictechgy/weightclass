@@ -52,7 +52,7 @@ wclass-advisory install-skill --target claude
 wclass-advisory install-skill --target both
 ```
 
-An upgrade replaces only an exact package-owned 0.16.2 or 0.17.0 bundle. A modified skill,
+An upgrade replaces only an exact package-owned 0.16.2, 0.17.0, or 0.17.1 bundle. A modified skill,
 symlink, or extra file still fails closed:
 
 ```sh

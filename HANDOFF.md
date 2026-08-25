@@ -201,6 +201,25 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   Managed `doctor` remains ready for both vendors and all five workflows, and
   the four corrected help surfaces pass from both uv and Homebrew entrypoints.
 
+### Advisory contention diagnostics (0.17.2 candidate, unreleased)
+
+- Managed lane allocation remains ten lanes per vendor/workflow. A live probe
+  with one Codex and one Claude implementation job active observed nine free
+  lanes each and atomically leased lane 1 for both, proving the reported
+  repeated contention was not actual lane exhaustion.
+- The root cause was diagnostic collapse: repository/verifier/config/record and
+  lane failures all became `managed_dispatch_rejected`, allowing callers to
+  guess “contention.” The candidate preserves distinct
+  `LaneUnavailableError` and `CampaignCapacityError` through orchestration and
+  emits `managed_lane_unavailable` only when every lane is leased, versus
+  `managed_campaign_capacity_reached` at the sealed sample cap.
+- `doctor` reports `lane_count: 10`. The packaged skill forbids relabeling
+  generic dispatch rejection as contention and recognizes exact 0.17.1 skills
+  for safe upgrade. All 120 advisory and 1,290 full tests pass with 19 skips;
+  Ruff, strict mypy, wheel/sdist isolation, actual 0.17.1 skill upgrade, and
+  Codex Security diff scan `05fcc392-ae12-4aa0-9f86-1226334789c4` pass with no
+  reportable finding. PR and release gates remain pending.
+
 ## The routing-economics result
 
 This is the reason the study existed, so keep the conclusion with the code.
@@ -799,10 +818,9 @@ human to read.
 
 ## Next Steps
 
-1. **No 0.17.1 release work remains.** PyPI and Homebrew publication, uv and
-   source Homebrew upgrades, exact skill upgrade, managed doctor, and all help
-   regressions are complete. Never reuse the failed 0.16.0/0.16.1 tags or any
-   published version.
+1. **Publish the reviewed 0.17.2 diagnostic fix.** Complete full, artifact, and
+   security gates, then exact-head PR, immutable release, PyPI, and Homebrew.
+   Never reuse the failed 0.16.0/0.16.1 tags or any published version.
 2. **Verified-object execution remains an open architecture item.** Current
    double observation narrows replacement but `Popen` still resolves a path.
    Before enforcing safe ancestors, settle sticky-directory and group-writable

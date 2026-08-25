@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import stat
@@ -10,7 +11,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from weightclass.advisory import advisory_campaign, advisory_parallel, managed_advisory
+from weightclass.advisory import (
+    advisory_campaign,
+    advisory_orchestration,
+    advisory_parallel,
+    managed_advisory,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ("implementation", "review", "research", "diagnosis", "design")
@@ -204,6 +210,7 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
                 workflows=WORKFLOWS,
             )
             self.assertTrue(status["ready"])
+            self.assertEqual(status["lane_count"], 10)
 
 
 class ManagedAdvisoryOperationTests(unittest.TestCase):
@@ -339,6 +346,49 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             flattened = "\0".join(argument for job in captured_jobs for argument in job.command)
             self.assertNotIn(task_content, flattened)
             self.assertIn(str(task_file), flattened)
+
+    def test_dispatch_cli_distinguishes_lane_exhaustion_from_campaign_capacity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+            base_arguments = [
+                "--state-root",
+                str(state_root),
+                "--repo",
+                str(Path(directory) / "repo"),
+                "--task-file",
+                str(Path(directory) / "task"),
+                "--vendor",
+                "codex",
+                "--confirm-task-egress",
+            ]
+            cases = (
+                (
+                    advisory_orchestration.LaneUnavailableError(),
+                    "managed_lane_unavailable",
+                ),
+                (
+                    advisory_orchestration.CampaignCapacityError(),
+                    "managed_campaign_capacity_reached",
+                ),
+            )
+            for error, expected in cases:
+                with self.subTest(expected=expected):
+                    stderr = io.StringIO()
+                    with (
+                        mock.patch.object(managed_advisory, "dispatch", side_effect=error),
+                        mock.patch("sys.stderr", stderr),
+                    ):
+                        code = managed_advisory.dispatch_main(base_arguments)
+                    self.assertEqual(code, 2)
+                    self.assertEqual(json.loads(stderr.getvalue())["error"], expected)
 
 
 class ManagedVerifierTests(unittest.TestCase):

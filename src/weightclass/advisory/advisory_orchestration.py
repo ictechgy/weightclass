@@ -36,6 +36,14 @@ else:
     )
 
 
+class LaneUnavailableError(ValueError):
+    """Every bounded anonymous lane is currently leased."""
+
+
+class CampaignCapacityError(ValueError):
+    """The sealed campaign cannot admit another in-flight sample."""
+
+
 @dataclass(frozen=True)
 class LaneRequest:
     """Task-free request for one anonymous vendor/workflow lane."""
@@ -198,9 +206,9 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
                 if completed + busy >= manifest["max_tasks"]:
                     for held_descriptors, _, _ in available:
                         _release_descriptors(held_descriptors)
-                    raise ValueError
+                    raise CampaignCapacityError
             if not available:
-                raise ValueError
+                raise LaneUnavailableError
             selected_descriptors, results_dir, lane_index = available.pop(0)
             for unused, _, _ in available:
                 _release_descriptors(unused)
@@ -214,6 +222,10 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
                     selected_descriptors,
                 )
             )
+    except (LaneUnavailableError, CampaignCapacityError):
+        _release_descriptors(lane_descriptors)
+        _release_descriptors(allocator_descriptors)
+        raise
     except (OSError, ValueError):
         _release_descriptors(lane_descriptors)
         _release_descriptors(allocator_descriptors)
