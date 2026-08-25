@@ -7,8 +7,8 @@ class Weightclass < Formula
 
   desc "Local, policy-driven routing for agent CLI workflows"
   homepage "https://github.com/ictechgy/weightclass"
-  url "https://files.pythonhosted.org/packages/db/94/533630e84006e7fec7561b99aa1b0a9b0ed9bee46df4d42d411910de6213/weightclass-0.15.1.tar.gz"
-  sha256 "684cedcaa3a3ec75edb9ff44d6f37eba972a2fdf6ffbeafe86c7e1b3d50000dc"
+  url "https://files.pythonhosted.org/packages/6c/44/5007d87eb3d17dd6d87ae23bbf9c3d56e6781895c1254215cf18777502cf/weightclass-0.16.2.tar.gz"
+  sha256 "5f6173e4fb7aeb625b2d196a8ad36b76a8ccce7e2330b3e0678c65c57c869786"
   license "MIT"
 
   depends_on "python@3.13"
@@ -29,6 +29,7 @@ class Weightclass < Formula
                  pipe_output("#{bin}/wclass classify", "Review the authorization boundary.", 0).strip
     assert_match '"schema_version": 1',
                  shell_output("#{bin}/wclass example-policy claude-cost-focused")
+    assert_match "wclass-advisory", shell_output("#{bin}/wclass-advisory --help")
 
     # 잘못된 입력은 닫히는 방향으로 실패하고 태스크를 되비추지 않아야 한다.
     output = pipe_output("#{bin}/wclass classify 2>&1", "", 2)
