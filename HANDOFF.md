@@ -18,10 +18,15 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 ## Current Status
 
 - Project root: the current repository checkout.
-- Current release candidate is `0.16.2`. `v0.16.0` and `v0.16.1` reached
+- **`weightclass 0.16.2` is published on PyPI.** Release run `32798010700`
+  passed immutable build, macOS 3.10/3.14, candidate validation on Python
+  3.10/3.14, and exact trusted publication. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/6c/44/5007d87eb3d17dd6d87ae23bbf9c3d56e6781895c1254215cf18777502cf/weightclass-0.16.2.tar.gz`
+  - sha256: `5f6173e4fb7aeb625b2d196a8ad36b76a8ccce7e2330b3e0678c65c57c869786`
+- `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
-  before publication; retain both tags and never reuse them. The published
-  PyPI and Homebrew release remains `0.15.1` until 0.16.2 is merged, tagged, and verified.
+  before publication; retain both tags and never reuse them. Homebrew remains
+  `0.15.1` until the formula update is merged and installed.
 - The published 0.15.1 hardening baseline was PR #57 (`84826cb`). Post-release
   repository and advisory follow-ups through merged PR #82 are present on
   `c92ddf9`; the productization work below starts from that commit.
