@@ -29,8 +29,11 @@ WHEEL_REGISTRY_PATH = "weightclass/delegation_qualifications.json"
 SDIST_REGISTRY_PATH = "src/weightclass/delegation_qualifications.json"
 REQUIRED_WHEEL_ADVISORY_PATHS = (
     "weightclass/advisory/__init__.py",
+    "weightclass/advisory/managed_advisory.py",
+    "weightclass/advisory/managed_verify.py",
     "weightclass/advisory/wclass_advisory.py",
     "weightclass/advisory/skill/SKILL.md",
+    "weightclass/advisory/skill/manifest.json",
 )
 REQUIRED_SDIST_ADVISORY_PATHS = tuple(f"src/{path}" for path in REQUIRED_WHEEL_ADVISORY_PATHS)
 EMPTY_REGISTRY = {

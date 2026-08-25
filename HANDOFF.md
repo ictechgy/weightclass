@@ -111,6 +111,36 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   and every PR CI job passed. Both user-level and Homebrew installs report
   0.16.2 and provide `wclass` plus `wclass-advisory`.
 
+### Managed advisory onboarding (0.17.0 release candidate, unreleased)
+
+- The working tree is versioned `0.17.0` and adds explicit managed onboarding
+  without changing core `wclass`. `wclass-advisory init` accepts caller-selected
+  opaque model/effort labels (or a reviewed schema-2 profile) and an optional
+  price table, then creates owner-private implementation, review, research,
+  diagnosis, and design campaigns in the platform state directory.
+- `doctor`, managed `review`, `dispatch`, `status`, and `cleanup` remove the
+  need for public Agent Skill users to supply profile, manifest, verifier,
+  pricing, and result-root paths on every task. The low-level explicit
+  `run --campaign-root ...` surface remains compatible.
+- The package-staged cross-project verifier executes the workflow verifier from
+  committed `HEAD`, rejects candidate edits to it, and retains the task-free
+  exit-42 baseline contract. Managed dispatch keeps confirmation before task
+  inspection, allocates all selected vendor lanes together, and never puts task
+  content in router diagnostics or state.
+- Agent Skill installation now ships an exact four-file bundle. Ordinary
+  conflicts remain protected; explicit `install-skill --upgrade` replaces only
+  the exact known 0.16.2 three-file bundle and preserves customized content.
+- Local evidence: Ruff and strict mypy passed; the full source suite passed
+  1,284 tests with 19 skips in 108.094 seconds; vacuity stayed byte-stable at
+  227 identity-redaction failures, 107 passes, 334 leaves. A 0.17.0 wheel/sdist
+  passed distribution isolation plus clean-venv `init -> doctor -> review` and
+  skill dry-run. Codex Security diff scan
+  `68974988-d4eb-4ad4-a392-6352f7fae8cd` covered all seven changed source/package
+  files and found no reportable issue; it used parent-only fallback and TAC
+  display status was unavailable.
+- Publication is still pending. Do not claim PyPI or Homebrew 0.17.0 until the
+  source PR, release workflow, and tap update have all completed.
+
 ## The routing-economics result
 
 This is the reason the study existed, so keep the conclusion with the code.
@@ -709,10 +739,11 @@ human to read.
 
 ## Next Steps
 
-1. **No 0.16.2 release work remains.** PyPI and Homebrew publication are both
-   complete. The unrelated pre-existing `relay.rb` whole-tap style finding was
-   intentionally left untouched. The shadowing user-level tool is now 0.15.1,
-   old kegs were cleaned, and stale linked-worktree metadata was pruned.
+1. **Publish the reviewed 0.17.0 managed-onboarding candidate.** Create a source
+   PR, wait for every CI job, merge the exact reviewed head, tag it once, and
+   let the trusted release workflow publish the immutable wheel/sdist. Then
+   update and test the source Homebrew formula and tap. Never reuse the failed
+   0.16.0/0.16.1 tags or any published version.
 2. **Verified-object execution remains an open architecture item.** Current
    double observation narrows replacement but `Popen` still resolves a path.
    Before enforcing safe ancestors, settle sticky-directory and group-writable
@@ -789,10 +820,14 @@ human to read.
 
 Open the repository checkout, read `HANDOFF.md` and
 applicable `AGENTS.md` files, then continue from: `0.16.2 is merged, tagged, and
-published from main commit d252403; Release run 32798010700 passed. The canonical
-sdist URL and SHA are recorded above. Advisory source PR #84, smoke fixes #85/#86,
-formula PR #87, and tap PR #16 are merged. Both user-level and Homebrew installs
-report 0.16.2 and provide wclass plus wclass-advisory. Four real Shape-B samples now include two
+published from main commit d252403; Release run 32798010700 passed. A local
+0.17.0 managed-advisory candidate now adds init, doctor, managed review,
+dispatch, status, cleanup, the package-staged cross-project verifier, and a
+safe exact-legacy Agent Skill upgrade. It passed 1,284 tests, Ruff, strict mypy,
+distribution/clean-venv smoke, stable 227/107/334 vacuity, and Codex Security
+scan 68974988-d4eb-4ad4-a392-6352f7fae8cd with no reportable findings, but is
+not yet published. The next action is source PR -> CI -> exact merge -> v0.17.0
+release -> PyPI verification -> Homebrew source/tap update. Four real Shape-B samples now include two
 failures that reached advice, with observed rescue 0/2 and no economic verdict
 because no reviewed price table existed. Claude/Codex task-free route profiles,
 exact argv review, explicit egress confirmation, and Codex disjoint cached-input

@@ -101,6 +101,12 @@ jobs:
           test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
           "$installed_venv/bin/wclass-advisory" --help >/dev/null
           "$installed_venv/bin/python" -m weightclass.advisory --help >/dev/null
+          managed_root="$RUNNER_TEMP/weightclass-advisory-managed"
+          "$installed_venv/bin/wclass-advisory" init --state-root "$managed_root" --vendor codex \
+            --model cheap=cheap --model advisor=advisor --model expensive=expensive \
+            --effort cheap=low --effort advisor=high --effort expensive=high >/dev/null
+          "$installed_venv/bin/wclass-advisory" doctor --state-root "$managed_root" --vendor codex --workflow all >/dev/null
+          "$installed_venv/bin/wclass-advisory" review --state-root "$managed_root" --vendor codex --workflow review >/dev/null
           installed_agent_bin="$RUNNER_TEMP/weightclass-installed-agent-bin"
           mkdir -m 700 "$installed_agent_bin"
           installed_true="$(type -P true)"
@@ -162,6 +168,12 @@ jobs:
           test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
           "$installed_venv/bin/wclass-advisory" --help >/dev/null
           "$installed_venv/bin/python" -m weightclass.advisory --help >/dev/null
+          managed_root="$RUNNER_TEMP/weightclass-advisory-managed"
+          "$installed_venv/bin/wclass-advisory" init --state-root "$managed_root" --vendor codex \
+            --model cheap=cheap --model advisor=advisor --model expensive=expensive \
+            --effort cheap=low --effort advisor=high --effort expensive=high >/dev/null
+          "$installed_venv/bin/wclass-advisory" doctor --state-root "$managed_root" --vendor codex --workflow all >/dev/null
+          "$installed_venv/bin/wclass-advisory" review --state-root "$managed_root" --vendor codex --workflow review >/dev/null
           installed_agent_bin="$RUNNER_TEMP/weightclass-installed-agent-bin"
           mkdir -m 700 "$installed_agent_bin"
           installed_true="$(type -P true)"
