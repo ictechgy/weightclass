@@ -80,8 +80,28 @@ def _set_option(arguments: Sequence[str], name: str, value: str) -> list[str]:
     return result
 
 
-def _run_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="wclass-advisory run", allow_abbrev=False)
+def _run_parser(command: str = "run") -> argparse.ArgumentParser:
+    if command not in {"run", "prune"}:
+        raise ValueError()
+    managed_command = "dispatch" if command == "run" else "cleanup"
+    parser = argparse.ArgumentParser(
+        prog=f"wclass-advisory {command}",
+        description=(
+            "Advanced explicit-campaign wrapper. Options not owned by this wrapper are "
+            "forwarded unchanged to the sealed runner."
+        ),
+        epilog=(
+            "Managed onboarding users should use "
+            f"`wclass-advisory {managed_command}` instead.\n\n"
+            "Forwarded runner options include:\n"
+            "  --repo, --task-file, --route-profile, --campaign, --verify\n"
+            "  --advise-first, --advise-on-failure, --advisor-context\n"
+            "  --prices, --prefer-prices, --confirm-task-egress\n"
+            "  --cheap-home, --advisor-home, --expensive-home, --exclude-dir"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
+    )
     parser.add_argument(
         "--campaign-root",
         required=True,
@@ -138,7 +158,7 @@ def _top_parser() -> argparse.ArgumentParser:
 
 
 def _run(arguments: Sequence[str], *, prune: bool) -> int:
-    parser = _run_parser()
+    parser = _run_parser("prune" if prune else "run")
     parsed, forwarded = parser.parse_known_args(arguments)
     if any(argument == "--out-dir" or argument.startswith("--out-dir=") for argument in forwarded):
         parser.error("--out-dir is controlled by --campaign-root")

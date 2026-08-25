@@ -160,6 +160,35 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   The active 0.17.0 managed campaigns are fresh, separate populations and must
   not be merged with those legacy records.
 
+### Advisory CLI contract follow-up (0.17.1 candidate, unreleased)
+
+- A fresh external-use audit found that 0.17.0 managed `dispatch` and low-level
+  forwarding both work, but `run --help` displayed only the three wrapper-owned
+  options. That misleading output caused an agent to conclude that repo, task,
+  campaign, verifier, advice, and egress-confirmation options were unsupported.
+- The 0.17.1 candidate labels `run` as the advanced explicit-campaign surface,
+  lists its security-critical forwarded options, and points managed users to
+  `dispatch`. `prune`, managed `review`, and `install-skill` now render their
+  exact public command names; review help also advertises the explicit-profile
+  compatibility form.
+- The packaged skill explicitly treats path-requesting `run` instructions or a
+  missing-egress conclusion based only on `run --help` as stale session state.
+  It requires reloading the installed skill and forbids substituting direct
+  implementation for an explicitly requested advisory run.
+- Safe skill upgrade now recognizes both the exact published 0.16.2 three-file
+  bundle and exact published 0.17.0 four-file bundle. Customized, extra-file,
+  and symlinked skills still fail closed. The destination is revalidated against
+  the same known version immediately before rename.
+- Prospective help/forwarding/stale-skill/upgrade tests pass; all 118 advisory
+  tests and the full 1,288-test suite pass with 19 skips. Ruff, format, strict
+  mypy over 162 source files, stable 227/107/334 vacuity, 0.17.1 wheel/sdist
+  isolation, managed onboarding, every corrected help surface, and an actual
+  0.17.0 four-file skill upgrade in a fresh HOME all pass. Codex Security diff
+  scan `2459da50-526f-4360-8597-e57470ef67e3` covered all five changed
+  source/package files and found no reportable issue; it used parent-only
+  fallback and TAC display status was unavailable. PR and publication gates
+  are still pending. Do not claim 0.17.1 is released yet.
+
 ## The routing-economics result
 
 This is the reason the study existed, so keep the conclusion with the code.
@@ -758,10 +787,10 @@ human to read.
 
 ## Next Steps
 
-1. **No 0.17.0 release work remains.** PyPI and Homebrew publication, local uv
-   and source Homebrew upgrades, managed onboarding smoke, skill preservation,
-   and formula tests are complete. Never reuse the failed 0.16.0/0.16.1 tags or
-   any published version.
+1. **Publish the reviewed 0.17.1 CLI-contract fix.** Complete the full suite,
+   distribution smoke, and security review; then use the usual exact-head PR,
+   immutable tag/release, PyPI verification, and Homebrew source/tap update.
+   Never reuse the failed 0.16.0/0.16.1 tags or any published version.
 2. **Verified-object execution remains an open architecture item.** Current
    double observation narrows replacement but `Popen` still resolves a path.
    Before enforcing safe ancestors, settle sticky-directory and group-writable
@@ -846,7 +875,12 @@ distribution/clean-venv smoke, stable 227/107/334 vacuity, and Codex Security
 scan 68974988-d4eb-4ad4-a392-6352f7fae8cd with no reportable findings, but is
 published by Release run 32807440505. Source PR #89, formula PR #90, and tap PR
 #17 are merged; PyPI, uv, Homebrew source upgrade, and brew test all report
-0.17.0. Four real Shape-B samples now include two
+0.17.0. An unreleased 0.17.1 candidate fixes misleading low-level run/prune,
+managed review, and install-skill help; teaches the packaged skill to reject
+stale run/path instructions; and safely upgrades exact 0.17.0 four-file skills
+without overwriting customizations. Its 118 advisory and 1,288 full tests,
+distribution upgrade smoke, and Security diff scan
+2459da50-526f-4360-8597-e57470ef67e3 pass; PR and release gates remain. Four real Shape-B samples now include two
 failures that reached advice, with observed rescue 0/2 and no economic verdict
 because no reviewed price table existed. Claude/Codex task-free route profiles,
 exact argv review, explicit egress confirmation, and Codex disjoint cached-input

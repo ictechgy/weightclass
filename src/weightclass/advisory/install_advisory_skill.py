@@ -33,6 +33,13 @@ LEGACY_FILE_SHA256 = {
     "agents/openai.yaml": "b946bd779de9ec40e785fecfe7950956c41d51d2d230e4bec4897d1381f443e1",
     "references/modes.md": "cd0a791f464eb110439ace1ef132ddd4a744eb4b42329a7aad05a1a2a4b4171f",
 }
+# Exact package-owned four-file bundle published in weightclass 0.17.0.
+PREVIOUS_BUNDLE_FILE_SHA256 = {
+    "SKILL.md": "39e0af77e6b7056733e452e25b5a3adaec51241cda8b5835841ee0cef82d9865",
+    "manifest.json": "a0970fe561d6237243f20a3a93217e62071a3f217a7ec171c0ee1edf37f57d31",
+    "agents/openai.yaml": "b946bd779de9ec40e785fecfe7950956c41d51d2d230e4bec4897d1381f443e1",
+    "references/modes.md": "cd0a791f464eb110439ace1ef132ddd4a744eb4b42329a7aad05a1a2a4b4171f",
+}
 TARGET_ROOTS = {
     "codex": (".agents", "skills"),
     "claude": (".claude", "skills"),
@@ -146,7 +153,7 @@ def _installed_matches(destination: Path, payloads: dict[str, bytes]) -> bool:
             return False
         found_directories: set[str] = set()
         found_files: set[str] = set()
-        for root, directories, files in os.walk(destination, followlinks=False):
+        for root, directories, file_names in os.walk(destination, followlinks=False):
             root_path = Path(root)
             for name in directories:
                 path = root_path / name
@@ -158,7 +165,7 @@ def _installed_matches(destination: Path, payloads: dict[str, bytes]) -> bool:
                 ):
                     return False
                 found_directories.add(path.relative_to(destination).as_posix())
-            for name in files:
+            for name in file_names:
                 path = root_path / name
                 metadata = path.lstat()
                 if (
@@ -178,7 +185,11 @@ def _installed_matches(destination: Path, payloads: dict[str, bytes]) -> bool:
         return False
 
 
-def _legacy_matches(destination: Path) -> bool:
+def _matches_known_bundle(
+    destination: Path,
+    expected_files: tuple[str, ...],
+    expected_sha256: dict[str, str],
+) -> bool:
     try:
         metadata = destination.lstat()
         if (
@@ -189,7 +200,7 @@ def _legacy_matches(destination: Path) -> bool:
             return False
         found_directories: set[str] = set()
         found_files: set[str] = set()
-        for root, directories, files in os.walk(destination, followlinks=False):
+        for root, directories, file_names in os.walk(destination, followlinks=False):
             root_path = Path(root)
             for name in directories:
                 path = root_path / name
@@ -197,21 +208,31 @@ def _legacy_matches(destination: Path) -> bool:
                 if path.is_symlink() or not stat.S_ISDIR(child.st_mode) or child.st_mode & 0o077:
                     return False
                 found_directories.add(path.relative_to(destination).as_posix())
-            for name in files:
+            for name in file_names:
                 path = root_path / name
                 child = path.lstat()
                 if path.is_symlink() or not stat.S_ISREG(child.st_mode) or child.st_mode & 0o077:
                     return False
                 found_files.add(path.relative_to(destination).as_posix())
-        if found_directories != EXPECTED_DIRECTORIES or found_files != set(LEGACY_FILES):
+        if found_directories != EXPECTED_DIRECTORIES or found_files != set(expected_files):
             return False
         return all(
             hashlib.sha256(_regular_bytes(destination / relative)).hexdigest()
-            == LEGACY_FILE_SHA256[relative]
-            for relative in LEGACY_FILES
+            == expected_sha256[relative]
+            for relative in expected_files
         )
     except (OSError, SkillInstallError):
         return False
+
+
+def _recognized_previous_files(destination: Path) -> tuple[str, ...] | None:
+    for files, expected_sha256 in (
+        (LEGACY_FILES, LEGACY_FILE_SHA256),
+        (EXPECTED_FILES, PREVIOUS_BUNDLE_FILE_SHA256),
+    ):
+        if _matches_known_bundle(destination, files, expected_sha256):
+            return files
+    return None
 
 
 def _write_private(path: Path, payload: bytes) -> None:
@@ -328,7 +349,12 @@ def _publish(home: Path, destination: Path, payloads: dict[str, bytes]) -> None:
         _remove_staging(staging)
 
 
-def _upgrade(home: Path, destination: Path, payloads: dict[str, bytes]) -> None:
+def _upgrade(
+    home: Path,
+    destination: Path,
+    payloads: dict[str, bytes],
+    previous_files: tuple[str, ...],
+) -> None:
     parent = destination.parent
     _ensure_skill_root(home, parent)
     if parent.is_symlink() or not stat.S_ISDIR(parent.lstat().st_mode):
@@ -344,6 +370,8 @@ def _upgrade(home: Path, destination: Path, payloads: dict[str, bytes]) -> None:
             (staging / relative).mkdir(mode=0o700)
         for relative, payload in payloads.items():
             _write_private(staging / relative, payload)
+        if _recognized_previous_files(destination) != previous_files:
+            _fail("skill_conflict")
         os.rename(destination, backup)
         moved_existing = True
         os.rename(staging, destination)
@@ -355,7 +383,7 @@ def _upgrade(home: Path, destination: Path, payloads: dict[str, bytes]) -> None:
         finally:
             os.close(directory_descriptor)
         try:
-            _remove_bundle(backup, LEGACY_FILES)
+            _remove_bundle(backup, previous_files)
         except OSError:
             pass
         moved_existing = False
@@ -396,15 +424,18 @@ def install_skill(
     planned: list[str] = []
 
     destinations: dict[str, Path] = {}
-    upgrade_targets: list[str] = []
+    upgrade_targets: dict[str, tuple[str, ...]] = {}
     for selected in targets:
         destination = _destination(home, selected)
         destinations[selected] = destination
         if destination.exists() or destination.is_symlink():
             if _installed_matches(destination, payloads):
                 already_installed.append(selected)
-            elif upgrade and _legacy_matches(destination):
-                upgrade_targets.append(selected)
+            elif upgrade:
+                previous_files = _recognized_previous_files(destination)
+                if previous_files is None:
+                    _fail("skill_conflict")
+                upgrade_targets[selected] = previous_files
             else:
                 _fail("skill_conflict")
         else:
@@ -414,8 +445,8 @@ def install_skill(
         for selected in planned:
             _publish(home, destinations[selected], payloads)
             installed.append(selected)
-        for selected in upgrade_targets:
-            _upgrade(home, destinations[selected], payloads)
+        for selected, previous_files in upgrade_targets.items():
+            _upgrade(home, destinations[selected], payloads, previous_files)
             upgraded.append(selected)
 
     return {
@@ -424,7 +455,7 @@ def install_skill(
         "target": target,
         "installed": installed,
         "upgraded": upgraded,
-        "upgrade_planned": upgrade_targets,
+        "upgrade_planned": list(upgrade_targets),
         "already_installed": already_installed,
         "planned": planned,
         "dry_run": dry_run,
@@ -432,7 +463,11 @@ def install_skill(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser = argparse.ArgumentParser(
+        prog="wclass-advisory install-skill",
+        description=__doc__,
+        allow_abbrev=False,
+    )
     parser.add_argument("--target", choices=("codex", "claude", "both"), default="both")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--upgrade", action="store_true")

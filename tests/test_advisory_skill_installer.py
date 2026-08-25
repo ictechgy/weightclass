@@ -139,6 +139,44 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
             )
             self.assertEqual(installed.stat().st_mode & 0o777, 0o700)
 
+    def test_explicit_upgrade_accepts_an_exact_previous_four_file_bundle(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            installed = home / ".agents" / "skills" / "advisory"
+            (installed / "agents").mkdir(parents=True, mode=0o700)
+            (installed / "references").mkdir(mode=0o700)
+            previous_hashes: dict[str, str] = {}
+            for relative in installer.EXPECTED_FILES:
+                payload = (BUNDLE / relative).read_bytes()
+                if relative == "SKILL.md":
+                    payload += b"\nprevious-version\n"
+                target = installed / relative
+                target.write_bytes(payload)
+                target.chmod(0o600)
+                previous_hashes[relative] = hashlib.sha256(payload).hexdigest()
+            installed.chmod(0o700)
+
+            with mock.patch.object(
+                installer,
+                "PREVIOUS_BUNDLE_FILE_SHA256",
+                previous_hashes,
+            ):
+                receipt = installer.install_skill(
+                    BUNDLE,
+                    home=home,
+                    target="codex",
+                    dry_run=False,
+                    advisory_command_available=True,
+                    upgrade=True,
+                )
+
+            self.assertEqual(receipt["upgraded"], ["codex"])
+            self.assertEqual(
+                (installed / "SKILL.md").read_bytes(),
+                (BUNDLE / "SKILL.md").read_bytes(),
+            )
+
     def test_destination_and_skill_root_symlinks_fail_closed(self) -> None:
         installer = load_installer()
         with tempfile.TemporaryDirectory() as directory:
