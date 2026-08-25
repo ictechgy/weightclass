@@ -253,7 +253,8 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   `c750fa5d-2489-4737-a10a-dd4e875440f4` found no reportable vulnerability;
   its functional coverage note exposed one remaining wrapper-level reason-code
   collapse, which is fixed by a direct `load_merged_lane_records()` regression.
-  Final full-suite, PR, and release gates remain pending.
+  The final source suite passes 1,295 tests with 23 skips. PR and release gates
+  remain pending.
 
 ## The routing-economics result
 
