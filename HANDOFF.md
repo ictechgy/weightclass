@@ -64,6 +64,13 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/c4/e2/40e23b2f217078b97ce553df774b779d5dfa05bb98518d60f47312c38093/weightclass-0.17.6.tar.gz`
   - sha256: `08aa58d9c6c8ca944aa05b8707430312d3527df4a13781686d3a53a02d85b90f`
+- **`weightclass 0.17.7` is published on PyPI and Homebrew.** Implementation
+  PR #110, source-formula PR #111, and tap PR `ictechgy/homebrew-tap#23` are
+  merged. Release run `32967606531` passed immutable build, macOS 3.10/3.14,
+  candidate validation on Python 3.10/3.14, and exact trusted publication.
+  The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/7e/97/107a9d27655032e87fcc338793343e2c0e13230979af57f1d852882c6209/weightclass-0.17.7.tar.gz`
+  - sha256: `d1f0c7f93f284a32b2810c9ebbae220a1ae22d5126fe6358a592dbd2f711011d`
 - `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
   before publication; retain both tags and never reuse them. Homebrew 0.16.2 is
@@ -427,8 +434,10 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   tests with 68 environment-specific skips. Security diff scan
   `a3cfbc45-1027-4eaa-bce8-58e95428c0c3` reviewed all five changed source/
   package files, found no reportable vulnerability with complete coverage, and
-  used 6,699,818 tokens in one sequential thread. PR, release,
-  installed-package, and existing-state cleanup gates remain pending.
+  used 6,699,818 tokens in one sequential thread. PR, release, uv install,
+  exact skill upgrade to managed onboarding 9, Homebrew upgrade, and `brew
+  test` all pass. Existing-state cleanup remains pending explicit destructive
+  approval; all lanes were free at the last read-only doctor check.
 
 ## The routing-economics result
 
