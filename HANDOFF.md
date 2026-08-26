@@ -71,7 +71,17 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/7e/97/107a9d27655032e87fcc338793343e2c0e13230979af57f1d852882c6209/weightclass-0.17.7.tar.gz`
   - sha256: `d1f0c7f93f284a32b2810c9ebbae220a1ae22d5126fe6358a592dbd2f711011d`
-- **`weightclass 0.17.8` is the current release candidate.** It adds a
+- **`weightclass 0.17.8` is published on PyPI and Homebrew.** Implementation
+  PR #113, source-formula PR #114, and tap PR `ictechgy/homebrew-tap#24` are
+  merged. Release run `32981140244` passed immutable build, macOS 3.10/3.14,
+  candidate validation on Python 3.10/3.14, manual PyPI environment approval,
+  and exact trusted publication. The user-level uv tool and Homebrew source
+  install report 0.17.8, `brew test` passes, and exact 0.17.7 personal skills
+  upgraded to the packaged 0.17.8 bundle for both Codex and Claude. The
+  canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/04/ee/b8ccb1ef866fac82552a20193978be6a69f21c0e4fb25600fe78013e0479/weightclass-0.17.8.tar.gz`
+  - sha256: `75b6ab98a84660a637cfc583f0b93b2b4bb07db65420981b7b2f5bda6300b4ef`
+- Release 0.17.8 adds a
   task-free local `cli-check`, installed-CLI status to `doctor`, a separately
   confirmed and non-persisted `provider-check`, and task-before-inspection
   dispatch gating. Failure receipts are schema 2 with fixed vendor/role fields;
