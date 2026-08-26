@@ -29,25 +29,25 @@ FINDING_KEYS = frozenset(
 )
 SEEDS = {
     "[seed:receipt-privacy]": (
-        "src/weightclass/advisory/speculative_run.py:328",
+        "src/weightclass/advisory/speculative_run.py:337",
         "failure_receipt",
         frozenset({"suppressed"}),
         frozenset({"info"}),
     ),
     "[seed:emission-reliability]": (
-        "src/weightclass/advisory/speculative_run.py:373",
+        "src/weightclass/advisory/speculative_run.py:386",
         "emit_failure_receipt",
         frozenset({"reportable", "suppressed", "deferred"}),
         frozenset({"info", "low", "medium"}),
     ),
     "[seed:verification-classification]": (
-        "src/weightclass/advisory/speculative_run.py:4117",
+        "src/weightclass/advisory/speculative_run.py:4172",
         "failure_kind",
         frozenset({"reportable", "suppressed", "deferred"}),
         frozenset({"info", "low", "medium"}),
     ),
     "[seed:measurement-compatibility]": (
-        "src/weightclass/advisory/speculative_run.py:4218",
+        "src/weightclass/advisory/speculative_run.py:4279",
         "emit_failure_receipt",
         frozenset({"reportable", "suppressed", "deferred"}),
         frozenset({"info", "low", "medium"}),

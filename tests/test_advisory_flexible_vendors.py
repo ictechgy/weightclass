@@ -80,8 +80,11 @@ class FlexibleVendorRouteTests(unittest.TestCase):
         self.assertEqual(agy.cheap[agy.cheap.index("--mode") + 1], "accept-edits")
         self.assertEqual(agy.advisor[agy.advisor.index("--mode") + 1], "plan")
         agy_evidence = routes.build_routes(profile("agy"), read_only_executors=True)
-        for command in agy_evidence:
+        for role, command in zip(("cheap", "advisor", "expensive"), agy_evidence, strict=True):
             self.assertEqual(command[command.index("--mode") + 1], "plan")
+            self.assertNotIn("--effort", command)
+            self.assertNotIn("--disable-slash-commands", command)
+            self.assertEqual("--json-schema" in command, role != "advisor")
 
         grok = routes.build_routes(profile("grok"))
         self.assertEqual(routes.command_task_delivery(grok.cheap), "file")
@@ -93,6 +96,9 @@ class FlexibleVendorRouteTests(unittest.TestCase):
         self.assertIn("--verbatim", grok.cheap)
         self.assertEqual(grok.cheap[grok.cheap.index("--output-format") + 1], "json")
         self.assertEqual(grok.cheap[grok.cheap.index("--model") + 1], "c")
+        grok_evidence = routes.build_routes(profile("grok"), read_only_executors=True)
+        for role, command in zip(("cheap", "advisor", "expensive"), grok_evidence, strict=True):
+            self.assertEqual("--json-schema" in command, role != "advisor")
 
     def test_schema_two_binds_exact_command_matrices_and_delivery(self) -> None:
         routes = load_module(ROUTES, "prospective_custom_routes")

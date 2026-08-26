@@ -15,7 +15,10 @@ from weightclass.advisory import (
     advisory_campaign,
     advisory_orchestration,
     advisory_parallel,
+    advisory_preflight,
+    advisory_routes,
     managed_advisory,
+    speculative_run,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -123,7 +126,7 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
             )
             self.assertEqual(review_status["tasks"], 0)
 
-    def test_only_claude_evidence_paths_are_generation_versioned(self) -> None:
+    def test_changed_builtin_routes_use_separate_generations(self) -> None:
         root = Path("/private/advisory-v1")
         self.assertIn(
             managed_advisory.CLAUDE_EVIDENCE_GENERATION,
@@ -137,6 +140,58 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
             managed_advisory.campaign_paths(root, "codex", "review"),
             managed_advisory.legacy_campaign_paths(root, "codex", "review"),
         )
+        self.assertIn(
+            managed_advisory.AGY_ROUTE_GENERATION,
+            managed_advisory.campaign_paths(root, "agy", "implementation").campaign.name,
+        )
+        self.assertIn(
+            managed_advisory.GROK_EVIDENCE_GENERATION,
+            managed_advisory.campaign_paths(root, "grok", "review").campaign.name,
+        )
+        self.assertEqual(
+            managed_advisory.campaign_paths(root, "grok", "implementation"),
+            managed_advisory.legacy_campaign_paths(root, "grok", "implementation"),
+        )
+
+    def test_agy_and_grok_migrations_preserve_legacy_campaigns(self) -> None:
+        cases = (("agy", WORKFLOWS), ("grok", WORKFLOWS[1:]))
+        for vendor, expected_workflows in cases:
+            with self.subTest(vendor=vendor), tempfile.TemporaryDirectory() as directory:
+                state_root = Path(directory) / "advisory-v1"
+                with mock.patch.object(
+                    managed_advisory,
+                    "campaign_paths",
+                    side_effect=managed_advisory.legacy_campaign_paths,
+                ):
+                    managed_advisory.initialize_campaign_set(
+                        state_root,
+                        profile=codex_profile() | {"vendor": vendor},
+                        prices=None,
+                        planned_tasks=12,
+                        max_tasks=24,
+                        dry_run=False,
+                    )
+                legacy = managed_advisory.legacy_campaign_paths(
+                    state_root, vendor, expected_workflows[0]
+                )
+                before = legacy.campaign.read_bytes()
+
+                preview = managed_advisory.migrate_vendor_campaigns(
+                    state_root, vendor=vendor, dry_run=True
+                )
+                receipt = managed_advisory.migrate_vendor_campaigns(
+                    state_root, vendor=vendor, dry_run=False
+                )
+
+                self.assertEqual(tuple(receipt["workflows"]), expected_workflows)
+                self.assertFalse(preview["already_migrated"])
+                self.assertFalse(receipt["already_migrated"])
+                self.assertEqual(legacy.campaign.read_bytes(), before)
+                for workflow in expected_workflows:
+                    current = managed_advisory.campaign_paths(state_root, vendor, workflow)
+                    self.assertTrue(current.campaign.is_file())
+                    self.assertTrue(current.results.is_dir())
+                    self.assertFalse((current.results / "runs.jsonl").exists())
 
     def test_migration_accepts_and_preserves_a_structured_v1_only_install(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -174,7 +229,7 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
             )
 
             self.assertFalse(receipt["already_migrated"])
-            self.assertEqual(receipt["generation"], "structured-v5")
+            self.assertEqual(receipt["generation"], "structured-v6")
             self.assertEqual(previous.campaign.read_bytes(), campaign_before)
             self.assertEqual(previous_log.read_bytes(), log_before)
             current = managed_advisory.campaign_paths(state_root, "claude", "review")
@@ -400,7 +455,9 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
                 vendors=("vendor-x",),
                 workflows=WORKFLOWS,
             )
-            self.assertTrue(status["ready"])
+            self.assertTrue(status["campaign_ready"])
+            self.assertFalse(status["dispatch_ready"])
+            self.assertFalse(status["ready"])
             self.assertEqual(status["lane_count"], 10)
 
 
@@ -422,14 +479,26 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                 dry_run=False,
             )
 
-            status = managed_advisory.doctor(state_root, vendors=("codex",), workflows=WORKFLOWS)
+            capability = advisory_preflight.CapabilityResult(
+                "codex", "ready", "none", "codex-cli test"
+            )
+            with mock.patch.object(
+                advisory_preflight,
+                "check_local_capability",
+                return_value=capability,
+            ):
+                status = managed_advisory.doctor(
+                    state_root, vendors=("codex",), workflows=WORKFLOWS
+                )
             encoded = json.dumps(status, sort_keys=True)
 
             self.assertTrue(status["ready"])
             self.assertNotIn(str(state_root), encoded)
-            self.assertNotIn("cheap", encoded)
-            self.assertNotIn("advisor", encoded)
-            self.assertNotIn("expensive", encoded)
+            self.assertNotIn('"models"', encoded)
+            self.assertEqual(
+                [item["role"] for item in status["cli"]],
+                ["cheap", "advisor", "expensive"],
+            )
             self.assertEqual(len(status["availability"]), len(WORKFLOWS))
             self.assertTrue(
                 all(item["free"] == 10 and item["busy"] == 0 for item in status["availability"])
@@ -507,6 +576,126 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                 vendors=("codex",),
                 workflow="implementation",
                 confirm_task_egress=False,
+            )
+
+    def test_dispatch_checks_all_local_roles_before_task_inspection(self) -> None:
+        routes = advisory_routes.AdvisoryRoutes(("missing",), ("missing",), ("missing",))
+        selected = managed_advisory.CampaignPaths(
+            Path("/state/profile"),
+            Path("/state/prices"),
+            Path("/state/campaign"),
+            Path("/state/results"),
+        )
+        unavailable = advisory_preflight.CapabilityResult(
+            "codex", "missing", "executable_missing", None
+        )
+        with (
+            mock.patch.object(
+                managed_advisory, "_configuration", return_value=(selected, {}, routes)
+            ),
+            mock.patch.object(
+                advisory_preflight,
+                "check_local_capability",
+                return_value=unavailable,
+            ),
+            mock.patch.object(
+                managed_advisory,
+                "_preflight_task_file",
+                side_effect=AssertionError("task was inspected"),
+            ),
+            self.assertRaises(managed_advisory.ProviderCapabilityError) as raised,
+        ):
+            managed_advisory.dispatch(
+                Path("/state"),
+                repo=Path("/repo"),
+                task_file=Path("/private/task"),
+                vendors=("codex",),
+                workflow="review",
+                confirm_task_egress=True,
+            )
+
+        self.assertEqual(
+            (raised.exception.vendor, raised.exception.role, raised.exception.code),
+            ("codex", "cheap", "executable_missing"),
+        )
+
+    def test_provider_check_is_task_free_and_never_records_a_campaign_sample(self) -> None:
+        routes = advisory_routes.AdvisoryRoutes(("fake",), ("fake",), ("fake",))
+        selected = managed_advisory.CampaignPaths(
+            Path("/state/profile"),
+            Path("/state/prices"),
+            Path("/state/campaign"),
+            Path("/state/results"),
+        )
+        capability = advisory_preflight.CapabilityResult("codex", "ready", "none", "fake 1")
+        child = {
+            "exit_code": 0,
+            "timed_out": False,
+            "seconds": 0.1,
+            "tokens": None,
+            "usage": None,
+            "failure_code": "none",
+            "stdout_present": True,
+            "stderr_present": False,
+        }
+        response = managed_advisory._baseline_probe("review")
+        assert response is not None
+        with (
+            mock.patch.object(
+                managed_advisory, "_configuration", return_value=(selected, {}, routes)
+            ),
+            mock.patch.object(advisory_routes, "routes_from_profile", return_value=routes),
+            mock.patch.object(
+                managed_advisory,
+                "_route_capabilities",
+                return_value=tuple(
+                    (role, capability) for role in ("cheap", "advisor", "expensive")
+                ),
+            ),
+            mock.patch.object(
+                speculative_run,
+                "run_child",
+                return_value=(child, response.decode("utf-8")),
+            ) as run_child,
+        ):
+            receipt = managed_advisory.provider_check(
+                Path("/state"),
+                vendors=("codex",),
+                workflow="review",
+                confirm_provider_egress=True,
+            )
+
+        self.assertTrue(receipt["ready"])
+        self.assertTrue(receipt["task_free"])
+        self.assertTrue(receipt["network_used"])
+        self.assertTrue(receipt["provider_egress_confirmed"])
+        self.assertFalse(receipt["sample_recorded"])
+        self.assertEqual(receipt["calls"], 3)
+        result_rows = receipt["results"]
+        self.assertIsInstance(result_rows, list)
+        assert isinstance(result_rows, list)
+        self.assertEqual(len(result_rows), 3)
+        self.assertEqual(run_child.call_count, 3)
+
+    def test_provider_check_requires_confirmation_before_state_or_network(self) -> None:
+        with (
+            mock.patch.object(
+                managed_advisory,
+                "_configuration",
+                side_effect=AssertionError("state was inspected"),
+            ),
+            mock.patch.object(
+                speculative_run,
+                "run_child",
+                side_effect=AssertionError("provider was called"),
+            ),
+            self.assertRaisesRegex(managed_advisory.ManagedAdvisoryError, "^$"),
+        ):
+            managed_advisory.provider_check(
+                Path("/state"),
+                vendors=("codex",),
+                workflow="review",
+                confirm_provider_egress=False,
             )
 
     def test_default_state_root_is_platform_local_and_contains_no_profile_name(self) -> None:
@@ -587,9 +776,12 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                     results.append(advisory_parallel.AdvisoryResult(job.label, 0, b"", b"", True))
                 return tuple(results)
 
-            with mock.patch(
-                "weightclass.advisory.managed_advisory.advisory_parallel.run_parallel",
-                side_effect=complete_jobs,
+            with (
+                mock.patch(
+                    "weightclass.advisory.managed_advisory.advisory_parallel.run_parallel",
+                    side_effect=complete_jobs,
+                ),
+                mock.patch.object(managed_advisory, "_require_route_capabilities"),
             ):
                 code = managed_advisory.dispatch(
                     state_root,
@@ -720,7 +912,16 @@ class ManagedAdvisoryCliTests(unittest.TestCase):
         completed = self._run("--help")
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        for command in ("init", "doctor", "dispatch", "status", "review", "run"):
+        for command in (
+            "init",
+            "doctor",
+            "cli-check",
+            "provider-check",
+            "dispatch",
+            "status",
+            "review",
+            "run",
+        ):
             self.assertIn(command, completed.stdout)
 
     def test_init_builds_builtin_profile_from_opaque_role_values(self) -> None:

@@ -11,6 +11,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,18 +20,22 @@ from typing import TYPE_CHECKING, BinaryIO, NoReturn, TypedDict
 if TYPE_CHECKING or __package__:
     from . import (
         advisory_campaign,
+        advisory_evidence_contract,
         advisory_orchestration,
         advisory_parallel,
         advisory_portfolio,
+        advisory_preflight,
         advisory_routes,
         managed_verify,
         speculative_run,
     )
 else:
     import advisory_campaign  # type: ignore[import-not-found]
+    import advisory_evidence_contract  # type: ignore[import-not-found]
     import advisory_orchestration  # type: ignore[import-not-found]
     import advisory_parallel  # type: ignore[import-not-found]
     import advisory_portfolio  # type: ignore[import-not-found]
+    import advisory_preflight  # type: ignore[import-not-found]
     import advisory_routes  # type: ignore[import-not-found]
     import managed_verify  # type: ignore[import-not-found]
     import speculative_run  # type: ignore[import-not-found]
@@ -38,8 +43,11 @@ else:
 SCHEMA_VERSION = 1
 WORKFLOWS = ("implementation", "review", "research", "diagnosis", "design")
 EVIDENCE_WORKFLOWS = WORKFLOWS[1:]
-CLAUDE_EVIDENCE_GENERATION = "structured-v5"
+CLAUDE_EVIDENCE_GENERATION = "structured-v6"
+AGY_ROUTE_GENERATION = "cli-v2"
+GROK_EVIDENCE_GENERATION = "structured-v1"
 PREVIOUS_CLAUDE_EVIDENCE_GENERATIONS = (
+    "structured-v5",
     "structured-v4",
     "structured-v3",
     "structured-v2",
@@ -55,6 +63,20 @@ _VENDOR = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 
 class ManagedAdvisoryError(ValueError):
     """Value-free rejection of unsafe or inconsistent managed configuration."""
+
+
+class ProviderCapabilityError(ValueError):
+    """One task-free vendor CLI check failed before task inspection."""
+
+    vendor: str
+    role: str
+    code: str
+
+    def __init__(self, vendor: str, role: str, code: str) -> None:
+        self.vendor = vendor
+        self.role = role
+        self.code = code
+        super().__init__(code)
 
 
 def _replay_output(stream: BinaryIO, payload: bytes) -> None:
@@ -92,10 +114,13 @@ class InitializationReceipt(TypedDict):
 class DoctorReceipt(TypedDict):
     schema_version: int
     ready: bool
+    campaign_ready: bool
+    dispatch_ready: bool
     lane_count: int
     vendors: list[str]
     workflows: list[str]
     availability: list[dict[str, object]]
+    cli: list[dict[str, object]]
 
 
 class EvidenceMigrationReceipt(TypedDict):
@@ -142,8 +167,16 @@ def default_state_root() -> Path:
 def campaign_paths(state_root: Path, vendor: str, workflow: str) -> CampaignPaths:
     if not state_root.is_absolute() or not _VENDOR.fullmatch(vendor) or workflow not in WORKFLOWS:
         _fail()
-    if vendor == "claude" and workflow in EVIDENCE_WORKFLOWS:
+    if vendor == "agy":
+        infix = (
+            f"-{AGY_ROUTE_GENERATION}"
+            if workflow == "implementation"
+            else f"-{workflow}-{AGY_ROUTE_GENERATION}"
+        )
+    elif vendor == "claude" and workflow in EVIDENCE_WORKFLOWS:
         infix = f"-{workflow}-{CLAUDE_EVIDENCE_GENERATION}"
+    elif vendor == "grok" and workflow in EVIDENCE_WORKFLOWS:
+        infix = f"-{workflow}-{GROK_EVIDENCE_GENERATION}"
     else:
         infix = "" if workflow == "implementation" else f"-{workflow}"
     return CampaignPaths(
@@ -361,7 +394,9 @@ def _manifest_for(
 ) -> advisory_campaign.CampaignManifest:
     try:
         routes = advisory_routes.routes_from_profile(
-            profile_path, read_only_executors=workflow != "implementation"
+            profile_path,
+            read_only_executors=workflow != "implementation",
+            evidence_workflow=workflow if workflow != "implementation" else None,
         )
         return advisory_campaign.build_manifest(
             arm="shape_b",
@@ -560,39 +595,55 @@ def initialize_campaign_set(
     return _receipt(vendor, prices=prices_payload is not None, already=False, dry_run=False)
 
 
-def _migration_receipt(*, already: bool, dry_run: bool) -> EvidenceMigrationReceipt:
+def _migration_plan(vendor: str) -> tuple[tuple[str, ...], str, tuple[str, ...]]:
+    if vendor == "claude":
+        return EVIDENCE_WORKFLOWS, CLAUDE_EVIDENCE_GENERATION, PREVIOUS_CLAUDE_EVIDENCE_GENERATIONS
+    if vendor == "grok":
+        return EVIDENCE_WORKFLOWS, GROK_EVIDENCE_GENERATION, ()
+    if vendor == "agy":
+        return WORKFLOWS, AGY_ROUTE_GENERATION, ()
+    _fail()
+
+
+def _migration_receipt(
+    vendor: str,
+    workflows: Sequence[str],
+    generation: str,
+    *,
+    already: bool,
+    dry_run: bool,
+) -> EvidenceMigrationReceipt:
     return {
         "schema_version": SCHEMA_VERSION,
-        "vendor": "claude",
-        "workflows": list(EVIDENCE_WORKFLOWS),
-        "generation": CLAUDE_EVIDENCE_GENERATION,
+        "vendor": vendor,
+        "workflows": list(workflows),
+        "generation": generation,
         "already_migrated": already,
         "legacy_preserved": True,
         "dry_run": dry_run,
     }
 
 
-def migrate_evidence_campaigns(
+def migrate_vendor_campaigns(
     state_root: Path, *, vendor: str, dry_run: bool
 ) -> EvidenceMigrationReceipt:
-    """Create a new Claude evidence generation without changing old populations."""
-    if vendor != "claude":
-        _fail()
+    """Create a new route generation without changing old populations."""
+    workflows, generation, previous_generations = _migration_plan(vendor)
     _private_directory(state_root, create=False)
     descriptor = _setup_lock(state_root)
     created_files: list[Path] = []
     created_directories: list[Path] = []
     try:
-        current = [campaign_paths(state_root, vendor, workflow) for workflow in EVIDENCE_WORKFLOWS]
+        current = [campaign_paths(state_root, vendor, workflow) for workflow in workflows]
         current_exists = [
             selected.campaign.exists() or selected.results.exists() for selected in current
         ]
         if any(current_exists):
             if not all(current_exists):
                 _fail()
-            for workflow in EVIDENCE_WORKFLOWS:
+            for workflow in workflows:
                 _configuration(state_root, vendor, workflow)
-            return _migration_receipt(already=True, dry_run=dry_run)
+            return _migration_receipt(vendor, workflows, generation, already=True, dry_run=dry_run)
 
         profile_path = legacy_campaign_paths(state_root, vendor, "implementation").profile
         _private_regular(profile_path)
@@ -611,13 +662,13 @@ def migrate_evidence_campaigns(
         source_sets = tuple(
             {
                 workflow: previous_evidence_campaign_paths(state_root, vendor, workflow, generation)
-                for workflow in EVIDENCE_WORKFLOWS
+                for workflow in workflows
             }
-            for generation in PREVIOUS_CLAUDE_EVIDENCE_GENERATIONS
+            for generation in previous_generations
         ) + (
             {
                 workflow: legacy_campaign_paths(state_root, vendor, workflow)
-                for workflow in EVIDENCE_WORKFLOWS
+                for workflow in workflows
             },
         )
         for source_set in source_sets:
@@ -634,9 +685,12 @@ def migrate_evidence_campaigns(
                 _private_regular(selected.campaign)
                 _private_directory(selected.results, create=False)
                 manifest = advisory_campaign.load_manifest(selected.campaign)
-                if manifest.get("workflow") != workflow or (
-                    manifest["cost_basis"] == "price_table"
-                ) != (selected_prices is not None):
+                bound_workflow = manifest.get("workflow")
+                if (
+                    (workflow == "implementation" and bound_workflow not in (None, workflow))
+                    or (workflow != "implementation" and bound_workflow != workflow)
+                    or (manifest["cost_basis"] == "price_table") != (selected_prices is not None)
+                ):
                     _fail()
                 advisory_campaign.load_merged_lane_records(
                     manifest,
@@ -650,10 +704,10 @@ def migrate_evidence_campaigns(
             _fail()
 
         if dry_run:
-            return _migration_receipt(already=False, dry_run=True)
+            return _migration_receipt(vendor, workflows, generation, already=False, dry_run=True)
 
         try:
-            for workflow, selected in zip(EVIDENCE_WORKFLOWS, current, strict=True):
+            for workflow, selected in zip(workflows, current, strict=True):
                 previous = source_manifests[workflow]
                 manifest = _manifest_for(
                     profile_path,
@@ -686,7 +740,15 @@ def migrate_evidence_campaigns(
             raise ManagedAdvisoryError() from None
     finally:
         _release_lock(descriptor)
-    return _migration_receipt(already=False, dry_run=False)
+    return _migration_receipt(vendor, workflows, generation, already=False, dry_run=False)
+
+
+def migrate_evidence_campaigns(
+    state_root: Path, *, vendor: str, dry_run: bool
+) -> EvidenceMigrationReceipt:
+    if vendor not in {"claude", "grok"}:
+        _fail()
+    return migrate_vendor_campaigns(state_root, vendor=vendor, dry_run=dry_run)
 
 
 def configured_vendors(state_root: Path) -> tuple[str, ...]:
@@ -736,6 +798,38 @@ def _selected_workflows(requested: str) -> tuple[str, ...]:
     return (requested,)
 
 
+def _route_capabilities(
+    vendor: str, routes: advisory_routes.AdvisoryRoutes
+) -> tuple[tuple[str, advisory_preflight.CapabilityResult], ...]:
+    cache: dict[str, advisory_preflight.CapabilityResult] = {}
+    checked: list[tuple[str, advisory_preflight.CapabilityResult]] = []
+    for role in ROLES:
+        command = getattr(routes, role)
+        executable = command[0]
+        result = cache.get(executable)
+        if result is None:
+            result = advisory_preflight.check_local_capability(vendor, executable)
+            cache[executable] = result
+        checked.append((role, result))
+    return tuple(checked)
+
+
+def _require_route_capabilities(
+    configurations: Mapping[
+        str,
+        tuple[
+            CampaignPaths,
+            advisory_campaign.CampaignManifest,
+            advisory_routes.AdvisoryRoutes,
+        ],
+    ],
+) -> None:
+    for vendor, (_, _, routes) in configurations.items():
+        for role, result in _route_capabilities(vendor, routes):
+            if not result.ready:
+                raise ProviderCapabilityError(vendor, role, result.failure_code)
+
+
 def _configuration(
     state_root: Path, vendor: str, workflow: str
 ) -> tuple[CampaignPaths, advisory_campaign.CampaignManifest, advisory_routes.AdvisoryRoutes]:
@@ -748,7 +842,9 @@ def _configuration(
     try:
         manifest = advisory_campaign.load_manifest(selected.campaign)
         routes = advisory_routes.routes_from_profile(
-            selected.profile, read_only_executors=workflow != "implementation"
+            selected.profile,
+            read_only_executors=workflow != "implementation",
+            evidence_workflow=workflow if workflow != "implementation" else None,
         )
         prices: Path | None = None
         prefer_prices = False
@@ -787,9 +883,14 @@ def doctor(state_root: Path, *, vendors: Sequence[str], workflows: Sequence[str]
     if not vendors or not workflows:
         _fail()
     availability: list[dict[str, object]] = []
+    cli: list[dict[str, object]] = []
+    dispatch_ready = True
     for vendor in vendors:
+        first_routes: advisory_routes.AdvisoryRoutes | None = None
         for workflow in workflows:
-            selected, _, _ = _configuration(state_root, vendor, workflow)
+            selected, _, routes = _configuration(state_root, vendor, workflow)
+            if first_routes is None:
+                first_routes = routes
             free, busy = advisory_orchestration.campaign_lane_availability(
                 advisory_orchestration.LaneRequest(
                     vendor,
@@ -806,13 +907,22 @@ def doctor(state_root: Path, *, vendors: Sequence[str], workflows: Sequence[str]
                     "busy": busy,
                 }
             )
+        assert first_routes is not None
+        for role, result in _route_capabilities(vendor, first_routes):
+            value = result.receipt()
+            value["role"] = role
+            cli.append(value)
+            dispatch_ready = dispatch_ready and result.ready
     return {
         "schema_version": SCHEMA_VERSION,
-        "ready": True,
+        "ready": dispatch_ready,
+        "campaign_ready": True,
+        "dispatch_ready": dispatch_ready,
         "lane_count": advisory_campaign.ANONYMOUS_LANE_COUNT,
         "vendors": list(vendors),
         "workflows": list(workflows),
         "availability": availability,
+        "cli": cli,
     }
 
 
@@ -953,6 +1063,8 @@ def _job(
         "weightclass.advisory.speculative_run",
         "--workflow",
         workflow,
+        "--vendor",
+        vendor,
         "--repo",
         str(repo),
         "--task-file",
@@ -993,11 +1105,12 @@ def dispatch(
         _fail()
     if not vendors or workflow not in WORKFLOWS:
         _fail()
+    configurations = {vendor: _configuration(state_root, vendor, workflow) for vendor in vendors}
+    _require_route_capabilities(configurations)
     _preflight_task_file(task_file)
     verifier = state_root / "verify-project.py"
     _private_regular(verifier, executable=True)
     _preflight_repo(repo, workflow, verifier)
-    configurations = {vendor: _configuration(state_root, vendor, workflow) for vendor in vendors}
     requests = tuple(
         advisory_orchestration.LaneRequest(
             vendor,
@@ -1057,6 +1170,133 @@ def dispatch(
         raise
     except (OSError, ValueError, advisory_campaign.CampaignError) as error:
         raise ManagedAdvisoryError() from error
+
+
+def provider_check(
+    state_root: Path,
+    *,
+    vendors: Sequence[str],
+    workflow: str,
+    confirm_provider_egress: bool,
+) -> dict[str, object]:
+    """Run task-free, non-persisted checks for all configured provider roles."""
+
+    if not confirm_provider_egress or not vendors or workflow not in WORKFLOWS:
+        _fail()
+    target_workflow = "review" if workflow == "implementation" else workflow
+    expected = _baseline_probe(target_workflow)
+    assert expected is not None
+    prompt = (
+        "This is a task-free provider readiness check. Do not inspect files or use tools. "
+        "Return exactly this JSON object and no other text:\n" + expected.decode("utf-8")
+    )
+    results: list[dict[str, object]] = []
+    all_ready = True
+    with tempfile.TemporaryDirectory(prefix="wclass-provider-check-") as directory:
+        workspace = Path(directory)
+        environment = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": os.environ.get("HOME", ""),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+        try:
+            initialized = subprocess.run(
+                ["git", "init", "-q"],
+                cwd=workspace,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=30,
+                env=environment,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise ManagedAdvisoryError() from error
+        if initialized.returncode != 0:
+            _fail()
+        for vendor in vendors:
+            selected, _, _ = _configuration(state_root, vendor, workflow)
+            routes = advisory_routes.routes_from_profile(
+                selected.profile,
+                read_only_executors=True,
+                evidence_workflow=target_workflow,
+            )
+            for role, capability in _route_capabilities(vendor, routes):
+                if not capability.ready:
+                    raise ProviderCapabilityError(vendor, role, capability.failure_code)
+                command = list(getattr(routes, role))
+                child: speculative_run.ChildResult | None = None
+                stdout = ""
+                try:
+                    child, stdout = speculative_run.run_child(
+                        command,
+                        workspace,
+                        prompt,
+                        allowed_env=speculative_run.default_child_env(command[0]),
+                        timeout_seconds=120.0,
+                    )
+                    shape = speculative_run.evidence_result_shape(stdout, command)
+                    _, parsed = speculative_run.extract_evidence_result(
+                        stdout, command, target_workflow
+                    )
+                    contract_ready = isinstance(parsed, dict)
+                except advisory_evidence_contract.EvidenceResultError:
+                    shape = speculative_run.evidence_result_shape(stdout, command)
+                    contract_ready = False
+                except (OSError, ValueError, speculative_run.RunFailure):
+                    child = None
+                    shape = "unknown"
+                    contract_ready = False
+                ready = bool(
+                    child is not None
+                    and child["exit_code"] == 0
+                    and not child["timed_out"]
+                    and contract_ready
+                )
+                all_ready = all_ready and ready
+                results.append(
+                    {
+                        "vendor": vendor,
+                        "role": role,
+                        "ready": ready,
+                        "child_exit_code": child["exit_code"] if child is not None else None,
+                        "child_timed_out": child["timed_out"] if child is not None else False,
+                        "child_seconds": child["seconds"] if child is not None else 0.0,
+                        "child_failure_code": (
+                            (
+                                child["failure_code"]
+                                if child["exit_code"] != 0 or contract_ready
+                                else "result_contract"
+                            )
+                            if child is not None
+                            else "local_probe_failed"
+                        ),
+                        "child_stdout_present": (
+                            child["stdout_present"] if child is not None else False
+                        ),
+                        "child_stderr_present": (
+                            child["stderr_present"] if child is not None else False
+                        ),
+                        "result_shape": shape,
+                        "envelope_extracted": contract_ready,
+                    }
+                )
+                child = None
+                stdout = ""
+    return {
+        "schema_version": 1,
+        "event": "managed_provider_check",
+        "task_free": True,
+        "network_used": True,
+        "provider_egress_confirmed": True,
+        "sample_recorded": False,
+        "calls": len(results),
+        "ready": all_ready,
+        "workflow": workflow,
+        "results": results,
+    }
 
 
 def review_payload(state_root: Path, *, vendors: Sequence[str], workflow: str) -> dict[str, object]:
@@ -1145,7 +1385,7 @@ def init_main(argv: Sequence[str]) -> int:
 def migrate_evidence_main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(prog="wclass-advisory migrate-evidence", allow_abbrev=False)
     parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--vendor", required=True, choices=("claude",))
+    parser.add_argument("--vendor", required=True, choices=("claude", "grok"))
     parser.add_argument("--dry-run", action="store_true")
     arguments = parser.parse_args(argv)
     try:
@@ -1156,6 +1396,25 @@ def migrate_evidence_main(argv: Sequence[str]) -> int:
         )
     except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
         print(json.dumps({"error": "managed_evidence_migration_rejected"}), file=sys.stderr)
+        return 2
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def migrate_routes_main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(prog="wclass-advisory migrate-routes", allow_abbrev=False)
+    parser.add_argument("--state-root", type=Path)
+    parser.add_argument("--vendor", required=True, choices=("agy",))
+    parser.add_argument("--dry-run", action="store_true")
+    arguments = parser.parse_args(argv)
+    try:
+        receipt = migrate_vendor_campaigns(
+            _root(arguments.state_root),
+            vendor=arguments.vendor,
+            dry_run=arguments.dry_run,
+        )
+    except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
+        print(json.dumps({"error": "managed_route_migration_rejected"}), file=sys.stderr)
         return 2
     print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
     return 0
@@ -1186,6 +1445,66 @@ def doctor_main(argv: Sequence[str]) -> int:
         return 2
     print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
     return 0
+
+
+def cli_check_main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(prog="wclass-advisory cli-check", allow_abbrev=False)
+    parser.add_argument("--vendor", choices=("all", *BUILTIN_VENDORS), default="all")
+    arguments = parser.parse_args(argv)
+    vendors = BUILTIN_VENDORS if arguments.vendor == "all" else (arguments.vendor,)
+    results = [advisory_preflight.check_local_capability(vendor, vendor) for vendor in vendors]
+    payload = {
+        "schema_version": 1,
+        "event": "advisory_cli_check",
+        "task_free": True,
+        "task_bytes_sent": False,
+        "provider_request_sent": False,
+        "environment_policy": "minimal",
+        "ready": all(result.ready for result in results),
+        "results": [result.receipt() for result in results],
+    }
+    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    return 0 if payload["ready"] is True else 1
+
+
+def _provider_capability_payload(error: ProviderCapabilityError) -> dict[str, object]:
+    return {
+        "error": "managed_provider_preflight_failed",
+        "vendor": error.vendor,
+        "role": error.role,
+        "child_failure_code": error.code,
+        "sample_recorded": False,
+    }
+
+
+def provider_check_main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(prog="wclass-advisory provider-check", allow_abbrev=False)
+    parser.add_argument("--state-root", type=Path)
+    parser.add_argument("--vendor", default="all")
+    parser.add_argument("--workflow", choices=WORKFLOWS, default="review")
+    parser.add_argument(
+        "--confirm-provider-egress",
+        action="store_true",
+        required=True,
+        help="allow three task-free provider calls that may use quota or incur cost",
+    )
+    arguments = parser.parse_args(argv)
+    try:
+        root = _root(arguments.state_root)
+        receipt = provider_check(
+            root,
+            vendors=_selected_vendors(root, arguments.vendor),
+            workflow=arguments.workflow,
+            confirm_provider_egress=arguments.confirm_provider_egress,
+        )
+    except ProviderCapabilityError as error:
+        print(json.dumps(_provider_capability_payload(error), sort_keys=True), file=sys.stderr)
+        return 2
+    except (OSError, ValueError, ManagedAdvisoryError):
+        print(json.dumps({"error": "managed_provider_check_rejected"}), file=sys.stderr)
+        return 2
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+    return 0 if receipt["ready"] is True else 1
 
 
 def review_main(argv: Sequence[str]) -> int:
@@ -1234,6 +1553,9 @@ def dispatch_main(argv: Sequence[str]) -> int:
             workflow=arguments.workflow,
             confirm_task_egress=arguments.confirm_task_egress,
         )
+    except ProviderCapabilityError as error:
+        print(json.dumps(_provider_capability_payload(error), sort_keys=True), file=sys.stderr)
+        return 2
     except advisory_orchestration.LaneUnavailableError:
         print(json.dumps({"error": "managed_lane_unavailable"}), file=sys.stderr)
         return 2

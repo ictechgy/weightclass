@@ -82,6 +82,13 @@ RELEASE_0176_BUNDLE_FILE_SHA256 = {
     "agents/openai.yaml": "b946bd779de9ec40e785fecfe7950956c41d51d2d230e4bec4897d1381f443e1",
     "references/modes.md": "edeab0bd355a4a10a4f8f98ce3a47b4ac18a2433443ed514048cd6916a759c6f",
 }
+# Exact package-owned four-file bundle published in weightclass 0.17.7.
+RELEASE_0177_BUNDLE_FILE_SHA256 = {
+    "SKILL.md": "94b880373bc7e044a13273cdb0007ccd90d036790ac355d6367139b37e841c1b",
+    "manifest.json": "e5662c0b70df9f85345e68b5cbfdcb9d2ee69a74f72e6c7145c8c36dc3b64008",
+    "agents/openai.yaml": "b946bd779de9ec40e785fecfe7950956c41d51d2d230e4bec4897d1381f443e1",
+    "references/modes.md": "edeab0bd355a4a10a4f8f98ce3a47b4ac18a2433443ed514048cd6916a759c6f",
+}
 TARGET_ROOTS = {
     "codex": (".agents", "skills"),
     "claude": (".claude", "skills"),
@@ -277,6 +284,7 @@ def _recognized_previous_files(destination: Path) -> tuple[str, ...] | None:
         (EXPECTED_FILES, NEXT_PREVIOUS_BUNDLE_FILE_SHA256),
         (EXPECTED_FILES, FINAL_PREVIOUS_BUNDLE_FILE_SHA256),
         (EXPECTED_FILES, RELEASE_0176_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0177_BUNDLE_FILE_SHA256),
     ):
         if _matches_known_bundle(destination, files, expected_sha256):
             return files

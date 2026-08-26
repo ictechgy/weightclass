@@ -27,9 +27,19 @@ are user-selected opaque configuration.
 - Require a clean Git checkout and `command -v wclass-advisory`.
 - Run `wclass-advisory doctor --vendor <vendor-or-all> --workflow <workflow>`
   before preparing task input. `doctor` validates every existing anonymous lane,
-  so a record-binding error is reported before dispatch. Do not ask the user for
+  locally invokes installed CLI `--help`/`--version` with a minimal environment
+  and temporary working directory, sends no task or provider prompt, and reports
+  `campaign_ready` separately from `dispatch_ready`. Stop on a false
+  `dispatch_ready`; dispatch repeats this local check for every role before task
+  inspection. A record-binding error is therefore reported before dispatch. Do not ask the user for
   profile, campaign, verifier-wrapper, price-table, or result-root paths when
   managed onboarding is ready.
+- If authentication, model availability, account limits, or an opaque provider
+  failure must be distinguished, explain that the next command makes three
+  task-free provider calls per vendor and may consume quota or incur cost. Run
+  `wclass-advisory provider-check --vendor <vendor-or-all> --workflow <workflow>
+  --confirm-provider-egress` only after that explicit approval. It stores no
+  output and emits `sample_recorded:false`; never count it as campaign evidence.
 - This managed skill always uses `init`, `doctor`, managed `review`, and
   `dispatch`; `run --campaign-root` is the advanced low-level compatibility
   surface, not this skill's entry point. If loaded instructions ask for opaque
@@ -63,6 +73,11 @@ are user-selected opaque configuration.
   Explain that all old Claude evidence records remain separate and read-only,
   obtain approval for the state change, then run the same command without
   `--dry-run`. Never copy old records into the new generation.
+- Release 0.17.8 also gives agy a new all-workflow route generation and Grok a
+  new evidence generation. If their doctor reports managed configuration
+  unavailable after upgrade, preview and then run `migrate-routes --vendor agy`
+  or `migrate-evidence --vendor grok`. Explain that every previous manifest and
+  record remains separate and read-only; never copy or merge them.
 - Select one workflow from the user's outcome. Read
   [references/modes.md](references/modes.md) when choosing a mode or preparing
   its verifier.
@@ -169,7 +184,8 @@ idempotent for identical inputs and refuses to overwrite a different campaign.
   when repository changes are within the user's request; rerun the repository's
   ordinary checks after applying it.
 - A failed cheap, retry, or expensive acceptance arm emits one
-  `advisory_attempt_failed` JSON receipt. Advisor calls retain their existing
+  schema-2 `advisory_attempt_failed` JSON receipt with fixed `vendor` and `role`
+  fields. Advisor calls retain their existing
   separate route status and do not emit attempt receipts. Receipt objects are
   JSON lines on stderr among other human diagnostics; parse only lines whose
   `event` is exactly `advisory_attempt_failed`. Use only the receipt's

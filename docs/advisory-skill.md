@@ -25,6 +25,7 @@ wclass-advisory init --vendor claude \
   --model cheap=CHEAP --model advisor=ADVISOR --model expensive=EXPENSIVE \
   --effort cheap=low --effort advisor=high --effort expensive=high
 wclass-advisory doctor --vendor claude --workflow all
+wclass-advisory cli-check --vendor all
 wclass-advisory review --vendor claude --workflow implementation
 ```
 
@@ -34,6 +35,14 @@ workspace. Schema-2 profiles must
 declare exact `implementation` and `evidence` matrices for `cheap`, `advisor`, and `expensive`.
 Do not invent model quality, pricing, entitlement, or subscription availability for agy or Grok;
 their labels are user-selected opaque configuration.
+`doctor` reports local CLI compatibility after invoking `--help`/`--version`
+with a minimal environment and temporary working directory; it sends no task or
+provider prompt. An optional
+`provider-check --confirm-provider-egress` makes three task-free calls, stores
+nothing, and never contributes a campaign sample.
+Existing agy installations use `migrate-routes --vendor agy`; existing Grok
+evidence installations use `migrate-evidence --vendor grok`. Both preserve old
+populations without merging records.
 
 ## Preview and install
 
