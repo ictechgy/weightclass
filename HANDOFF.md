@@ -316,8 +316,11 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   legacy run populations. The final source suite passes 1,307 tests with 25
   skips; the Advisory-focused suite passes 137 tests with 6 skips, and Ruff plus
   strict mypy over 165 source files pass. The 0.17.4 wheel/sdist isolation run
-  passes 1,300 tests with 64 environment-specific skips. Security, CI, and
-  release gates remain pending.
+  passes 1,300 tests with 64 environment-specific skips. Final security diff
+  scan `bb6284ae-78b3-438d-baf1-02eff5bfb100` covered all six changed
+  source/package files and found no reportable vulnerability; measured usage
+  was 8,449,226 total tokens with complete coverage and parent-only fallback.
+  CI and release gates remain pending.
 
 ## The routing-economics result
 
