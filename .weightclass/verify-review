@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prospective factual gate for the repository improvement review."""
+"""Prospective factual gate for the advisory failure-receipt review."""
 
 from __future__ import annotations
 
@@ -28,29 +28,29 @@ FINDING_KEYS = frozenset(
     }
 )
 SEEDS = {
-    "[seed:default-admission]": (
-        "src/weightclass/agent_discovery.py:71",
-        "observe_executable",
+    "[seed:receipt-privacy]": (
+        "src/weightclass/advisory/speculative_run.py:282",
+        "failure_receipt",
         frozenset({"suppressed"}),
-        "info",
+        frozenset({"info"}),
     ),
-    "[seed:default-binding]": (
-        "src/weightclass/cli.py:1870",
-        "_resolve_default_route_executable",
-        frozenset({"reportable", "deferred"}),
-        "low",
+    "[seed:emission-reliability]": (
+        "src/weightclass/advisory/speculative_run.py:318",
+        "emit_failure_receipt",
+        frozenset({"reportable", "suppressed", "deferred"}),
+        frozenset({"info", "low", "medium"}),
     ),
-    "[seed:preset-wiring]": (
-        "src/weightclass/cli.py:865",
-        "_add_preset_override_arguments",
-        frozenset({"suppressed"}),
-        "info",
+    "[seed:verification-classification]": (
+        "src/weightclass/advisory/speculative_run.py:3834",
+        "failure_kind",
+        frozenset({"reportable", "suppressed", "deferred"}),
+        frozenset({"info", "low", "medium"}),
     ),
-    "[seed:distribution-isolation]": (
-        "tests/verify_distribution_isolation.py:1382",
-        "_reject_forbidden_top_level_content",
-        frozenset({"suppressed"}),
-        "info",
+    "[seed:measurement-compatibility]": (
+        "src/weightclass/advisory/speculative_run.py:3935",
+        "emit_failure_receipt",
+        frozenset({"reportable", "suppressed", "deferred"}),
+        frozenset({"info", "low", "medium"}),
     ),
 }
 
@@ -149,8 +149,8 @@ def validate_finding(value: object) -> tuple[str, str]:
 
     seed_id = title.split(" ", 1)[0]
     if seed_id in SEEDS:
-        expected_location, expected_token, dispositions, expected_severity = SEEDS[seed_id]
-        if disposition not in dispositions or severity != expected_severity:
+        expected_location, expected_token, dispositions, expected_severities = SEEDS[seed_id]
+        if disposition not in dispositions or severity not in expected_severities:
             raise ReviewVerificationError
         if expected_location not in locations:
             raise ReviewVerificationError

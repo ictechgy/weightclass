@@ -6,6 +6,7 @@ from __future__ import annotations
 import fcntl
 import os
 import stat
+import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -58,6 +59,18 @@ class CampaignRecordsInvalidError(ValueError):
         super().__init__(self.code)
 
 
+class AllocatorUnavailableError(ValueError):
+    """The short cross-lane allocator lock exceeded its bounded wait."""
+
+
+class _LockUnavailableError(ValueError):
+    """One valid lock is currently held by another process."""
+
+
+ALLOCATOR_LOCK_TIMEOUT = 2.0
+ALLOCATOR_LOCK_POLL_SECONDS = 0.02
+
+
 @dataclass(frozen=True)
 class LaneRequest:
     """Task-free request for one anonymous vendor/workflow lane."""
@@ -89,7 +102,7 @@ class LaneLease:
     _descriptors: tuple[int, ...]
 
 
-def _open_lane_lock(path: Path, *, blocking: bool = False) -> int:
+def _open_lane_lock(path: Path) -> int:
     flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
     descriptor = -1
     try:
@@ -101,13 +114,27 @@ def _open_lane_lock(path: Path, *, blocking: bool = False) -> int:
             or stat.S_IMODE(metadata.st_mode) & 0o077
         ):
             raise ValueError
-        operation = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
-        fcntl.flock(descriptor, operation)
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return descriptor
+    except BlockingIOError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise _LockUnavailableError from None
     except (OSError, ValueError):
         if descriptor >= 0:
             os.close(descriptor)
         raise ValueError from None
+
+
+def _open_allocator_lock(path: Path) -> int:
+    deadline = time.monotonic() + ALLOCATOR_LOCK_TIMEOUT
+    while True:
+        try:
+            return _open_lane_lock(path)
+        except _LockUnavailableError:
+            if time.monotonic() >= deadline:
+                raise AllocatorUnavailableError from None
+            time.sleep(ALLOCATOR_LOCK_POLL_SECONDS)
 
 
 def _private_directory(path: Path, *, create: bool) -> None:
@@ -193,7 +220,7 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
     try:
         prepared = {request.results_dir: _prepare_lane_directories(request) for request in selected}
         for root in sorted(prepared, key=os.fspath):
-            allocator_descriptors.append(_open_lane_lock(root / ".allocator.lock", blocking=True))
+            allocator_descriptors.append(_open_allocator_lock(root / ".allocator.lock"))
 
         # All allocator locks are held while every lane is probed. No caller
         # can observe a partial allocation or take a lane between probes.
@@ -207,7 +234,7 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
                     descriptors.append(_open_lane_lock(results_dir / ".lane.lock"))
                     if lane_index == 0:
                         descriptors.append(_open_lane_lock(results_dir / "dispatch.lock"))
-                except ValueError:
+                except _LockUnavailableError:
                     _release_descriptors(descriptors)
                     busy += 1
                     continue
@@ -236,7 +263,7 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
                     selected_descriptors,
                 )
             )
-    except (LaneUnavailableError, CampaignCapacityError):
+    except (LaneUnavailableError, CampaignCapacityError, AllocatorUnavailableError):
         _release_descriptors(lane_descriptors)
         _release_descriptors(allocator_descriptors)
         raise
@@ -254,6 +281,34 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
             yield tuple(leases)
         finally:
             _release_descriptors(lane_descriptors)
+
+
+def campaign_lane_availability(request: LaneRequest) -> tuple[int, int]:
+    """Return a point-in-time free/busy snapshot without retaining a lane."""
+    allocator_descriptor = -1
+    available_descriptors: list[int] = []
+    free = 0
+    busy = 0
+    try:
+        paths = _prepare_lane_directories(request)
+        allocator_descriptor = _open_allocator_lock(request.results_dir / ".allocator.lock")
+        for lane_index, results_dir in enumerate(paths):
+            descriptors: list[int] = []
+            try:
+                descriptors.append(_open_lane_lock(results_dir / ".lane.lock"))
+                if lane_index == 0:
+                    descriptors.append(_open_lane_lock(results_dir / "dispatch.lock"))
+            except _LockUnavailableError:
+                _release_descriptors(descriptors)
+                busy += 1
+                continue
+            available_descriptors.extend(descriptors)
+            free += 1
+        return free, busy
+    finally:
+        _release_descriptors(available_descriptors)
+        if allocator_descriptor >= 0:
+            _release_descriptors((allocator_descriptor,))
 
 
 def _open_dispatch_lock(path: Path) -> int:

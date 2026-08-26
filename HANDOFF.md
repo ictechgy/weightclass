@@ -270,6 +270,58 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   population returns `campaign_record_binding_mismatch` instead of an empty
   message.
 
+### Advisory failure receipts (0.17.4 candidate)
+
+- Each failed cheap, advised-retry, or expensive attempt emits one canonical
+  `advisory_attempt_failed` JSON receipt to stderr. Its closed schema contains
+  only fixed route/kind/stage values, booleans, bounded numeric exit/timing/count
+  fields, and no task, path, model, error string, verifier stream, patch, advice,
+  profile, credential, or workspace material.
+- Ordinary nonzero verifier exits are now recorded as
+  `failure_kind=route`, `failure_stage=verification`, and
+  `error=verification_failed`; the receipt exposes the numeric verifier exit
+  code. Prospective verifiers should use distinct nonzero codes for materially
+  different acceptance phases when useful. Raw verifier output remains
+  transient for the existing advisor flow, and failed workspaces/patches are
+  still deleted.
+- Existing report compatibility is preserved: receipt fallback values are not
+  forced into stored attempt records, so an unclassified legacy failure cannot
+  become a usable effectiveness sample merely because it was rendered.
+- The implementation Advisory dispatch ran both vendors once. Codex cheap
+  passed after a 569.5-second child and 135.6-second verifier and produced the
+  retained patch. Claude cheap failed after 907.4 seconds and a 152.5-second
+  verifier; its 2,593-character advice, retry, and expensive route also failed.
+  No external retry was run.
+- Prospective acceptance, focused receipt/privacy/cleanup tests, Ruff, strict
+  mypy over 165 source files, and the pre-review 1,298-test source suite pass
+  with 25 skips.
+- PR #102 was reviewed through one separate read-only Advisory dispatch. Codex
+  cheap passed after 326.8 seconds and a 1.2-second verifier. Claude cheap
+  returned an invalid result after 1,010.2 seconds, advice/retry failed, and the
+  expensive review passed. Both accepted reviews identified receipt-output
+  failure as a medium control-flow issue. The integrated follow-up makes receipt
+  and parent replay writes best-effort, removes partial patches after write or
+  chmod failure, adds `verification_integrity`, redacts cleanup diagnostics,
+  and clarifies that only cheap/retry/expensive acceptance arms emit receipts.
+- The reported silent-lock diagnosis was narrowed in source: lane and legacy
+  `dispatch.lock` probes were already nonblocking, while `.allocator.lock` was
+  the only unbounded acquisition. The allocator now has a two-second ceiling
+  and exact `managed_allocator_busy` error; a legacy lane-0 owner moves a new
+  run to another free lane. `doctor` reports point-in-time free/busy counts and
+  dispatch immediately emits `managed_dispatch_started` with anonymous lane
+  indices before vendor work begins.
+- The Mac-only `wclass-advisory-local run` compatibility path is redirected to
+  managed `wclass-advisory dispatch`; its legacy report/status/prune surfaces
+  and all legacy records remain read-only. The packaged skill forbids invoking
+  legacy run populations. The final source suite passes 1,307 tests with 25
+  skips; the Advisory-focused suite passes 137 tests with 6 skips, and Ruff plus
+  strict mypy over 165 source files pass. The 0.17.4 wheel/sdist isolation run
+  passes 1,300 tests with 64 environment-specific skips. Final security diff
+  scan `bb6284ae-78b3-438d-baf1-02eff5bfb100` covered all six changed
+  source/package files and found no reportable vulnerability; measured usage
+  was 8,449,226 total tokens with complete coverage and parent-only fallback.
+  CI and release gates remain pending.
+
 ## The routing-economics result
 
 This is the reason the study existed, so keep the conclusion with the code.

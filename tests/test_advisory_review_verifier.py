@@ -34,38 +34,42 @@ def accepted_result() -> dict[str, object]:
     return {
         "schema_version": 1,
         "mode": "review",
-        "summary": "The seeded controls and residual risks were checked against tracked source.",
+        "summary": (
+            "The failure-receipt privacy, reliability, classification, and "
+            "measurement controls were checked."
+        ),
         "findings": [
             finding(
-                "[seed:default-admission] Default executable admission control",
+                "[seed:receipt-privacy] Closed receipt schema excludes untrusted text",
                 "info",
                 "suppressed",
-                "src/weightclass/agent_discovery.py:71",
-                "observe_executable applies the shared admission boundary.",
+                "src/weightclass/advisory/speculative_run.py:282",
+                "failure_receipt selects only reviewed enums and bounded scalar values.",
             ),
             finding(
-                "[seed:default-binding] Default review and run binding residual",
-                "low",
-                "deferred",
-                "src/weightclass/cli.py:1870",
-                "_resolve_default_route_executable runs again unless acknowledgement binds review.",
-            ),
-            finding(
-                "[seed:preset-wiring] Shared preset override registration",
+                "[seed:emission-reliability] Receipt emission is an operator output boundary",
                 "info",
                 "suppressed",
-                "src/weightclass/cli.py:865",
-                "_add_preset_override_arguments keeps example-policy aligned with other commands.",
+                "src/weightclass/advisory/speculative_run.py:318",
+                "emit_failure_receipt serializes only the closed receipt and writes it to stderr.",
             ),
             finding(
-                "[seed:distribution-isolation] Repository-only artifact rejection",
+                "[seed:verification-classification] Ordinary verifier failures are explicit",
                 "info",
                 "suppressed",
-                "tests/verify_distribution_isolation.py:1382",
-                "_reject_forbidden_top_level_content checks every wheel member.",
+                "src/weightclass/advisory/speculative_run.py:3834",
+                "failure_kind and failure_stage are fixed before cleanup when verification fails.",
+            ),
+            finding(
+                "[seed:measurement-compatibility] Rendering does not force "
+                "fallback values into records",
+                "info",
+                "suppressed",
+                "src/weightclass/advisory/speculative_run.py:3935",
+                "emit_failure_receipt reads fallback values without mutating the stored attempt.",
             ),
         ],
-        "limitations": ["Runtime compatibility of deferred hardening options was not measured."],
+        "limitations": ["Provider-specific stderr transport behavior was not measured."],
     }
 
 
@@ -84,7 +88,7 @@ class AdvisoryReviewVerifierTests(unittest.TestCase):
             env=environment,
         )
 
-    def test_accepts_seeded_residuals_and_suppressed_control(self) -> None:
+    def test_accepts_seeded_failure_receipt_controls(self) -> None:
         self.assertEqual(self.run_verifier(accepted_result()).returncode, 0)
 
     def test_baseline_probe_returns_42(self) -> None:
@@ -111,7 +115,7 @@ class AdvisoryReviewVerifierTests(unittest.TestCase):
             "[new] Unsupported claim",
             "high",
             "reportable",
-            "tools/advisory_parallel.py:212",
+            "src/weightclass/advisory/advisory_parallel.py:212",
             "This cites the location but omits counterevidence.",
         )
         added["counterevidence"] = []
@@ -122,8 +126,8 @@ class AdvisoryReviewVerifierTests(unittest.TestCase):
         for location in (
             "missing.py:1",
             "../HANDOFF.md:1",
-            "src/weightclass/agent_discovery.py:70",
-            "tests/verify_distribution_isolation.py:1382",
+            "src/weightclass/advisory/speculative_run.py:281",
+            "src/weightclass/advisory/speculative_run.py:3935",
         ):
             with self.subTest(location=location):
                 value = accepted_result()

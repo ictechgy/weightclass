@@ -14,7 +14,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn, TypedDict
+from typing import TYPE_CHECKING, BinaryIO, NoReturn, TypedDict
 
 if TYPE_CHECKING or __package__:
     from . import (
@@ -49,6 +49,29 @@ class ManagedAdvisoryError(ValueError):
     """Value-free rejection of unsafe or inconsistent managed configuration."""
 
 
+def _replay_output(stream: BinaryIO, payload: bytes) -> None:
+    """Best-effort operator output must not change a completed campaign result."""
+    if not payload:
+        return
+    try:
+        stream.write(payload)
+        stream.flush()
+    except (OSError, ValueError):
+        pass
+
+
+def _dispatch_started_receipt(
+    workflow: str, leases: Sequence[advisory_orchestration.LaneLease]
+) -> bytes:
+    payload = {
+        "schema_version": 1,
+        "event": "managed_dispatch_started",
+        "workflow": workflow,
+        "leases": [{"vendor": lease.vendor, "lane_index": lease.lane_index} for lease in leases],
+    }
+    return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
 class InitializationReceipt(TypedDict):
     schema_version: int
     vendor: str
@@ -64,6 +87,7 @@ class DoctorReceipt(TypedDict):
     lane_count: int
     vendors: list[str]
     workflows: list[str]
+    availability: list[dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -581,15 +605,33 @@ def _configuration(
 def doctor(state_root: Path, *, vendors: Sequence[str], workflows: Sequence[str]) -> DoctorReceipt:
     if not vendors or not workflows:
         _fail()
+    availability: list[dict[str, object]] = []
     for vendor in vendors:
         for workflow in workflows:
-            _configuration(state_root, vendor, workflow)
+            selected, _, _ = _configuration(state_root, vendor, workflow)
+            free, busy = advisory_orchestration.campaign_lane_availability(
+                advisory_orchestration.LaneRequest(
+                    vendor,
+                    selected.results,
+                    workflow=workflow,
+                    campaign_path=selected.campaign,
+                )
+            )
+            availability.append(
+                {
+                    "vendor": vendor,
+                    "workflow": workflow,
+                    "free": free,
+                    "busy": busy,
+                }
+            )
     return {
         "schema_version": SCHEMA_VERSION,
         "ready": True,
         "lane_count": advisory_campaign.ANONYMOUS_LANE_COUNT,
         "vendors": list(vendors),
         "workflows": list(workflows),
+        "availability": availability,
     }
 
 
@@ -804,18 +846,17 @@ def dispatch(
                 )
                 for vendor, lease in zip(vendors, leases, strict=True)
             )
+            _replay_output(sys.stderr.buffer, _dispatch_started_receipt(workflow, leases))
             results = advisory_parallel.run_parallel(jobs)
             returncode = 0
             record_error = False
             for vendor, lease, result in zip(vendors, leases, results, strict=True):
                 if result.stdout:
-                    sys.stdout.buffer.write(result.stdout)
-                    sys.stdout.buffer.flush()
+                    _replay_output(sys.stdout.buffer, result.stdout)
                 if result.stderr:
-                    sys.stderr.buffer.write(result.stderr)
-                    sys.stderr.buffer.flush()
+                    _replay_output(sys.stderr.buffer, result.stderr)
                 if result.output_truncated:
-                    print("advisory output limit exceeded", file=sys.stderr)
+                    _replay_output(sys.stderr.buffer, b"advisory output limit exceeded\n")
                 if (
                     _next_ordinal(configurations[vendor][1], lease.results_dir)
                     != ordinals[vendor] + 1
@@ -830,6 +871,7 @@ def dispatch(
         advisory_orchestration.LaneUnavailableError,
         advisory_orchestration.CampaignCapacityError,
         advisory_orchestration.CampaignRecordsInvalidError,
+        advisory_orchestration.AllocatorUnavailableError,
     ):
         raise
     except (OSError, ValueError, advisory_campaign.CampaignError) as error:
@@ -936,7 +978,10 @@ def doctor_main(argv: Sequence[str]) -> int:
     except advisory_orchestration.CampaignRecordsInvalidError as error:
         print(json.dumps({"error": error.code}), file=sys.stderr)
         return 2
-    except (OSError, ManagedAdvisoryError):
+    except advisory_orchestration.AllocatorUnavailableError:
+        print(json.dumps({"error": "managed_allocator_busy"}), file=sys.stderr)
+        return 2
+    except (OSError, ValueError, ManagedAdvisoryError):
         print(json.dumps({"error": "managed_configuration_unavailable"}), file=sys.stderr)
         return 2
     print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
@@ -997,6 +1042,9 @@ def dispatch_main(argv: Sequence[str]) -> int:
         return 2
     except advisory_orchestration.CampaignRecordsInvalidError as error:
         print(json.dumps({"error": error.code}), file=sys.stderr)
+        return 2
+    except advisory_orchestration.AllocatorUnavailableError:
+        print(json.dumps({"error": "managed_allocator_busy"}), file=sys.stderr)
         return 2
     except (OSError, ManagedAdvisoryError):
         print(json.dumps({"error": "managed_dispatch_rejected"}), file=sys.stderr)

@@ -40,6 +40,11 @@ before dispatch. Every selected vendor/workflow receives a distinct anonymous
 lane, so projects sharing a campaign root do not share a live ordinal or
 campaign lock. If every bounded lane for one selected vendor is busy, the whole
 batch fails before partial dispatch and every partial lease is released.
+The cross-lane allocator has a two-second bounded wait; expiration is reported
+as `managed_allocator_busy` instead of an unbounded foreground stall. The
+legacy lane-0 `dispatch.lock` is probed nonblocking, so a legacy owner moves a
+new run to another free lane. Availability reported by `doctor` is a
+point-in-time snapshot rather than a reservation.
 Every job runs in its own process session with an eight-hour outer deadline and a
 1 MiB combined stdout/stderr retention ceiling;
 the inner runner's narrower per-child and verifier limits still apply. Timeout
@@ -126,6 +131,44 @@ Descriptor-bound verifier and price-table bytes are staged into the owner-only
 output directory; verification and pricing use those private copies rather than
 reopening the caller paths. The JSONL record contains the campaign fingerprint,
 arm, and ordinal but never task/advice/output text. Run only one task at a time.
+
+### Diagnosing a failed arm
+
+Each failed cheap, advised-retry, or expensive attempt emits one task-free
+JSON receipt on standard error. The receipt is an operational event, not a
+campaign record: it contains only the selected arm, fixed `failure_kind` and
+`failure_stage` values, booleans, and bounded child/candidate/verifier exit,
+timing, and count fields. It never contains verifier streams, error text,
+paths, task or patch material, model labels, advice, or credentials. Failed
+workspaces and patches are discarded.
+
+The verifier's exit status remains the task-specific oracle. Exit `0` means
+that the candidate satisfied the verifier; any other ordinary exit is recorded
+as `failure_kind=route`, `failure_stage=verification`, and
+`error=verification_failed` in the transient attempt record. A verifier
+timeout is a verification failure with the same stage and a timeout-specific
+internal error. Exit `42` is reserved for the task-free baseline probe and is
+not a candidate pass. The receipt retains only the bounded numeric exit code;
+the verifier's stdout and stderr are available transiently to the existing
+advisor flow and are never printed or persisted by the runner.
+
+Use `failure_stage` to choose the task-specific diagnosis path, then consult
+the verifier's own acceptance criteria separately:
+
+- `setup`: workspace creation or checkout failed;
+- `execution`: the selected child did not produce a usable result;
+- `result`: a read-only result could not be extracted or shaped;
+- `handover`: reconstruction or patch-boundary checks rejected the candidate;
+- `verification`: the verifier rejected or timed out;
+- `verification_integrity`: the verifier exited but modified patched files, so
+  its exit code alone is not the final acceptance verdict;
+- `acceptance`: the verifier passed but the attempt made no usable change;
+- `persistence`: writing an already accepted patch failed;
+- `unknown`: a malformed or incomplete in-memory record.
+
+These stages identify where to inspect the task-specific verifier contract;
+they do not infer why a model failed, and receipt fields must not be used as a
+substitute for verifier output.
 
 ## Report and promotion gate
 

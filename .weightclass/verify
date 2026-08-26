@@ -3,15 +3,15 @@ set -eu
 
 if ! git diff --cached --quiet -- \
   .weightclass/verify \
-  tests/test_advisory_campaign_diagnostics.py; then
+  tests/test_advisory_failure_receipts.py; then
   echo "protected acceptance files changed"
   exit 1
 fi
 
 set +e
-WCLASS_CAMPAIGN_DIAGNOSTICS_ACCEPTANCE=1 PYTHONPATH="$PWD/src" \
+WCLASS_FAILURE_RECEIPT_ACCEPTANCE=1 PYTHONPATH="$PWD/src" \
   python3 -m unittest \
-    tests.test_advisory_campaign_diagnostics
+    tests.test_advisory_failure_receipts
 focused_code=$?
 set -e
 

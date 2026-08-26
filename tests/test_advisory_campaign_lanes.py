@@ -5,6 +5,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -62,6 +63,25 @@ def close_child(child: subprocess.Popen[str]) -> None:
 
 @unittest.skipUnless(REPOSITORY_LANES_AVAILABLE, "repository-only anonymous campaign lanes")
 class AdvisoryCampaignLaneAcceptanceTests(unittest.TestCase):
+    def locked_child(self, path: Path) -> subprocess.Popen[str]:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        program = (
+            "import fcntl,os,sys;"
+            "fd=os.open(sys.argv[1],os.O_CREAT|os.O_RDWR,0o600);"
+            "fcntl.flock(fd,fcntl.LOCK_EX);print('locked',flush=True);sys.stdin.read(1)"
+        )
+        child = subprocess.Popen(
+            [sys.executable, "-c", program, str(path)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(close_child, child)
+        assert child.stdout is not None
+        self.assertEqual(child.stdout.readline().strip(), "locked")
+        return child
+
     def test_same_campaign_allocates_distinct_anonymous_lanes_concurrently(self) -> None:
         orchestration = load_module(ORCHESTRATION, "prospective_lane_orchestration")
         with tempfile.TemporaryDirectory() as directory:
@@ -107,6 +127,42 @@ class AdvisoryCampaignLaneAcceptanceTests(unittest.TestCase):
                         self.fail("partial lane allocation started")
             with orchestration.acquire_campaign_lanes((first,)) as leases:
                 self.assertEqual(leases[0].lane_index, 0)
+
+    def test_legacy_dispatch_lock_never_blocks_selection_of_the_next_lane(self) -> None:
+        orchestration = load_module(ORCHESTRATION, "prospective_legacy_lock_skip")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "results"
+            child = self.locked_child(root / "dispatch.lock")
+            started = time.monotonic()
+            request = orchestration.LaneRequest("vendor", root, 2)
+            with orchestration.acquire_campaign_lanes((request,)) as leases:
+                self.assertEqual(leases[0].lane_index, 1)
+            self.assertLess(time.monotonic() - started, 1.0)
+            free, busy = orchestration.campaign_lane_availability(request)
+            self.assertEqual((free, busy), (1, 1))
+            assert child.stdin is not None
+            child.stdin.write("x")
+            child.stdin.flush()
+            self.assertEqual(child.wait(timeout=5), 0)
+
+    def test_allocator_wait_is_bounded_and_has_a_distinct_error(self) -> None:
+        orchestration = load_module(ORCHESTRATION, "prospective_allocator_timeout")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "results"
+            child = self.locked_child(root / ".allocator.lock")
+            request = orchestration.LaneRequest("vendor", root, 2)
+            started = time.monotonic()
+            with (
+                mock.patch.object(orchestration, "ALLOCATOR_LOCK_TIMEOUT", 0.05),
+                mock.patch.object(orchestration, "ALLOCATOR_LOCK_POLL_SECONDS", 0.005),
+                self.assertRaisesRegex(orchestration.AllocatorUnavailableError, "^$"),
+            ):
+                orchestration.campaign_lane_availability(request)
+            self.assertLess(time.monotonic() - started, 1.0)
+            assert child.stdin is not None
+            child.stdin.write("x")
+            child.stdin.flush()
+            self.assertEqual(child.wait(timeout=5), 0)
 
     def test_campaign_capacity_is_not_reported_as_live_lane_contention(self) -> None:
         orchestration = load_module(ORCHESTRATION, "prospective_lane_capacity_reason")

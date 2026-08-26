@@ -214,6 +214,11 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
 
 
 class ManagedAdvisoryOperationTests(unittest.TestCase):
+    def test_output_replay_failure_does_not_change_a_completed_result(self) -> None:
+        buffer = io.BytesIO()
+        with mock.patch.object(buffer, "write", side_effect=BrokenPipeError):
+            managed_advisory._replay_output(buffer, b"bounded receipt")
+
     def test_doctor_is_task_free_and_returns_no_paths_or_models(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state_root = Path(directory) / "advisory-v1"
@@ -234,6 +239,69 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             self.assertNotIn("cheap", encoded)
             self.assertNotIn("advisor", encoded)
             self.assertNotIn("expensive", encoded)
+            self.assertEqual(len(status["availability"]), len(WORKFLOWS))
+            self.assertTrue(
+                all(item["free"] == 10 and item["busy"] == 0 for item in status["availability"])
+            )
+
+    def test_doctor_reports_a_point_in_time_busy_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+            selected = managed_advisory.campaign_paths(state_root, "codex", "implementation")
+            request = advisory_orchestration.LaneRequest(
+                "codex",
+                selected.results,
+                workflow="implementation",
+                campaign_path=selected.campaign,
+            )
+            with advisory_orchestration.acquire_campaign_lanes((request,)):
+                status = managed_advisory.doctor(
+                    state_root,
+                    vendors=("codex",),
+                    workflows=("implementation",),
+                )
+
+            self.assertEqual(
+                status["availability"],
+                [
+                    {
+                        "vendor": "codex",
+                        "workflow": "implementation",
+                        "free": 9,
+                        "busy": 1,
+                    }
+                ],
+            )
+
+    def test_dispatch_started_receipt_contains_no_result_path(self) -> None:
+        private_path = Path("/private/PRIVATE-PROJECT-MATERIAL")
+        lease = advisory_orchestration.LaneLease(
+            "codex",
+            "implementation",
+            7,
+            private_path,
+            (),
+        )
+        receipt = managed_advisory._dispatch_started_receipt("implementation", (lease,))
+
+        self.assertEqual(
+            json.loads(receipt),
+            {
+                "schema_version": 1,
+                "event": "managed_dispatch_started",
+                "workflow": "implementation",
+                "leases": [{"vendor": "codex", "lane_index": 7}],
+            },
+        )
+        self.assertNotIn(str(private_path).encode(), receipt)
 
     def test_dispatch_rejects_missing_confirmation_before_touching_task_or_state(self) -> None:
         secret_named_task = Path("/never/read/PRIVATE-TASK-CONTENT")
@@ -377,6 +445,10 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                 (
                     advisory_orchestration.CampaignCapacityError(),
                     "managed_campaign_capacity_reached",
+                ),
+                (
+                    advisory_orchestration.AllocatorUnavailableError(),
+                    "managed_allocator_busy",
                 ),
             )
             for error, expected in cases:
