@@ -45,6 +45,11 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   on Python 3.10/3.14, and exact trusted publication. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/85/e3/81a154a49de27e765f2e14ba7b2f3e4c75283eb958e9ff349ce68ed27d72/weightclass-0.17.3.tar.gz`
   - sha256: `f54cb17162fe040428331abf7e819949d9018309816c78956dbf61d0cbd54096`
+- **`weightclass 0.17.4` is published on PyPI and Homebrew.** Release run
+  `32942266996` passed immutable build, macOS 3.10/3.14, candidate validation
+  on Python 3.10/3.14, and exact trusted publication. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/e0/dd/7e122f748c56c99058f8e39e8558d0b4a804290d16fa9d5e80a0a6136ed0/weightclass-0.17.4.tar.gz`
+  - sha256: `133fe963b54ba45bfe7419911a5c7b5f06f0ac16f8d8b7d66b701a0399fe35ef`
 - `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
   before publication; retain both tags and never reuse them. Homebrew 0.16.2 is
@@ -270,7 +275,7 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   population returns `campaign_record_binding_mismatch` instead of an empty
   message.
 
-### Advisory failure receipts (0.17.4 candidate)
+### Advisory failure receipts (released in 0.17.4)
 
 - Each failed cheap, advised-retry, or expensive attempt emits one canonical
   `advisory_attempt_failed` JSON receipt to stderr. Its closed schema contains
@@ -320,7 +325,15 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   scan `bb6284ae-78b3-438d-baf1-02eff5bfb100` covered all six changed
   source/package files and found no reportable vulnerability; measured usage
   was 8,449,226 total tokens with complete coverage and parent-only fallback.
-  CI and release gates remain pending.
+  Source PR #102 merged as `763fa49`; Release run `32942266996` published the
+  exact reviewed candidate. Source-formula PR #103 merged as `d316f01`, and tap
+  PR `ictechgy/homebrew-tap#21` merged as `68491ee`. The user-level uv tool and
+  Homebrew source install both report 0.17.4, and `brew test` passes. Exact
+  0.17.3 personal skills upgraded through `upgrade_planned` to `upgraded` for
+  both Codex and Claude and match the packaged bundle byte-for-byte. A live
+  installed `doctor` snapshot correctly reported busy and free lanes while
+  other projects were running, and the Mac legacy `run` shim emitted its fixed
+  compatibility redirect before invoking managed dispatch.
 
 ## The routing-economics result
 
