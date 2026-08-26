@@ -101,6 +101,14 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
                 "dontAsk",
             )
             self.assertIn("--json-schema", routes.cheap)
+            reviewed = managed_advisory.review_payload(
+                state_root, vendors=("claude",), workflow="review"
+            )
+            reviewed_routes = reviewed["routes"]
+            assert isinstance(reviewed_routes, list)
+            reviewed_route = reviewed_routes[0]
+            assert isinstance(reviewed_route, dict)
+            self.assertEqual(reviewed_route["executor_access"], "read_only")
             stdout = io.StringIO()
             with mock.patch("sys.stdout", stdout):
                 self.assertEqual(
@@ -129,6 +137,52 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
             managed_advisory.campaign_paths(root, "codex", "review"),
             managed_advisory.legacy_campaign_paths(root, "codex", "review"),
         )
+
+    def test_migration_accepts_and_preserves_a_structured_v1_only_install(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            with mock.patch.object(managed_advisory, "CLAUDE_EVIDENCE_GENERATION", "structured-v1"):
+                managed_advisory.initialize_campaign_set(
+                    state_root,
+                    profile=codex_profile() | {"vendor": "claude"},
+                    prices=None,
+                    planned_tasks=24,
+                    max_tasks=48,
+                    dry_run=False,
+                )
+            previous = managed_advisory.previous_evidence_campaign_paths(
+                state_root, "claude", "review", "structured-v1"
+            )
+            previous_manifest = advisory_campaign.load_manifest(previous.campaign)
+            previous_log = previous.results / "runs.jsonl"
+            previous_log.write_text(
+                json.dumps(
+                    {
+                        "campaign": advisory_campaign.record_binding(previous_manifest, 1),
+                        "workflow": "review",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            previous_log.chmod(0o600)
+            campaign_before = previous.campaign.read_bytes()
+            log_before = previous_log.read_bytes()
+
+            receipt = managed_advisory.migrate_evidence_campaigns(
+                state_root, vendor="claude", dry_run=False
+            )
+
+            self.assertFalse(receipt["already_migrated"])
+            self.assertEqual(receipt["generation"], "structured-v5")
+            self.assertEqual(previous.campaign.read_bytes(), campaign_before)
+            self.assertEqual(previous_log.read_bytes(), log_before)
+            current = managed_advisory.campaign_paths(state_root, "claude", "review")
+            self.assertNotEqual(current, previous)
+            current_manifest = advisory_campaign.load_manifest(current.campaign)
+            self.assertEqual(current_manifest["planned_tasks"], 24)
+            self.assertEqual(current_manifest["max_tasks"], 48)
+            self.assertFalse((current.results / "runs.jsonl").exists())
 
     def test_initialization_creates_one_private_cross_project_campaign_set(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
