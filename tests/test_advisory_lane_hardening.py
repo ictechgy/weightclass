@@ -97,6 +97,47 @@ class AdvisoryLaneHardeningTests(unittest.TestCase):
             with self.assertRaisesRegex(runner.CampaignError, "^$"):
                 runner.prune_all_lanes(root)
 
+    def test_available_lane_cleanup_skips_busy_lane_and_removes_free_residue(self) -> None:
+        runner = load_runner("lane_available_cleanup")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "results"
+            lane = root / ".lanes" / "lane-01"
+            for protected in (root, root / ".lanes", lane):
+                protected.mkdir(mode=0o700, parents=True, exist_ok=True)
+                protected.chmod(0o700)
+            for selected in (root, lane):
+                work = selected / ".work"
+                work.mkdir(mode=0o700, parents=True)
+                workspace = work / "spec-cheap-stale"
+                workspace.mkdir(mode=0o700)
+                runner.write_registry(selected / "workspaces.txt", [str(workspace)])
+            lock_path = root / "campaign.lock"
+            program = (
+                "import fcntl,os,sys;"
+                "fd=os.open(sys.argv[1],os.O_CREAT|os.O_RDWR,0o600);"
+                "fcntl.flock(fd,fcntl.LOCK_EX);print('locked',flush=True);sys.stdin.read()"
+            )
+            child = subprocess.Popen(
+                [sys.executable, "-c", program, str(lock_path)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.addCleanup(close_child, child)
+            assert child.stdout is not None
+            self.assertEqual(child.stdout.readline().strip(), "locked")
+
+            result = runner.prune_available_lanes(root)
+
+            self.assertEqual(result["lanes_scanned"], 2)
+            self.assertEqual(result["busy_lanes"], 1)
+            self.assertEqual(result["registered"], 1)
+            self.assertEqual(result["removed"], 1)
+            self.assertEqual(result["retained"], 0)
+            self.assertTrue((root / ".work" / "spec-cheap-stale").is_dir())
+            self.assertFalse((lane / ".work" / "spec-cheap-stale").exists())
+
     def test_results_root_and_lane_symlinks_fail_without_chmod_following(self) -> None:
         orchestration = load_orchestration("lane_symlink_hardening")
         with tempfile.TemporaryDirectory() as directory:

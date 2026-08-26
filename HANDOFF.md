@@ -399,6 +399,34 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   five Claude workflows ready with ten free lanes each; and installed review
   reports the expected read-only stdin route.
 
+### Advisory state retention (0.17.7 candidate)
+
+- A metadata-only local audit found 8,730,345,998 bytes and 203,353 files in
+  the managed advisory root. Three registered implementation workspaces account
+  for about 8.72 GB; manifests, records, profiles, and prior evidence
+  generations are only tens of kilobytes. No task or log body was read.
+- The growth is structural: successful implementation attempts preserved both
+  the verified patch and a full reconstructed repository workspace. Interrupted
+  attempts were also intentionally registered for later cleanup, but managed
+  cleanup required every lane in a population to be idle.
+- A successful implementation now keeps the owner-only verified patch and
+  immediately discards the full workspace. Before a new campaign attempt, the
+  runner also removes registered residue from that lane while holding its
+  campaign lock and emits only task-free counts.
+- Managed `cleanup` now locks each lane independently, cleans every inactive
+  lane, skips active lanes, and returns one closed JSON receipt with population,
+  lane, busy, registered, removed, and retained counts. It never deletes
+  profiles, manifests, run records, patches, or prior generations.
+- Focused tests cover immediate success cleanup, path-free automatic cleanup,
+  partial cleanup with one busy lane, and the managed aggregate receipt. The
+  existing 8.72 GB of registered workspaces has not been deleted because that
+  material deletion requires a separate explicit confirmation.
+- The Advisory-focused suite passes 146 tests with 8 skips; the full source
+  suite passes 1,317 tests with 27 skips; Ruff, formatting, compileall, and
+  strict mypy over 165 source files pass. Wheel/sdist isolation passes 1,310
+  tests with 68 environment-specific skips. Security, PR, release,
+  installed-package, and existing-state cleanup gates remain pending.
+
 ## The routing-economics result
 
 This is the reason the study existed, so keep the conclusion with the code.

@@ -224,7 +224,11 @@ duplicate JSON keys, missing bindings, repeated/local gaps, mixed fingerprints,
 or a combined population over the sealed maximum fail closed. The merged
 ordinals exist only in memory; lane records are never rewritten. Even a
 statistically decisive point estimate is withheld until the sealed task and
-failure minimums are both met. `--prune` cleans every existing lane.
+failure minimums are both met. Low-level `--prune` cleans every existing lane
+only when the population is inactive. Managed `cleanup` cleans inactive lanes
+independently, skips active lanes, and reports only counts. A new campaign
+attempt also recovers registered residue from its own locked lane before
+creating another workspace.
 
 The campaign receipt is necessary but not sufficient for productization. A
 promotion also requires independent blind quality review, zero new critical

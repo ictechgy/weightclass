@@ -153,6 +153,13 @@ idempotent for identical inputs and refuses to overwrite a different campaign.
    ordinal. Use one vendor only when the user narrows the run. Do not add retries
    around this command; its sealed Shape-B policy owns the bounded retry and
    fallback behavior.
+   Before a new campaign attempt creates a workspace, the runner automatically
+   removes registered residue in that same lane while holding its
+   campaign lock. An `advisory_stale_workspace_cleanup` receipt contains only
+   registered, removed, and retained counts. For manual recovery, run managed
+   `cleanup`; it cleans every inactive lane independently, skips active lanes,
+   and returns a task-free `managed_cleanup` receipt. Rerun only when
+   `complete` is false; never delete state directories or campaign logs by hand.
 4. Delete exactly the temporary task file in a finally/cleanup path, including
    on preflight or provider failure.
 

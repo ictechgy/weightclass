@@ -117,6 +117,34 @@ class AdvisoryFailureReceiptAcceptanceTests(unittest.TestCase):
                     runner.classify_child_failure(stdout, child_stderr, exit_code), expected
                 )
 
+    def test_stale_workspace_cleanup_receipt_contains_counts_not_paths(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as directory:
+            out_dir = Path(directory) / "results"
+            workspace = out_dir / ".work" / "spec-cheap-private-name"
+            workspace.mkdir(mode=0o700, parents=True)
+            registry = out_dir / "workspaces.txt"
+            runner.write_registry(registry, [str(workspace)])
+            stderr = io.StringIO()
+
+            with mock.patch("sys.stderr", stderr):
+                result = runner.cleanup_stale_before_attempt(registry, out_dir)
+
+            self.assertEqual(result, {"registered": 1, "removed": 1, "retained": 0})
+            self.assertFalse(workspace.exists())
+            receipt = json.loads(stderr.getvalue())
+            self.assertEqual(
+                receipt,
+                {
+                    "schema_version": 1,
+                    "event": "advisory_stale_workspace_cleanup",
+                    "registered": 1,
+                    "removed": 1,
+                    "retained": 0,
+                },
+            )
+            self.assertNotIn(str(workspace), stderr.getvalue())
+
     def test_failed_verification_is_classified_before_workspace_cleanup(self) -> None:
         runner = load_runner()
         with tempfile.TemporaryDirectory() as directory:

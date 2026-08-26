@@ -228,6 +228,20 @@ class Attempt(TypedDict, total=False):
     envelope_extracted: bool
 
 
+class WorkspacePruneResult(TypedDict):
+    registered: int
+    removed: int
+    retained: int
+
+
+class LanePruneResult(TypedDict):
+    lanes_scanned: int
+    busy_lanes: int
+    registered: int
+    removed: int
+    retained: int
+
+
 # Failure receipts are deliberately smaller and stricter than attempt records.
 # They are an operator-facing event, not a second run log: keep only values that
 # can be interpreted without opening a path, reading a task, or trusting model
@@ -3514,10 +3528,13 @@ def create_registered_workspace(
     return workspace
 
 
-def prune(registry: Path, out_dir: Path) -> int:
+def prune_registered_workspaces(
+    registry: Path, out_dir: Path, *, report_paths: bool
+) -> WorkspacePruneResult:
     if not registry.exists():
-        print("등록된 작업공간 없음")
-        return 0
+        if report_paths:
+            print("등록된 작업공간 없음")
+        return {"registered": 0, "removed": 0, "retained": 0}
     live = [line for line in registry.read_text(encoding="utf-8").splitlines() if line.strip()]
     removed = 0
     kept: list[str] = []
@@ -3529,22 +3546,101 @@ def prune(registry: Path, out_dir: Path) -> int:
         if target is None:
             # 우리가 만든 것이 아니면 지우지도 않고 잊지도 않는다. 잊으면
             # 사람이 확인할 마지막 단서가 사라진다.
-            print(f"건너뜀(이 스크립트가 만든 작업공간이 아님): {line}")
+            if report_paths:
+                print(f"건너뜀(이 스크립트가 만든 작업공간이 아님): {line}")
             kept.append(line)
             continue
         try:
             shutil.rmtree(target)
         except OSError as error:
-            print(f"삭제 실패, 등록에 남긴다: {target} ({error})")
+            if report_paths:
+                print(f"삭제 실패, 등록에 남긴다: {target} ({error})")
             kept.append(line)
             continue
         removed += 1
-        print(f"삭제: {target}")
+        if report_paths:
+            print(f"삭제: {target}")
     # 지운 것만 등록에서 뺀다. 통째로 비우면 아직 디스크에 남아 있는 신뢰할 수
     # 없는 트리를 가리키는 유일한 참조가 사라진다.
     write_registry(registry, kept)
-    print(f"{removed}개 정리 완료 (등록 {len(live)}개, 남김 {len(kept)}개)")
+    if report_paths:
+        print(f"{removed}개 정리 완료 (등록 {len(live)}개, 남김 {len(kept)}개)")
+    return {"registered": len(live), "removed": removed, "retained": len(kept)}
+
+
+def prune(registry: Path, out_dir: Path) -> int:
+    prune_registered_workspaces(registry, out_dir, report_paths=True)
     return 0
+
+
+def _open_campaign_cleanup_lock(lane: Path) -> int:
+    flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(lane / "campaign.lock", flags, 0o600)
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+    ):
+        os.close(descriptor)
+        raise CampaignError()
+    return descriptor
+
+
+def prune_available_lanes(out_dir: Path) -> LanePruneResult:
+    """Clean inactive lanes independently and retain every active lane."""
+    lanes = existing_lane_result_directories(out_dir, ANONYMOUS_LANE_COUNT)
+    totals: LanePruneResult = {
+        "lanes_scanned": len(lanes),
+        "busy_lanes": 0,
+        "registered": 0,
+        "removed": 0,
+        "retained": 0,
+    }
+    try:
+        for lane in lanes:
+            descriptor = _open_campaign_cleanup_lock(lane)
+            try:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    totals["busy_lanes"] += 1
+                    continue
+                result = prune_registered_workspaces(
+                    lane / "workspaces.txt", lane, report_paths=False
+                )
+                for field in ("registered", "removed", "retained"):
+                    totals[field] += result[field]
+            finally:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+    except OSError:
+        raise CampaignError() from None
+    return totals
+
+
+def cleanup_stale_before_attempt(registry: Path, out_dir: Path) -> WorkspacePruneResult:
+    """Recover registered residue while the caller holds the campaign lock."""
+    result = prune_registered_workspaces(registry, out_dir, report_paths=False)
+    if result["registered"]:
+        try:
+            print(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "event": "advisory_stale_workspace_cleanup",
+                        **result,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                file=sys.stderr,
+            )
+        except (OSError, ValueError):
+            pass
+    return result
 
 
 def prune_all_lanes(out_dir: Path) -> int:
@@ -3556,16 +3652,7 @@ def prune_all_lanes(out_dir: Path) -> int:
     descriptors: list[int] = []
     try:
         for lane in lanes:
-            flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(lane / "campaign.lock", flags, 0o600)
-            metadata = os.fstat(descriptor)
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_uid != os.getuid()
-                or stat.S_IMODE(metadata.st_mode) & 0o077
-            ):
-                os.close(descriptor)
-                raise CampaignError()
+            descriptor = _open_campaign_cleanup_lock(lane)
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
@@ -4120,6 +4207,12 @@ def attempt(
             emit_failure_receipt(record, route=name)
             return record, verify_output, patch_bytes
         record["patch"] = str(patch)
+        # The verified patch is the complete implementation handoff. Keeping a
+        # second full repository clone made successful campaigns grow by the
+        # repository size even though applying or reviewing the patch does not
+        # need that clone.
+        discard(registry, handover, out_dir)
+        record["workspace"] = None
     else:
         if handover is not None:
             discard(registry, handover, out_dir)
@@ -4461,6 +4554,7 @@ def main() -> int:
             ordinals = validate_record_bindings(campaign_manifest, existing_records)
             if arguments.sample_ordinal != len(ordinals) + 1:
                 raise CampaignError()
+            cleanup_stale_before_attempt(registry, arguments.out_dir)
         except (CampaignError, OSError):
             if campaign_lock is not None:
                 campaign_lock.close()
@@ -4932,7 +5026,6 @@ def main() -> int:
             return 0
         print(f"\n검증 통과. 패치: {winner['patch']}  ({winner['patch_lines']}줄)")
         print(f"적용: git -C {shlex.quote(str(repo))} apply {shlex.quote(str(winner['patch']))}")
-        print(f"작업공간: {winner['workspace']}")
         return 0
 
     print("\n두 경로 모두 검증 실패. 작업공간은 지웠다. 재시도하지 않는다.")
