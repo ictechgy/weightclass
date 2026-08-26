@@ -70,9 +70,11 @@ class AdvisoryFailureReceiptAcceptanceTests(unittest.TestCase):
         self.assertEqual(
             receipt,
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "event": "advisory_attempt_failed",
+                "vendor": "unknown",
                 "route": "cheap",
+                "role": "cheap",
                 "failure_kind": "unknown",
                 "failure_stage": "verification",
                 "child_exit_code": 0,
@@ -108,6 +110,9 @@ class AdvisoryFailureReceiptAcceptanceTests(unittest.TestCase):
             ("", "rate_limit: too many requests", 1, "rate_limit"),
             ("", "unknown option --legacy", 2, "invalid_invocation"),
             ("", "permission denied; approval required", 1, "permission_or_approval"),
+            ("", "model not found for this account", 1, "model_unavailable"),
+            ("", "subscription required", 1, "account_limit"),
+            ("", "project is not trusted", 1, "configuration"),
             ("PRIVATE TASK MATERIAL", "opaque provider failure", 1, "unknown"),
             ("PRIVATE TASK MATERIAL", "", 0, "none"),
         )

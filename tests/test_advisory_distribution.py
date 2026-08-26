@@ -35,7 +35,10 @@ class AdvisoryDistributionTests(unittest.TestCase):
         for command in (
             "init",
             "migrate-evidence",
+            "migrate-routes",
             "doctor",
+            "cli-check",
+            "provider-check",
             "review",
             "dispatch",
             "status",
@@ -117,6 +120,7 @@ class AdvisoryDistributionTests(unittest.TestCase):
             "prune": "usage: wclass-advisory prune",
             "review": "usage: wclass-advisory review",
             "migrate-evidence": "usage: wclass-advisory migrate-evidence",
+            "migrate-routes": "usage: wclass-advisory migrate-routes",
             "install-skill": "usage: wclass-advisory install-skill",
         }
         for command, usage in expected.items():

@@ -55,6 +55,7 @@ publisher once, on PyPI:
      --requirement requirements/release.txt
    PYTHONPATH=src python3 -W error::ResourceWarning -m unittest discover -s tests
    ruff check src tests && ruff format --check src tests && mypy
+   PYTHONPATH=src python3 -m weightclass.advisory cli-check --vendor all
    release_dist_dir=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-release.XXXXXX")
    python3.13 -m build --no-isolation --outdir "$release_dist_dir"
    twine check --strict "$release_dist_dir"/*.whl "$release_dist_dir"/*.tar.gz
@@ -66,6 +67,11 @@ publisher once, on PyPI:
    process-group/FIFO boundary jobs pass. After building, verify the wheel's
    metadata version and an installed `wclass --version` against
    `weightclass.__version__`.
+   The task-free CLI check is a maintainer-machine compatibility gate for the
+   installed Claude, Codex, agy, and Grok versions. It invokes only local
+   `--help`/`--version` with a minimal environment and temporary working directory,
+   sends no task or provider prompt, and must report every vendor
+   `ready` before tagging.
 
 3. Tag the merged commit and push the tag:
 

@@ -288,6 +288,10 @@ CHILD_FAILURE_CODES = frozenset(
         "permission_or_approval",
         "network",
         "provider_unavailable",
+        "model_unavailable",
+        "account_limit",
+        "configuration",
+        "result_contract",
         "unknown",
     }
 )
@@ -325,7 +329,15 @@ def _receipt_count(value: object) -> int:
     return max(0, min(MAX_RECEIPT_COUNT, value))
 
 
-def failure_receipt(attempt: Mapping[str, object], route: str) -> dict[str, object]:
+def _receipt_vendor(value: object) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", value):
+        return "unknown"
+    return value
+
+
+def failure_receipt(
+    attempt: Mapping[str, object], route: str, vendor: str = "unknown"
+) -> dict[str, object]:
     """Return the closed, task-free receipt for one failed attempt.
 
     Do not add fields here without treating them as a public privacy contract.
@@ -339,9 +351,11 @@ def failure_receipt(attempt: Mapping[str, object], route: str) -> dict[str, obje
     excluded = attempt.get("excluded_scaffolding")
     excluded_count = len(excluded) if isinstance(excluded, (list, tuple)) else 0
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "event": "advisory_attempt_failed",
+        "vendor": _receipt_vendor(vendor),
         "route": _receipt_enum(route, FAILURE_RECEIPT_ROUTES, "unknown"),
+        "role": _receipt_enum(route, FAILURE_RECEIPT_ROUTES, "unknown"),
         "failure_kind": _receipt_enum(
             attempt.get("failure_kind"), FAILURE_RECEIPT_KINDS, "unknown"
         ),
@@ -370,11 +384,15 @@ def failure_receipt(attempt: Mapping[str, object], route: str) -> dict[str, obje
     }
 
 
-def emit_failure_receipt(attempt: Mapping[str, object], route: str) -> None:
+def emit_failure_receipt(
+    attempt: Mapping[str, object], route: str, vendor: str = "unknown"
+) -> None:
     """Best-effort receipt output must never change the attempt verdict."""
     try:
         print(
-            json.dumps(failure_receipt(attempt, route), sort_keys=True, separators=(",", ":")),
+            json.dumps(
+                failure_receipt(attempt, route, vendor), sort_keys=True, separators=(",", ":")
+            ),
             file=sys.stderr,
         )
     except (OSError, ValueError):
@@ -1051,6 +1069,40 @@ def classify_child_failure(stdout: str, stderr: str, exit_code: int | None) -> s
                 "internal server error",
             ),
         ),
+        (
+            "model_unavailable",
+            (
+                "model not found",
+                "unknown model",
+                "invalid model",
+                "model is not available",
+                "does not have access to model",
+                "model access is not allowed",
+            ),
+        ),
+        (
+            "account_limit",
+            (
+                "account limit",
+                "subscription required",
+                "payment required",
+                "billing account",
+                "insufficient credits",
+                "spending limit",
+            ),
+        ),
+        (
+            "configuration",
+            (
+                "configuration error",
+                "invalid configuration",
+                "failed to load config",
+                "schema is too complex",
+                "project is not trusted",
+                "not a trusted directory",
+                "trust this folder",
+            ),
+        ),
     )
     for category, markers in categories:
         if any(marker in text for marker in markers):
@@ -1066,6 +1118,7 @@ def run_child(
     allowed_env: frozenset[str] | None = None,
     home: Path | None = None,
     prefer_prices: bool = False,
+    timeout_seconds: float = CHILD_TIMEOUT,
 ) -> tuple[ChildResult, str]:
     """One vendor invocation. The task goes in on stdin and never into the log.
 
@@ -1132,7 +1185,7 @@ def run_child(
             start_new_session=True,
         ) as child:
             try:
-                stdout, stderr = child.communicate(delivered_task, timeout=CHILD_TIMEOUT)
+                stdout, stderr = child.communicate(delivered_task, timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
                 # kill 중에 자식이 스스로 끝나면 ProcessLookupError 가 난다.
                 # 정상적인 경합이므로 무시한다 — 그것 때문에 측정을 죽이면,
@@ -3909,6 +3962,7 @@ def evidence_result_shape(stdout: str, command: list[str]) -> str:
         return "empty"
     if not wants_structured_output(command):
         return "unstructured"
+    saw_envelope_without_result = False
     for candidate in (text, *reversed(text.splitlines())):
         stripped = candidate.strip()
         if not stripped.startswith(("{", "[")):
@@ -3921,7 +3975,8 @@ def evidence_result_shape(stdout: str, command: list[str]) -> str:
             return "structured_output"
         found = _first_text(parsed)
         if not found:
-            return "envelope_without_result"
+            saw_envelope_without_result = True
+            continue
         selected = found.strip()
         if selected.startswith("```") and selected.endswith("```"):
             return "fenced_json"
@@ -3930,7 +3985,7 @@ def evidence_result_shape(stdout: str, command: list[str]) -> str:
         except (ValueError, TypeError):
             return "prose"
         return "json_text" if isinstance(nested, (dict, list)) else "prose"
-    return "malformed_envelope"
+    return "envelope_without_result" if saw_envelope_without_result else "malformed_envelope"
 
 
 def compose_task(task: str, advice: str) -> str:
@@ -3970,6 +4025,7 @@ def attempt(
     child_home: Path | None,
     prefer_prices: bool,
     workflow: str = "implementation",
+    vendor: str = "unknown",
 ) -> tuple[Attempt, str, bytes]:
     """Clone, run one route, verify, and return only transient handoff bytes.
 
@@ -4204,7 +4260,7 @@ def attempt(
             record["failure_stage"] = "persistence"
             discard(registry, handover, out_dir)
             record["workspace"] = None
-            emit_failure_receipt(record, route=name)
+            emit_failure_receipt(record, route=name, vendor=vendor)
             return record, verify_output, patch_bytes
         record["patch"] = str(patch)
         # The verified patch is the complete implementation handoff. Keeping a
@@ -4221,7 +4277,7 @@ def attempt(
         patch_bytes if workflow == "implementation" else evidence_result_text.encode("utf-8")
     )
     if not record["accepted"]:
-        emit_failure_receipt(record, route=name)
+        emit_failure_receipt(record, route=name, vendor=vendor)
     return record, verify_output, transient
 
 
@@ -4240,6 +4296,7 @@ def main() -> int:
         default="implementation",
         help="implementation returns a patch; other workflows return transient verified JSON",
     )
+    parser.add_argument("--vendor", default="unknown", help="task-free vendor label for receipts")
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--task-file", type=Path)
@@ -4410,6 +4467,9 @@ def main() -> int:
             profile_routes = routes_from_profile(
                 arguments.route_profile.expanduser(),
                 read_only_executors=arguments.workflow != "implementation",
+                evidence_workflow=(
+                    arguments.workflow if arguments.workflow != "implementation" else None
+                ),
             )
         except AdvisoryRouteError:
             parser.error("invalid advisory route profile")
@@ -4851,6 +4911,7 @@ def main() -> int:
         child_home=cheap_home,
         prefer_prices=arguments.prefer_prices,
         workflow=arguments.workflow,
+        vendor=arguments.vendor,
     )
     cheap_child = cheap.get("child")
     child_seconds = cheap_child["seconds"] if cheap_child else None
@@ -4954,6 +5015,7 @@ def main() -> int:
                 child_home=cheap_home,
                 prefer_prices=arguments.prefer_prices,
                 workflow=arguments.workflow,
+                vendor=arguments.vendor,
             )
             record["retry"] = retry
             reason = (
@@ -4983,6 +5045,7 @@ def main() -> int:
             child_home=expensive_home,
             prefer_prices=arguments.prefer_prices,
             workflow=arguments.workflow,
+            vendor=arguments.vendor,
         )
         record["expensive"] = expensive
         reason = (

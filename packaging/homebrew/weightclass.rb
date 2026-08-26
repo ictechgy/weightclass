@@ -41,9 +41,13 @@ class Weightclass < Formula
            "--model", "expensive=expensive",
            "--effort", "cheap=low", "--effort", "advisor=high",
            "--effort", "expensive=high"
-    assert_match '"ready":true',
+    assert_match '"campaign_ready":true',
                  shell_output("#{bin}/wclass-advisory doctor --state-root #{managed_root} " \
                               "--vendor codex --workflow all")
+    assert_match "usage: wclass-advisory cli-check",
+                 shell_output("#{bin}/wclass-advisory cli-check --help")
+    assert_match "--confirm-provider-egress",
+                 shell_output("#{bin}/wclass-advisory provider-check --help")
 
     # 잘못된 입력은 닫히는 방향으로 실패하고 태스크를 되비추지 않아야 한다.
     output = pipe_output("#{bin}/wclass classify 2>&1", "", 2)

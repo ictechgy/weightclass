@@ -101,6 +101,8 @@ jobs:
           test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
           "$installed_venv/bin/wclass-advisory" --help >/dev/null
           "$installed_venv/bin/python" -m weightclass.advisory --help >/dev/null
+          "$installed_venv/bin/wclass-advisory" cli-check --help >/dev/null
+          "$installed_venv/bin/wclass-advisory" provider-check --help >/dev/null
           managed_root="$RUNNER_TEMP/weightclass-advisory-managed"
           "$installed_venv/bin/wclass-advisory" init --state-root "$managed_root" --vendor codex \
             --model cheap=cheap --model advisor=advisor --model expensive=expensive \

@@ -161,6 +161,31 @@ EVIDENCE_JSON_SCHEMA = json.dumps(
     separators=(",", ":"),
 )
 
+_EVIDENCE_SCHEMA_DEFS = {
+    "review": ("s", "ss", "ns", "rf", "rfs"),
+    "research": ("s", "ss", "ns", "rc", "rcs"),
+    "diagnosis": ("s", "ss", "ns", "dh", "dhs"),
+    "design": ("s", "ss", "ns", "do", "dos"),
+}
+
+
+def evidence_json_schema(workflow: str) -> str:
+    """Return one provider-compilable workflow schema, never the full union."""
+
+    definitions = json.loads(EVIDENCE_JSON_SCHEMA)
+    names = _EVIDENCE_SCHEMA_DEFS.get(workflow)
+    if names is None:
+        raise AdvisoryRouteError()
+    variants = definitions["oneOf"]
+    selected = next(
+        variant for variant in variants if variant["properties"]["mode"].get("const") == workflow
+    )
+    return json.dumps(
+        {"$defs": {name: definitions["$defs"][name] for name in names}, **selected},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
 
 class AdvisoryRouteError(ValueError):
     """Raised without caller-provided values when a profile is invalid."""
@@ -352,7 +377,10 @@ def profile_sha256(path: Path) -> str:
 
 
 def build_routes(
-    profile: Mapping[str, object], *, read_only_executors: bool = False
+    profile: Mapping[str, object],
+    *,
+    read_only_executors: bool = False,
+    evidence_workflow: str | None = None,
 ) -> AdvisoryRoutes:
     if profile.get("schema_version") == CUSTOM_PROFILE_SCHEMA_VERSION:
         if set(profile) != {"schema_version", "vendor", "commands"}:
@@ -373,6 +401,11 @@ def build_routes(
         raise AdvisoryRouteError()
     models = _role_map(profile["models"])
     efforts = _role_map(profile["efforts"])
+    selected_schema = (
+        evidence_json_schema(evidence_workflow)
+        if read_only_executors and evidence_workflow is not None
+        else EVIDENCE_JSON_SCHEMA
+    )
 
     def claude(role: str, *, advisor: bool) -> tuple[str, ...]:
         read_only = advisor or read_only_executors
@@ -392,7 +425,7 @@ def build_routes(
             "json",
         )
         if evidence_executor:
-            command += ("--json-schema", EVIDENCE_JSON_SCHEMA)
+            command += ("--json-schema", selected_schema)
         return command + (
             "--model",
             models[role],
@@ -419,26 +452,31 @@ def build_routes(
         )
 
     def agy(role: str, *, advisor: bool) -> tuple[str, ...]:
-        permission = "plan" if advisor or read_only_executors else "accept-edits"
-        return (
+        read_only = advisor or read_only_executors
+        evidence_executor = read_only_executors and not advisor
+        command: tuple[str, ...] = (
             "agy",
             "--sandbox",
             "--mode",
-            permission,
-            "--disable-slash-commands",
+            "plan" if read_only else "accept-edits",
             "--output-format",
             "json",
             "--model",
             models[role],
-            "--effort",
-            efforts[role],
-            "--print",
-            TASK_PLACEHOLDER,
         )
+        # agy 1.1.21 advertises --effort but rejects it for the configured
+        # models. It also warns that plan mode has no effect while slash
+        # expansion is disabled. Keep both flags only on write executors.
+        if not read_only:
+            command += ("--effort", efforts[role], "--disable-slash-commands")
+        if evidence_executor:
+            command += ("--json-schema", selected_schema)
+        return command + ("--print", TASK_PLACEHOLDER)
 
     def grok(role: str, *, advisor: bool) -> tuple[str, ...]:
+        evidence_executor = read_only_executors and not advisor
         permission = "plan" if advisor or read_only_executors else "acceptEdits"
-        return (
+        command: tuple[str, ...] = (
             "grok",
             "--permission-mode",
             permission,
@@ -450,10 +488,10 @@ def build_routes(
             "json",
             "--model",
             models[role],
-            "--verbatim",
-            "--prompt-file",
-            TASK_FILE_PLACEHOLDER,
         )
+        if evidence_executor:
+            command += ("--json-schema", selected_schema)
+        return command + ("--verbatim", "--prompt-file", TASK_FILE_PLACEHOLDER)
 
     builder = {
         "claude": claude,
@@ -468,8 +506,17 @@ def build_routes(
     )
 
 
-def routes_from_profile(path: Path, *, read_only_executors: bool = False) -> AdvisoryRoutes:
-    return build_routes(load_profile(path), read_only_executors=read_only_executors)
+def routes_from_profile(
+    path: Path,
+    *,
+    read_only_executors: bool = False,
+    evidence_workflow: str | None = None,
+) -> AdvisoryRoutes:
+    return build_routes(
+        load_profile(path),
+        read_only_executors=read_only_executors,
+        evidence_workflow=evidence_workflow,
+    )
 
 
 def command_task_delivery(command: Sequence[str]) -> str:

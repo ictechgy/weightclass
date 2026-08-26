@@ -54,6 +54,7 @@ cannot weaken acceptance by editing the working copy.
 
 ```sh
 wclass-advisory doctor --vendor all --workflow review
+wclass-advisory cli-check --vendor all
 wclass-advisory review --vendor all --workflow review
 wclass-advisory dispatch \
   --vendor all --workflow review \
@@ -62,12 +63,31 @@ wclass-advisory dispatch \
   --confirm-task-egress
 ```
 
-`doctor` and `review` are task-free. `dispatch` validates every selected
+`doctor`, `cli-check`, and `review` are task-free. `doctor` locally invokes
+installed CLI `--help`/`--version` with a minimal environment and temporary
+working directory; it sends no task bytes or provider prompt but is not a network
+sandbox for a hostile executable. It distinguishes
+`campaign_ready` from `dispatch_ready`. `dispatch` repeats the same local check
+for cheap, advisor, and expensive before it inspects the task file, then validates every selected
 profile, manifest, price basis, result lane, ordinal, clean repository,
 committed verifier, and private task file before vendor execution. Task content
 is never stored, logged, echoed, hashed, or used in a label. Codex and Claude
 normally receive it through stdin; agy retains its reviewed argv exposure and
 Grok uses a private transient prompt file.
+
+An explicit live readiness check is available when local capability is not
+enough:
+
+```sh
+wclass-advisory provider-check --vendor all --workflow review \
+  --confirm-provider-egress
+```
+
+It makes three task-free provider calls per vendor and may consume quota or
+incur cost. It returns only vendor, role, fixed failure code, exit/timing
+fields, presence booleans, and result shape. It never writes provider output or
+a campaign sample. A failed check therefore cannot contaminate effectiveness
+or cost evidence.
 
 Use `wclass-advisory status` for aggregate readiness and evidence. Use
 `wclass-advisory cleanup` only to prune registered disposable workspaces; it
@@ -88,7 +108,9 @@ Managed dispatch reports `managed_lane_unavailable` only when every bounded
 lane for a selected vendor/workflow is actively leased. A sealed sample cap is
 `managed_campaign_capacity_reached`; `managed_allocator_busy` means the short
 allocator exceeded its bounded wait; other preflight or binding failures remain
-`managed_dispatch_rejected`. `doctor` reports ten configured lanes by default
+`managed_dispatch_rejected`. `managed_provider_preflight_failed` includes only
+the vendor, role, fixed failure code, and `sample_recorded:false`. `doctor`
+reports ten configured lanes by default
 plus a point-in-time free/busy snapshot. After lanes are selected, dispatch
 immediately emits a task-free `managed_dispatch_started` event; a long silence
 after that event is vendor/verifier work, not silent lock acquisition.
@@ -99,12 +121,16 @@ The replacement uses the complete four-mode schema, including exact required
 fields, closed objects, bounded arrays, and bounded strings; the local parser
 remains the final byte-bounded validation boundary.
 
-Release 0.17.6 moves that complete contract to `structured-v5`. The 0.17.5
+Release 0.17.6 moved that complete contract to `structured-v5`. Release 0.17.8
+uses `structured-v6`, where each provider call receives only its selected
+workflow schema instead of the four-workflow `oneOf`; this stays below Claude's
+structured-output grammar complexity limit while the local parser still
+enforces the complete selected contract. The 0.17.5
 package changed the route fingerprint after some machines had already created
 `structured-v1`, so those machines correctly rejected the mismatch. Migration
-now accepts the newest complete v4, v3, v2, or v1 population, or the older
+now accepts the newest complete v5, v4, v3, v2, or v1 population, or the older
 unversioned population as its source, validates all bindings, creates an empty
-v5 population, and preserves every source byte. V2 through v4 were used only
+v6 population, and preserves every source byte. V2 through v4 were used only
 by local pre-release verification and are handled so those machines recover too.
 Existing Claude review/research/diagnosis/design records are never rewritten or
 merged. Upgrade an existing managed root explicitly:
@@ -116,12 +142,30 @@ wclass-advisory migrate-evidence --vendor claude
 
 The old campaign files and records remain owner-private and read-only at their
 existing paths. Managed doctor, dispatch, and status select only the new
-`structured-v5` generation after migration. Claude implementation and every
+`structured-v6` generation after migration. Claude implementation and every
 Codex population retain their existing paths and records.
+
+Release 0.17.8 also changes built-in agy and Grok command fingerprints. Agy
+read-only routes remove the rejected `--effort` flag, preserve effective plan
+mode, and add the workflow JSON Schema; Grok evidence executors add the same
+schema. Existing populations remain read-only. Migrate them explicitly:
+
+```sh
+wclass-advisory migrate-routes --vendor agy --dry-run
+wclass-advisory migrate-routes --vendor agy
+wclass-advisory migrate-evidence --vendor grok --dry-run
+wclass-advisory migrate-evidence --vendor grok
+```
+
+Agy migration creates empty current campaigns for all five workflows because
+its advisor command also changed. Grok migration changes only the four evidence
+workflows; its implementation population retains its existing path. Neither
+operation rewrites, merges, or counts an old record in the new generation.
 
 Failed child processes expose only a fixed `child_failure_code` plus stdout/
 stderr presence booleans. Categories cover authentication, rate limits, context
-limits, invalid invocation, permission/approval, network, provider availability,
-timeout, and unknown failures. No raw child output is retained. A failed
+limits, invalid invocation, permission/approval, network, provider/model
+availability, account limits, configuration, result contracts, timeout, and
+unknown failures. No raw child output is retained. A failed
 implementation child that produced no candidate is classified as infrastructure,
 skips the verifier, and is excluded from model-quality denominators.

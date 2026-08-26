@@ -71,6 +71,38 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/7e/97/107a9d27655032e87fcc338793343e2c0e13230979af57f1d852882c6209/weightclass-0.17.7.tar.gz`
   - sha256: `d1f0c7f93f284a32b2810c9ebbae220a1ae22d5126fe6358a592dbd2f711011d`
+- **`weightclass 0.17.8` is the current release candidate.** It adds a
+  task-free local `cli-check`, installed-CLI status to `doctor`, a separately
+  confirmed and non-persisted `provider-check`, and task-before-inspection
+  dispatch gating. Failure receipts are schema 2 with fixed vendor/role fields;
+  model availability, account limits, configuration, and result-contract
+  failures have closed categories. Provider checks always report
+  `sample_recorded:false` and never append a campaign record.
+- Claude evidence uses workflow-specific `structured-v6` schemas instead of
+  the provider-rejected four-workflow union. Existing v5 and older populations
+  remain read-only and migrate only by explicit `migrate-evidence`. Agy
+  read-only routes omit the rejected `--effort`, preserve effective plan mode,
+  and use workflow schemas; Grok evidence executors now use the supported JSON
+  Schema. Their changed fingerprints use new empty generations created by
+  explicit `migrate-routes --vendor agy` or `migrate-evidence --vendor grok`;
+  no old record is rewritten or merged.
+- Live task-free acceptance passed Codex 3/3, Claude 3/3, Grok 3/3, and an Agy
+  plan/schema probe. Claude's prior two-second exit and Grok's late
+  result-contract rejection were reproduced before the fix. Local CLI
+  compatibility passes Claude 2.1.246, Codex 0.149.0, agy 1.1.21, and Grok
+  1.0.5. The final source gates pass 1,329 unittest tests with 27 skips and
+  1,302 pytest tests with 27 skips plus 1,586 subtests; Ruff, format, and strict
+  mypy over 167 source files pass.
+- Codex Security diff scan `548a6a93-9838-4ce1-a051-9e745af668e5` found one
+  low PATH/environment exposure in the first local probe implementation. The
+  fix uses executable admission, rejects repository-local built-ins, and
+  passes only a minimal environment; the original reproducer no longer creates
+  its inherited-secret marker while all four real CLI checks still pass. A
+  final post-fix diff scan `4e1d5a3a-f623-473d-ac5b-888c45f8026e` completed
+  all ten changed production/package surfaces with no reportable finding. It
+  measured 15,804,217 total tokens (15,784,225 input; 15,544,320 cached input).
+  The known path-based spawn TOCTOU remains an explicitly documented
+  pre-existing architecture residual rather than a 0.17.8 regression.
 - `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
   before publication; retain both tags and never reuse them. Homebrew 0.16.2 is

@@ -94,7 +94,10 @@ subscription usage, and it does not create active measurement profiles by guessi
 The reviewed agy route places the exact `{{task}}` slot in argv. Its review output reports
 `"task_delivery": "argv"` and `"task_process_exposure": true`; local process inspection can see
 the task while the child runs. The executor uses `--mode accept-edits`, while advisor and evidence
-executors use `--mode plan`.
+executors use `--mode plan`. Agy 1.1.21 rejects the advertised `--effort` flag for configured
+models and disables plan mode when slash expansion is disabled, so read-only routes omit both
+`--effort` and `--disable-slash-commands`. Cheap and expensive evidence executors use the selected
+workflow JSON Schema; the prose advisor remains schema-free.
 
 The reviewed Grok route uses `--prompt-file {{task_file}}`. The runner creates an owner-only,
 transient file outside the Git workspace immediately before spawn and deletes it after success,
@@ -103,6 +106,8 @@ failure, timeout, or a child start error. Keeping it outside the clone prevents 
 `"task_delivery": "file"` and no argv exposure. The route also disables subagents, web search,
 and implicit prompt rewriting so the reviewed command does not silently widen the measurement
 surface.
+Cheap and expensive Grok evidence executors use the selected workflow JSON Schema; the prose
+advisor remains schema-free.
 
 agy JSON usage exposes `input_tokens`, `output_tokens`, `thinking_tokens`, and
 `cache_read_tokens`. Grok JSON exposes its own vendor-reported `total_cost_usd` plus

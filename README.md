@@ -69,6 +69,7 @@ wclass-advisory init --vendor codex \
   --model cheap=CHEAP --model advisor=ADVISOR --model expensive=EXPENSIVE \
   --effort cheap=low --effort advisor=high --effort expensive=high
 wclass-advisory doctor --vendor codex --workflow all
+wclass-advisory cli-check --vendor all
 wclass-advisory review --vendor codex --workflow implementation
 wclass-advisory install-skill --target codex --dry-run
 ```
@@ -83,6 +84,17 @@ must commit the workflow's prospective `.weightclass/verify*` before
 the [campaign contract](docs/advisory-campaign.md). Distribution makes the
 tool available; it does not establish cost savings, model quality, pricing,
 entitlement, or subscription availability.
+
+`doctor` locally invokes installed-CLI `--help`/`--version` with a minimal
+environment and temporary working directory, sends no task bytes or provider prompt,
+and reports
+`campaign_ready` separately from `dispatch_ready`. To test authentication and
+all three configured model roles without sending a project task, explicitly run
+`wclass-advisory provider-check --vendor codex --workflow review
+--confirm-provider-egress`. That command may consume quota or incur cost, never
+writes a campaign sample, and stores no provider output.
+Upgrades that change sealed provider argv use preserving, explicit migrations:
+`migrate-evidence` for Claude/Grok evidence and `migrate-routes` for agy.
 
 Native schema 2 and delegation protocol 2 add explicit source/account profiles,
 closed model-and-effort builders, directional profile/vendor authorization, and

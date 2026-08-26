@@ -142,7 +142,10 @@ def _top_parser() -> argparse.ArgumentParser:
         choices=(
             "init",
             "migrate-evidence",
+            "migrate-routes",
             "doctor",
+            "cli-check",
+            "provider-check",
             "review",
             "dispatch",
             "status",
@@ -164,7 +167,7 @@ def _run(arguments: Sequence[str], *, prune: bool) -> int:
     if any(argument == "--out-dir" or argument.startswith("--out-dir=") for argument in forwarded):
         parser.error("--out-dir is controlled by --campaign-root")
     campaign_root = parsed.campaign_root.expanduser().resolve()
-    runner_arguments = [*forwarded, "--workflow", parsed.workflow]
+    runner_arguments = [*forwarded, "--workflow", parsed.workflow, "--vendor", parsed.vendor]
     if prune:
         runner_arguments.append("--prune")
     try:
@@ -214,8 +217,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return managed_advisory.init_main(arguments[1:])
     if command == "migrate-evidence":
         return managed_advisory.migrate_evidence_main(arguments[1:])
+    if command == "migrate-routes":
+        return managed_advisory.migrate_routes_main(arguments[1:])
     if command == "doctor":
         return managed_advisory.doctor_main(arguments[1:])
+    if command == "cli-check":
+        return managed_advisory.cli_check_main(arguments[1:])
+    if command == "provider-check":
+        return managed_advisory.provider_check_main(arguments[1:])
     if command == "review":
         if not any(
             argument == "--profile" or argument.startswith("--profile=")

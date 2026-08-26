@@ -806,6 +806,9 @@ def main() -> int:
             routes = routes_from_profile(
                 arguments.route_profile.expanduser(),
                 read_only_executors=arguments.workflow != "implementation",
+                evidence_workflow=(
+                    arguments.workflow if arguments.workflow != "implementation" else None
+                ),
             )
             cheap = list(routes.cheap)
             advisor = list(routes.advisor)

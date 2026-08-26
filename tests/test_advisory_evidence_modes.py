@@ -256,6 +256,34 @@ class EvidenceCampaignAndRouteTests(unittest.TestCase):
         for command in codex:
             self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
 
+    def test_claude_production_routes_use_one_bounded_workflow_schema(self) -> None:
+        routes = load_module(ROUTES, "prospective_workflow_schema_routes")
+        definitions = {
+            "review": {"s", "ss", "ns", "rf", "rfs"},
+            "research": {"s", "ss", "ns", "rc", "rcs"},
+            "diagnosis": {"s", "ss", "ns", "dh", "dhs"},
+            "design": {"s", "ss", "ns", "do", "dos"},
+        }
+        for workflow, expected_defs in definitions.items():
+            with self.subTest(workflow=workflow):
+                compiled = routes.build_routes(
+                    self.profile("claude"),
+                    read_only_executors=True,
+                    evidence_workflow=workflow,
+                )
+                for role, command in zip(("cheap", "advisor", "expensive"), compiled, strict=True):
+                    if role == "advisor":
+                        self.assertNotIn("--json-schema", command)
+                        continue
+                    schema = json.loads(command[command.index("--json-schema") + 1])
+                    self.assertNotIn("oneOf", schema)
+                    self.assertEqual(schema["properties"]["mode"]["const"], workflow)
+                    self.assertEqual(set(schema["$defs"]), expected_defs)
+                    self.assertLessEqual(
+                        len(command[command.index("--json-schema") + 1].encode()),
+                        routes.MAX_COMMAND_TOKEN_BYTES,
+                    )
+
     def test_schema_two_campaign_binds_workflow_without_rewriting_schema_one(self) -> None:
         campaign = load_module(CAMPAIGN, "prospective_evidence_campaign")
         with tempfile.TemporaryDirectory() as directory:
@@ -561,6 +589,16 @@ class EvidenceRunnerTests(unittest.TestCase):
                 result_text, parsed = runner.extract_evidence_result(stdout, command, "review")
                 self.assertEqual(json.loads(result_text), expected)
                 self.assertEqual(parsed, expected)
+
+        codex_completed = (
+            codex_stdout
+            + "\n"
+            + json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1}})
+        )
+        self.assertEqual(
+            runner.evidence_result_shape(codex_completed, ["codex", "exec", "--json"]),
+            "json_text",
+        )
 
         shapes = (
             ("", "empty"),
