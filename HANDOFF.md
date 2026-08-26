@@ -57,6 +57,13 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   0.17.6 supersedes it. The 0.17.5 sdist is:
   - url: `https://files.pythonhosted.org/packages/1f/ff/b3149e13a08492fe760f141794d9ca81ab80e6bbe68061144b76428097a1/weightclass-0.17.5.tar.gz`
   - sha256: `d23979793552f0d14e415456a67b14934b3e70f85516191d8b1c87e79722edb6`
+- **`weightclass 0.17.6` is published on PyPI and Homebrew.** Implementation
+  PR #107, source-formula PR #108, and tap PR `ictechgy/homebrew-tap#22` are
+  merged. Release run `32963131319` passed immutable build, macOS 3.10/3.14,
+  candidate validation on Python 3.10/3.14, and exact trusted publication.
+  The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/c4/e2/40e23b2f217078b97ce553df774b779d5dfa05bb98518d60f47312c38093/weightclass-0.17.6.tar.gz`
+  - sha256: `08aa58d9c6c8ca944aa05b8707430312d3527df4a13781686d3a53a02d85b90f`
 - `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
   before publication; retain both tags and never reuse them. Homebrew 0.16.2 is
@@ -385,8 +392,12 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   evidence workflow. Final 0.17.6 security diff scan
   `e9d99a3e-2f5a-47ca-8dfc-e1bdb84ab6c7` reviewed all five changed source/
   package files, found no reportable vulnerability with complete coverage, and
-  used 4,880,148 tokens in one sequential thread. PR CI, merge,
-  installed-package, and release gates remain pending.
+  used 4,880,148 tokens in one sequential thread. PR CI, merge, and all release
+  gates pass. Exact uv and Homebrew installs report 0.17.6; both Codex and
+  Claude skills report managed onboarding 8; installed migration returns
+  `already_migrated=true` for `structured-v5`; installed doctor reports all
+  five Claude workflows ready with ten free lanes each; and installed review
+  reports the expected read-only stdin route.
 
 ## The routing-economics result
 
