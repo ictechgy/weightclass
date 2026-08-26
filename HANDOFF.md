@@ -382,12 +382,11 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   isolation passes 1,306 tests with 66 environment-specific skips.
   The machine's Claude evidence dry-run and actual migration both succeeded,
   legacy data remained separate, and source doctor/review accept every new
-  evidence workflow. The 0.17.5 security diff scan
-  `ea3a729d-09dd-41b5-b5d7-96a9b870fbda` reviewed all nine changed source/
+  evidence workflow. Final 0.17.6 security diff scan
+  `e9d99a3e-2f5a-47ca-8dfc-e1bdb84ab6c7` reviewed all five changed source/
   package files, found no reportable vulnerability with complete coverage, and
-  used 2,176,170 tokens in one sequential thread. The smaller 0.17.6 recovery
-  diff still needs its final security scan, PR CI, merge, installed-package,
-  and release gates.
+  used 4,880,148 tokens in one sequential thread. PR CI, merge,
+  installed-package, and release gates remain pending.
 
 ## The routing-economics result
 
