@@ -167,7 +167,10 @@ idempotent for identical inputs and refuses to overwrite a different campaign.
   JSON lines on stderr among other human diagnostics; parse only lines whose
   `event` is exactly `advisory_attempt_failed`. Use only the receipt's
   fixed `failure_stage`, child/verifier exit and timeout fields, and numeric
-  candidate counts to explain where the attempt stopped. For
+  candidate counts to explain where the attempt stopped. A fixed
+  `child_failure_code` and stdout/stderr presence booleans distinguish common
+  provider/CLI failures without retaining either stream. Treat the category as
+  a bounded heuristic, not provider-authored proof. For
   `failure_stage=verification`, compare `verify_exit_code` with the committed
   task-specific verifier's documented exit codes. A
   `failure_stage=verification_integrity` receipt means the verifier exited but

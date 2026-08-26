@@ -43,21 +43,21 @@ def accepted_result() -> dict[str, object]:
                 "[seed:receipt-privacy] Closed receipt schema excludes untrusted text",
                 "info",
                 "suppressed",
-                "src/weightclass/advisory/speculative_run.py:297",
+                "src/weightclass/advisory/speculative_run.py:314",
                 "failure_receipt selects only reviewed enums and bounded scalar values.",
             ),
             finding(
                 "[seed:emission-reliability] Receipt emission is an operator output boundary",
                 "info",
                 "suppressed",
-                "src/weightclass/advisory/speculative_run.py:337",
+                "src/weightclass/advisory/speculative_run.py:359",
                 "emit_failure_receipt serializes only the closed receipt and writes it to stderr.",
             ),
             finding(
                 "[seed:verification-classification] Ordinary verifier failures are explicit",
                 "info",
                 "suppressed",
-                "src/weightclass/advisory/speculative_run.py:3903",
+                "src/weightclass/advisory/speculative_run.py:4030",
                 "failure_kind and failure_stage are fixed before cleanup when verification fails.",
             ),
             finding(
@@ -65,7 +65,7 @@ def accepted_result() -> dict[str, object]:
                 "fallback values into records",
                 "info",
                 "suppressed",
-                "src/weightclass/advisory/speculative_run.py:4004",
+                "src/weightclass/advisory/speculative_run.py:4131",
                 "emit_failure_receipt reads fallback values without mutating the stored attempt.",
             ),
         ],
@@ -126,8 +126,8 @@ class AdvisoryReviewVerifierTests(unittest.TestCase):
         for location in (
             "missing.py:1",
             "../HANDOFF.md:1",
-            "src/weightclass/advisory/speculative_run.py:296",
-            "src/weightclass/advisory/speculative_run.py:4004",
+            "src/weightclass/advisory/speculative_run.py:313",
+            "src/weightclass/advisory/speculative_run.py:4131",
         ):
             with self.subTest(location=location):
                 value = accepted_result()

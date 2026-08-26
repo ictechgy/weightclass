@@ -161,11 +161,19 @@ class AdvisoryPortfolioTests(unittest.TestCase):
         cheap["result_shape"] = "prose"
         retry["failure_stage"] = "PRIVATE-TASK-MATERIAL"
         retry["result_shape"] = "PRIVATE-TASK-MATERIAL"
+        cheap_child = cheap["child"]
+        retry_child = retry["child"]
+        assert isinstance(cheap_child, dict) and isinstance(retry_child, dict)
+        cheap_child["failure_code"] = "permission_or_approval"
+        retry_child["failure_code"] = "PRIVATE-TASK-MATERIAL"
 
         campaign = first_campaign(self.build_result(records))
 
         self.assertEqual(campaign["failure_stages"], {"result": 1, "unknown": 1})
         self.assertEqual(campaign["result_shapes"], {"prose": 1, "unknown": 1})
+        self.assertEqual(
+            campaign["child_failure_codes"], {"permission_or_approval": 1, "unknown": 1}
+        )
         self.assertNotIn("PRIVATE", json.dumps(campaign, sort_keys=True))
 
     def test_rejects_duplicate_population_without_value_bearing_error(self) -> None:

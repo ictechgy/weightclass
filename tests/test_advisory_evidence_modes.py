@@ -237,7 +237,22 @@ class EvidenceCampaignAndRouteTests(unittest.TestCase):
             else:
                 self.assertEqual(permission, "dontAsk")
                 schema = json.loads(command[command.index("--json-schema") + 1])
-                self.assertEqual(schema["required"], ["schema_version", "mode"])
+                variants = schema["oneOf"]
+                self.assertEqual(
+                    {variant["properties"]["mode"]["const"] for variant in variants},
+                    {"review", "research", "diagnosis", "design"},
+                )
+                for variant in variants:
+                    self.assertFalse(variant["additionalProperties"])
+                    self.assertEqual(set(variant["required"]), set(variant["properties"]))
+                review = next(
+                    variant
+                    for variant in variants
+                    if variant["properties"]["mode"]["const"] == "review"
+                )
+                finding = review["properties"]["findings"]["items"]
+                self.assertFalse(finding["additionalProperties"])
+                self.assertIn("recommendation", finding["required"])
         codex = routes.build_routes(self.profile("codex"), read_only_executors=True)
         for command in codex:
             self.assertEqual(command[command.index("--sandbox") + 1], "read-only")

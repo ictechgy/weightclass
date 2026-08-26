@@ -42,6 +42,9 @@ class AdvisoryFailureReceiptAcceptanceTests(unittest.TestCase):
                 "exit_code": 0,
                 "timed_out": False,
                 "seconds": 12.5,
+                "failure_code": private_value,
+                "stdout_present": True,
+                "stderr_present": False,
             },
             "made_changes": True,
             "patch_lines": 27,
@@ -75,6 +78,9 @@ class AdvisoryFailureReceiptAcceptanceTests(unittest.TestCase):
                 "child_exit_code": 0,
                 "child_timed_out": False,
                 "child_seconds": 12.5,
+                "child_failure_code": "unknown",
+                "child_stdout_present": True,
+                "child_stderr_present": False,
                 "candidate_made_changes": True,
                 "candidate_patch_lines": 27,
                 "candidate_dropped_ignored": 1,
@@ -94,6 +100,22 @@ class AdvisoryFailureReceiptAcceptanceTests(unittest.TestCase):
         with mock.patch("sys.stderr", stderr):
             runner.emit_failure_receipt(attempt, route="cheap")
         self.assertEqual(json.loads(stderr.getvalue()), receipt)
+
+    def test_child_failure_diagnostics_are_fixed_categories(self) -> None:
+        runner = load_runner()
+        cases = (
+            ("", "Authentication failed: login required", 1, "authentication"),
+            ("", "rate_limit: too many requests", 1, "rate_limit"),
+            ("", "unknown option --legacy", 2, "invalid_invocation"),
+            ("", "permission denied; approval required", 1, "permission_or_approval"),
+            ("PRIVATE TASK MATERIAL", "opaque provider failure", 1, "unknown"),
+            ("PRIVATE TASK MATERIAL", "", 0, "none"),
+        )
+        for stdout, child_stderr, exit_code, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(
+                    runner.classify_child_failure(stdout, child_stderr, exit_code), expected
+                )
 
     def test_failed_verification_is_classified_before_workspace_cleanup(self) -> None:
         runner = load_runner()

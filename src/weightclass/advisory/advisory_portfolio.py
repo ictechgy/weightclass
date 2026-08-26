@@ -76,6 +76,20 @@ RESULT_SHAPES = frozenset(
         "unknown",
     }
 )
+CHILD_FAILURE_CODES = frozenset(
+    {
+        "none",
+        "timeout",
+        "authentication",
+        "rate_limit",
+        "context_limit",
+        "invalid_invocation",
+        "permission_or_approval",
+        "network",
+        "provider_unavailable",
+        "unknown",
+    }
+)
 
 
 def _finite_number(value: object) -> float | None:
@@ -326,6 +340,7 @@ def _campaign_status(
     both_failed = sum(1 for record in usable if _both_failed(record))
     failure_stages: dict[str, int] = {}
     result_shapes: dict[str, int] = {}
+    child_failure_codes: dict[str, int] = {}
     for record in records:
         for stage_name in ("cheap", "retry", "expensive"):
             attempt = record.get(stage_name)
@@ -339,6 +354,14 @@ def _campaign_status(
             if isinstance(result_shape, str):
                 result_shape = result_shape if result_shape in RESULT_SHAPES else "unknown"
                 result_shapes[result_shape] = result_shapes.get(result_shape, 0) + 1
+            child = attempt.get("child")
+            if isinstance(child, Mapping):
+                failure_code = child.get("failure_code")
+                if isinstance(failure_code, str) and failure_code != "none":
+                    failure_code = (
+                        failure_code if failure_code in CHILD_FAILURE_CODES else "unknown"
+                    )
+                    child_failure_codes[failure_code] = child_failure_codes.get(failure_code, 0) + 1
     abstention_reasons = [] if progress.decision_eligible else [progress.reason]
     abstention_reasons.extend(metric_abstentions)
     if infrastructure_failures:
@@ -360,6 +383,7 @@ def _campaign_status(
         "infrastructure_failures": infrastructure_failures,
         "failure_stages": dict(sorted(failure_stages.items())),
         "result_shapes": dict(sorted(result_shapes.items())),
+        "child_failure_codes": dict(sorted(child_failure_codes.items())),
         "decision_eligible": progress.decision_eligible,
         "reached_cap": progress.reached_cap,
         "abstention_reason": progress.reason,

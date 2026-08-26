@@ -89,6 +89,9 @@ after that event is vendor/verifier work, not silent lock acquisition.
 
 Release 0.17.5 introduces a new Claude evidence-route generation because the
 older plan-mode executor did not mechanically require the closed workflow JSON.
+The replacement uses the complete four-mode schema, including exact required
+fields, closed objects, bounded arrays, and bounded strings; the local parser
+remains the final byte-bounded validation boundary.
 Existing Claude review/research/diagnosis/design records are never rewritten or
 merged. Upgrade an existing managed root explicitly:
 
@@ -101,3 +104,10 @@ The old campaign files and records remain owner-private and read-only at their
 existing paths. Managed doctor, dispatch, and status select only the new
 `structured-v1` generation after migration. Claude implementation and every
 Codex population retain their existing paths and records.
+
+Failed child processes expose only a fixed `child_failure_code` plus stdout/
+stderr presence booleans. Categories cover authentication, rate limits, context
+limits, invalid invocation, permission/approval, network, provider availability,
+timeout, and unknown failures. No raw child output is retained. A failed
+implementation child that produced no candidate is classified as infrastructure,
+skips the verifier, and is excluded from model-quality denominators.

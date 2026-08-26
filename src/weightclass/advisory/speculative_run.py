@@ -136,6 +136,9 @@ class ChildResult(TypedDict):
     timed_out: bool
     seconds: float
     tokens: int | None
+    failure_code: str
+    stdout_present: bool
+    stderr_present: bool
     # 벤더가 말해 주는 만큼의 사용량. cost_usd 가 있으면 그것이 유일하게
     # 벤더 간 비교 가능한 수치다.
     usage: dict[str, object] | None
@@ -260,6 +263,20 @@ EVIDENCE_RESULT_SHAPES = frozenset(
         "unknown",
     }
 )
+CHILD_FAILURE_CODES = frozenset(
+    {
+        "none",
+        "timeout",
+        "authentication",
+        "rate_limit",
+        "context_limit",
+        "invalid_invocation",
+        "permission_or_approval",
+        "network",
+        "provider_unavailable",
+        "unknown",
+    }
+)
 SAFE_DIAGNOSTIC_CODES = frozenset(
     {
         "workspace_not_owned",
@@ -320,6 +337,11 @@ def failure_receipt(attempt: Mapping[str, object], route: str) -> dict[str, obje
         "child_exit_code": _receipt_exit_code(child_record.get("exit_code")),
         "child_timed_out": child_record.get("timed_out") is True,
         "child_seconds": _receipt_seconds(child_record.get("seconds")),
+        "child_failure_code": _receipt_enum(
+            child_record.get("failure_code"), CHILD_FAILURE_CODES, "unknown"
+        ),
+        "child_stdout_present": child_record.get("stdout_present") is True,
+        "child_stderr_present": child_record.get("stderr_present") is True,
         "candidate_made_changes": attempt.get("made_changes") is True,
         "candidate_patch_lines": _receipt_count(attempt.get("patch_lines")),
         "candidate_dropped_ignored": _receipt_count(attempt.get("dropped_ignored")),
@@ -927,6 +949,101 @@ def _prepare_task_command(command: list[str], task: str) -> tuple[list[str], str
     return prepared, "", path
 
 
+def classify_child_failure(stdout: str, stderr: str, exit_code: int | None) -> str:
+    """Reduce provider diagnostics to a fixed, task-free operational category.
+
+    This is deliberately heuristic and never controls acceptance. Raw streams may
+    contain task-derived text, so only this allowlisted category and presence bits
+    are persisted. Stderr is inspected first because it is less likely to contain
+    the model response; stdout remains a fallback for CLIs that emit JSON errors.
+    """
+    if exit_code == 0:
+        return "none"
+    text = f"{stderr[-65_536:]}\n{stdout[-65_536:]}".casefold()
+    categories = (
+        (
+            "authentication",
+            (
+                "not logged in",
+                "login required",
+                "authentication failed",
+                "unauthorized",
+                "invalid api key",
+                "invalid_api_key",
+                "oauth token",
+            ),
+        ),
+        (
+            "rate_limit",
+            (
+                "rate limit",
+                "rate_limit",
+                "too many requests",
+                "quota exceeded",
+                "usage limit",
+                "credit balance",
+            ),
+        ),
+        (
+            "context_limit",
+            (
+                "context length",
+                "context window",
+                "prompt is too long",
+                "too many tokens",
+                "maximum token",
+            ),
+        ),
+        (
+            "invalid_invocation",
+            (
+                "unknown option",
+                "unknown argument",
+                "unrecognized option",
+                "unrecognized argument",
+                "invalid choice",
+                "unexpected argument",
+            ),
+        ),
+        (
+            "permission_or_approval",
+            (
+                "permission denied",
+                "approval required",
+                "cannot request approval",
+                "not allowed",
+                "operation not permitted",
+                "requires approval",
+            ),
+        ),
+        (
+            "network",
+            (
+                "network error",
+                "connection refused",
+                "connection reset",
+                "could not resolve",
+                "dns error",
+                "offline",
+            ),
+        ),
+        (
+            "provider_unavailable",
+            (
+                "service unavailable",
+                "provider unavailable",
+                "server overloaded",
+                "overloaded_error",
+                "internal server error",
+            ),
+        ),
+    )
+    for category, markers in categories:
+        if any(marker in text for marker in markers):
+            return category
+    return "unknown"
+
+
 def run_child(
     command: list[str],
     workspace: Path,
@@ -1072,6 +1189,9 @@ def run_child(
             "seconds": round(time.monotonic() - started, 1),
             "tokens": partial.get("total_tokens") if partial else None,
             "usage": dict(partial) if partial else None,
+            "failure_code": "timeout",
+            "stdout_present": bool(stdout),
+            "stderr_present": bool(stderr),
         }, stdout
     structured = wants_structured_output(prepared_command)
     usage = extract_usage(stdout, stderr, prepared_command[0], structured)
@@ -1102,6 +1222,9 @@ def run_child(
         "seconds": round(time.monotonic() - started, 1),
         "tokens": usage.get("total_tokens") if usage else None,
         "usage": dict(usage) if usage else None,
+        "failure_code": classify_child_failure(stdout, stderr, code),
+        "stdout_present": bool(stdout),
+        "stderr_present": bool(stderr),
     }, stdout
 
 
@@ -3806,15 +3929,7 @@ def attempt(
             command, workspace, task, rates, allowed_env, child_home, prefer_prices
         )
         child_result = record["child"]
-        if workflow == "implementation" and (
-            child_result["timed_out"] or child_result["exit_code"] != 0
-        ):
-            record["error"] = (
-                "route_execution_timed_out"
-                if child_result["timed_out"]
-                else "route_execution_failed"
-            )
-            record["failure_stage"] = "execution"
+        child_execution_failed = child_result["timed_out"] or child_result["exit_code"] != 0
         if workflow != "implementation":
             if child_result["timed_out"] or child_result["exit_code"] != 0:
                 record["error"] = "read-only route did not return a usable result"
@@ -3858,6 +3973,17 @@ def attempt(
         # 결과와 수치만 기록한다는 것이므로 개수만 남긴다.
         record["dropped_ignored"] = len(dropped)
         record["made_changes"] = record["patch_lines"] > 0
+        if workflow == "implementation" and child_execution_failed and not record["made_changes"]:
+            record["error"] = (
+                "route_execution_timed_out"
+                if child_result["timed_out"]
+                else "route_execution_failed"
+            )
+            # A failed child that produced no candidate never reached a quality
+            # gate. Keep it out of the model-quality denominator, while the
+            # fixed child failure code explains the likely operational cause.
+            record["failure_kind"] = "infrastructure"
+            record["failure_stage"] = "execution"
         if workflow != "implementation":
             if record["made_changes"]:
                 record["error"] = "read-only route changed the repository"
@@ -4570,6 +4696,9 @@ def main() -> int:
                         "seconds": 0.0,
                         "tokens": None,
                         "usage": None,
+                        "failure_code": "unknown",
+                        "stdout_present": False,
+                        "stderr_present": False,
                     },
                     "chars": 0,
                     "truncated": False,
