@@ -34,6 +34,7 @@ class AdvisoryDistributionTests(unittest.TestCase):
         self.assertEqual(advisory.returncode, 0, advisory.stderr)
         for command in (
             "init",
+            "migrate-evidence",
             "doctor",
             "review",
             "dispatch",
@@ -115,6 +116,7 @@ class AdvisoryDistributionTests(unittest.TestCase):
         expected = {
             "prune": "usage: wclass-advisory prune",
             "review": "usage: wclass-advisory review",
+            "migrate-evidence": "usage: wclass-advisory migrate-evidence",
             "install-skill": "usage: wclass-advisory install-skill",
         }
         for command, usage in expected.items():

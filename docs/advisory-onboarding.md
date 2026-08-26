@@ -86,3 +86,18 @@ allocator exceeded its bounded wait; other preflight or binding failures remain
 plus a point-in-time free/busy snapshot. After lanes are selected, dispatch
 immediately emits a task-free `managed_dispatch_started` event; a long silence
 after that event is vendor/verifier work, not silent lock acquisition.
+
+Release 0.17.5 introduces a new Claude evidence-route generation because the
+older plan-mode executor did not mechanically require the closed workflow JSON.
+Existing Claude review/research/diagnosis/design records are never rewritten or
+merged. Upgrade an existing managed root explicitly:
+
+```sh
+wclass-advisory migrate-evidence --vendor claude --dry-run
+wclass-advisory migrate-evidence --vendor claude
+```
+
+The old campaign files and records remain owner-private and read-only at their
+existing paths. Managed doctor, dispatch, and status select only the new
+`structured-v1` generation after migration. Claude implementation and every
+Codex population retain their existing paths and records.

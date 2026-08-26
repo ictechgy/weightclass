@@ -10,8 +10,9 @@ Choose the narrowest mode matching the requested deliverable.
 | `diagnosis` | Reproduction and root-cause hypotheses | The reproduction is real and the claimed cause explains or predicts the observed behavior |
 | `design` | Convergent, repository-grounded options and recommendation | Hard constraints, cited observations, accessibility or compatibility checks, and measurable acceptance criteria hold |
 
-Evidence modes are read-only. Claude executors use plan mode without Edit;
-Codex executors use a read-only sandbox. Any tracked, untracked, ignored, or
+Evidence modes are read-only. Claude executors use `dontAsk` with only Read,
+Glob, and Grep plus a task-free JSON Schema; their advisor remains in plan
+mode. Codex executors use a read-only sandbox. Any tracked, untracked, ignored, or
 known agent-scaffolding write rejects the attempt. The runner supplies the
 exact closed result schema for the selected mode.
 

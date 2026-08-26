@@ -335,6 +335,40 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   other projects were running, and the Mac legacy `run` shim emitted its fixed
   compatibility redirect before invoking managed dispatch.
 
+### Claude evidence contract and execution precedence (0.17.5 candidate)
+
+- Completed managed evidence records showed repeated Claude
+  `failure_stage=result` with no verifier execution, while Codex sometimes
+  reached the same closed workflow verifier. Source and local Claude 2.1.246
+  help confirmed that the built-in Claude evidence route used plan mode plus a
+  JSON envelope but did not request JSON Schema structured output.
+- Claude cheap/expensive evidence executors now use `dontAsk`, only Read/Glob/
+  Grep, and a task-free JSON Schema requiring schema version and workflow mode;
+  the runner retains its stricter closed per-workflow parser. Claude advisor
+  prose remains in plan mode. Claude implementation and every Codex route are
+  unchanged.
+- Existing Claude evidence populations are never rewritten or merged. Managed
+  paths use a new `structured-v1` generation, and explicit
+  `migrate-evidence --vendor claude` validates old bindings and creates empty
+  current campaigns while leaving every legacy manifest/result byte in place.
+  Managed status selects explicit current paths rather than directory-wide
+  discovery.
+- Evidence attempts now record only fixed output shapes and whether a provider
+  envelope was extracted. Portfolio output aggregates those shapes and failure
+  stages through closed allowlists. Implementation children that exit nonzero
+  without changes take `failure_stage=execution`, skip the irrelevant verifier
+  and advisor, retain the numeric child exit in the receipt, and can still
+  escalate under the sealed policy.
+- Focused route, migration, output-shape, implementation-precedence, portfolio,
+  distribution-command, and existing advisory tests pass. The full source suite
+  passes 1,311 tests with 25 skips; the Advisory-focused suite passes 141 tests
+  with 6 skips; Ruff and strict mypy over 165 source files pass; and 0.17.5
+  wheel/sdist isolation passes 1,304 tests with 65 environment-specific skips.
+  The machine's Claude evidence dry-run and actual migration both succeeded,
+  legacy data remained separate, and source doctor/review accept every new
+  evidence workflow. Security, PR, installed-package, and release gates remain
+  pending.
+
 ## The routing-economics result
 
 This is the reason the study existed, so keep the conclusion with the code.

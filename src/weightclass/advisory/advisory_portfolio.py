@@ -50,6 +50,32 @@ WORKFLOWS = frozenset({"implementation", "review", "research", "diagnosis", "des
 STAGES = ("cheap", "advice_first", "advice_failure", "retry", "expensive")
 _PROFILE_NAME = re.compile(r"(?P<vendor>[a-z0-9][a-z0-9._-]{0,63})-profile\.json\Z")
 _WORKFLOW_ORDER = ("implementation", "review", "research", "diagnosis", "design")
+FAILURE_STAGES = frozenset(
+    {
+        "setup",
+        "execution",
+        "result",
+        "handover",
+        "verification",
+        "verification_integrity",
+        "acceptance",
+        "persistence",
+        "unknown",
+    }
+)
+RESULT_SHAPES = frozenset(
+    {
+        "empty",
+        "unstructured",
+        "structured_output",
+        "json_text",
+        "fenced_json",
+        "prose",
+        "envelope_without_result",
+        "malformed_envelope",
+        "unknown",
+    }
+)
 
 
 def _finite_number(value: object) -> float | None:
@@ -298,6 +324,21 @@ def _campaign_status(
     )
     escalations = sum(1 for record in usable if record.get("escalated") is True)
     both_failed = sum(1 for record in usable if _both_failed(record))
+    failure_stages: dict[str, int] = {}
+    result_shapes: dict[str, int] = {}
+    for record in records:
+        for stage_name in ("cheap", "retry", "expensive"):
+            attempt = record.get(stage_name)
+            if not isinstance(attempt, Mapping):
+                continue
+            failure_stage = attempt.get("failure_stage")
+            if isinstance(failure_stage, str):
+                failure_stage = failure_stage if failure_stage in FAILURE_STAGES else "unknown"
+                failure_stages[failure_stage] = failure_stages.get(failure_stage, 0) + 1
+            result_shape = attempt.get("result_shape")
+            if isinstance(result_shape, str):
+                result_shape = result_shape if result_shape in RESULT_SHAPES else "unknown"
+                result_shapes[result_shape] = result_shapes.get(result_shape, 0) + 1
     abstention_reasons = [] if progress.decision_eligible else [progress.reason]
     abstention_reasons.extend(metric_abstentions)
     if infrastructure_failures:
@@ -317,6 +358,8 @@ def _campaign_status(
         "escalations": escalations,
         "both_failed": both_failed,
         "infrastructure_failures": infrastructure_failures,
+        "failure_stages": dict(sorted(failure_stages.items())),
+        "result_shapes": dict(sorted(result_shapes.items())),
         "decision_eligible": progress.decision_eligible,
         "reached_cap": progress.reached_cap,
         "abstention_reason": progress.reason,

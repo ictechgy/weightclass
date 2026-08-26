@@ -46,6 +46,90 @@ def custom_profile(vendor: str) -> dict[str, object]:
 
 
 class ManagedAdvisoryInitializationTests(unittest.TestCase):
+    def test_claude_evidence_migration_preserves_legacy_population(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            with mock.patch.object(
+                managed_advisory,
+                "campaign_paths",
+                side_effect=managed_advisory.legacy_campaign_paths,
+            ):
+                managed_advisory.initialize_campaign_set(
+                    state_root,
+                    profile=codex_profile() | {"vendor": "claude"},
+                    prices=None,
+                    planned_tasks=60,
+                    max_tasks=150,
+                    dry_run=False,
+                )
+            legacy = managed_advisory.legacy_campaign_paths(state_root, "claude", "review")
+            legacy_manifest = advisory_campaign.load_manifest(legacy.campaign)
+            record = {
+                "campaign": advisory_campaign.record_binding(legacy_manifest, 1),
+                "workflow": "review",
+            }
+            log = legacy.results / "runs.jsonl"
+            log.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            log.chmod(0o600)
+            campaign_before = legacy.campaign.read_bytes()
+            log_before = log.read_bytes()
+
+            preview = managed_advisory.migrate_evidence_campaigns(
+                state_root, vendor="claude", dry_run=True
+            )
+            receipt = managed_advisory.migrate_evidence_campaigns(
+                state_root, vendor="claude", dry_run=False
+            )
+            repeated = managed_advisory.migrate_evidence_campaigns(
+                state_root, vendor="claude", dry_run=False
+            )
+
+            self.assertFalse(preview["already_migrated"])
+            self.assertFalse(receipt["already_migrated"])
+            self.assertTrue(repeated["already_migrated"])
+            self.assertTrue(receipt["legacy_preserved"])
+            self.assertEqual(legacy.campaign.read_bytes(), campaign_before)
+            self.assertEqual(log.read_bytes(), log_before)
+            current = managed_advisory.campaign_paths(state_root, "claude", "review")
+            self.assertIn(managed_advisory.CLAUDE_EVIDENCE_GENERATION, current.campaign.name)
+            self.assertTrue(current.campaign.is_file())
+            self.assertTrue(current.results.is_dir())
+            self.assertFalse((current.results / "runs.jsonl").exists())
+            _, _, routes = managed_advisory._configuration(state_root, "claude", "review")
+            self.assertEqual(
+                routes.cheap[routes.cheap.index("--permission-mode") + 1],
+                "dontAsk",
+            )
+            self.assertIn("--json-schema", routes.cheap)
+            stdout = io.StringIO()
+            with mock.patch("sys.stdout", stdout):
+                self.assertEqual(
+                    managed_advisory.status_main(["--state-root", str(state_root)]),
+                    0,
+                )
+            status = json.loads(stdout.getvalue())
+            review_status = next(
+                item
+                for item in status["campaigns"]
+                if item["vendor"] == "claude" and item["workflow"] == "review"
+            )
+            self.assertEqual(review_status["tasks"], 0)
+
+    def test_only_claude_evidence_paths_are_generation_versioned(self) -> None:
+        root = Path("/private/advisory-v1")
+        self.assertIn(
+            managed_advisory.CLAUDE_EVIDENCE_GENERATION,
+            managed_advisory.campaign_paths(root, "claude", "review").campaign.name,
+        )
+        self.assertEqual(
+            managed_advisory.campaign_paths(root, "claude", "implementation"),
+            managed_advisory.legacy_campaign_paths(root, "claude", "implementation"),
+        )
+        self.assertEqual(
+            managed_advisory.campaign_paths(root, "codex", "review"),
+            managed_advisory.legacy_campaign_paths(root, "codex", "review"),
+        )
+
     def test_initialization_creates_one_private_cross_project_campaign_set(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state_root = Path(directory) / "advisory-v1"

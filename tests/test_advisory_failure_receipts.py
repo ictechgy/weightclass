@@ -50,6 +50,8 @@ class AdvisoryFailureReceiptAcceptanceTests(unittest.TestCase):
             "accepted": False,
             "failure_kind": private_value,
             "failure_stage": "verification",
+            "result_shape": private_value,
+            "envelope_extracted": True,
             "verify": {
                 "passed": False,
                 "exit_code": 17,
@@ -80,6 +82,8 @@ class AdvisoryFailureReceiptAcceptanceTests(unittest.TestCase):
                 "verify_exit_code": 17,
                 "verify_timed_out": False,
                 "verify_seconds": 3.5,
+                "result_shape": "unknown",
+                "envelope_extracted": True,
             },
         )
         self.assertNotIn(private_value, encoded)

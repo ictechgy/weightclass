@@ -37,6 +37,8 @@ else:
 
 SCHEMA_VERSION = 1
 WORKFLOWS = ("implementation", "review", "research", "diagnosis", "design")
+EVIDENCE_WORKFLOWS = WORKFLOWS[1:]
+CLAUDE_EVIDENCE_GENERATION = "structured-v1"
 ROLES = ("cheap", "advisor", "expensive")
 BUILTIN_VENDORS = ("codex", "claude", "agy", "grok")
 EXPECTED_BASELINE_FAILURE = 42
@@ -90,6 +92,16 @@ class DoctorReceipt(TypedDict):
     availability: list[dict[str, object]]
 
 
+class EvidenceMigrationReceipt(TypedDict):
+    schema_version: int
+    vendor: str
+    workflows: list[str]
+    generation: str
+    already_migrated: bool
+    legacy_preserved: bool
+    dry_run: bool
+
+
 @dataclass(frozen=True)
 class CampaignPaths:
     profile: Path
@@ -122,6 +134,21 @@ def default_state_root() -> Path:
 
 
 def campaign_paths(state_root: Path, vendor: str, workflow: str) -> CampaignPaths:
+    if not state_root.is_absolute() or not _VENDOR.fullmatch(vendor) or workflow not in WORKFLOWS:
+        _fail()
+    if vendor == "claude" and workflow in EVIDENCE_WORKFLOWS:
+        infix = f"-{workflow}-{CLAUDE_EVIDENCE_GENERATION}"
+    else:
+        infix = "" if workflow == "implementation" else f"-{workflow}"
+    return CampaignPaths(
+        profile=state_root / f"{vendor}-profile.json",
+        prices=state_root / f"{vendor}-prices.json",
+        campaign=state_root / f"{vendor}{infix}-shape-b.json",
+        results=state_root / f"{vendor}{infix}-results",
+    )
+
+
+def legacy_campaign_paths(state_root: Path, vendor: str, workflow: str) -> CampaignPaths:
     if not state_root.is_absolute() or not _VENDOR.fullmatch(vendor) or workflow not in WORKFLOWS:
         _fail()
     infix = "" if workflow == "implementation" else f"-{workflow}"
@@ -506,6 +533,110 @@ def initialize_campaign_set(
     finally:
         _release_lock(descriptor)
     return _receipt(vendor, prices=prices_payload is not None, already=False, dry_run=False)
+
+
+def _migration_receipt(*, already: bool, dry_run: bool) -> EvidenceMigrationReceipt:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "vendor": "claude",
+        "workflows": list(EVIDENCE_WORKFLOWS),
+        "generation": CLAUDE_EVIDENCE_GENERATION,
+        "already_migrated": already,
+        "legacy_preserved": True,
+        "dry_run": dry_run,
+    }
+
+
+def migrate_evidence_campaigns(
+    state_root: Path, *, vendor: str, dry_run: bool
+) -> EvidenceMigrationReceipt:
+    """Create a new Claude evidence generation without changing old populations."""
+    if vendor != "claude":
+        _fail()
+    _private_directory(state_root, create=False)
+    descriptor = _setup_lock(state_root)
+    created_files: list[Path] = []
+    created_directories: list[Path] = []
+    try:
+        current = [campaign_paths(state_root, vendor, workflow) for workflow in EVIDENCE_WORKFLOWS]
+        current_exists = [
+            selected.campaign.exists() or selected.results.exists() for selected in current
+        ]
+        if any(current_exists):
+            if not all(current_exists):
+                _fail()
+            for workflow in EVIDENCE_WORKFLOWS:
+                _configuration(state_root, vendor, workflow)
+            return _migration_receipt(already=True, dry_run=dry_run)
+
+        profile_path = legacy_campaign_paths(state_root, vendor, "implementation").profile
+        _private_regular(profile_path)
+        profile = _profile_from_path(profile_path)
+        if profile.get("vendor") != vendor:
+            _fail()
+        verifier = state_root / "verify-project.py"
+        _private_regular(verifier, executable=True)
+        prices_path = legacy_campaign_paths(state_root, vendor, "implementation").prices
+        selected_prices: Path | None = None
+        if prices_path.exists() or prices_path.is_symlink():
+            _private_regular(prices_path)
+            selected_prices = prices_path
+
+        legacy_manifests: dict[str, advisory_campaign.CampaignManifest] = {}
+        for workflow in EVIDENCE_WORKFLOWS:
+            selected = legacy_campaign_paths(state_root, vendor, workflow)
+            _private_regular(selected.campaign)
+            _private_directory(selected.results, create=False)
+            manifest = advisory_campaign.load_manifest(selected.campaign)
+            if manifest.get("workflow") != workflow or (
+                manifest["cost_basis"] == "price_table"
+            ) != (selected_prices is not None):
+                _fail()
+            advisory_campaign.load_merged_lane_records(
+                manifest,
+                selected.results,
+                advisory_campaign.ANONYMOUS_LANE_COUNT,
+            )
+            legacy_manifests[workflow] = manifest
+
+        if dry_run:
+            return _migration_receipt(already=False, dry_run=True)
+
+        try:
+            for workflow, selected in zip(EVIDENCE_WORKFLOWS, current, strict=True):
+                previous = legacy_manifests[workflow]
+                manifest = _manifest_for(
+                    profile_path,
+                    workflow=workflow,
+                    verifier=verifier,
+                    prices=selected_prices,
+                    planned_tasks=previous["planned_tasks"],
+                    max_tasks=previous["max_tasks"],
+                )
+                advisory_campaign.write_manifest(selected.campaign, manifest)
+                created_files.append(selected.campaign)
+                selected.results.mkdir(mode=0o700)
+                created_directories.append(selected.results)
+            directory_descriptor = os.open(state_root, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
+            for directory in reversed(created_directories):
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+            for file_path in reversed(created_files):
+                try:
+                    file_path.unlink()
+                except OSError:
+                    pass
+            raise ManagedAdvisoryError() from None
+    finally:
+        _release_lock(descriptor)
+    return _migration_receipt(already=False, dry_run=False)
 
 
 def configured_vendors(state_root: Path) -> tuple[str, ...]:
@@ -961,6 +1092,25 @@ def init_main(argv: Sequence[str]) -> int:
     return 0
 
 
+def migrate_evidence_main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(prog="wclass-advisory migrate-evidence", allow_abbrev=False)
+    parser.add_argument("--state-root", type=Path)
+    parser.add_argument("--vendor", required=True, choices=("claude",))
+    parser.add_argument("--dry-run", action="store_true")
+    arguments = parser.parse_args(argv)
+    try:
+        receipt = migrate_evidence_campaigns(
+            _root(arguments.state_root),
+            vendor=arguments.vendor,
+            dry_run=arguments.dry_run,
+        )
+    except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
+        print(json.dumps({"error": "managed_evidence_migration_rejected"}), file=sys.stderr)
+        return 2
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
 def doctor_main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(prog="wclass-advisory doctor", allow_abbrev=False)
     parser.add_argument("--state-root", type=Path)
@@ -1057,13 +1207,26 @@ def status_main(argv: Sequence[str]) -> int:
     arguments = parser.parse_args(argv)
     try:
         root = _root(arguments.state_root)
-        configured_vendors(root)
+        vendors = configured_vendors(root)
     except (OSError, ManagedAdvisoryError):
         print(json.dumps({"error": "managed_configuration_unavailable"}), file=sys.stderr)
         return 2
     original = sys.argv
     try:
-        sys.argv = ["wclass-advisory status", "--campaign-directory", str(root)]
+        portfolio_arguments = ["wclass-advisory status"]
+        for vendor in vendors:
+            for workflow in WORKFLOWS:
+                selected = campaign_paths(root, vendor, workflow)
+                portfolio_arguments.extend(
+                    (
+                        "--campaign",
+                        vendor,
+                        workflow,
+                        str(selected.campaign),
+                        str(selected.results),
+                    )
+                )
+        sys.argv = portfolio_arguments
         return advisory_portfolio.main()
     finally:
         sys.argv = original

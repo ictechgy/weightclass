@@ -152,6 +152,22 @@ class AdvisoryPortfolioTests(unittest.TestCase):
         self.assertNotIn("PRIVATE-RESULTS", rendered)
         self.assertNotIn("task", rendered.casefold().replace("tasks", ""))
 
+    def test_aggregates_only_fixed_failure_stages_and_result_shapes(self) -> None:
+        records = sample_records()
+        cheap = records[1]["cheap"]
+        retry = records[2]["retry"]
+        assert isinstance(cheap, dict) and isinstance(retry, dict)
+        cheap["failure_stage"] = "result"
+        cheap["result_shape"] = "prose"
+        retry["failure_stage"] = "PRIVATE-TASK-MATERIAL"
+        retry["result_shape"] = "PRIVATE-TASK-MATERIAL"
+
+        campaign = first_campaign(self.build_result(records))
+
+        self.assertEqual(campaign["failure_stages"], {"result": 1, "unknown": 1})
+        self.assertEqual(campaign["result_shapes"], {"prose": 1, "unknown": 1})
+        self.assertNotIn("PRIVATE", json.dumps(campaign, sort_keys=True))
+
     def test_rejects_duplicate_population_without_value_bearing_error(self) -> None:
         portfolio = load_portfolio()
         entry = portfolio.PortfolioEntry(

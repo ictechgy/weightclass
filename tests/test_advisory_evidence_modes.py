@@ -228,9 +228,16 @@ class EvidenceCampaignAndRouteTests(unittest.TestCase):
     def test_read_only_profiles_remove_executor_write_authority(self) -> None:
         routes = load_module(ROUTES, "prospective_evidence_routes")
         claude = routes.build_routes(self.profile("claude"), read_only_executors=True)
-        for command in claude:
-            self.assertEqual(command[command.index("--permission-mode") + 1], "plan")
+        for role, command in zip(("cheap", "advisor", "expensive"), claude, strict=True):
             self.assertNotIn("Edit", command[command.index("--tools") + 1].split(","))
+            permission = command[command.index("--permission-mode") + 1]
+            if role == "advisor":
+                self.assertEqual(permission, "plan")
+                self.assertNotIn("--json-schema", command)
+            else:
+                self.assertEqual(permission, "dontAsk")
+                schema = json.loads(command[command.index("--json-schema") + 1])
+                self.assertEqual(schema["required"], ["schema_version", "mode"])
         codex = routes.build_routes(self.profile("codex"), read_only_executors=True)
         for command in codex:
             self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
@@ -540,6 +547,22 @@ class EvidenceRunnerTests(unittest.TestCase):
                 result_text, parsed = runner.extract_evidence_result(stdout, command, "review")
                 self.assertEqual(json.loads(result_text), expected)
                 self.assertEqual(parsed, expected)
+
+        shapes = (
+            ("", "empty"),
+            (claude_structured_stdout, "structured_output"),
+            (claude_stdout, "json_text"),
+            (json.dumps({"result": f"```json\n{text}\n```"}), "fenced_json"),
+            (json.dumps({"result": "plain planning prose"}), "prose"),
+            (json.dumps({"usage": {"input_tokens": 1}}), "envelope_without_result"),
+            ("not-json", "malformed_envelope"),
+        )
+        for stdout, expected_shape in shapes:
+            with self.subTest(expected_shape=expected_shape):
+                self.assertEqual(
+                    runner.evidence_result_shape(stdout, ["claude", "--output-format", "json"]),
+                    expected_shape,
+                )
 
         non_finite = json.dumps(
             {"structured_output": {"schema_version": float("nan")}}, allow_nan=True

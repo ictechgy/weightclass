@@ -31,6 +31,18 @@ ROLES = ("cheap", "advisor", "expensive")
 WORKFLOWS = ("implementation", "evidence")
 TASK_PLACEHOLDER = "{{task}}"
 TASK_FILE_PLACEHOLDER = "{{task_file}}"
+EVIDENCE_JSON_SCHEMA = json.dumps(
+    {
+        "type": "object",
+        "required": ["schema_version", "mode"],
+        "properties": {
+            "schema_version": {"const": 1},
+            "mode": {"enum": ["review", "research", "diagnosis", "design"]},
+        },
+    },
+    sort_keys=True,
+    separators=(",", ":"),
+)
 
 
 class AdvisoryRouteError(ValueError):
@@ -247,7 +259,8 @@ def build_routes(
 
     def claude(role: str, *, advisor: bool) -> tuple[str, ...]:
         read_only = advisor or read_only_executors
-        permission = "plan" if read_only else "acceptEdits"
+        evidence_executor = read_only_executors and not advisor
+        permission = "dontAsk" if evidence_executor else "plan" if advisor else "acceptEdits"
         command: tuple[str, ...] = (
             "claude",
             "--print",
@@ -257,9 +270,13 @@ def build_routes(
             permission,
         )
         command += ("--tools", "Read,Glob,Grep" if read_only else "Read,Edit,Glob,Grep")
-        return command + (
+        command += (
             "--output-format",
             "json",
+        )
+        if evidence_executor:
+            command += ("--json-schema", EVIDENCE_JSON_SCHEMA)
+        return command + (
             "--model",
             models[role],
             "--effort",
