@@ -335,6 +335,47 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   other projects were running, and the Mac legacy `run` shim emitted its fixed
   compatibility redirect before invoking managed dispatch.
 
+### Claude evidence contract and execution precedence (0.17.5 candidate)
+
+- Completed managed evidence records showed repeated Claude
+  `failure_stage=result` with no verifier execution, while Codex sometimes
+  reached the same closed workflow verifier. Source and local Claude 2.1.246
+  help confirmed that the built-in Claude evidence route used plan mode plus a
+  JSON envelope but did not request JSON Schema structured output.
+- Claude cheap/expensive evidence executors now use `dontAsk`, only Read/Glob/
+  Grep, and the complete closed union of all four task-free evidence schemas;
+  every nested object, required field, bounded list, and bounded string is
+  represented. The runner still enforces the exact selected workflow with its
+  local byte-bounded parser. Claude advisor prose remains in plan mode. Claude
+  implementation and every Codex route are unchanged.
+- Existing Claude evidence populations are never rewritten or merged. Managed
+  paths use a new `structured-v1` generation, and explicit
+  `migrate-evidence --vendor claude` validates old bindings and creates empty
+  current campaigns while leaving every legacy manifest/result byte in place.
+  Managed status selects explicit current paths rather than directory-wide
+  discovery.
+- Evidence attempts now record only fixed output shapes and whether a provider
+  envelope was extracted. Portfolio output aggregates those shapes and failure
+  stages through closed allowlists. Implementation children that exit nonzero
+  without changes take `failure_stage=execution`, are classified as
+  infrastructure, skip the irrelevant verifier and advisor, retain the numeric
+  child exit plus only a fixed heuristic failure category and stream-presence
+  booleans, and can still escalate under the sealed policy. Portfolio output
+  aggregates only allowlisted child failure categories.
+- Focused route, migration, output-shape, implementation-precedence, child
+  diagnostic, portfolio, distribution-command, and existing advisory tests
+  pass. The full source suite passes 1,312 tests with 26 skips; the
+  Advisory-focused suite passes 142 tests with 7 skips; Ruff, formatting,
+  compileall, and strict mypy over 165 source files pass; and 0.17.5 wheel/sdist
+  isolation passes 1,305 tests with 66 environment-specific skips.
+  The machine's Claude evidence dry-run and actual migration both succeeded,
+  legacy data remained separate, and source doctor/review accept every new
+  evidence workflow. Final-head security diff scan
+  `ea3a729d-09dd-41b5-b5d7-96a9b870fbda` reviewed all nine changed source/
+  package files, found no reportable vulnerability with complete coverage, and
+  used 2,176,170 tokens in one sequential thread. PR CI, merge,
+  installed-package, and release gates remain pending.
+
 ## The routing-economics result
 
 This is the reason the study existed, so keep the conclusion with the code.

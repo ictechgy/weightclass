@@ -56,6 +56,13 @@ are user-selected opaque configuration.
   fingerprint into old records, reseal over the population, or silently start
   a replacement campaign. Report the exact value-free code and stop. Do not
   substitute direct implementation for the explicitly requested advisory run.
+- Claude evidence executors use a structured-output generation distinct from
+  the earlier plan-mode population. If Claude implementation doctor is ready
+  but an evidence workflow reports managed configuration unavailable after an
+  upgrade, run `wclass-advisory migrate-evidence --vendor claude --dry-run`.
+  Explain that all old Claude evidence records remain separate and read-only,
+  obtain approval for the state change, then run the same command without
+  `--dry-run`. Never copy old records into the new generation.
 - Select one workflow from the user's outcome. Read
   [references/modes.md](references/modes.md) when choosing a mode or preparing
   its verifier.
@@ -160,7 +167,10 @@ idempotent for identical inputs and refuses to overwrite a different campaign.
   JSON lines on stderr among other human diagnostics; parse only lines whose
   `event` is exactly `advisory_attempt_failed`. Use only the receipt's
   fixed `failure_stage`, child/verifier exit and timeout fields, and numeric
-  candidate counts to explain where the attempt stopped. For
+  candidate counts to explain where the attempt stopped. A fixed
+  `child_failure_code` and stdout/stderr presence booleans distinguish common
+  provider/CLI failures without retaining either stream. Treat the category as
+  a bounded heuristic, not provider-authored proof. For
   `failure_stage=verification`, compare `verify_exit_code` with the committed
   task-specific verifier's documented exit codes. A
   `failure_stage=verification_integrity` receipt means the verifier exited but
@@ -170,6 +180,10 @@ idempotent for identical inputs and refuses to overwrite a different campaign.
   when that distinction is useful. Never request a deleted workspace, infer a
   failure from model prose, or claim the receipt contains raw verifier output.
   The receipt is operational evidence, not an effectiveness verdict.
+  Evidence receipts additionally expose only a fixed `result_shape` and an
+  `envelope_extracted` boolean. Use these to distinguish structured output,
+  JSON text, fenced JSON, prose, empty output, and malformed/empty envelopes;
+  they never contain the child result itself.
 - Evidence workflows print the winning canonical JSON only after aggregate
   logging. Use that transient output to answer the user. Do not save the result
   body, verifier output, advice, task, source paths, or fingerprints elsewhere.

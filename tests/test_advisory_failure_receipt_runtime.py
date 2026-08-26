@@ -179,6 +179,50 @@ class AdvisoryFailureReceiptRuntimeTests(unittest.TestCase):
                 "verification_integrity",
             )
 
+    @unittest.skipUnless(REPOSITORY_GIT_AVAILABLE, "source Git repository unavailable")
+    def test_nonzero_implementation_child_takes_precedence_over_verification(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    runner,
+                    "run_verify",
+                    side_effect=AssertionError("verifier must not run"),
+                ),
+                mock.patch("sys.stderr", stderr),
+            ):
+                record, verify_output, patch = runner.attempt(
+                    "cheap",
+                    [sys.executable, "-c", "raise SystemExit(7)"],
+                    ROOT,
+                    runner.head_commit(ROOT),
+                    "bounded task",
+                    output / "unused-verify",
+                    output,
+                    output / "workspaces.txt",
+                    frozenset(),
+                    None,
+                    None,
+                    None,
+                    False,
+                )
+
+            receipt = json.loads(stderr.getvalue())
+            self.assertEqual(record["failure_stage"], "execution")
+            self.assertEqual(record["error"], "route_execution_failed")
+            self.assertEqual(record["failure_kind"], "infrastructure")
+            self.assertEqual(record["verify"]["exit_code"], None)
+            self.assertEqual(receipt["child_exit_code"], 7)
+            self.assertEqual(receipt["child_failure_code"], "unknown")
+            self.assertFalse(receipt["child_stdout_present"])
+            self.assertFalse(receipt["child_stderr_present"])
+            self.assertEqual(receipt["failure_stage"], "execution")
+            self.assertEqual(receipt["verify_exit_code"], None)
+            self.assertEqual(verify_output, "")
+            self.assertEqual(patch, b"")
+
 
 if __name__ == "__main__":
     unittest.main()

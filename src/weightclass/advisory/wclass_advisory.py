@@ -141,6 +141,7 @@ def _top_parser() -> argparse.ArgumentParser:
         "command",
         choices=(
             "init",
+            "migrate-evidence",
             "doctor",
             "review",
             "dispatch",
@@ -211,6 +212,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = arguments[0]
     if command == "init":
         return managed_advisory.init_main(arguments[1:])
+    if command == "migrate-evidence":
+        return managed_advisory.migrate_evidence_main(arguments[1:])
     if command == "doctor":
         return managed_advisory.doctor_main(arguments[1:])
     if command == "review":

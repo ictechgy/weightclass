@@ -74,8 +74,10 @@ wclass-advisory review --profile ./claude-profile.json
 wclass-advisory review --profile ./codex-profile.json
 ```
 
-Claude executors run with safe mode, no session persistence, JSON output, the edit-capable tool
-subset, and `acceptEdits`; its advisor runs in `plan` mode with only Read, Glob, and Grep. Codex
+Claude implementation executors run with safe mode, no session persistence, JSON output, the
+edit-capable tool subset, and `acceptEdits`; its advisor runs in `plan` mode with only Read, Glob,
+and Grep. Claude evidence executors use `dontAsk`, the same read-only tool subset, and a task-free
+JSON Schema so the final envelope contains structured output rather than a plan artifact. Codex
 routes are ephemeral, ignore user configuration and exec-policy rules, emit JSONL, and use a
 workspace-write sandbox for executors and a read-only sandbox for the advisor. Authentication
 remains owned by each CLI. The runner itself does not read or copy credential files, but a child

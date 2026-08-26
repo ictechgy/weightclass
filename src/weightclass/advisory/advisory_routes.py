@@ -33,6 +33,121 @@ TASK_PLACEHOLDER = "{{task}}"
 TASK_FILE_PLACEHOLDER = "{{task_file}}"
 
 
+def _closed_schema(properties: dict[str, object]) -> dict[str, object]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(properties),
+        "properties": properties,
+    }
+
+
+_EVIDENCE_STRING: dict[str, object] = {"type": "string", "minLength": 1, "maxLength": 8192}
+_EVIDENCE_STRING_LIST: dict[str, object] = {
+    "type": "array",
+    "maxItems": 64,
+    "items": _EVIDENCE_STRING,
+}
+
+
+def _evidence_items(item: dict[str, object], *, minimum: int) -> dict[str, object]:
+    return {"type": "array", "minItems": minimum, "maxItems": 128, "items": item}
+
+
+_REVIEW_FINDING = _closed_schema(
+    {
+        "title": _EVIDENCE_STRING,
+        "severity": {"enum": ["critical", "high", "medium", "low", "info"]},
+        "confidence": {"enum": ["high", "medium", "low"]},
+        "disposition": {"enum": ["reportable", "suppressed", "deferred"]},
+        "locations": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+        "evidence": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+        "counterevidence": _EVIDENCE_STRING_LIST,
+        "recommendation": _EVIDENCE_STRING,
+    }
+)
+_RESEARCH_CLAIM = _closed_schema(
+    {
+        "claim": _EVIDENCE_STRING,
+        "status": {"enum": ["supported", "mixed", "unsupported", "unresolved"]},
+        "confidence": {"enum": ["high", "medium", "low"]},
+        "evidence": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+        "counterevidence": _EVIDENCE_STRING_LIST,
+    }
+)
+_DIAGNOSTIC_HYPOTHESIS = _closed_schema(
+    {
+        "cause": _EVIDENCE_STRING,
+        "status": {"enum": ["confirmed", "rejected", "plausible", "unresolved"]},
+        "confidence": {"enum": ["high", "medium", "low"]},
+        "evidence": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+        "counterevidence": _EVIDENCE_STRING_LIST,
+    }
+)
+_DESIGN_OPTION = _closed_schema(
+    {
+        "title": _EVIDENCE_STRING,
+        "rationale": _EVIDENCE_STRING,
+        "evidence": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+        "strengths": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+        "risks": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+        "affected_surfaces": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+    }
+)
+EVIDENCE_JSON_SCHEMA = json.dumps(
+    {
+        "oneOf": [
+            _closed_schema(
+                {
+                    "schema_version": {"const": 1},
+                    "mode": {"const": "review"},
+                    "summary": _EVIDENCE_STRING,
+                    "findings": _evidence_items(_REVIEW_FINDING, minimum=0),
+                    "limitations": _EVIDENCE_STRING_LIST,
+                }
+            ),
+            _closed_schema(
+                {
+                    "schema_version": {"const": 1},
+                    "mode": {"const": "research"},
+                    "question": _EVIDENCE_STRING,
+                    "summary": _EVIDENCE_STRING,
+                    "claims": _evidence_items(_RESEARCH_CLAIM, minimum=1),
+                    "limitations": _EVIDENCE_STRING_LIST,
+                }
+            ),
+            _closed_schema(
+                {
+                    "schema_version": {"const": 1},
+                    "mode": {"const": "diagnosis"},
+                    "symptom": _EVIDENCE_STRING,
+                    "summary": _EVIDENCE_STRING,
+                    "hypotheses": _evidence_items(_DIAGNOSTIC_HYPOTHESIS, minimum=1),
+                    "reproduction": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+                    "limitations": _EVIDENCE_STRING_LIST,
+                }
+            ),
+            _closed_schema(
+                {
+                    "schema_version": {"const": 1},
+                    "mode": {"const": "design"},
+                    "problem": _EVIDENCE_STRING,
+                    "summary": _EVIDENCE_STRING,
+                    "principles": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+                    "options": _evidence_items(_DESIGN_OPTION, minimum=1),
+                    "recommendation": _EVIDENCE_STRING,
+                    "acceptance_criteria": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+                    "validation": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+                    "limitations": _EVIDENCE_STRING_LIST,
+                }
+            ),
+        ]
+    },
+    sort_keys=True,
+    separators=(",", ":"),
+)
+
+
 class AdvisoryRouteError(ValueError):
     """Raised without caller-provided values when a profile is invalid."""
 
@@ -247,7 +362,8 @@ def build_routes(
 
     def claude(role: str, *, advisor: bool) -> tuple[str, ...]:
         read_only = advisor or read_only_executors
-        permission = "plan" if read_only else "acceptEdits"
+        evidence_executor = read_only_executors and not advisor
+        permission = "dontAsk" if evidence_executor else "plan" if advisor else "acceptEdits"
         command: tuple[str, ...] = (
             "claude",
             "--print",
@@ -257,9 +373,13 @@ def build_routes(
             permission,
         )
         command += ("--tools", "Read,Glob,Grep" if read_only else "Read,Edit,Glob,Grep")
-        return command + (
+        command += (
             "--output-format",
             "json",
+        )
+        if evidence_executor:
+            command += ("--json-schema", EVIDENCE_JSON_SCHEMA)
+        return command + (
             "--model",
             models[role],
             "--effort",

@@ -198,7 +198,11 @@ def main() -> int:
         cheap = record.get("cheap")
         if not isinstance(cheap, dict):
             return False
-        return bool(cheap.get("verify")) and cheap.get("failure_kind") != "infrastructure"
+        return (
+            bool(cheap.get("verify"))
+            and cheap.get("failure_kind") != "infrastructure"
+            and cheap.get("failure_stage") != "execution"
+        )
 
     def is_infrastructure_failure(record: dict[str, object]) -> bool:
         # p 는 **싼 경로** 의 실패율이므로 싼 경로만 본다. 승급이 도구 고장
