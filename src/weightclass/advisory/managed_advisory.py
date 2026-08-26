@@ -38,7 +38,13 @@ else:
 SCHEMA_VERSION = 1
 WORKFLOWS = ("implementation", "review", "research", "diagnosis", "design")
 EVIDENCE_WORKFLOWS = WORKFLOWS[1:]
-CLAUDE_EVIDENCE_GENERATION = "structured-v1"
+CLAUDE_EVIDENCE_GENERATION = "structured-v5"
+PREVIOUS_CLAUDE_EVIDENCE_GENERATIONS = (
+    "structured-v4",
+    "structured-v3",
+    "structured-v2",
+    "structured-v1",
+)
 ROLES = ("cheap", "advisor", "expensive")
 BUILTIN_VENDORS = ("codex", "claude", "agy", "grok")
 EXPECTED_BASELINE_FAILURE = 42
@@ -152,6 +158,25 @@ def legacy_campaign_paths(state_root: Path, vendor: str, workflow: str) -> Campa
     if not state_root.is_absolute() or not _VENDOR.fullmatch(vendor) or workflow not in WORKFLOWS:
         _fail()
     infix = "" if workflow == "implementation" else f"-{workflow}"
+    return CampaignPaths(
+        profile=state_root / f"{vendor}-profile.json",
+        prices=state_root / f"{vendor}-prices.json",
+        campaign=state_root / f"{vendor}{infix}-shape-b.json",
+        results=state_root / f"{vendor}{infix}-results",
+    )
+
+
+def previous_evidence_campaign_paths(
+    state_root: Path, vendor: str, workflow: str, generation: str = "structured-v4"
+) -> CampaignPaths:
+    if (
+        not state_root.is_absolute()
+        or vendor != "claude"
+        or workflow not in EVIDENCE_WORKFLOWS
+        or generation not in PREVIOUS_CLAUDE_EVIDENCE_GENERATIONS
+    ):
+        _fail()
+    infix = f"-{workflow}-{generation}"
     return CampaignPaths(
         profile=state_root / f"{vendor}-profile.json",
         prices=state_root / f"{vendor}-prices.json",
@@ -582,29 +607,54 @@ def migrate_evidence_campaigns(
             _private_regular(prices_path)
             selected_prices = prices_path
 
-        legacy_manifests: dict[str, advisory_campaign.CampaignManifest] = {}
-        for workflow in EVIDENCE_WORKFLOWS:
-            selected = legacy_campaign_paths(state_root, vendor, workflow)
-            _private_regular(selected.campaign)
-            _private_directory(selected.results, create=False)
-            manifest = advisory_campaign.load_manifest(selected.campaign)
-            if manifest.get("workflow") != workflow or (
-                manifest["cost_basis"] == "price_table"
-            ) != (selected_prices is not None):
+        source_manifests: dict[str, advisory_campaign.CampaignManifest] | None = None
+        source_sets = tuple(
+            {
+                workflow: previous_evidence_campaign_paths(state_root, vendor, workflow, generation)
+                for workflow in EVIDENCE_WORKFLOWS
+            }
+            for generation in PREVIOUS_CLAUDE_EVIDENCE_GENERATIONS
+        ) + (
+            {
+                workflow: legacy_campaign_paths(state_root, vendor, workflow)
+                for workflow in EVIDENCE_WORKFLOWS
+            },
+        )
+        for source_set in source_sets:
+            presence = [
+                selected.campaign.exists() or selected.results.exists()
+                for selected in source_set.values()
+            ]
+            if not any(presence):
+                continue
+            if not all(presence):
                 _fail()
-            advisory_campaign.load_merged_lane_records(
-                manifest,
-                selected.results,
-                advisory_campaign.ANONYMOUS_LANE_COUNT,
-            )
-            legacy_manifests[workflow] = manifest
+            validated: dict[str, advisory_campaign.CampaignManifest] = {}
+            for workflow, selected in source_set.items():
+                _private_regular(selected.campaign)
+                _private_directory(selected.results, create=False)
+                manifest = advisory_campaign.load_manifest(selected.campaign)
+                if manifest.get("workflow") != workflow or (
+                    manifest["cost_basis"] == "price_table"
+                ) != (selected_prices is not None):
+                    _fail()
+                advisory_campaign.load_merged_lane_records(
+                    manifest,
+                    selected.results,
+                    advisory_campaign.ANONYMOUS_LANE_COUNT,
+                )
+                validated[workflow] = manifest
+            source_manifests = validated
+            break
+        if source_manifests is None:
+            _fail()
 
         if dry_run:
             return _migration_receipt(already=False, dry_run=True)
 
         try:
             for workflow, selected in zip(EVIDENCE_WORKFLOWS, current, strict=True):
-                previous = legacy_manifests[workflow]
+                previous = source_manifests[workflow]
                 manifest = _manifest_for(
                     profile_path,
                     workflow=workflow,

@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-25 KST by Codex_
+_Last updated: 2026-08-26 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
@@ -50,6 +50,13 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   on Python 3.10/3.14, and exact trusted publication. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/e0/dd/7e122f748c56c99058f8e39e8558d0b4a804290d16fa9d5e80a0a6136ed0/weightclass-0.17.4.tar.gz`
   - sha256: `133fe963b54ba45bfe7419911a5c7b5f06f0ac16f8d8b7d66b701a0399fe35ef`
+- **`weightclass 0.17.5` is published on PyPI but intentionally not promoted
+  to Homebrew.** Release run `32960180505` passed every immutable gate and
+  exact publication. Installed migration then exposed a safe fail-closed
+  generation-fingerprint mismatch, so source formula PR #106 was closed and
+  0.17.6 supersedes it. The 0.17.5 sdist is:
+  - url: `https://files.pythonhosted.org/packages/1f/ff/b3149e13a08492fe760f141794d9ca81ab80e6bbe68061144b76428097a1/weightclass-0.17.5.tar.gz`
+  - sha256: `d23979793552f0d14e415456a67b14934b3e70f85516191d8b1c87e79722edb6`
 - `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
   before publication; retain both tags and never reuse them. Homebrew 0.16.2 is
@@ -335,7 +342,7 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   other projects were running, and the Mac legacy `run` shim emitted its fixed
   compatibility redirect before invoking managed dispatch.
 
-### Claude evidence contract and execution precedence (0.17.5 candidate)
+### Claude evidence contract and execution precedence (0.17.6 candidate)
 
 - Completed managed evidence records showed repeated Claude
   `failure_stage=result` with no verifier execution, while Codex sometimes
@@ -349,9 +356,14 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   local byte-bounded parser. Claude advisor prose remains in plan mode. Claude
   implementation and every Codex route are unchanged.
 - Existing Claude evidence populations are never rewritten or merged. Managed
-  paths use a new `structured-v1` generation, and explicit
+  paths use a new `structured-v5` generation, and explicit
   `migrate-evidence --vendor claude` validates old bindings and creates empty
   current campaigns while leaving every legacy manifest/result byte in place.
+  The migration prefers and preserves the newest complete `structured-v4`,
+  `structured-v3`, `structured-v2`, or 0.17.5 `structured-v1` population,
+  then falls back to the original unversioned population. This repairs the
+  0.17.5 route-fingerprint mismatch without merging any source. V2 through V4
+  existed only during local pre-release checks.
   Managed status selects explicit current paths rather than directory-wide
   discovery.
 - Evidence attempts now record only fixed output shapes and whether a provider
@@ -364,17 +376,18 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   aggregates only allowlisted child failure categories.
 - Focused route, migration, output-shape, implementation-precedence, child
   diagnostic, portfolio, distribution-command, and existing advisory tests
-  pass. The full source suite passes 1,312 tests with 26 skips; the
-  Advisory-focused suite passes 142 tests with 7 skips; Ruff, formatting,
-  compileall, and strict mypy over 165 source files pass; and 0.17.5 wheel/sdist
-  isolation passes 1,305 tests with 66 environment-specific skips.
+  pass. The full source suite passes 1,313 tests with 26 skips; the
+  Advisory-focused suite passes 143 tests with 7 skips; Ruff, formatting,
+  compileall, and strict mypy over 165 source files pass; and 0.17.6 wheel/sdist
+  isolation passes 1,306 tests with 66 environment-specific skips.
   The machine's Claude evidence dry-run and actual migration both succeeded,
   legacy data remained separate, and source doctor/review accept every new
-  evidence workflow. Final-head security diff scan
+  evidence workflow. The 0.17.5 security diff scan
   `ea3a729d-09dd-41b5-b5d7-96a9b870fbda` reviewed all nine changed source/
   package files, found no reportable vulnerability with complete coverage, and
-  used 2,176,170 tokens in one sequential thread. PR CI, merge,
-  installed-package, and release gates remain pending.
+  used 2,176,170 tokens in one sequential thread. The smaller 0.17.6 recovery
+  diff still needs its final security scan, PR CI, merge, installed-package,
+  and release gates.
 
 ## The routing-economics result
 

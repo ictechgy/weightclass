@@ -87,11 +87,19 @@ plus a point-in-time free/busy snapshot. After lanes are selected, dispatch
 immediately emits a task-free `managed_dispatch_started` event; a long silence
 after that event is vendor/verifier work, not silent lock acquisition.
 
-Release 0.17.5 introduces a new Claude evidence-route generation because the
+Release 0.17.5 introduced a Claude evidence-route generation because the
 older plan-mode executor did not mechanically require the closed workflow JSON.
 The replacement uses the complete four-mode schema, including exact required
 fields, closed objects, bounded arrays, and bounded strings; the local parser
 remains the final byte-bounded validation boundary.
+
+Release 0.17.6 moves that complete contract to `structured-v5`. The 0.17.5
+package changed the route fingerprint after some machines had already created
+`structured-v1`, so those machines correctly rejected the mismatch. Migration
+now accepts the newest complete v4, v3, v2, or v1 population, or the older
+unversioned population as its source, validates all bindings, creates an empty
+v5 population, and preserves every source byte. V2 through v4 were used only
+by local pre-release verification and are handled so those machines recover too.
 Existing Claude review/research/diagnosis/design records are never rewritten or
 merged. Upgrade an existing managed root explicitly:
 
@@ -102,7 +110,7 @@ wclass-advisory migrate-evidence --vendor claude
 
 The old campaign files and records remain owner-private and read-only at their
 existing paths. Managed doctor, dispatch, and status select only the new
-`structured-v1` generation after migration. Claude implementation and every
+`structured-v5` generation after migration. Claude implementation and every
 Codex population retain their existing paths and records.
 
 Failed child processes expose only a fixed `child_failure_code` plus stdout/

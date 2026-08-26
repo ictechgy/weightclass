@@ -42,106 +42,120 @@ def _closed_schema(properties: dict[str, object]) -> dict[str, object]:
     }
 
 
-_EVIDENCE_STRING: dict[str, object] = {"type": "string", "minLength": 1, "maxLength": 8192}
-_EVIDENCE_STRING_LIST: dict[str, object] = {
-    "type": "array",
-    "maxItems": 64,
-    "items": _EVIDENCE_STRING,
-}
+def _schema_ref(name: str) -> dict[str, object]:
+    return {"$ref": f"#/$defs/{name}"}
 
 
-def _evidence_items(item: dict[str, object], *, minimum: int) -> dict[str, object]:
-    return {"type": "array", "minItems": minimum, "maxItems": 128, "items": item}
+def _evidence_items(name: str, *, minimum: int, maximum: int = 128) -> dict[str, object]:
+    return {
+        "type": "array",
+        "minItems": minimum,
+        "maxItems": maximum,
+        "items": _schema_ref(name),
+    }
 
 
 _REVIEW_FINDING = _closed_schema(
     {
-        "title": _EVIDENCE_STRING,
+        "title": _schema_ref("s"),
         "severity": {"enum": ["critical", "high", "medium", "low", "info"]},
         "confidence": {"enum": ["high", "medium", "low"]},
         "disposition": {"enum": ["reportable", "suppressed", "deferred"]},
-        "locations": {**_EVIDENCE_STRING_LIST, "minItems": 1},
-        "evidence": {**_EVIDENCE_STRING_LIST, "minItems": 1},
-        "counterevidence": _EVIDENCE_STRING_LIST,
-        "recommendation": _EVIDENCE_STRING,
+        "locations": _schema_ref("ns"),
+        "evidence": _schema_ref("ns"),
+        "counterevidence": _schema_ref("ss"),
+        "recommendation": _schema_ref("s"),
     }
 )
 _RESEARCH_CLAIM = _closed_schema(
     {
-        "claim": _EVIDENCE_STRING,
+        "claim": _schema_ref("s"),
         "status": {"enum": ["supported", "mixed", "unsupported", "unresolved"]},
         "confidence": {"enum": ["high", "medium", "low"]},
-        "evidence": {**_EVIDENCE_STRING_LIST, "minItems": 1},
-        "counterevidence": _EVIDENCE_STRING_LIST,
+        "evidence": _schema_ref("ns"),
+        "counterevidence": _schema_ref("ss"),
     }
 )
 _DIAGNOSTIC_HYPOTHESIS = _closed_schema(
     {
-        "cause": _EVIDENCE_STRING,
+        "cause": _schema_ref("s"),
         "status": {"enum": ["confirmed", "rejected", "plausible", "unresolved"]},
         "confidence": {"enum": ["high", "medium", "low"]},
-        "evidence": {**_EVIDENCE_STRING_LIST, "minItems": 1},
-        "counterevidence": _EVIDENCE_STRING_LIST,
+        "evidence": _schema_ref("ns"),
+        "counterevidence": _schema_ref("ss"),
     }
 )
 _DESIGN_OPTION = _closed_schema(
     {
-        "title": _EVIDENCE_STRING,
-        "rationale": _EVIDENCE_STRING,
-        "evidence": {**_EVIDENCE_STRING_LIST, "minItems": 1},
-        "strengths": {**_EVIDENCE_STRING_LIST, "minItems": 1},
-        "risks": {**_EVIDENCE_STRING_LIST, "minItems": 1},
-        "affected_surfaces": {**_EVIDENCE_STRING_LIST, "minItems": 1},
+        "title": _schema_ref("s"),
+        "rationale": _schema_ref("s"),
+        "evidence": _schema_ref("ns"),
+        "strengths": _schema_ref("ns"),
+        "risks": _schema_ref("ns"),
+        "affected_surfaces": _schema_ref("ns"),
     }
 )
 EVIDENCE_JSON_SCHEMA = json.dumps(
     {
+        "$defs": {
+            "s": {"type": "string", "minLength": 1, "maxLength": 8192},
+            "ss": _evidence_items("s", minimum=0, maximum=64),
+            "ns": _evidence_items("s", minimum=1, maximum=64),
+            "rf": _REVIEW_FINDING,
+            "rc": _RESEARCH_CLAIM,
+            "dh": _DIAGNOSTIC_HYPOTHESIS,
+            "do": _DESIGN_OPTION,
+            "rfs": _evidence_items("rf", minimum=0),
+            "rcs": _evidence_items("rc", minimum=1),
+            "dhs": _evidence_items("dh", minimum=1),
+            "dos": _evidence_items("do", minimum=1),
+        },
         "oneOf": [
             _closed_schema(
                 {
                     "schema_version": {"const": 1},
                     "mode": {"const": "review"},
-                    "summary": _EVIDENCE_STRING,
-                    "findings": _evidence_items(_REVIEW_FINDING, minimum=0),
-                    "limitations": _EVIDENCE_STRING_LIST,
+                    "summary": _schema_ref("s"),
+                    "findings": _schema_ref("rfs"),
+                    "limitations": _schema_ref("ss"),
                 }
             ),
             _closed_schema(
                 {
                     "schema_version": {"const": 1},
                     "mode": {"const": "research"},
-                    "question": _EVIDENCE_STRING,
-                    "summary": _EVIDENCE_STRING,
-                    "claims": _evidence_items(_RESEARCH_CLAIM, minimum=1),
-                    "limitations": _EVIDENCE_STRING_LIST,
+                    "question": _schema_ref("s"),
+                    "summary": _schema_ref("s"),
+                    "claims": _schema_ref("rcs"),
+                    "limitations": _schema_ref("ss"),
                 }
             ),
             _closed_schema(
                 {
                     "schema_version": {"const": 1},
                     "mode": {"const": "diagnosis"},
-                    "symptom": _EVIDENCE_STRING,
-                    "summary": _EVIDENCE_STRING,
-                    "hypotheses": _evidence_items(_DIAGNOSTIC_HYPOTHESIS, minimum=1),
-                    "reproduction": {**_EVIDENCE_STRING_LIST, "minItems": 1},
-                    "limitations": _EVIDENCE_STRING_LIST,
+                    "symptom": _schema_ref("s"),
+                    "summary": _schema_ref("s"),
+                    "hypotheses": _schema_ref("dhs"),
+                    "reproduction": _schema_ref("ns"),
+                    "limitations": _schema_ref("ss"),
                 }
             ),
             _closed_schema(
                 {
                     "schema_version": {"const": 1},
                     "mode": {"const": "design"},
-                    "problem": _EVIDENCE_STRING,
-                    "summary": _EVIDENCE_STRING,
-                    "principles": {**_EVIDENCE_STRING_LIST, "minItems": 1},
-                    "options": _evidence_items(_DESIGN_OPTION, minimum=1),
-                    "recommendation": _EVIDENCE_STRING,
-                    "acceptance_criteria": {**_EVIDENCE_STRING_LIST, "minItems": 1},
-                    "validation": {**_EVIDENCE_STRING_LIST, "minItems": 1},
-                    "limitations": _EVIDENCE_STRING_LIST,
+                    "problem": _schema_ref("s"),
+                    "summary": _schema_ref("s"),
+                    "principles": _schema_ref("ns"),
+                    "options": _schema_ref("dos"),
+                    "recommendation": _schema_ref("s"),
+                    "acceptance_criteria": _schema_ref("ns"),
+                    "validation": _schema_ref("ns"),
+                    "limitations": _schema_ref("ss"),
                 }
             ),
-        ]
+        ],
     },
     sort_keys=True,
     separators=(",", ":"),
