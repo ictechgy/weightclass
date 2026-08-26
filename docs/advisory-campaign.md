@@ -40,6 +40,11 @@ before dispatch. Every selected vendor/workflow receives a distinct anonymous
 lane, so projects sharing a campaign root do not share a live ordinal or
 campaign lock. If every bounded lane for one selected vendor is busy, the whole
 batch fails before partial dispatch and every partial lease is released.
+The cross-lane allocator has a two-second bounded wait; expiration is reported
+as `managed_allocator_busy` instead of an unbounded foreground stall. The
+legacy lane-0 `dispatch.lock` is probed nonblocking, so a legacy owner moves a
+new run to another free lane. Availability reported by `doctor` is a
+point-in-time snapshot rather than a reservation.
 Every job runs in its own process session with an eight-hour outer deadline and a
 1 MiB combined stdout/stderr retention ceiling;
 the inner runner's narrower per-child and verifier limits still apply. Timeout
@@ -154,8 +159,9 @@ the verifier's own acceptance criteria separately:
 - `execution`: the selected child did not produce a usable result;
 - `result`: a read-only result could not be extracted or shaped;
 - `handover`: reconstruction or patch-boundary checks rejected the candidate;
-- `verification`: the verifier rejected, timed out, or modified the patched
-  files;
+- `verification`: the verifier rejected or timed out;
+- `verification_integrity`: the verifier exited but modified patched files, so
+  its exit code alone is not the final acceptance verdict;
 - `acceptance`: the verifier passed but the attempt made no usable change;
 - `persistence`: writing an already accepted patch failed;
 - `unknown`: a malformed or incomplete in-memory record.

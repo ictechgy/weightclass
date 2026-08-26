@@ -293,9 +293,30 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   verifier; its 2,593-character advice, retry, and expensive route also failed.
   No external retry was run.
 - Prospective acceptance, focused receipt/privacy/cleanup tests, Ruff, strict
-  mypy over 165 source files, and the final 1,298-test source suite pass with 25
-  skips. PR, Advisory review, security, distribution, and release gates remain
-  pending.
+  mypy over 165 source files, and the pre-review 1,298-test source suite pass
+  with 25 skips.
+- PR #102 was reviewed through one separate read-only Advisory dispatch. Codex
+  cheap passed after 326.8 seconds and a 1.2-second verifier. Claude cheap
+  returned an invalid result after 1,010.2 seconds, advice/retry failed, and the
+  expensive review passed. Both accepted reviews identified receipt-output
+  failure as a medium control-flow issue. The integrated follow-up makes receipt
+  and parent replay writes best-effort, removes partial patches after write or
+  chmod failure, adds `verification_integrity`, redacts cleanup diagnostics,
+  and clarifies that only cheap/retry/expensive acceptance arms emit receipts.
+- The reported silent-lock diagnosis was narrowed in source: lane and legacy
+  `dispatch.lock` probes were already nonblocking, while `.allocator.lock` was
+  the only unbounded acquisition. The allocator now has a two-second ceiling
+  and exact `managed_allocator_busy` error; a legacy lane-0 owner moves a new
+  run to another free lane. `doctor` reports point-in-time free/busy counts and
+  dispatch immediately emits `managed_dispatch_started` with anonymous lane
+  indices before vendor work begins.
+- The Mac-only `wclass-advisory-local run` compatibility path is redirected to
+  managed `wclass-advisory dispatch`; its legacy report/status/prune surfaces
+  and all legacy records remain read-only. The packaged skill forbids invoking
+  legacy run populations. The final source suite passes 1,307 tests with 25
+  skips; the Advisory-focused suite passes 137 tests with 6 skips, and Ruff plus
+  strict mypy over 165 source files pass. Security, distribution, CI, and
+  release gates remain pending.
 
 ## The routing-economics result
 

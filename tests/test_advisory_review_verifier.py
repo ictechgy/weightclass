@@ -34,34 +34,38 @@ def accepted_result() -> dict[str, object]:
     return {
         "schema_version": 1,
         "mode": "review",
-        "summary": "The failure-receipt privacy, reliability, classification, and measurement controls were checked.",
+        "summary": (
+            "The failure-receipt privacy, reliability, classification, and "
+            "measurement controls were checked."
+        ),
         "findings": [
             finding(
                 "[seed:receipt-privacy] Closed receipt schema excludes untrusted text",
                 "info",
                 "suppressed",
-                "src/weightclass/advisory/speculative_run.py:273",
+                "src/weightclass/advisory/speculative_run.py:282",
                 "failure_receipt selects only reviewed enums and bounded scalar values.",
             ),
             finding(
                 "[seed:emission-reliability] Receipt emission is an operator output boundary",
                 "info",
                 "suppressed",
-                "src/weightclass/advisory/speculative_run.py:309",
+                "src/weightclass/advisory/speculative_run.py:318",
                 "emit_failure_receipt serializes only the closed receipt and writes it to stderr.",
             ),
             finding(
                 "[seed:verification-classification] Ordinary verifier failures are explicit",
                 "info",
                 "suppressed",
-                "src/weightclass/advisory/speculative_run.py:3772",
+                "src/weightclass/advisory/speculative_run.py:3834",
                 "failure_kind and failure_stage are fixed before cleanup when verification fails.",
             ),
             finding(
-                "[seed:measurement-compatibility] Rendering does not force fallback values into records",
+                "[seed:measurement-compatibility] Rendering does not force "
+                "fallback values into records",
                 "info",
                 "suppressed",
-                "src/weightclass/advisory/speculative_run.py:3877",
+                "src/weightclass/advisory/speculative_run.py:3935",
                 "emit_failure_receipt reads fallback values without mutating the stored attempt.",
             ),
         ],
@@ -122,8 +126,8 @@ class AdvisoryReviewVerifierTests(unittest.TestCase):
         for location in (
             "missing.py:1",
             "../HANDOFF.md:1",
-            "src/weightclass/advisory/speculative_run.py:272",
-            "src/weightclass/advisory/speculative_run.py:3877",
+            "src/weightclass/advisory/speculative_run.py:281",
+            "src/weightclass/advisory/speculative_run.py:3935",
         ):
             with self.subTest(location=location):
                 value = accepted_result()

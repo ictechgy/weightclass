@@ -132,10 +132,10 @@ class AdvisoryLaneHardeningTests(unittest.TestCase):
             )
             real_open = orchestration._open_lane_lock
 
-            def one_busy(path: Path, *, blocking: bool = False) -> int:
+            def one_busy(path: Path) -> int:
                 if path == root / ".lane.lock":
-                    raise ValueError
-                return cast(int, real_open(path, blocking=blocking))
+                    raise orchestration._LockUnavailableError
+                return cast(int, real_open(path))
 
             with (
                 mock.patch.object(orchestration, "_open_lane_lock", side_effect=one_busy),

@@ -236,6 +236,7 @@ FAILURE_RECEIPT_STAGES = frozenset(
         "result",
         "handover",
         "verification",
+        "verification_integrity",
         "acceptance",
         "persistence",
         "unknown",
@@ -244,6 +245,14 @@ FAILURE_RECEIPT_STAGES = frozenset(
 MAX_RECEIPT_EXIT_CODE = 255
 MAX_RECEIPT_SECONDS = 86_400.0
 MAX_RECEIPT_COUNT = 1_000_000
+SAFE_DIAGNOSTIC_CODES = frozenset(
+    {
+        "workspace_not_owned",
+        "workspace_cleanup_failed",
+        "workspace_registry_update_failed",
+        "advisor_workspace_cleanup_failed",
+    }
+)
 
 
 def _receipt_enum(value: object, allowed: frozenset[str], fallback: str) -> str:
@@ -307,11 +316,66 @@ def failure_receipt(attempt: Mapping[str, object], route: str) -> dict[str, obje
 
 
 def emit_failure_receipt(attempt: Mapping[str, object], route: str) -> None:
-    """Emit exactly one canonical receipt; never emit the failed attempt itself."""
-    print(
-        json.dumps(failure_receipt(attempt, route), sort_keys=True, separators=(",", ":")),
-        file=sys.stderr,
-    )
+    """Best-effort receipt output must never change the attempt verdict."""
+    try:
+        print(
+            json.dumps(failure_receipt(attempt, route), sort_keys=True, separators=(",", ":")),
+            file=sys.stderr,
+        )
+    except (OSError, ValueError):
+        pass
+
+
+def emit_safe_diagnostic(code: str) -> None:
+    """Emit one value-free operational diagnostic without affecting control flow."""
+    selected = code if code in SAFE_DIAGNOSTIC_CODES else "diagnostic_unavailable"
+    try:
+        print(
+            json.dumps(
+                {"schema_version": 1, "event": "advisory_diagnostic", "code": selected},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            file=sys.stderr,
+        )
+    except (OSError, ValueError):
+        pass
+
+
+def write_verified_patch(path: Path, payload: bytes) -> None:
+    """Write one owner-only patch and remove every partial file on failure."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
+    created = False
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        created = True
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("patch write made no progress")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.fchmod(descriptor, 0o400)
+        os.close(descriptor)
+        descriptor = -1
+    except OSError:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if created:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+        raise
 
 
 # 작업공간 이름의 접두사. mkdtemp 호출부와 삭제 허용 목록이 같은 상수를
@@ -3235,25 +3299,23 @@ def discard(registry: Path, workspace: Path, out_dir: Path) -> None:
     if target is None:
         # 지우지 않았으므로 등록에서도 빼지 않는다. 디렉터리는 남아 있는데
         # 참조만 사라지는 것이 이 함수가 막으려는 바로 그 상태다.
-        print(f"작업공간을 확인할 수 없어 등록에 남긴다: {workspace}", file=sys.stderr)
+        emit_safe_diagnostic("workspace_not_owned")
         return
     try:
         shutil.rmtree(target)
-    except OSError as error:
+    except OSError:
         # 권한을 고쳐서 재시도하지 않는다. 경로 기반 chmod 는 심링크를 따라가고
         # 검사와 사용 사이에 갈아끼울 틈이 있어, 자식이 트리 밖의 권한을 바꾸게
         # 만들 수 있다. 지우지 못한 것은 등록에 남겨 사람이 보게 하는 편이 낫다.
-        print(f"작업공간을 지우지 못했다, 등록에 남긴다: {target} ({error})", file=sys.stderr)
+        emit_safe_diagnostic("workspace_cleanup_failed")
         return
     try:
         register(registry, workspace, add=False)
-    except OSError as error:
+    except OSError:
         # 디렉터리는 이미 사라졌다. 여기서 예외를 다시 던지면 성공한 정리가
         # 실행 전체를 실패시키지만, 남은 등록 한 줄은 다음 --prune 이 존재하지
         # 않는 경로로 보고 안전하게 버릴 수 있다.
-        print(
-            f"작업공간은 지웠지만 등록을 갱신하지 못했다: {type(error).__name__}", file=sys.stderr
-        )
+        emit_safe_diagnostic("workspace_registry_update_failed")
 
 
 def resolved_own_workspace(candidate: Path, out_dir: Path) -> Path | None:
@@ -3449,7 +3511,7 @@ def ask_advisor(
         if not stranded:
             register(registry, workspace, add=False)
     if stranded:
-        print(f"  경고: 조언자 작업공간을 지우지 못했다. --prune 으로 정리하라: {workspace}")
+        emit_safe_diagnostic("advisor_workspace_cleanup_failed")
     # 조언자가 정상 종료하지 않았으면 그 stdout 은 조언이 아니다. 인증 실패,
     # 쿼터 초과, 타임아웃도 stdout 에 무언가를 쓰고, 그것을 그대로 과제에
     # 붙이면 executor 가 오류 메시지를 지시로 읽는다.
@@ -3798,7 +3860,7 @@ def attempt(
             record["verify"]["passed"] = False
             record["error"] = "verification modified the patched files; patch no longer matches"
             record["failure_kind"] = "route"
-            record["failure_stage"] = "verification"
+            record["failure_stage"] = "verification_integrity"
     except (RunFailure, subprocess.SubprocessError, OSError) as error:
         # RunFailure 만 잡으면 clone_at 의 CalledProcessError 나 복사 중의
         # OSError 가 그대로 올라가, 등록된 채 지워지지 않은 작업공간이 남는다.
@@ -3852,11 +3914,7 @@ def attempt(
         # 검증을 통과한 뒤에야 디스크에 쓴다. 여기서 실패해도 이 함수의 계약은
         # 지켜야 한다 — 무슨 일이 있어도 판정을 남기고 정상 반환한다.
         try:
-            patch.write_bytes(patch_bytes)
-            # 승인된 패치는 읽기 전용으로 둔다. 뒤 과제의 검증이 무심코 훑고 쓰는
-            # 것은 막지만, 작정한 코드는 chmod 로 되돌릴 수 있다. 담장이 아니라
-            # 실수에 대한 방어다.
-            patch.chmod(0o400)
+            write_verified_patch(patch, patch_bytes)
         except OSError as error:
             record["accepted"] = False
             record["error"] = f"could not write the patch: {type(error).__name__}"

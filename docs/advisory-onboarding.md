@@ -80,6 +80,9 @@ users back to `dispatch`; those forwarded options include `--repo`,
 
 Managed dispatch reports `managed_lane_unavailable` only when every bounded
 lane for a selected vendor/workflow is actively leased. A sealed sample cap is
-`managed_campaign_capacity_reached`; other preflight or binding failures remain
-`managed_dispatch_rejected` and are not lane contention. `doctor` reports the
-configured lane count (ten per vendor and workflow by default).
+`managed_campaign_capacity_reached`; `managed_allocator_busy` means the short
+allocator exceeded its bounded wait; other preflight or binding failures remain
+`managed_dispatch_rejected`. `doctor` reports ten configured lanes by default
+plus a point-in-time free/busy snapshot. After lanes are selected, dispatch
+immediately emits a task-free `managed_dispatch_started` event; a long silence
+after that event is vendor/verifier work, not silent lock acquisition.

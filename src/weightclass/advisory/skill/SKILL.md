@@ -37,11 +37,19 @@ are user-selected opaque configuration.
   inspecting only `run --help`, treat that session or skill as stale and reload
   the installed skill in a new session. Do not fall back to direct implementation
   as a substitute for an explicitly requested advisory run.
+- Never invoke a machine-specific `wclass-advisory-local run` legacy campaign
+  from this skill. The canonical cross-project entry point is managed
+  `wclass-advisory dispatch`; legacy result populations remain read-only and
+  must not be repaired, resealed, or combined with managed records.
 - Report lane contention only for the exact `managed_lane_unavailable` error.
   `managed_campaign_capacity_reached` means the sealed sample cap was reached;
+  `managed_allocator_busy` means the short cross-lane allocator exceeded its
+  bounded wait and is not a vendor/model run;
   `managed_dispatch_rejected` is a non-lane preflight or binding rejection and
   must not be relabeled as contention. `doctor` reports the configured lane
-  count, which is ten per vendor and workflow by default.
+  count plus a point-in-time `free`/`busy` snapshot for each vendor/workflow;
+  availability may change immediately after the snapshot. Ten lanes are
+  configured per vendor and workflow by default.
 - Treat `campaign_record_binding_mismatch` and the other fixed
   `campaign_record_*`/`campaign_records_invalid` errors as an unhealthy sealed
   population, not contention. Never rewrite records, copy a current
@@ -121,6 +129,10 @@ idempotent for identical inputs and refuses to overwrite a different campaign.
 
    Managed dispatch validates the bound profiles, campaigns, price tables,
    central verifier, project verifier, and ordinals before reading task input.
+   After lane allocation it immediately emits one task-free
+   `managed_dispatch_started` event with vendor and anonymous lane index. This
+   event means model work has started; silence before it is preflight or the
+   bounded allocator wait, while silence after it can be a long-running arm.
    Multiple selected vendors start independent campaigns concurrently;
    each vendor's cheap/advisor/retry/expensive stages remain sequential inside
    its anonymous fixed lane. Each command acquires one free lane for its exact
@@ -142,11 +154,18 @@ idempotent for identical inputs and refuses to overwrite a different campaign.
 - `implementation` returns a verified patch path. Inspect it and apply it only
   when repository changes are within the user's request; rerun the repository's
   ordinary checks after applying it.
-- A failed arm emits one `advisory_attempt_failed` JSON receipt. Use only its
+- A failed cheap, retry, or expensive acceptance arm emits one
+  `advisory_attempt_failed` JSON receipt. Advisor calls retain their existing
+  separate route status and do not emit attempt receipts. Receipt objects are
+  JSON lines on stderr among other human diagnostics; parse only lines whose
+  `event` is exactly `advisory_attempt_failed`. Use only the receipt's
   fixed `failure_stage`, child/verifier exit and timeout fields, and numeric
   candidate counts to explain where the attempt stopped. For
   `failure_stage=verification`, compare `verify_exit_code` with the committed
-  task-specific verifier's documented exit codes. A prospective verifier should
+  task-specific verifier's documented exit codes. A
+  `failure_stage=verification_integrity` receipt means the verifier exited but
+  changed patched files, so its numeric exit code is not the final acceptance
+  verdict. A prospective verifier should
   use distinct nonzero exit codes for materially different acceptance phases
   when that distinction is useful. Never request a deleted workspace, infer a
   failure from model prose, or claim the receipt contains raw verifier output.

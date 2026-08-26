@@ -4,14 +4,19 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
+import stat
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "src" / "weightclass" / "advisory" / "speculative_run.py"
+if str(RUNNER.parent) not in sys.path:
+    sys.path.insert(0, str(RUNNER.parent))
 
 
 def load_runner() -> types.ModuleType:
@@ -72,6 +77,104 @@ class AdvisoryFailureReceiptRuntimeTests(unittest.TestCase):
                 self.assertEqual(record["error"], "verification_failed")
                 self.assertEqual(verify_output, "PRIVATE-VERIFIER-OUTPUT")
                 self.assertTrue(patch)
+
+    def test_closed_stderr_cannot_change_a_failure_verdict(self) -> None:
+        runner = load_runner()
+        attempt = {
+            "accepted": False,
+            "failure_kind": "route",
+            "failure_stage": "verification",
+            "verify": {"passed": False, "exit_code": 17, "timed_out": False},
+        }
+        stderr = io.StringIO()
+        stderr.close()
+
+        with mock.patch("sys.stderr", stderr):
+            runner.emit_failure_receipt(attempt, route="cheap")
+
+    def test_cleanup_diagnostic_contains_no_workspace_or_error_text(self) -> None:
+        runner = load_runner()
+        private_value = "PRIVATE-WORKSPACE-MATERIAL"
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(runner, "resolved_own_workspace", return_value=None),
+            mock.patch("sys.stderr", stderr),
+        ):
+            runner.discard(
+                Path("/private") / private_value,
+                Path("/private") / private_value,
+                Path("/private/results"),
+            )
+
+        self.assertEqual(
+            json.loads(stderr.getvalue()),
+            {
+                "code": "workspace_not_owned",
+                "event": "advisory_diagnostic",
+                "schema_version": 1,
+            },
+        )
+        self.assertNotIn(private_value, stderr.getvalue())
+
+    def test_partial_or_unprotected_patch_is_removed_on_failure(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cases = (
+                mock.patch.object(os, "write", side_effect=OSError("write failed")),
+                mock.patch.object(os, "fchmod", side_effect=OSError("chmod failed")),
+            )
+            for index, failure in enumerate(cases):
+                with self.subTest(index=index):
+                    path = root / f"candidate-{index}.patch"
+                    with failure, self.assertRaises(OSError):
+                        runner.write_verified_patch(path, b"reviewed patch bytes")
+                    self.assertFalse(path.exists())
+
+            completed = root / "accepted.patch"
+            runner.write_verified_patch(completed, b"reviewed patch bytes")
+            self.assertEqual(completed.read_bytes(), b"reviewed patch bytes")
+            self.assertEqual(stat.S_IMODE(completed.stat().st_mode), 0o400)
+
+    def test_verifier_mutation_has_a_distinct_integrity_stage(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            verify = output / "verify"
+            verify.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            verify.chmod(0o700)
+            child = (
+                "from pathlib import Path;"
+                "path=Path('README.md');"
+                "path.write_text(path.read_text(encoding='utf-8')+'\\n',encoding='utf-8')"
+            )
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(runner, "tracked_files_unchanged", return_value=False),
+                mock.patch("sys.stderr", stderr),
+            ):
+                record, _, _ = runner.attempt(
+                    "expensive",
+                    [sys.executable, "-c", child],
+                    ROOT,
+                    runner.head_commit(ROOT),
+                    "bounded task",
+                    verify,
+                    output,
+                    output / "workspaces.txt",
+                    frozenset(),
+                    None,
+                    None,
+                    None,
+                    False,
+                )
+
+            self.assertEqual(record["failure_stage"], "verification_integrity")
+            self.assertEqual(record["verify"]["exit_code"], 0)
+            self.assertEqual(
+                json.loads(stderr.getvalue())["failure_stage"],
+                "verification_integrity",
+            )
 
 
 if __name__ == "__main__":
