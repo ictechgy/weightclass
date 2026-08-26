@@ -1291,23 +1291,40 @@ def prune_main(argv: Sequence[str]) -> int:
     try:
         root = _root(arguments.state_root)
         vendors = _selected_vendors(root, arguments.vendor)
+        totals = {
+            "populations": 0,
+            "lanes_scanned": 0,
+            "busy_lanes": 0,
+            "registered": 0,
+            "removed": 0,
+            "retained": 0,
+        }
         for vendor in vendors:
             for workflow in _selected_workflows(arguments.workflow):
                 selected = campaign_paths(root, vendor, workflow)
-                original = sys.argv
-                try:
-                    sys.argv = [
-                        "wclass-advisory cleanup",
-                        "--prune",
-                        "--out-dir",
-                        str(selected.results),
-                    ]
-                    code = speculative_run.main()
-                finally:
-                    sys.argv = original
-                if code:
-                    return code
+                result = speculative_run.prune_available_lanes(selected.results)
+                totals["populations"] += 1
+                for field in (
+                    "lanes_scanned",
+                    "busy_lanes",
+                    "registered",
+                    "removed",
+                    "retained",
+                ):
+                    totals[field] += result[field]
+        print(
+            json.dumps(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "event": "managed_cleanup",
+                    "complete": totals["busy_lanes"] == 0 and totals["retained"] == 0,
+                    **totals,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
         return 0
-    except (OSError, ManagedAdvisoryError):
+    except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
         print(json.dumps({"error": "managed_cleanup_rejected"}), file=sys.stderr)
         return 2

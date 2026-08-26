@@ -220,6 +220,59 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
                 self.assertEqual(manifest["cost_basis"], "vendor")
                 self.assertIsNone(manifest["prices_sha256"])
 
+    def test_managed_cleanup_reports_partial_lane_progress_without_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch(
+                    "weightclass.advisory.managed_advisory.speculative_run.prune_available_lanes",
+                    return_value={
+                        "lanes_scanned": 10,
+                        "busy_lanes": 1,
+                        "registered": 2,
+                        "removed": 1,
+                        "retained": 0,
+                    },
+                ),
+                mock.patch("sys.stdout", stdout),
+            ):
+                code = managed_advisory.prune_main(
+                    [
+                        "--state-root",
+                        str(state_root),
+                        "--vendor",
+                        "codex",
+                        "--workflow",
+                        "implementation",
+                    ]
+                )
+
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                json.loads(stdout.getvalue()),
+                {
+                    "schema_version": 1,
+                    "event": "managed_cleanup",
+                    "complete": False,
+                    "populations": 1,
+                    "lanes_scanned": 10,
+                    "busy_lanes": 1,
+                    "registered": 2,
+                    "removed": 1,
+                    "retained": 0,
+                },
+            )
+            self.assertNotIn(str(state_root), stdout.getvalue())
+
     def test_identical_initialization_is_idempotent_and_does_not_rewrite(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state_root = Path(directory) / "advisory-v1"

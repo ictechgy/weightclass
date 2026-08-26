@@ -80,6 +80,45 @@ class AdvisoryFailureReceiptRuntimeTests(unittest.TestCase):
                 self.assertEqual(verify_output, "PRIVATE-VERIFIER-OUTPUT")
                 self.assertTrue(patch)
 
+    @unittest.skipUnless(REPOSITORY_GIT_AVAILABLE, "source Git repository unavailable")
+    def test_successful_patch_retains_patch_but_discards_full_workspace(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            verify = output / "verify"
+            verify.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            verify.chmod(0o700)
+            child = (
+                "from pathlib import Path;"
+                "path=Path('README.md');"
+                "path.write_text(path.read_text(encoding='utf-8')+'\\n',encoding='utf-8')"
+            )
+            registry = output / "workspaces.txt"
+
+            record, _, patch = runner.attempt(
+                "cheap",
+                [sys.executable, "-c", child],
+                ROOT,
+                runner.head_commit(ROOT),
+                "bounded task",
+                verify,
+                output,
+                registry,
+                frozenset(),
+                None,
+                None,
+                None,
+                False,
+            )
+
+            self.assertTrue(record["accepted"])
+            self.assertIsNone(record["workspace"])
+            patch_path = Path(record["patch"])
+            self.assertTrue(patch_path.is_file())
+            self.assertEqual(patch_path.read_bytes(), patch)
+            self.assertFalse(registry.read_text(encoding="utf-8").strip())
+            self.assertFalse(any((output / ".work").iterdir()))
+
     def test_closed_stderr_cannot_change_a_failure_verdict(self) -> None:
         runner = load_runner()
         attempt = {
