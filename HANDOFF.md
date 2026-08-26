@@ -370,11 +370,11 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   isolation passes 1,305 tests with 66 environment-specific skips.
   The machine's Claude evidence dry-run and actual migration both succeeded,
   legacy data remained separate, and source doctor/review accept every new
-  evidence workflow. Security diff scan
-  `0d1b5286-cdeb-4296-a5b6-55ca0f6cc2fd` found no security vulnerability in
-  the initial PR head; it also prompted the non-security full-schema and child
-  diagnostic hardening above. Final-head security, PR, installed-package, and
-  release gates remain pending.
+  evidence workflow. Final-head security diff scan
+  `ea3a729d-09dd-41b5-b5d7-96a9b870fbda` reviewed all nine changed source/
+  package files, found no reportable vulnerability with complete coverage, and
+  used 2,176,170 tokens in one sequential thread. PR CI, merge,
+  installed-package, and release gates remain pending.
 
 ## The routing-economics result
 
