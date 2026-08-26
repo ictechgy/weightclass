@@ -424,7 +424,10 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 - The Advisory-focused suite passes 146 tests with 8 skips; the full source
   suite passes 1,317 tests with 27 skips; Ruff, formatting, compileall, and
   strict mypy over 165 source files pass. Wheel/sdist isolation passes 1,310
-  tests with 68 environment-specific skips. Security, PR, release,
+  tests with 68 environment-specific skips. Security diff scan
+  `a3cfbc45-1027-4eaa-bce8-58e95428c0c3` reviewed all five changed source/
+  package files, found no reportable vulnerability with complete coverage, and
+  used 6,699,818 tokens in one sequential thread. PR, release,
   installed-package, and existing-state cleanup gates remain pending.
 
 ## The routing-economics result
