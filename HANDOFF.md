@@ -315,7 +315,8 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   and all legacy records remain read-only. The packaged skill forbids invoking
   legacy run populations. The final source suite passes 1,307 tests with 25
   skips; the Advisory-focused suite passes 137 tests with 6 skips, and Ruff plus
-  strict mypy over 165 source files pass. Security, distribution, CI, and
+  strict mypy over 165 source files pass. The 0.17.4 wheel/sdist isolation run
+  passes 1,300 tests with 64 environment-specific skips. Security, CI, and
   release gates remain pending.
 
 ## The routing-economics result

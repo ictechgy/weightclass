@@ -15,6 +15,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNER = ROOT / "src" / "weightclass" / "advisory" / "speculative_run.py"
+REPOSITORY_GIT_AVAILABLE = (ROOT / ".git").exists()
 if str(RUNNER.parent) not in sys.path:
     sys.path.insert(0, str(RUNNER.parent))
 
@@ -30,6 +31,7 @@ def load_runner() -> types.ModuleType:
 
 
 class AdvisoryFailureReceiptRuntimeTests(unittest.TestCase):
+    @unittest.skipUnless(REPOSITORY_GIT_AVAILABLE, "source Git repository unavailable")
     def test_each_failed_arm_emits_one_private_receipt(self) -> None:
         runner = load_runner()
         with tempfile.TemporaryDirectory() as directory:
@@ -136,6 +138,7 @@ class AdvisoryFailureReceiptRuntimeTests(unittest.TestCase):
             self.assertEqual(completed.read_bytes(), b"reviewed patch bytes")
             self.assertEqual(stat.S_IMODE(completed.stat().st_mode), 0o400)
 
+    @unittest.skipUnless(REPOSITORY_GIT_AVAILABLE, "source Git repository unavailable")
     def test_verifier_mutation_has_a_distinct_integrity_stage(self) -> None:
         runner = load_runner()
         with tempfile.TemporaryDirectory() as directory:
