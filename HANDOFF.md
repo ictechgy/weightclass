@@ -92,8 +92,17 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   upgraded to managed onboarding 11. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/b2/b3/e9d011103d7dde79614064359d34effb724babe32842a66387d328365624/weightclass-0.17.9.tar.gz`
   - sha256: `634dcbe9f66934f15262611115ca3e7dace51712cb9883fd1e1254f6f6d19a75`
-- **`weightclass 0.18.0` is the current release candidate from merged PR
-  #119.** It centralizes advisory failure enums,
+- **`weightclass 0.18.0` is published on PyPI and Homebrew.** Implementation
+  PR #119, release PR #120, source-formula PR #121, and tap PR
+  `ictechgy/homebrew-tap#26` are merged. Release run `33046470848` passed the
+  immutable Python 3.13 build, macOS 3.10/3.14 boundaries, Python 3.10/3.14
+  candidate validation, explicit PyPI environment approval, and exact trusted
+  publication. The user-level uv tool and Homebrew source install both report
+  0.18.0, `brew test` passes, and exact 0.17.9 Codex/Claude skills upgraded to
+  managed onboarding 12. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/af/59/127e1df37ea364cc34161b2916c0d319fe197bcc403e03db176d79f72b6a/weightclass-0.18.0.tar.gz`
+  - sha256: `1b6813901cdad9ddfd8fc9508befa5a0138ece89069bcefe3ad444a627d0a60f`
+  This release centralizes advisory failure enums,
   adds distinct managed preflight reason codes, additive attempt/advice/metric
   denominators, task-free vendor heartbeat/completion receipts, and explicit
   untrusted evidence framing. A new read-only `consult` path runs exactly one
