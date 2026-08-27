@@ -14,8 +14,8 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import BinaryIO, cast
 
@@ -29,6 +29,7 @@ DEFAULT_TIMEOUT_SECONDS = 28_800.0
 DEFAULT_MAX_OUTPUT_BYTES = 1_048_576
 MAX_TIMEOUT_SECONDS = 28_800.0
 MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+DEFAULT_HEARTBEAT_SECONDS = 60.0
 _LABEL = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _START_ERROR = b"advisory child start failed\n"
 _TIMEOUT_ERROR = b"advisory child timed out\n"
@@ -233,13 +234,64 @@ def _run_job(job: AdvisoryJob) -> AdvisoryResult:
     return _capture_job(process, job)
 
 
-def run_parallel(jobs: Sequence[AdvisoryJob]) -> tuple[AdvisoryResult, ...]:
+ProgressCallback = Callable[[str, str, int], None]
+
+
+def _notify_progress(
+    callback: ProgressCallback | None, label: str, event: str, elapsed_seconds: int
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(label, event, elapsed_seconds)
+    except (OSError, ValueError):
+        pass
+
+
+def run_parallel(
+    jobs: Sequence[AdvisoryJob],
+    *,
+    progress: ProgressCallback | None = None,
+    heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
+) -> tuple[AdvisoryResult, ...]:
     """Run a validated batch concurrently and return results in input order."""
 
     selected = tuple(jobs)
     _validate_jobs(selected)
+    if (
+        isinstance(heartbeat_seconds, bool)
+        or not isinstance(heartbeat_seconds, (int, float))
+        or not 0 < heartbeat_seconds <= MAX_TIMEOUT_SECONDS
+    ):
+        raise ValueError
+    started = time.monotonic()
     with ThreadPoolExecutor(
         max_workers=len(selected), thread_name_prefix="wclass-advisory"
     ) as executor:
-        futures = [executor.submit(_run_job, job) for job in selected]
-        return tuple(future.result() for future in futures)
+        futures: list[Future[AdvisoryResult]] = [executor.submit(_run_job, job) for job in selected]
+        indexes = {future: index for index, future in enumerate(futures)}
+        pending = set(futures)
+        results: list[AdvisoryResult | None] = [None] * len(selected)
+        while pending:
+            completed, pending = wait(
+                pending,
+                timeout=float(heartbeat_seconds),
+                return_when=FIRST_COMPLETED,
+            )
+            elapsed = max(0, int(time.monotonic() - started))
+            if not completed:
+                for future in sorted(pending, key=indexes.__getitem__):
+                    _notify_progress(
+                        progress,
+                        selected[indexes[future]].label,
+                        "heartbeat",
+                        elapsed,
+                    )
+                continue
+            for future in sorted(completed, key=indexes.__getitem__):
+                index = indexes[future]
+                results[index] = future.result()
+                _notify_progress(progress, selected[index].label, "completed", elapsed)
+        if any(result is None for result in results):
+            raise ValueError
+        return tuple(cast(AdvisoryResult, result) for result in results)

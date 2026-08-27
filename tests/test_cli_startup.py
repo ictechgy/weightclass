@@ -10,6 +10,36 @@ from weightclass import classification_cli
 
 
 class CliStartupTests(unittest.TestCase):
+    def test_full_cli_import_defers_delegation_v2_execution_modules(self) -> None:
+        program = """
+import json
+import sys
+
+import weightclass.cli
+
+loaded = sorted(
+    name
+    for name in sys.modules
+    if name in {
+        "weightclass.delegation_v2_compile",
+        "weightclass.delegation_v2_protocol",
+        "weightclass.delegation_v2_runtime",
+        "weightclass.delegation_v2_schema",
+    }
+)
+print(json.dumps(loaded))
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", program],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [])
+
     def test_local_classify_does_not_mislabel_unexpected_failures_as_vendor_unavailable(
         self,
     ) -> None:

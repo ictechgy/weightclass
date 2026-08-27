@@ -127,6 +127,26 @@ class ParallelAdvisoryTests(unittest.TestCase):
 
         thread.start.assert_called_once_with()
 
+    def test_heartbeat_and_completion_callbacks_are_task_free_and_ordered(self) -> None:
+        parallel = load_module(PARALLEL, "prospective_advisory_parallel_progress")
+        events: list[tuple[str, str, int]] = []
+        results = parallel.run_parallel(
+            (
+                parallel.AdvisoryJob(
+                    "slow",
+                    (sys.executable, "-c", "import time;time.sleep(.08)"),
+                ),
+                parallel.AdvisoryJob("fast", (sys.executable, "-c", "pass")),
+            ),
+            progress=lambda label, event, elapsed: events.append((label, event, elapsed)),
+            heartbeat_seconds=0.01,
+        )
+
+        self.assertEqual([result.returncode for result in results], [0, 0])
+        self.assertIn(("fast", "completed", 0), events)
+        self.assertTrue(any(label == "slow" and event == "heartbeat" for label, event, _ in events))
+        self.assertTrue(any(label == "slow" and event == "completed" for label, event, _ in events))
+
 
 if __name__ == "__main__":
     unittest.main()

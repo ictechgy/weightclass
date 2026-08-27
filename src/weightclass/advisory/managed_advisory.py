@@ -32,6 +32,7 @@ if TYPE_CHECKING or __package__:
         managed_verify,
         speculative_run,
     )
+    from .advisory_diagnostics import PROVIDER_CHECK_FAILURE_CODES
 else:
     import advisory_campaign  # type: ignore[import-not-found]
     import advisory_evidence_contract  # type: ignore[import-not-found]
@@ -42,6 +43,7 @@ else:
     import advisory_routes  # type: ignore[import-not-found]
     import managed_verify  # type: ignore[import-not-found]
     import speculative_run  # type: ignore[import-not-found]
+    from advisory_diagnostics import PROVIDER_CHECK_FAILURE_CODES  # type: ignore[import-not-found]
 
     try:
         from weightclass import __version__ as _PACKAGE_VERSION
@@ -72,6 +74,7 @@ SETUP_LOCK_TIMEOUT = 2.0
 SETUP_LOCK_POLL_SECONDS = 0.02
 RUNNER_VERSION_CHANGED_EXIT = 78
 _VENDOR = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
+_PROFILE_SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _RUNNER_BOOTSTRAP = """\
 import sys
 try:
@@ -107,6 +110,24 @@ class RunnerVersionChangedError(RuntimeError):
     """The installed advisory package changed after managed preflight."""
 
 
+class ManagedPreflightError(RuntimeError):
+    """One task-free managed preflight failed with a closed reason code."""
+
+    code: str
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+class ProviderConfirmationRequiredError(RuntimeError):
+    """A custom consult profile needs an explicit task-free provider check."""
+
+
+class ProviderConformanceError(RuntimeError):
+    """A confirmed custom-provider check failed before task inspection."""
+
+
 class ProviderCapabilityError(ValueError):
     """One task-free vendor CLI check failed before task inspection."""
 
@@ -140,6 +161,25 @@ def _dispatch_started_receipt(
         "event": "managed_dispatch_started",
         "workflow": workflow,
         "leases": [{"vendor": lease.vendor, "lane_index": lease.lane_index} for lease in leases],
+    }
+    return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _dispatch_progress_receipt(
+    workflow: str, vendor: str, event: str, elapsed_seconds: int
+) -> bytes:
+    event_name = {
+        "heartbeat": "managed_vendor_heartbeat",
+        "completed": "managed_vendor_completed",
+    }.get(event)
+    if event_name is None or vendor not in BUILTIN_VENDORS and not _VENDOR.fullmatch(vendor):
+        return b""
+    payload = {
+        "schema_version": 1,
+        "event": event_name,
+        "workflow": workflow,
+        "vendor": vendor,
+        "elapsed_seconds": max(0, elapsed_seconds),
     }
     return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
@@ -181,6 +221,15 @@ class CampaignPaths:
     prices: Path
     campaign: Path
     results: Path
+
+
+@dataclass(frozen=True)
+class ConsultConfiguration:
+    paths: CampaignPaths
+    routes: advisory_routes.AdvisoryRoutes
+    custom: bool
+    profile_sha256: str
+    route_sha256: str
 
 
 def _fail() -> NoReturn:
@@ -851,6 +900,25 @@ def _selected_workflows(requested: str) -> tuple[str, ...]:
     return (requested,)
 
 
+def _consult_route_acknowledgements(
+    values: Sequence[str], vendors: Sequence[str]
+) -> dict[str, str]:
+    acknowledgements: dict[str, str] = {}
+    for value in values:
+        vendor, separator, fingerprint = value.partition("=")
+        if (
+            separator != "="
+            or vendor not in vendors
+            or vendor in acknowledgements
+            or not _PROFILE_SHA256.fullmatch(fingerprint)
+        ):
+            _fail()
+        acknowledgements[vendor] = fingerprint
+    if set(acknowledgements) != set(vendors):
+        _fail()
+    return acknowledgements
+
+
 def _route_capabilities(
     vendor: str, routes: advisory_routes.AdvisoryRoutes
 ) -> tuple[tuple[str, advisory_preflight.CapabilityResult], ...]:
@@ -930,6 +998,40 @@ def _configuration(
     except advisory_campaign.CampaignError as error:
         raise advisory_orchestration.CampaignRecordsInvalidError(error) from None
     return selected, manifest, routes
+
+
+def _consult_configuration(state_root: Path, vendor: str, workflow: str) -> ConsultConfiguration:
+    selected = campaign_paths(state_root, vendor, workflow)
+    verifier = state_root / "verify-project.py"
+    _private_regular(verifier, executable=True)
+    _private_regular(selected.profile)
+    try:
+        profile = _profile_from_path(selected.profile)
+        routes = advisory_routes.build_routes(
+            profile,
+            read_only_executors=True,
+            evidence_workflow=workflow,
+        )
+    except (OSError, advisory_routes.AdvisoryRouteError) as error:
+        raise ManagedAdvisoryError() from error
+    return ConsultConfiguration(
+        selected,
+        routes,
+        profile.get("schema_version") == 2,
+        advisory_routes.profile_digest(profile),
+        advisory_routes.evidence_routes_digest(profile, routes, workflow),
+    )
+
+
+def _require_consult_capabilities(
+    configurations: Mapping[str, ConsultConfiguration],
+    *,
+    role: str,
+) -> None:
+    for vendor, configuration in configurations.items():
+        result = dict(_route_capabilities(vendor, configuration.routes))[role]
+        if not result.ready:
+            raise ProviderCapabilityError(vendor, role, result.failure_code)
 
 
 def doctor(state_root: Path, *, vendors: Sequence[str], workflows: Sequence[str]) -> DoctorReceipt:
@@ -1038,7 +1140,7 @@ def _baseline_probe(workflow: str) -> bytes | None:
 
 def _preflight_repo(repo: Path, workflow: str, verifier: Path) -> None:
     if not repo.is_absolute() or not repo.is_dir():
-        _fail()
+        raise ManagedPreflightError("managed_repo_unavailable")
     environment = {
         "PATH": os.environ.get("PATH", ""),
         "HOME": os.environ.get("HOME", ""),
@@ -1056,10 +1158,15 @@ def _preflight_repo(repo: Path, workflow: str, verifier: Path) -> None:
             timeout=30,
             env=environment,
         )
-        if status.returncode != 0 or status.stdout:
-            _fail()
-        verifier_environment = dict(environment)
-        verifier_environment["WCLASS_ADVISORY_WORKFLOW"] = workflow
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ManagedPreflightError("managed_repo_unavailable") from error
+    if status.returncode != 0:
+        raise ManagedPreflightError("managed_repo_unavailable")
+    if status.stdout:
+        raise ManagedPreflightError("managed_repo_dirty")
+    verifier_environment = dict(environment)
+    verifier_environment["WCLASS_ADVISORY_WORKFLOW"] = workflow
+    try:
         completed = subprocess.run(
             [str(verifier)],
             cwd=repo,
@@ -1071,24 +1178,24 @@ def _preflight_repo(repo: Path, workflow: str, verifier: Path) -> None:
             env=verifier_environment,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        raise ManagedAdvisoryError() from error
+        raise ManagedPreflightError("managed_verifier_unavailable") from error
     if completed.returncode != EXPECTED_BASELINE_FAILURE:
-        _fail()
+        raise ManagedPreflightError("managed_verifier_baseline_rejected")
 
 
 def _preflight_task_file(task_file: Path) -> None:
     if not task_file.is_absolute():
-        _fail()
+        raise ManagedPreflightError("managed_task_input_rejected")
     try:
         metadata = task_file.lstat()
     except OSError as error:
-        raise ManagedAdvisoryError() from error
+        raise ManagedPreflightError("managed_task_input_rejected") from error
     if (
         not stat.S_ISREG(metadata.st_mode)
         or metadata.st_uid != os.getuid()
         or stat.S_IMODE(metadata.st_mode) & 0o077
     ):
-        _fail()
+        raise ManagedPreflightError("managed_task_input_rejected")
 
 
 def _next_ordinal(manifest: advisory_campaign.CampaignManifest, results: Path) -> int:
@@ -1149,6 +1256,160 @@ def _job(
     return advisory_parallel.AdvisoryJob(vendor, tuple(command))
 
 
+def _consult_job(
+    vendor: str,
+    workflow: str,
+    role: str,
+    repo: Path,
+    task_file: Path,
+    profile: Path,
+    route_sha256: str,
+    verifier: Path,
+) -> advisory_parallel.AdvisoryJob:
+    return advisory_parallel.AdvisoryJob(
+        vendor,
+        (
+            sys.executable,
+            "-m",
+            "weightclass.advisory.advisory_consult",
+            "--expected-package-version",
+            PACKAGE_VERSION,
+            "--workflow",
+            workflow,
+            "--vendor",
+            vendor,
+            "--role",
+            role,
+            "--repo",
+            str(repo),
+            "--task-file",
+            str(task_file),
+            "--route-profile",
+            str(profile),
+            "--expected-route-sha256",
+            route_sha256,
+            "--verify",
+            str(verifier),
+        ),
+    )
+
+
+def _consult_result_receipt(vendor: str, workflow: str, result: Mapping[str, object]) -> bytes:
+    payload = {
+        "schema_version": 1,
+        "event": "managed_consult_result",
+        "vendor": vendor,
+        "workflow": workflow,
+        "content_trust": "untrusted_model_authored",
+        "sample_recorded": False,
+        "result": dict(result),
+    }
+    return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _consult_failure_receipt(
+    vendor: str, workflow: str, result: advisory_parallel.AdvisoryResult
+) -> bytes:
+    payload = {
+        "schema_version": 1,
+        "event": "managed_consult_failed",
+        "vendor": vendor,
+        "workflow": workflow,
+        "returncode": result.returncode,
+        "started": result.started,
+        "timed_out": result.timed_out,
+        "output_truncated": result.output_truncated,
+        "sample_recorded": False,
+    }
+    return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def consult(
+    state_root: Path,
+    *,
+    repo: Path,
+    task_file: Path,
+    vendors: Sequence[str],
+    workflow: str,
+    role: str,
+    acknowledged_route_sha256: Mapping[str, str],
+    confirm_task_egress: bool,
+    confirm_provider_egress: bool,
+) -> int:
+    if not confirm_task_egress or not vendors or workflow not in EVIDENCE_WORKFLOWS:
+        _fail()
+    if role not in {"cheap", "expensive"}:
+        _fail()
+    configurations = {
+        vendor: _consult_configuration(state_root, vendor, workflow) for vendor in vendors
+    }
+    if set(acknowledged_route_sha256) != set(vendors) or any(
+        acknowledged_route_sha256.get(vendor) != configurations[vendor].route_sha256
+        for vendor in vendors
+    ):
+        raise ManagedPreflightError("managed_consult_route_mismatch")
+    _require_consult_capabilities(configurations, role=role)
+    custom_vendors = tuple(
+        vendor for vendor, configuration in configurations.items() if configuration.custom
+    )
+    if custom_vendors:
+        if not confirm_provider_egress:
+            raise ProviderConfirmationRequiredError
+        readiness = provider_check(
+            state_root,
+            vendors=custom_vendors,
+            workflow=workflow,
+            confirm_provider_egress=True,
+            require_campaign=False,
+            expected_route_sha256=acknowledged_route_sha256,
+        )
+        if readiness.get("ready") is not True:
+            raise ProviderConformanceError
+    _preflight_task_file(task_file)
+    verifier = state_root / "verify-project.py"
+    _private_regular(verifier, executable=True)
+    _preflight_repo(repo, workflow, verifier)
+    jobs = tuple(
+        _consult_job(
+            vendor,
+            workflow,
+            role,
+            repo,
+            task_file,
+            configurations[vendor].paths.profile,
+            configurations[vendor].route_sha256,
+            verifier,
+        )
+        for vendor in vendors
+    )
+    results = advisory_parallel.run_parallel(
+        jobs,
+        progress=lambda vendor, event, elapsed: _replay_output(
+            sys.stderr.buffer,
+            _dispatch_progress_receipt(workflow, vendor, event, elapsed),
+        ),
+    )
+    returncode = 0
+    for vendor, result in zip(vendors, results, strict=True):
+        if result.stderr:
+            _replay_output(sys.stderr.buffer, result.stderr)
+        if result.returncode == RUNNER_VERSION_CHANGED_EXIT:
+            raise RunnerVersionChangedError
+        if result.returncode != 0:
+            _replay_output(sys.stderr.buffer, _consult_failure_receipt(vendor, workflow, result))
+            returncode = 1
+            continue
+        try:
+            rendered = result.stdout.decode("utf-8", errors="strict")
+            parsed = advisory_evidence_contract.parse_evidence_result(rendered, workflow)
+        except (UnicodeError, advisory_evidence_contract.EvidenceResultError):
+            _replay_output(sys.stderr.buffer, _consult_failure_receipt(vendor, workflow, result))
+            returncode = 1
+            continue
+        _replay_output(sys.stdout.buffer, _consult_result_receipt(vendor, workflow, parsed))
+    return returncode
+
+
 def dispatch(
     state_root: Path,
     *,
@@ -1198,7 +1459,13 @@ def dispatch(
                 for vendor, lease in zip(vendors, leases, strict=True)
             )
             _replay_output(sys.stderr.buffer, _dispatch_started_receipt(workflow, leases))
-            results = advisory_parallel.run_parallel(jobs)
+            results = advisory_parallel.run_parallel(
+                jobs,
+                progress=lambda vendor, event, elapsed: _replay_output(
+                    sys.stderr.buffer,
+                    _dispatch_progress_receipt(workflow, vendor, event, elapsed),
+                ),
+            )
             returncode = 0
             record_error = False
             runner_version_changed = False
@@ -1240,6 +1507,8 @@ def provider_check(
     vendors: Sequence[str],
     workflow: str,
     confirm_provider_egress: bool,
+    require_campaign: bool = True,
+    expected_route_sha256: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """Run task-free, non-persisted checks for all configured provider roles."""
 
@@ -1279,12 +1548,21 @@ def provider_check(
         if initialized.returncode != 0:
             _fail()
         for vendor in vendors:
-            selected, _, _ = _configuration(state_root, vendor, workflow)
-            routes = advisory_routes.routes_from_profile(
-                selected.profile,
-                read_only_executors=True,
-                evidence_workflow=target_workflow,
-            )
+            if require_campaign:
+                selected, _, _ = _configuration(state_root, vendor, workflow)
+                routes = advisory_routes.routes_from_profile(
+                    selected.profile,
+                    read_only_executors=True,
+                    evidence_workflow=target_workflow,
+                )
+            else:
+                configuration = _consult_configuration(state_root, vendor, target_workflow)
+                if (
+                    expected_route_sha256 is None
+                    or expected_route_sha256.get(vendor) != configuration.route_sha256
+                ):
+                    raise ManagedPreflightError("managed_consult_route_mismatch")
+                routes = configuration.routes
             for role, capability in _route_capabilities(vendor, routes):
                 if not capability.ready:
                     raise ProviderCapabilityError(vendor, role, capability.failure_code)
@@ -1318,6 +1596,17 @@ def provider_check(
                     and contract_ready
                 )
                 all_ready = all_ready and ready
+                failure_code = (
+                    (
+                        child["failure_code"]
+                        if child["exit_code"] != 0 or contract_ready
+                        else "result_contract"
+                    )
+                    if child is not None
+                    else "local_probe_failed"
+                )
+                if failure_code not in PROVIDER_CHECK_FAILURE_CODES:
+                    failure_code = "unknown"
                 results.append(
                     {
                         "vendor": vendor,
@@ -1326,15 +1615,7 @@ def provider_check(
                         "child_exit_code": child["exit_code"] if child is not None else None,
                         "child_timed_out": child["timed_out"] if child is not None else False,
                         "child_seconds": child["seconds"] if child is not None else 0.0,
-                        "child_failure_code": (
-                            (
-                                child["failure_code"]
-                                if child["exit_code"] != 0 or contract_ready
-                                else "result_contract"
-                            )
-                            if child is not None
-                            else "local_probe_failed"
-                        ),
+                        "child_failure_code": failure_code,
                         "child_stdout_present": (
                             child["stdout_present"] if child is not None else False
                         ),
@@ -1361,27 +1642,42 @@ def provider_check(
     }
 
 
-def review_payload(state_root: Path, *, vendors: Sequence[str], workflow: str) -> dict[str, object]:
+def review_payload(
+    state_root: Path,
+    *,
+    vendors: Sequence[str],
+    workflow: str,
+    require_campaign: bool = True,
+) -> dict[str, object]:
     reviewed: list[dict[str, object]] = []
     for vendor in vendors:
-        _, _, routes = _configuration(state_root, vendor, workflow)
+        configuration: ConsultConfiguration | None = None
+        if require_campaign:
+            _, _, routes = _configuration(state_root, vendor, workflow)
+        else:
+            configuration = _consult_configuration(state_root, vendor, workflow)
+            routes = configuration.routes
         deliveries = {
             role: advisory_routes.command_task_delivery(getattr(routes, role)) for role in ROLES
         }
         distinct = set(deliveries.values())
-        reviewed.append(
-            {
-                "vendor": vendor,
-                "workflow": workflow,
-                "executor_access": (
-                    "workspace_write" if workflow == "implementation" else "read_only"
-                ),
-                "task_delivery": next(iter(distinct)) if len(distinct) == 1 else deliveries,
-                "task_process_exposure": "argv" in distinct,
-                "task_egress": True,
-            }
-        )
-    return {"schema_version": SCHEMA_VERSION, "routes": reviewed}
+        review: dict[str, object] = {
+            "vendor": vendor,
+            "workflow": workflow,
+            "executor_access": ("workspace_write" if workflow == "implementation" else "read_only"),
+            "task_delivery": next(iter(distinct)) if len(distinct) == 1 else deliveries,
+            "task_process_exposure": "argv" in distinct,
+            "task_egress": True,
+        }
+        if configuration is not None:
+            review["profile_sha256"] = configuration.profile_sha256
+            review["route_sha256"] = configuration.route_sha256
+            review["routes"] = {role: list(getattr(routes, role)) for role in ROLES}
+        reviewed.append(review)
+    payload: dict[str, object] = {"schema_version": SCHEMA_VERSION, "routes": reviewed}
+    if not require_campaign:
+        payload["campaign_bound"] = False
+    return payload
 
 
 def _role_values(values: Sequence[str]) -> dict[str, str]:
@@ -1590,19 +1886,89 @@ def review_main(argv: Sequence[str]) -> int:
     parser.add_argument("--state-root", type=Path)
     parser.add_argument("--vendor", default="all")
     parser.add_argument("--workflow", choices=WORKFLOWS, default="implementation")
+    parser.add_argument(
+        "--consult",
+        action="store_true",
+        help="review a non-recording evidence route without validating campaign records",
+    )
     arguments = parser.parse_args(argv)
     try:
+        if arguments.consult and arguments.workflow not in EVIDENCE_WORKFLOWS:
+            _fail()
         root = _root(arguments.state_root)
         payload = review_payload(
             root,
             vendors=_selected_vendors(root, arguments.vendor),
             workflow=arguments.workflow,
+            require_campaign=not arguments.consult,
         )
-    except (OSError, ManagedAdvisoryError):
+    except (OSError, ValueError, ManagedAdvisoryError):
         print(json.dumps({"error": "managed_configuration_unavailable"}), file=sys.stderr)
         return 2
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
     return 0
+
+
+def consult_main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(prog="wclass-advisory consult", allow_abbrev=False)
+    parser.add_argument("--state-root", type=Path)
+    parser.add_argument("--repo", required=True, type=Path)
+    parser.add_argument("--task-file", required=True, type=Path)
+    parser.add_argument("--vendor", default="all")
+    parser.add_argument("--workflow", required=True, choices=EVIDENCE_WORKFLOWS)
+    parser.add_argument("--role", choices=("cheap", "expensive"), default="cheap")
+    parser.add_argument(
+        "--ack-route-sha256",
+        action="append",
+        required=True,
+        help="repeat VENDOR=sha256:... for every selected reviewed consult route",
+    )
+    parser.add_argument("--confirm-task-egress", action="store_true", required=True)
+    parser.add_argument("--confirm-provider-egress", action="store_true")
+    arguments = parser.parse_args(argv)
+    try:
+        root = _root(arguments.state_root)
+        vendors = _selected_vendors(root, arguments.vendor)
+        return consult(
+            root,
+            repo=arguments.repo.expanduser().resolve(),
+            task_file=arguments.task_file.expanduser(),
+            vendors=vendors,
+            workflow=arguments.workflow,
+            role=arguments.role,
+            acknowledged_route_sha256=_consult_route_acknowledgements(
+                arguments.ack_route_sha256, vendors
+            ),
+            confirm_task_egress=arguments.confirm_task_egress,
+            confirm_provider_egress=arguments.confirm_provider_egress,
+        )
+    except ProviderConfirmationRequiredError:
+        print(json.dumps({"error": "managed_provider_confirmation_required"}), file=sys.stderr)
+        return 2
+    except ProviderConformanceError:
+        print(json.dumps({"error": "managed_provider_preflight_failed"}), file=sys.stderr)
+        return 2
+    except ProviderCapabilityError as error:
+        print(json.dumps(_provider_capability_payload(error), sort_keys=True), file=sys.stderr)
+        return 2
+    except RunnerVersionChangedError:
+        print(json.dumps({"error": "managed_runner_version_changed"}), file=sys.stderr)
+        return 2
+    except ManagedPreflightError as error:
+        print(
+            json.dumps(
+                {
+                    "error": "managed_consult_rejected",
+                    "reason_code": error.code,
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+    except (OSError, ValueError, ManagedAdvisoryError):
+        print(json.dumps({"error": "managed_consult_rejected"}), file=sys.stderr)
+        return 2
 
 
 def dispatch_main(argv: Sequence[str]) -> int:
@@ -1641,6 +2007,18 @@ def dispatch_main(argv: Sequence[str]) -> int:
         return 2
     except RunnerVersionChangedError:
         print(json.dumps({"error": "managed_runner_version_changed"}), file=sys.stderr)
+        return 2
+    except ManagedPreflightError as error:
+        print(
+            json.dumps(
+                {
+                    "error": "managed_dispatch_rejected",
+                    "reason_code": error.code,
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
         return 2
     except (OSError, ManagedAdvisoryError):
         print(json.dumps({"error": "managed_dispatch_rejected"}), file=sys.stderr)

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING or __package__:
     from . import (
         advisory_campaign,
+        advisory_experiments,
         advisory_orchestration,
         advisory_portfolio,
         advisory_routes,
@@ -25,6 +26,7 @@ else:
     if module_directory not in sys.path:
         sys.path.insert(0, module_directory)
     import advisory_campaign  # type: ignore[import-not-found]
+    import advisory_experiments  # type: ignore[import-not-found]
     import advisory_orchestration  # type: ignore[import-not-found]
     import advisory_portfolio  # type: ignore[import-not-found]
     import advisory_routes  # type: ignore[import-not-found]
@@ -147,6 +149,7 @@ def _top_parser() -> argparse.ArgumentParser:
             "cli-check",
             "provider-check",
             "review",
+            "consult",
             "dispatch",
             "status",
             "cleanup",
@@ -155,6 +158,7 @@ def _top_parser() -> argparse.ArgumentParser:
             "seal",
             "report",
             "portfolio",
+            "experiment",
             "install-skill",
         ),
     )
@@ -234,6 +238,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 [argument for argument in arguments[1:] if argument != "--managed"]
             )
         return _invoke(advisory_routes.main, arguments, "wclass-advisory")
+    if command == "consult":
+        return managed_advisory.consult_main(arguments[1:])
     if command == "dispatch":
         return managed_advisory.dispatch_main(arguments[1:])
     if command == "status":
@@ -250,6 +256,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _invoke(speculative_report.main, arguments[1:], "wclass-advisory report")
     if command == "portfolio":
         return _invoke(advisory_portfolio.main, arguments[1:], "wclass-advisory portfolio")
+    if command == "experiment":
+        return advisory_experiments.main(arguments[1:])
     if command == "install-skill":
         return install_advisory_skill.main(list(arguments[1:]))
     parser.error("invalid command")
