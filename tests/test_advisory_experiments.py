@@ -194,6 +194,21 @@ class AdvisoryExperimentTests(unittest.TestCase):
         self.assertEqual(result, 2)
         self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_experiment_input"})
 
+    def test_cli_rejects_real_deep_field_before_retaining_the_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "records.jsonl")
+            nested = "[" * 20_000 + "true" + "]" * 20_000
+            path.write_text(
+                '{"schema_version":1,"experiment":"sequential","accepted":' + nested + "}\n",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                result = advisory_experiments.main(["sequential", "--records", str(path)])
+
+        self.assertEqual(result, 2)
+        self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_experiment_input"})
+
 
 if __name__ == "__main__":
     unittest.main()

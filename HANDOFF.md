@@ -108,7 +108,7 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   PR review additionally hardened every internal advisory Python child with an
   isolated, parent-package-pinned bootstrap and bounded experiment input to
   10,000 prevalidated records with recursive-parser failures redacted. Current
-  offline gates pass 1,364 unittest tests with 27 skips, Ruff over the
+  offline gates pass 1,365 unittest tests with 27 skips, Ruff over the
   full source/test/verifier set, strict mypy over 172 source files, wheel/sdist
   build plus strict metadata/isolation checks, and a clean-wheel CLI smoke test.
 - Release 0.17.8 adds a

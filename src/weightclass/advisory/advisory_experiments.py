@@ -112,6 +112,7 @@ def _records(path: Path) -> list[dict[str, Any]]:
         expected_keys = EXPERIMENT_KEYS.get(experiment) if isinstance(experiment, str) else None
         if value.get("schema_version") != 1 or expected_keys is None or set(value) != expected_keys:
             raise ExperimentInputError()
+        _validate_record_fields(value)
         result.append(value)
     if not result:
         raise ExperimentInputError()
@@ -136,6 +137,52 @@ def _bounded_integer(value: object, *, upper: int | None = None) -> int:
     if value > effective_upper:
         raise ExperimentInputError()
     return value
+
+
+def _validate_record_fields(record: dict[str, Any]) -> None:
+    """Reject nested or out-of-domain values before retaining a parsed record."""
+    experiment = record["experiment"]
+    if experiment == "sequential":
+        _boolean(record["accepted"])
+        return
+    if experiment == "context_2x2":
+        if record["cell"] not in CONTEXT_CELLS:
+            raise ExperimentInputError()
+        _boolean(record["accepted"])
+        _bounded_integer(record["input_tokens"])
+        _bounded_integer(record["output_tokens"])
+        _bounded_integer(record["elapsed_ms"])
+        return
+    if experiment == "brainstorm_generator_critic":
+        for field in (
+            "baseline_compliant",
+            "treatment_compliant",
+            "baseline_critical_violation",
+            "treatment_critical_violation",
+            "raters_agree",
+        ):
+            _boolean(record[field])
+        for field in (
+            "baseline_diversity_bps",
+            "treatment_diversity_bps",
+            "baseline_duplicate_rate_bps",
+            "treatment_duplicate_rate_bps",
+        ):
+            _bounded_integer(record[field], upper=10_000)
+        preference = record["preference"]
+        if not isinstance(preference, str) or preference not in {"baseline", "treatment", "tie"}:
+            raise ExperimentInputError()
+        return
+    if experiment == "confidence":
+        abstained = _boolean(record["abstained"])
+        if abstained:
+            if record["predicted_probability_bps"] is not None or record["accepted"] is not None:
+                raise ExperimentInputError()
+        else:
+            _bounded_integer(record["predicted_probability_bps"], upper=10_000)
+            _boolean(record["accepted"])
+        return
+    raise ExperimentInputError()
 
 
 def _rate_bps(successes: int, total: int) -> int | None:
