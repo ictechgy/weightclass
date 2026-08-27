@@ -92,8 +92,8 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   upgraded to managed onboarding 11. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/b2/b3/e9d011103d7dde79614064359d34effb724babe32842a66387d328365624/weightclass-0.17.9.tar.gz`
   - sha256: `634dcbe9f66934f15262611115ca3e7dace51712cb9883fd1e1254f6f6d19a75`
-- **Unreleased roadmap implementation is active on
-  `feat/advisory-consult-roadmap`.** It centralizes advisory failure enums,
+- **`weightclass 0.18.0` is the current release candidate from merged PR
+  #119.** It centralizes advisory failure enums,
   adds distinct managed preflight reason codes, additive attempt/advice/metric
   denominators, task-free vendor heartbeat/completion receipts, and explicit
   untrusted evidence framing. A new read-only `consult` path runs exactly one
@@ -111,6 +111,8 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   offline gates pass 1,365 unittest tests with 27 skips, Ruff over the
   full source/test/verifier set, strict mypy over 172 source files, wheel/sdist
   build plus strict metadata/isolation checks, and a clean-wheel CLI smoke test.
+  PR #119 merged as `fadf362`; its final immutable security diff review found
+  no reportable findings after independently rechecking both review-time fixes.
 - Release 0.17.8 adds a
   task-free local `cli-check`, installed-CLI status to `doctor`, a separately
   confirmed and non-persisted `provider-check`, and task-before-inspection
