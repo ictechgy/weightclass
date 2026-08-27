@@ -4,9 +4,9 @@
 aggregate-only evidence. It does not invoke a provider, inspect a repository,
 write advisory state, or update a route. Input is UTF-8 JSONL with one closed
 schema-1 object per non-empty line. The file is capped at 4 MiB and each line at
-64 KiB; duplicate or unknown keys, non-finite numbers, special files, and values
-outside the documented bounds fail with `invalid_experiment_input` without
-echoing a record.
+64 KiB, with at most 10,000 records; duplicate or unknown keys, excessive JSON
+nesting, non-finite numbers, special files, and values outside the documented
+bounds fail with `invalid_experiment_input` without echoing a record.
 
 Do not put task text, task identifiers, timestamps, profile names, paths,
 fingerprints, credentials, or provider output in these files. The schemas have

@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from weightclass.advisory import advisory_experiments
 
@@ -152,6 +153,46 @@ class AdvisoryExperimentTests(unittest.TestCase):
         self.assertEqual(result, 2)
         self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_experiment_input"})
         self.assertNotIn(sentinel, stderr.getvalue())
+
+    def test_cli_bounds_record_count_before_accumulating_the_study(self) -> None:
+        record = json.dumps(
+            {"schema_version": 1, "experiment": "sequential", "accepted": True},
+            separators=(",", ":"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "records.jsonl")
+            path.write_text(
+                (record + "\n") * (advisory_experiments.MAX_EXPERIMENT_RECORDS + 1),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                result = advisory_experiments.main(
+                    ["sequential", "--records", str(path), "--maximum-samples", "10000"]
+                )
+
+        self.assertEqual(result, 2)
+        self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_experiment_input"})
+
+    def test_cli_redacts_recursive_json_parser_failure(self) -> None:
+        directory, path = self._record_file(
+            [{"schema_version": 1, "experiment": "sequential", "accepted": True}]
+        )
+        stderr = io.StringIO()
+        try:
+            with (
+                mock.patch(
+                    "weightclass.advisory.advisory_experiments.json.loads",
+                    side_effect=RecursionError,
+                ),
+                contextlib.redirect_stderr(stderr),
+            ):
+                result = advisory_experiments.main(["sequential", "--records", str(path)])
+        finally:
+            directory.cleanup()
+
+        self.assertEqual(result, 2)
+        self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_experiment_input"})
 
 
 if __name__ == "__main__":

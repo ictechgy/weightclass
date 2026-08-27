@@ -43,6 +43,41 @@ def custom_profile(command: list[str]) -> dict[str, object]:
 
 
 class AdvisoryConsultTests(unittest.TestCase):
+    def test_managed_consult_bootstrap_rejects_cwd_module_shadowing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shadow = root / "weightclass" / "advisory"
+            shadow.mkdir(parents=True)
+            marker = root / "shadow-imported"
+            (shadow.parent / "__init__.py").write_text("", encoding="utf-8")
+            (shadow / "__init__.py").write_text("", encoding="utf-8")
+            (shadow / "advisory_consult.py").write_text(
+                f"from pathlib import Path\nPath({str(marker)!r}).write_text('bad')\n",
+                encoding="utf-8",
+            )
+            job = managed_advisory._consult_job(
+                "custom",
+                "research",
+                "cheap",
+                Path("/missing/repo"),
+                Path("/missing/PRIVATE-TASK"),
+                Path("/missing/profile"),
+                "sha256:" + "0" * 64,
+                Path("/missing/verifier"),
+            )
+            completed = subprocess.run(
+                job.command,
+                cwd=root,
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            shadow_imported = marker.exists()
+
+        self.assertEqual(job.command[1], "-I")
+        self.assertEqual(completed.returncode, 2, completed.stderr)
+        self.assertFalse(shadow_imported)
+
     def test_internal_consult_rejects_profile_mismatch_before_task_access(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

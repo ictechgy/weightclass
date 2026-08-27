@@ -99,8 +99,10 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
         accepted = subprocess.run(
             [
                 sys.executable,
+                "-I",
                 "-c",
                 managed_advisory._RUNNER_BOOTSTRAP,
+                str(managed_advisory.PACKAGE_ROOT),
                 managed_advisory.PACKAGE_VERSION,
                 "--help",
             ],
@@ -112,8 +114,10 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
         completed = subprocess.run(
             [
                 sys.executable,
+                "-I",
                 "-c",
                 managed_advisory._RUNNER_BOOTSTRAP,
+                str(managed_advisory.PACKAGE_ROOT),
                 "definitely-not-the-loaded-version",
                 "--help",
             ],
@@ -992,11 +996,13 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             self.assertEqual([job.label for job in captured_jobs], ["vendor-a", "vendor-b"])
             self.assertTrue(
                 all(
-                    job.command[:4]
+                    job.command[:6]
                     == (
                         sys.executable,
+                        "-I",
                         "-c",
                         managed_advisory._RUNNER_BOOTSTRAP,
+                        str(managed_advisory.PACKAGE_ROOT),
                         managed_advisory.PACKAGE_VERSION,
                     )
                     for job in captured_jobs

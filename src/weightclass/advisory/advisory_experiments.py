@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
 import os
@@ -14,8 +15,48 @@ from typing import Any, Final
 
 MAX_RECORD_BYTES: Final = 4_194_304
 MAX_LINE_BYTES: Final = 65_536
+MAX_EXPERIMENT_RECORDS: Final = 10_000
 CONTEXT_CELLS: Final = ("baseline", "guard", "advisory", "guard_advisory")
 MAX_AGGREGATE_INTEGER: Final = 9_007_199_254_740_991
+EXPERIMENT_KEYS: Final = {
+    "sequential": frozenset({"schema_version", "experiment", "accepted"}),
+    "context_2x2": frozenset(
+        {
+            "schema_version",
+            "experiment",
+            "cell",
+            "accepted",
+            "input_tokens",
+            "output_tokens",
+            "elapsed_ms",
+        }
+    ),
+    "brainstorm_generator_critic": frozenset(
+        {
+            "schema_version",
+            "experiment",
+            "baseline_compliant",
+            "treatment_compliant",
+            "baseline_critical_violation",
+            "treatment_critical_violation",
+            "baseline_diversity_bps",
+            "treatment_diversity_bps",
+            "baseline_duplicate_rate_bps",
+            "treatment_duplicate_rate_bps",
+            "preference",
+            "raters_agree",
+        }
+    ),
+    "confidence": frozenset(
+        {
+            "schema_version",
+            "experiment",
+            "predicted_probability_bps",
+            "accepted",
+            "abstained",
+        }
+    ),
+}
 
 
 class ExperimentInputError(ValueError):
@@ -50,14 +91,26 @@ def _records(path: Path) -> list[dict[str, Any]]:
     if len(payload) > MAX_RECORD_BYTES:
         raise ExperimentInputError()
     result: list[dict[str, Any]] = []
-    for raw_line in payload.splitlines():
+    for index, terminated_line in enumerate(io.BytesIO(payload), start=1):
+        if index > MAX_EXPERIMENT_RECORDS:
+            raise ExperimentInputError()
+        raw_line = terminated_line.rstrip(b"\r\n")
         if not raw_line or len(raw_line) > MAX_LINE_BYTES:
             raise ExperimentInputError()
         try:
             value = json.loads(raw_line, object_pairs_hook=_reject_duplicate_keys)
-        except (ExperimentInputError, json.JSONDecodeError, UnicodeDecodeError) as error:
+        except (
+            ExperimentInputError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            RecursionError,
+        ) as error:
             raise ExperimentInputError() from error
         if not isinstance(value, dict):
+            raise ExperimentInputError()
+        experiment = value.get("experiment")
+        expected_keys = EXPERIMENT_KEYS.get(experiment) if isinstance(experiment, str) else None
+        if value.get("schema_version") != 1 or expected_keys is None or set(value) != expected_keys:
             raise ExperimentInputError()
         result.append(value)
     if not result:
@@ -346,8 +399,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--alpha-bps must be between 1 and 5000")
     if not 0 <= arguments.target_rate_bps <= 10_000:
         parser.error("--target-rate-bps must be between 0 and 10000")
-    if not 1 <= arguments.minimum_samples <= arguments.maximum_samples <= 100_000:
-        parser.error("sample bounds must satisfy 1 <= minimum <= maximum <= 100000")
+    if not 1 <= arguments.minimum_samples <= arguments.maximum_samples <= MAX_EXPERIMENT_RECORDS:
+        parser.error(
+            f"sample bounds must satisfy 1 <= minimum <= maximum <= {MAX_EXPERIMENT_RECORDS}"
+        )
     analyzers: dict[str, Callable[[list[dict[str, Any]]], dict[str, Any]]] = {
         "context-2x2": analyze_context,
         "brainstorm": analyze_brainstorm,
@@ -365,7 +420,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         else:
             result = analyzers[arguments.kind](records)
-    except (ExperimentInputError, OSError, ValueError, OverflowError):
+    except (ExperimentInputError, OSError, ValueError, OverflowError, RecursionError):
         print(json.dumps({"error": "invalid_experiment_input"}), file=sys.stderr)
         return 2
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))

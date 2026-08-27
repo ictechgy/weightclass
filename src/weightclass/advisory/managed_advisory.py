@@ -51,6 +51,7 @@ else:
         _PACKAGE_VERSION = "source-tree"
 
 PACKAGE_VERSION = _PACKAGE_VERSION
+PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
 SCHEMA_VERSION = 1
 WORKFLOWS = ("implementation", "review", "research", "diagnosis", "design")
@@ -80,12 +81,15 @@ import sys
 try:
     import importlib.metadata
     from pathlib import Path
+    package_root = Path(sys.argv[1]).resolve()
+    sys.path.insert(0, str(package_root.parent))
     import weightclass
     from weightclass.advisory import speculative_run
 except Exception:
     raise SystemExit(78)
-expected = sys.argv[1]
-package_root = Path(weightclass.__file__).resolve().parent
+expected = sys.argv[2]
+if Path(weightclass.__file__).resolve().parent != package_root:
+    raise SystemExit(78)
 installed = any(part in {"site-packages", "dist-packages"} for part in package_root.parts)
 try:
     metadata_version = importlib.metadata.version("weightclass") if installed else expected
@@ -93,8 +97,32 @@ except Exception:
     raise SystemExit(78)
 if weightclass.__version__ != expected or metadata_version != expected:
     raise SystemExit(78)
-sys.argv = [sys.argv[0], *sys.argv[2:]]
+sys.argv = [sys.argv[0], *sys.argv[3:]]
 raise SystemExit(speculative_run.main())
+"""
+_CONSULT_RUNNER_BOOTSTRAP = """\
+import sys
+try:
+    import importlib.metadata
+    from pathlib import Path
+    package_root = Path(sys.argv[1]).resolve()
+    sys.path.insert(0, str(package_root.parent))
+    import weightclass
+    from weightclass.advisory import advisory_consult
+except Exception:
+    raise SystemExit(78)
+expected = sys.argv[2]
+if Path(weightclass.__file__).resolve().parent != package_root:
+    raise SystemExit(78)
+installed = any(part in {"site-packages", "dist-packages"} for part in package_root.parts)
+try:
+    metadata_version = importlib.metadata.version("weightclass") if installed else expected
+except Exception:
+    raise SystemExit(78)
+if weightclass.__version__ != expected or metadata_version != expected:
+    raise SystemExit(78)
+sys.argv = [sys.argv[0], *sys.argv[3:]]
+raise SystemExit(advisory_consult.main())
 """
 
 
@@ -1248,8 +1276,10 @@ def _job(
         runner_arguments[index:index] = ["--prices", str(selected.prices), "--prefer-prices"]
     command = [
         sys.executable,
+        "-I",
         "-c",
         _RUNNER_BOOTSTRAP,
+        str(PACKAGE_ROOT),
         PACKAGE_VERSION,
         *runner_arguments,
     ]
@@ -1270,8 +1300,11 @@ def _consult_job(
         vendor,
         (
             sys.executable,
-            "-m",
-            "weightclass.advisory.advisory_consult",
+            "-I",
+            "-c",
+            _CONSULT_RUNNER_BOOTSTRAP,
+            str(PACKAGE_ROOT),
+            PACKAGE_VERSION,
             "--expected-package-version",
             PACKAGE_VERSION,
             "--workflow",
