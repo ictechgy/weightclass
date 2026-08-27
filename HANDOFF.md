@@ -81,6 +81,17 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/04/ee/b8ccb1ef866fac82552a20193978be6a69f21c0e4fb25600fe78013e0479/weightclass-0.17.8.tar.gz`
   - sha256: `75b6ab98a84660a637cfc583f0b93b2b4bb07db65420981b7b2f5bda6300b4ef`
+- **`weightclass 0.17.9` is published on PyPI and Homebrew.** Implementation
+  PR #116, source-formula PR #117, and tap PR
+  `ictechgy/homebrew-tap#25` are merged. Release run `33029726299` passed the
+  immutable Python 3.13 build, macOS 3.10/3.14 boundaries, Python 3.10/3.14
+  candidate validation, explicit PyPI environment approval, and exact trusted
+  publication. A complete seven-file terminal Security diff scan found no
+  reportable findings. The user-level uv tool and Homebrew source install both
+  report 0.17.9, `brew test` passes, and exact 0.17.8 Codex/Claude skills
+  upgraded to managed onboarding 11. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/b2/b3/e9d011103d7dde79614064359d34effb724babe32842a66387d328365624/weightclass-0.17.9.tar.gz`
+  - sha256: `634dcbe9f66934f15262611115ca3e7dace51712cb9883fd1e1254f6f6d19a75`
 - Release 0.17.8 adds a
   task-free local `cli-check`, installed-CLI status to `doctor`, a separately
   confirmed and non-persisted `provider-check`, and task-before-inspection
@@ -113,7 +124,7 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   measured 15,804,217 total tokens (15,784,225 input; 15,544,320 cached input).
   The known path-based spawn TOCTOU remains an explicitly documented
   pre-existing architecture residual rather than a 0.17.8 regression.
-- The 0.17.9 candidate closes the reviewed advisory
+- Release 0.17.9 closes the reviewed advisory
   follow-ups. Vendor credential families now require exact built-in executable
   basenames; Grok/custom `{{task_file}}` delivery streams through an inherited
   pipe without creating a task pathname or file; setup locks have
