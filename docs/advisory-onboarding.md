@@ -73,7 +73,15 @@ profile, manifest, price basis, result lane, ordinal, clean repository,
 committed verifier, and private task file before vendor execution. Task content
 is never stored, logged, echoed, hashed, or used in a label. Codex and Claude
 normally receive it through stdin; agy retains its reviewed argv exposure and
-Grok uses a private transient prompt file.
+Grok receives an inherited `/dev/fd/N` pipe. No task pathname or task file is
+created; failure to establish anonymous descriptor delivery stops the route
+before egress.
+
+The managed parent also pins its loaded weightclass version into every runner
+bootstrap. A concurrent package replacement fails before task access with
+`managed_runner_version_changed`; retry only after the install is complete.
+Concurrent `init` or migration setup returns `managed_setup_busy` after a
+bounded wait rather than blocking indefinitely.
 
 An explicit live readiness check is available when local capability is not
 enough:

@@ -1,3 +1,3 @@
-"""weightclass: local, policy-driven routing for Codex and Claude workflows."""
+"""weightclass: local, policy-driven routing for supported native agent CLIs."""
 
-__version__ = "0.17.8"
+__version__ = "0.17.9"

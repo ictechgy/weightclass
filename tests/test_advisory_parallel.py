@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -102,6 +104,28 @@ class ParallelAdvisoryTests(unittest.TestCase):
         self.assertFalse(result.started)
         self.assertEqual(result.stdout, b"")
         self.assertEqual(result.stderr, b"advisory child start failed\n")
+
+    def test_slow_timeout_reap_is_transferred_to_a_daemon(self) -> None:
+        parallel = load_module(PARALLEL, "prospective_advisory_parallel_reaper")
+        process = cast(subprocess.Popen[bytes], mock.Mock())
+        process.pid = 12345
+        thread = mock.Mock()
+        with (
+            mock.patch.object(parallel.time, "sleep"),
+            mock.patch.object(parallel.os, "killpg"),
+            mock.patch.object(
+                process,
+                "wait",
+                side_effect=(subprocess.TimeoutExpired(("child",), 1.0), 0),
+            ) as wait,
+            mock.patch.object(parallel.threading, "Thread", return_value=thread) as factory,
+        ):
+            parallel._terminate_process_group(process)
+            target = factory.call_args.kwargs["target"]
+            target()
+            self.assertEqual(wait.call_count, 2)
+
+        thread.start.assert_called_once_with()
 
 
 if __name__ == "__main__":

@@ -12,12 +12,15 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, NoReturn, TypedDict
 
 if TYPE_CHECKING or __package__:
+    from weightclass import __version__ as _PACKAGE_VERSION
+
     from . import (
         advisory_campaign,
         advisory_evidence_contract,
@@ -40,6 +43,13 @@ else:
     import managed_verify  # type: ignore[import-not-found]
     import speculative_run  # type: ignore[import-not-found]
 
+    try:
+        from weightclass import __version__ as _PACKAGE_VERSION
+    except ImportError:
+        _PACKAGE_VERSION = "source-tree"
+
+PACKAGE_VERSION = _PACKAGE_VERSION
+
 SCHEMA_VERSION = 1
 WORKFLOWS = ("implementation", "review", "research", "diagnosis", "design")
 EVIDENCE_WORKFLOWS = WORKFLOWS[1:]
@@ -58,11 +68,43 @@ BUILTIN_VENDORS = ("codex", "claude", "agy", "grok")
 EXPECTED_BASELINE_FAILURE = 42
 MAX_CONFIGURED_VENDORS = 16
 MAX_PROFILE_BYTES = 131_072
+SETUP_LOCK_TIMEOUT = 2.0
+SETUP_LOCK_POLL_SECONDS = 0.02
+RUNNER_VERSION_CHANGED_EXIT = 78
 _VENDOR = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
+_RUNNER_BOOTSTRAP = """\
+import sys
+try:
+    import importlib.metadata
+    from pathlib import Path
+    import weightclass
+    from weightclass.advisory import speculative_run
+except Exception:
+    raise SystemExit(78)
+expected = sys.argv[1]
+package_root = Path(weightclass.__file__).resolve().parent
+installed = any(part in {"site-packages", "dist-packages"} for part in package_root.parts)
+try:
+    metadata_version = importlib.metadata.version("weightclass") if installed else expected
+except Exception:
+    raise SystemExit(78)
+if weightclass.__version__ != expected or metadata_version != expected:
+    raise SystemExit(78)
+sys.argv = [sys.argv[0], *sys.argv[2:]]
+raise SystemExit(speculative_run.main())
+"""
 
 
 class ManagedAdvisoryError(ValueError):
     """Value-free rejection of unsafe or inconsistent managed configuration."""
+
+
+class SetupUnavailableError(ValueError):
+    """The bounded managed setup lock remained owned by another process."""
+
+
+class RunnerVersionChangedError(RuntimeError):
+    """The installed advisory package changed after managed preflight."""
 
 
 class ProviderCapabilityError(ValueError):
@@ -368,8 +410,19 @@ def _setup_lock(state_root: Path) -> int:
             or stat.S_IMODE(metadata.st_mode) & 0o077
         ):
             _fail()
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        return descriptor
+        deadline = time.monotonic() + SETUP_LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return descriptor
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise SetupUnavailableError from None
+                time.sleep(SETUP_LOCK_POLL_SECONDS)
+    except SetupUnavailableError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
     except (OSError, ManagedAdvisoryError) as error:
         if descriptor >= 0:
             os.close(descriptor)
@@ -1057,10 +1110,7 @@ def _job(
     ordinal: int,
     verifier: Path,
 ) -> advisory_parallel.AdvisoryJob:
-    command = [
-        sys.executable,
-        "-m",
-        "weightclass.advisory.speculative_run",
+    runner_arguments = [
         "--workflow",
         workflow,
         "--vendor",
@@ -1085,10 +1135,17 @@ def _job(
         str(results),
     ]
     if manifest["arm"] == "shape_a_b":
-        command.insert(command.index("--advise-on-failure"), "--advise-first")
+        runner_arguments.insert(runner_arguments.index("--advise-on-failure"), "--advise-first")
     if manifest["cost_basis"] == "price_table":
-        index = command.index("--campaign")
-        command[index:index] = ["--prices", str(selected.prices), "--prefer-prices"]
+        index = runner_arguments.index("--campaign")
+        runner_arguments[index:index] = ["--prices", str(selected.prices), "--prefer-prices"]
+    command = [
+        sys.executable,
+        "-c",
+        _RUNNER_BOOTSTRAP,
+        PACKAGE_VERSION,
+        *runner_arguments,
+    ]
     return advisory_parallel.AdvisoryJob(vendor, tuple(command))
 
 
@@ -1144,6 +1201,7 @@ def dispatch(
             results = advisory_parallel.run_parallel(jobs)
             returncode = 0
             record_error = False
+            runner_version_changed = False
             for vendor, lease, result in zip(vendors, leases, results, strict=True):
                 if result.stdout:
                     _replay_output(sys.stdout.buffer, result.stdout)
@@ -1151,6 +1209,8 @@ def dispatch(
                     _replay_output(sys.stderr.buffer, result.stderr)
                 if result.output_truncated:
                     _replay_output(sys.stderr.buffer, b"advisory output limit exceeded\n")
+                if result.returncode == RUNNER_VERSION_CHANGED_EXIT:
+                    runner_version_changed = True
                 if (
                     _next_ordinal(configurations[vendor][1], lease.results_dir)
                     != ordinals[vendor] + 1
@@ -1158,6 +1218,8 @@ def dispatch(
                     record_error = True
                 if result.returncode != 0 and returncode == 0:
                     returncode = result.returncode if result.returncode > 0 else 1
+            if runner_version_changed:
+                raise RunnerVersionChangedError
             if record_error:
                 _fail()
             return returncode
@@ -1375,6 +1437,9 @@ def init_main(argv: Sequence[str]) -> int:
             max_tasks=arguments.max_tasks,
             dry_run=arguments.dry_run,
         )
+    except SetupUnavailableError:
+        print(json.dumps({"error": "managed_setup_busy"}), file=sys.stderr)
+        return 2
     except (OSError, ManagedAdvisoryError):
         print(json.dumps({"error": "managed_configuration_invalid"}), file=sys.stderr)
         return 2
@@ -1394,6 +1459,9 @@ def migrate_evidence_main(argv: Sequence[str]) -> int:
             vendor=arguments.vendor,
             dry_run=arguments.dry_run,
         )
+    except SetupUnavailableError:
+        print(json.dumps({"error": "managed_setup_busy"}), file=sys.stderr)
+        return 2
     except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
         print(json.dumps({"error": "managed_evidence_migration_rejected"}), file=sys.stderr)
         return 2
@@ -1413,6 +1481,9 @@ def migrate_routes_main(argv: Sequence[str]) -> int:
             vendor=arguments.vendor,
             dry_run=arguments.dry_run,
         )
+    except SetupUnavailableError:
+        print(json.dumps({"error": "managed_setup_busy"}), file=sys.stderr)
+        return 2
     except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
         print(json.dumps({"error": "managed_route_migration_rejected"}), file=sys.stderr)
         return 2
@@ -1567,6 +1638,9 @@ def dispatch_main(argv: Sequence[str]) -> int:
         return 2
     except advisory_orchestration.AllocatorUnavailableError:
         print(json.dumps({"error": "managed_allocator_busy"}), file=sys.stderr)
+        return 2
+    except RunnerVersionChangedError:
+        print(json.dumps({"error": "managed_runner_version_changed"}), file=sys.stderr)
         return 2
     except (OSError, ManagedAdvisoryError):
         print(json.dumps({"error": "managed_dispatch_rejected"}), file=sys.stderr)

@@ -36,6 +36,7 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         skill = (BUNDLE / "SKILL.md").read_text(encoding="utf-8")
         modes = (BUNDLE / "references" / "modes.md").read_text(encoding="utf-8")
         metadata = (BUNDLE / "agents" / "openai.yaml").read_text(encoding="utf-8")
+        manifest = json.loads((BUNDLE / "manifest.json").read_text(encoding="utf-8"))
 
         self.assertIn("name: advisory", skill)
         self.assertIn("$advisory", metadata)
@@ -44,6 +45,16 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         for workflow in ("implementation", "review", "research", "diagnosis", "design"):
             self.assertIn(f"`{workflow}`", modes)
         self.assertIn("Brainstorming is not a production workflow", modes)
+        self.assertEqual(manifest, {"managed_onboarding": 11, "schema_version": 1})
+        self.assertIn("managed_runner_version_changed", skill)
+        self.assertIn("managed_setup_busy", skill)
+
+    def test_published_0178_bundle_is_a_safe_upgrade_source(self) -> None:
+        installer = load_installer()
+        self.assertEqual(
+            set(installer.RELEASE_0178_BUNDLE_FILE_SHA256),
+            set(installer.EXPECTED_FILES),
+        )
 
     def test_install_both_is_private_exact_and_idempotent(self) -> None:
         installer = load_installer()

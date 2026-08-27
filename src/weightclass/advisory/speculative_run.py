@@ -65,6 +65,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Mapping
@@ -517,6 +518,7 @@ VENDOR_ENV_PREFIXES = {
 # custom command; widening to every known vendor would hand unrelated keys to a
 # newly configured CLI.
 CHILD_ENV_PREFIXES: tuple[str, ...] = ()
+_TASK_DESCRIPTOR_ROOT = Path("/dev/fd")
 
 # HOME 을 바꿔도 이것들이 남아 있으면 CLI 가 실제 홈을 먼저 본다. 접미사로
 # 훑지 않는 이유는 JAVA_HOME 처럼 홈과 무관한 이름이 같은 모양이기 때문이다.
@@ -544,10 +546,7 @@ def default_child_env(executable: str | None = None) -> frozenset[str]:
     """
     prefixes: tuple[str, ...] = CHILD_ENV_PREFIXES
     if executable:
-        for vendor, vendor_prefixes in VENDOR_ENV_PREFIXES.items():
-            if vendor in Path(executable).name.lower():
-                prefixes = vendor_prefixes
-                break
+        prefixes = VENDOR_ENV_PREFIXES.get(Path(executable).name.lower(), prefixes)
     return frozenset(
         name for name in os.environ if name in CHILD_ENV_NAMES or name.startswith(prefixes)
     )
@@ -927,7 +926,17 @@ _TASK_PLACEHOLDER = "{{task}}"
 _TASK_FILE_PLACEHOLDER = "{{task_file}}"
 
 
-def _prepare_task_command(command: list[str], task: str) -> tuple[list[str], str, Path | None]:
+def _descriptor_above_stdio(descriptor: int) -> int:
+    if descriptor > 2:
+        return descriptor
+    replacement = fcntl.fcntl(descriptor, fcntl.F_DUPFD_CLOEXEC, 3)
+    os.close(descriptor)
+    return replacement
+
+
+def _prepare_task_command(
+    command: list[str], task: str
+) -> tuple[list[str], str, tuple[int, int, bytes] | None]:
     """Materialize one reviewed task-delivery slot immediately before spawn."""
     slots = [
         (index, token)
@@ -952,33 +961,25 @@ def _prepare_task_command(command: list[str], task: str) -> tuple[list[str], str
         prepared[index] = task
         return prepared, "", None
 
-    path: Path | None = None
+    if not _TASK_DESCRIPTOR_ROOT.is_dir():
+        raise RunFailure("anonymous task-file delivery is unavailable")
+    read_descriptor = -1
+    write_descriptor = -1
     try:
         encoded = task.encode("utf-8", errors="strict")
-        # Keep prompt material outside the Git workspace. A child commonly runs
-        # `git add -A`; if this file lived in the clone, deleting it after the
-        # child returned would still leave its task bytes staged in the index.
-        descriptor, name = tempfile.mkstemp(prefix="wclass-child-task-")
-        path = Path(name)
-        try:
-            os.fchmod(descriptor, 0o600)
-            view = memoryview(encoded)
-            while view:
-                written = os.write(descriptor, view)
-                if written <= 0:
-                    raise OSError()
-                view = view[written:]
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        read_descriptor, write_descriptor = os.pipe()
+        read_descriptor = _descriptor_above_stdio(read_descriptor)
+        write_descriptor = _descriptor_above_stdio(write_descriptor)
     except (OSError, UnicodeError):
-        if path is not None:
+        for descriptor in (read_descriptor, write_descriptor):
+            if descriptor < 0:
+                continue
             with contextlib.suppress(OSError):
-                path.unlink()
+                os.close(descriptor)
         raise RunFailure("could not materialize task file") from None
     prepared = list(command)
-    prepared[index] = str(path)
-    return prepared, "", path
+    prepared[index] = str(_TASK_DESCRIPTOR_ROOT / str(read_descriptor))
+    return prepared, "", (read_descriptor, write_descriptor, encoded)
 
 
 def classify_child_failure(stdout: str, stderr: str, exit_code: int | None) -> str:
@@ -1150,7 +1151,36 @@ def run_child(
     runs code the *agent wrote*, which nobody chose and nobody reviewed.
     """
     started = time.monotonic()
-    prepared_command, delivered_task, transient_task_file = _prepare_task_command(command, task)
+    prepared_command, delivered_task, transient_task_pipe = _prepare_task_command(command, task)
+    read_descriptor = transient_task_pipe[0] if transient_task_pipe is not None else -1
+    write_descriptor = transient_task_pipe[1] if transient_task_pipe is not None else -1
+    task_payload = transient_task_pipe[2] if transient_task_pipe is not None else b""
+    delivery_complete = transient_task_pipe is None
+    delivery_stop = threading.Event()
+    delivery_thread: threading.Thread | None = None
+
+    def deliver_task_file() -> None:
+        nonlocal delivery_complete, write_descriptor
+        view = memoryview(task_payload)
+        try:
+            os.set_blocking(write_descriptor, False)
+            while view and not delivery_stop.is_set():
+                try:
+                    written = os.write(write_descriptor, view)
+                except BlockingIOError:
+                    delivery_stop.wait(0.01)
+                    continue
+                if written <= 0:
+                    return
+                view = view[written:]
+            delivery_complete = not view
+        except OSError:
+            pass
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(write_descriptor)
+            write_descriptor = -1
+
     # 자체 프로세스 그룹에서 돌린다. subprocess 의 타임아웃은 직계 자식만
     # 죽이므로, 벤더 CLI 가 띄운 손자들은 "타임아웃" 을 보고한 뒤에도 계속
     # 돌며 작업공간에 쓴다 — 곧 지울 디렉터리에.
@@ -1183,7 +1213,25 @@ def run_child(
             text=True,
             errors="replace",
             start_new_session=True,
+            pass_fds=((read_descriptor,) if read_descriptor >= 0 else ()),
         ) as child:
+            if transient_task_pipe is not None:
+                os.close(read_descriptor)
+                read_descriptor = -1
+                delivery_thread = threading.Thread(
+                    target=deliver_task_file,
+                    name="wclass-task-delivery",
+                    daemon=True,
+                )
+                try:
+                    delivery_thread.start()
+                except RuntimeError as error:
+                    with contextlib.suppress(OSError):
+                        os.close(write_descriptor)
+                    write_descriptor = -1
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        _kill_group(child)
+                    raise RunFailure("could not deliver task file") from error
             try:
                 stdout, stderr = child.communicate(delivered_task, timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
@@ -1216,9 +1264,16 @@ def run_child(
         # ProcessLookupError 는 위에서 이미 삼켰으므로 여기 오지 않는다.
         raise RunFailure("could not start the route") from error
     finally:
-        if transient_task_file is not None:
+        delivery_stop.set()
+        if delivery_thread is not None:
+            delivery_thread.join(timeout=1.0)
+        for descriptor in (read_descriptor, write_descriptor):
+            if descriptor < 0:
+                continue
             with contextlib.suppress(OSError):
-                transient_task_file.unlink()
+                os.close(descriptor)
+    if transient_task_pipe is not None and code == 0 and not delivery_complete:
+        raise RunFailure("could not deliver task file")
     if timed_out:
         # 시간이 다 됐어도 토큰은 이미 쓰였다. 부분 출력에서 건질 수 있으면
         # 건진다 — 비용에서 빼면 싼 경로가 실제보다 좋아 보인다.
@@ -4680,7 +4735,7 @@ def main() -> int:
         if arguments.child_env_all:
             return None
         name = Path(argv[0]).name.lower()
-        if not any(vendor in name for vendor in VENDOR_ENV_PREFIXES):
+        if name not in VENDOR_ENV_PREFIXES:
             print(
                 f"  주의: {arm} 의 '{Path(argv[0]).name}' 에서 벤더를 알아보지 못해"
                 " 벤더별 자격증명을 전달하지 않는다. 필요한 정확한 이름만"
@@ -4726,7 +4781,7 @@ def main() -> int:
             # 실패가 p 를 오염시킬 자리다. 확실히 다른 벤더일 때만 건너뛴다.
             name = Path(argv[0]).name.lower()
             other_vendors = {v for v in VENDOR_ENV_PREFIXES if v != "claude"}
-            if any(v in name for v in other_vendors) and "claude" not in name:
+            if name in other_vendors:
                 continue
             print(
                 f"  주의: {switch} 가 켜져 있는데 {arm} 의 허용 목록에"

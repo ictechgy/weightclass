@@ -12,6 +12,7 @@ import re
 import selectors
 import signal
 import subprocess
+import threading
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -116,6 +117,16 @@ def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=1.0)
     except subprocess.TimeoutExpired:
         _signal_process_group(process, signal.SIGKILL)
+
+        # An uninterruptible session leader may outlive the bounded timeout.
+        # Keep one owner for its eventual status without blocking dispatch.
+        def reap() -> None:
+            try:
+                process.wait()
+            except (ChildProcessError, OSError):
+                pass
+
+        threading.Thread(target=reap, name="wclass-advisory-reaper", daemon=True).start()
 
 
 def _capture_job(process: subprocess.Popen[bytes], job: AdvisoryJob) -> AdvisoryResult:

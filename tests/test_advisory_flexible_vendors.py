@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -204,6 +205,7 @@ class FlexibleVendorRunnerTests(unittest.TestCase):
             value = json.loads(stdout)
             self.assertEqual(child["exit_code"], 0)
             self.assertEqual(value["task"], task)
+            self.assertTrue(value["path"].startswith("/dev/fd/"))
             self.assertNotEqual(Path(value["path"]).parent, workspace)
             self.assertFalse(Path(value["path"]).exists())
             cached = subprocess.run(
@@ -214,20 +216,28 @@ class FlexibleVendorRunnerTests(unittest.TestCase):
             ).stdout
             self.assertNotIn(task, cached)
 
-    def test_private_task_file_is_removed_when_child_start_fails(self) -> None:
+    def test_task_file_delivery_never_materializes_a_named_file(self) -> None:
         runner = load_module(RUNNER, "prospective_task_file_cleanup")
-        created: list[Path] = []
-        real_mkstemp = runner.tempfile.mkstemp
 
-        def tracked_mkstemp(*args: object, **kwargs: object) -> tuple[int, str]:
-            descriptor, name = real_mkstemp(*args, **kwargs)
-            created.append(Path(name))
-            return descriptor, name
+        def fail_after_observing_anonymous_delivery(
+            command: list[str], *args: object, **kwargs: object
+        ) -> None:
+            self.assertTrue(command[-1].startswith("/dev/fd/"))
+            self.assertGreater(int(command[-1].rsplit("/", 1)[1]), 2)
+            raise OSError()
 
         with (
             tempfile.TemporaryDirectory() as directory,
-            mock.patch.object(runner.tempfile, "mkstemp", side_effect=tracked_mkstemp),
-            mock.patch.object(runner.subprocess, "Popen", side_effect=OSError()),
+            mock.patch.object(
+                runner.tempfile,
+                "mkstemp",
+                side_effect=AssertionError("named task file created"),
+            ),
+            mock.patch.object(
+                runner.subprocess,
+                "Popen",
+                side_effect=fail_after_observing_anonymous_delivery,
+            ),
             self.assertRaisesRegex(runner.RunFailure, "could not start the route"),
         ):
             runner.run_child(
@@ -236,8 +246,68 @@ class FlexibleVendorRunnerTests(unittest.TestCase):
                 "PRIVATE-TASK-MARKER",
             )
 
-        self.assertEqual(len(created), 1)
-        self.assertFalse(created[0].exists())
+    def test_task_file_delivery_survives_stdio_descriptor_reuse(self) -> None:
+        program = """
+import json
+import os
+import sys
+from pathlib import Path
+from weightclass.advisory import speculative_run
+
+os.close(0)
+reader = "import pathlib,sys;print(pathlib.Path(sys.argv[1]).read_text())"
+child, output = speculative_run.run_child(
+    [sys.executable, "-c", reader, "{{task_file}}"],
+    Path(sys.argv[1]),
+    "FDZERO",
+)
+print(json.dumps({"code": child["exit_code"], "output": output}))
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            completed = subprocess.run(
+                [sys.executable, "-c", program, directory],
+                cwd=ROOT,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        value = json.loads(completed.stdout)
+        self.assertEqual(value, {"code": 0, "output": "FDZERO\n"})
+
+    def test_task_pipe_streams_the_maximum_bounded_task_without_blocking(self) -> None:
+        runner = load_module(RUNNER, "prospective_maximum_task_pipe")
+        reader = "import pathlib,sys;print(len(pathlib.Path(sys.argv[1]).read_text()))"
+        task = "x" * runner.MAX_TASK_FILE_BYTES
+        with tempfile.TemporaryDirectory() as directory:
+            child, output = runner.run_child(
+                [sys.executable, "-c", reader, "{{task_file}}"],
+                Path(directory),
+                task,
+            )
+
+        self.assertEqual(child["exit_code"], 0)
+        self.assertEqual(output, f"{runner.MAX_TASK_FILE_BYTES}\n")
+
+    def test_task_pipe_writer_start_failure_kills_the_waiting_child(self) -> None:
+        runner = load_module(RUNNER, "prospective_task_pipe_writer_failure")
+        reader = "import pathlib,sys;pathlib.Path(sys.argv[1]).read_text()"
+        started = time.monotonic()
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(runner.threading, "Thread") as thread,
+            self.assertRaisesRegex(runner.RunFailure, "could not deliver task file"),
+        ):
+            thread.return_value.start.side_effect = RuntimeError()
+            runner.run_child(
+                [sys.executable, "-c", reader, "{{task_file}}"],
+                Path(directory),
+                "PRIVATE",
+            )
+
+        self.assertLess(time.monotonic() - started, 2.0)
 
     def test_usage_is_vendor_specific_and_unknown_structured_output_is_untrusted(self) -> None:
         runner = load_module(RUNNER, "prospective_vendor_usage")
@@ -300,6 +370,7 @@ class FlexibleVendorRunnerTests(unittest.TestCase):
             agy = runner.default_child_env("agy")
             grok = runner.default_child_env("grok")
             unknown = runner.default_child_env("acme-cli")
+            substring = runner.default_child_env("magy-cli")
         self.assertIn("GOOGLE_API_KEY", agy)
         self.assertIn("AGY_TOKEN", agy)
         self.assertNotIn("OPENAI_API_KEY", agy)
@@ -307,6 +378,7 @@ class FlexibleVendorRunnerTests(unittest.TestCase):
         self.assertIn("XAI_API_KEY", grok)
         self.assertNotIn("GOOGLE_API_KEY", grok)
         self.assertEqual(unknown, frozenset({"PATH"}))
+        self.assertEqual(substring, frozenset({"PATH"}))
 
 
 if __name__ == "__main__":

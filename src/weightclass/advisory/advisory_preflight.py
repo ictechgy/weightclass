@@ -201,6 +201,16 @@ def _safe_version(payload: bytes) -> str | None:
     return first if _VERSION.fullmatch(first) else None
 
 
+def _workspace_root(current: Path) -> Path | None:
+    """Return the nearest repository boundary without invoking repository code."""
+
+    for candidate in (current, *current.parents):
+        marker = candidate / ".git"
+        if marker.is_dir() or marker.is_file():
+            return candidate
+    return None
+
+
 def check_local_capability(vendor: str, executable: str) -> CapabilityResult:
     """Check one executable without task bytes, provider calls, or persisted output."""
 
@@ -209,16 +219,22 @@ def check_local_capability(vendor: str, executable: str) -> CapabilityResult:
     resolved = shutil.which(executable)
     if resolved is None:
         return CapabilityResult(vendor, "missing", "executable_missing", None)
-    spec = _SPECS.get(vendor)
-    if spec is None:
-        return CapabilityResult(vendor, "custom_unverified", "none", None)
     try:
+        if not Path(resolved).is_absolute():
+            return CapabilityResult(vendor, "unsafe", "unsafe_executable", None)
         resolved_path = Path(resolved).resolve(strict=True)
-        if resolved_path.is_relative_to(Path.cwd().resolve()):
+        current = Path.cwd().resolve()
+        workspace_root = _workspace_root(current)
+        if resolved_path.parent == current or (
+            workspace_root is not None and resolved_path.is_relative_to(workspace_root)
+        ):
             return CapabilityResult(vendor, "unsafe", "unsafe_executable", None)
         observe_executable(os.fspath(resolved_path))
     except (OSError, V2ValidationError):
         return CapabilityResult(vendor, "unsafe", "unsafe_executable", None)
+    spec = _SPECS.get(vendor)
+    if spec is None:
+        return CapabilityResult(vendor, "custom_unverified", "none", None)
     try:
         help_code, help_payload = _bounded_command(
             (os.fspath(resolved_path), *spec.help_command[1:])

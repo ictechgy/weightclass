@@ -137,3 +137,27 @@ time-of-check/time-of-use race. A portable descriptor launcher is still a
 separate design. Neither residual changes the aggregate-only schema or
 authorizes task persistence, credential management, background execution, or a
 bundled provider runtime.
+
+## Advisory runtime follow-up (2026-08-27)
+
+Managed advisory dispatch now starts its internal runner through a task-free
+bootstrap bound to the weightclass version already loaded by the parent. A
+concurrent package replacement returns `managed_runner_version_changed` before
+the runner reads the task, instead of allowing old campaign logic and new
+result-contract code to mix. This is an installation-generation guard, not
+verified-object execution and not a lock on external package managers.
+
+`{{task_file}}` delivery no longer creates a named prompt file. The runner
+streams task bytes through a bounded-lifetime pipe and passes `/dev/fd/N`
+explicitly to the child. Failure to establish or complete descriptor delivery
+stops the route without persisting task bytes. Vendor
+credential families now require an exact built-in executable basename; custom
+names that merely contain `codex`, `claude`, `agy`, or `grok` receive no such
+prefixes unless the operator explicitly allows exact variables.
+
+Task-free CLI preflight rejects relative PATH results and any executable inside
+the nearest repository boundary, even when invoked from a nested directory.
+Custom vendors receive the same executable metadata admission before their CLI
+contract is reported as unverified. Managed setup locks now use a bounded wait,
+and advisory timeout cleanup transfers an unusually slow final reap to a daemon
+thread after the second group kill.

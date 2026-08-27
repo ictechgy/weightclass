@@ -14,7 +14,7 @@ arbitrary-vendor command matrices. Before execution, inspect the task-free route
 review and report its delivery contract: `stdin`, `argv`, or private file, plus
 whether any selected role puts task text in argv. An agy `{{task}}` route has the
 documented local process-inspection exposure. A Grok `{{task_file}}` route uses
-an owner-only transient file outside the Git workspace. Never guess model
+an inherited `/dev/fd/N` pipe and creates no task pathname or task file. Never guess model
 quality, cost, entitlement, or subscription availability; agy/Grok model labels
 are user-selected opaque configuration.
 
@@ -60,6 +60,12 @@ are user-selected opaque configuration.
   count plus a point-in-time `free`/`busy` snapshot for each vendor/workflow;
   availability may change immediately after the snapshot. Ten lanes are
   configured per vendor and workflow by default.
+- `managed_runner_version_changed` means the installed weightclass package was
+  replaced after the managed parent loaded. No task was read by that runner;
+  wait for uv/Homebrew/package installation to finish, start a fresh session,
+  rerun `doctor`, and dispatch once. Do not count the attempt or retry it inside
+  the old process. `managed_setup_busy` is bounded `init`/migration contention,
+  not provider or lane failure.
 - Treat `campaign_record_binding_mismatch` and the other fixed
   `campaign_record_*`/`campaign_records_invalid` errors as an unhealthy sealed
   population, not contention. Never rewrite records, copy a current
