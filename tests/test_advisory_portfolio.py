@@ -47,14 +47,24 @@ def sample_records() -> list[dict[str, object]]:
         },
         {
             "cheap": {"accepted": False, "child": child(200, 20.0, 2.0)},
-            "advice_failure": {"empty": False, "child": child(50, 5.0, 0.5)},
+            "advice_failure": {
+                "empty": False,
+                "chars": 100,
+                "route_failed": False,
+                "child": child(50, 5.0, 0.5),
+            },
             "retry": {"accepted": True, "child": child(250, 25.0, 2.5)},
             "escalated": False,
             "expensive": None,
         },
         {
             "cheap": {"accepted": False, "child": child(300, 30.0, 3.0)},
-            "advice_failure": {"empty": False, "child": child(50, 5.0, 0.5)},
+            "advice_failure": {
+                "empty": False,
+                "chars": 100,
+                "route_failed": False,
+                "child": child(50, 5.0, 0.5),
+            },
             "retry": {"accepted": False, "child": child(350, 35.0, 3.5)},
             "escalated": True,
             "expensive": {"accepted": True, "child": child(1_000, 100.0, 10.0)},
@@ -134,6 +144,9 @@ class AdvisoryPortfolioTests(unittest.TestCase):
             "max_tasks": 150,
             "advised_failures": 2,
             "minimum_advised_failures": 12,
+            "advice_attempted": 2,
+            "advice_delivered": 2,
+            "retry_attempted": 2,
             "cheap_passes": 1,
             "cheap_failures": 2,
             "advised_rescues": 1,
@@ -154,27 +167,90 @@ class AdvisoryPortfolioTests(unittest.TestCase):
 
     def test_aggregates_only_fixed_failure_stages_and_result_shapes(self) -> None:
         records = sample_records()
+        first_cheap = records[0]["cheap"]
         cheap = records[1]["cheap"]
         retry = records[2]["retry"]
-        assert isinstance(cheap, dict) and isinstance(retry, dict)
+        second_retry = records[1]["retry"]
+        third_cheap = records[2]["cheap"]
+        expensive = records[2]["expensive"]
+        assert all(
+            isinstance(attempt, dict)
+            for attempt in (first_cheap, cheap, second_retry, third_cheap, retry, expensive)
+        )
+        assert isinstance(first_cheap, dict)
+        assert isinstance(cheap, dict)
+        assert isinstance(second_retry, dict)
+        assert isinstance(third_cheap, dict)
+        assert isinstance(retry, dict)
+        assert isinstance(expensive, dict)
         cheap["failure_stage"] = "result"
         cheap["result_shape"] = "prose"
         retry["failure_stage"] = "PRIVATE-TASK-MATERIAL"
         retry["result_shape"] = "PRIVATE-TASK-MATERIAL"
+        first_child = first_cheap["child"]
         cheap_child = cheap["child"]
+        second_retry_child = second_retry["child"]
+        third_cheap_child = third_cheap["child"]
         retry_child = retry["child"]
-        assert isinstance(cheap_child, dict) and isinstance(retry_child, dict)
+        expensive_child = expensive["child"]
+        assert all(
+            isinstance(child, dict)
+            for child in (
+                first_child,
+                cheap_child,
+                second_retry_child,
+                third_cheap_child,
+                retry_child,
+                expensive_child,
+            )
+        )
+        assert isinstance(first_child, dict)
+        assert isinstance(cheap_child, dict)
+        assert isinstance(second_retry_child, dict)
+        assert isinstance(third_cheap_child, dict)
+        assert isinstance(retry_child, dict)
+        assert isinstance(expensive_child, dict)
+        first_child["failure_code"] = "model_unavailable"
         cheap_child["failure_code"] = "permission_or_approval"
-        retry_child["failure_code"] = "PRIVATE-TASK-MATERIAL"
+        second_retry_child["failure_code"] = "account_limit"
+        third_cheap_child["failure_code"] = "configuration"
+        retry_child["failure_code"] = "result_contract"
+        expensive_child["failure_code"] = "PRIVATE-TASK-MATERIAL"
 
         campaign = first_campaign(self.build_result(records))
 
         self.assertEqual(campaign["failure_stages"], {"result": 1, "unknown": 1})
         self.assertEqual(campaign["result_shapes"], {"prose": 1, "unknown": 1})
         self.assertEqual(
-            campaign["child_failure_codes"], {"permission_or_approval": 1, "unknown": 1}
+            campaign["child_failure_codes"],
+            {
+                "account_limit": 1,
+                "configuration": 1,
+                "model_unavailable": 1,
+                "permission_or_approval": 1,
+                "result_contract": 1,
+                "unknown": 1,
+            },
         )
         self.assertNotIn("PRIVATE", json.dumps(campaign, sort_keys=True))
+
+    def test_reports_metric_and_attempt_denominators_without_changing_the_gate(self) -> None:
+        records = sample_records()
+        campaign = first_campaign(self.build_result(records))
+
+        self.assertEqual(campaign["metric_records"], 3)
+        self.assertEqual(campaign["usable_metric_records"], 3)
+        self.assertEqual(
+            campaign["attempt_counts"],
+            {
+                "cheap": 3,
+                "advice_first": 0,
+                "advice_failure": 2,
+                "retry": 2,
+                "expensive": 1,
+            },
+        )
+        self.assertEqual(campaign["advised_failures"], 2)
 
     def test_rejects_duplicate_population_without_value_bearing_error(self) -> None:
         portfolio = load_portfolio()

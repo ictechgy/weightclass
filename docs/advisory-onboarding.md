@@ -63,6 +63,28 @@ wclass-advisory dispatch \
   --confirm-task-egress
 ```
 
+For an isolated answer that must not become campaign evidence, use `consult`
+with a read-only workflow (`review`, `research`, `diagnosis`, or `design`):
+
+```sh
+wclass-advisory review --consult --vendor claude --workflow review
+wclass-advisory consult --vendor claude --workflow review --role cheap \
+  --repo /absolute/clean/repository \
+  --task-file /absolute/owner-only/task-file \
+  --ack-route-sha256 claude=sha256:REVIEWED --confirm-task-egress
+```
+
+It invokes exactly one role per vendor, takes no lane, writes no sample, and
+prints one tagged NDJSON receipt per vendor. The nested result is model-authored
+untrusted content even after closed-schema validation. Custom schema-2 profiles
+require `--confirm-provider-egress`; their task-free provider check completes
+before the task path is inspected. `review --consult` validates the same
+non-recording profile routes without depending on campaign records.
+It prints their exact argv, profile digest, and workflow-specific
+`route_sha256`; supply one `--ack-route-sha256 VENDOR=sha256:...` per selected vendor. Provider
+conformance and the task-consuming child both recheck that same digest before
+task access.
+
 `doctor`, `cli-check`, and `review` are task-free. `doctor` locally invokes
 installed CLI `--help`/`--version` with a minimal environment and temporary
 working directory; it sends no task bytes or provider prompt but is not a network
@@ -121,7 +143,36 @@ the vendor, role, fixed failure code, and `sample_recorded:false`. `doctor`
 reports ten configured lanes by default
 plus a point-in-time free/busy snapshot. After lanes are selected, dispatch
 immediately emits a task-free `managed_dispatch_started` event; a long silence
-after that event is vendor/verifier work, not silent lock acquisition.
+after that event is vendor/verifier work, not silent lock acquisition. During a
+long call, fixed `managed_vendor_heartbeat` receipts appear on standard error;
+`managed_vendor_completed` marks child completion. These receipts contain only
+vendor, workflow, and elapsed seconds.
+
+## Offline experiment analysis
+
+`wclass-advisory experiment` analyzes caller-prepared, aggregate-only JSONL and
+never writes advisory state or changes core routing. The four closed schemas
+cover conservative sequential acceptance, a Context Guard × advisory 2×2
+matrix, paired single-generator versus generator-critic brainstorming, and
+confidence/abstention calibration:
+
+```sh
+wclass-advisory experiment sequential --records outcomes.jsonl
+wclass-advisory experiment context-2x2 --records context-matrix.jsonl
+wclass-advisory experiment brainstorm --records paired-ratings.jsonl
+wclass-advisory experiment confidence --records predictions.jsonl
+```
+
+Unknown fields and malformed records fail closed without echoing input. The
+sequential decision uses a simultaneous Hoeffding union-bound confidence
+sequence, so repeated inspection does not silently turn a fixed-horizon
+interval into an unsafe stopping rule. Context interaction is labeled
+descriptive rather than causal; brainstorming keeps preference, constraint
+compliance, duplicates, and rater agreement separate; confidence records must
+represent abstentions with null prediction and outcome. None of these reports
+promotes a model or updates a route.
+See [Advisory experiment records](advisory-experiments.md) for every closed
+input shape and the interpretation boundary.
 
 Release 0.17.5 introduced a Claude evidence-route generation because the
 older plan-mode executor did not mechanically require the closed workflow JSON.

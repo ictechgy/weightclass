@@ -376,6 +376,26 @@ def profile_sha256(path: Path) -> str:
     return profile_digest(load_profile(path))
 
 
+def evidence_routes_digest(
+    profile: Mapping[str, object], routes: AdvisoryRoutes, workflow: str
+) -> str:
+    """Bind one profile to its exact workflow-specific read-only argv."""
+    if workflow not in {"review", "research", "diagnosis", "design"}:
+        raise AdvisoryRouteError()
+    payload = json.dumps(
+        {
+            "profile_sha256": profile_digest(profile),
+            "workflow": workflow,
+            "routes": {role: list(getattr(routes, role)) for role in ROLES},
+        },
+        ensure_ascii=True,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
 def build_routes(
     profile: Mapping[str, object],
     *,

@@ -45,7 +45,7 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         for workflow in ("implementation", "review", "research", "diagnosis", "design"):
             self.assertIn(f"`{workflow}`", modes)
         self.assertIn("Brainstorming is not a production workflow", modes)
-        self.assertEqual(manifest, {"managed_onboarding": 11, "schema_version": 1})
+        self.assertEqual(manifest, {"managed_onboarding": 12, "schema_version": 1})
         self.assertIn("managed_runner_version_changed", skill)
         self.assertIn("managed_setup_busy", skill)
 
@@ -54,6 +54,15 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         self.assertEqual(
             set(installer.RELEASE_0178_BUNDLE_FILE_SHA256),
             set(installer.EXPECTED_FILES),
+        )
+        self.assertEqual(
+            set(installer.RELEASE_0179_BUNDLE_FILE_SHA256),
+            {
+                "SKILL.md",
+                "manifest.json",
+                "agents/openai.yaml",
+                "references/modes.md",
+            },
         )
 
     def test_install_both_is_private_exact_and_idempotent(self) -> None:

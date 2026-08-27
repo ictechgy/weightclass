@@ -22,6 +22,7 @@ if TYPE_CHECKING or __package__:
         load_manifest,
         load_merged_lane_records,
     )
+    from .advisory_diagnostics import CHILD_FAILURE_CODES, FAILURE_STAGES, RESULT_SHAPES
 else:
     from advisory_campaign import (  # type: ignore[import-not-found]
         CampaignError,
@@ -30,6 +31,11 @@ else:
         campaign_progress,
         load_manifest,
         load_merged_lane_records,
+    )
+    from advisory_diagnostics import (  # type: ignore[import-not-found]
+        CHILD_FAILURE_CODES,
+        FAILURE_STAGES,
+        RESULT_SHAPES,
     )
 
 
@@ -50,46 +56,6 @@ WORKFLOWS = frozenset({"implementation", "review", "research", "diagnosis", "des
 STAGES = ("cheap", "advice_first", "advice_failure", "retry", "expensive")
 _PROFILE_NAME = re.compile(r"(?P<vendor>[a-z0-9][a-z0-9._-]{0,63})-profile\.json\Z")
 _WORKFLOW_ORDER = ("implementation", "review", "research", "diagnosis", "design")
-FAILURE_STAGES = frozenset(
-    {
-        "setup",
-        "execution",
-        "result",
-        "handover",
-        "verification",
-        "verification_integrity",
-        "acceptance",
-        "persistence",
-        "unknown",
-    }
-)
-RESULT_SHAPES = frozenset(
-    {
-        "empty",
-        "unstructured",
-        "structured_output",
-        "json_text",
-        "fenced_json",
-        "prose",
-        "envelope_without_result",
-        "malformed_envelope",
-        "unknown",
-    }
-)
-CHILD_FAILURE_CODES = frozenset(
-    {
-        "none",
-        "timeout",
-        "authentication",
-        "rate_limit",
-        "context_limit",
-        "invalid_invocation",
-        "permission_or_approval",
-        "network",
-        "provider_unavailable",
-        "unknown",
-    }
-)
 
 
 def _finite_number(value: object) -> float | None:
@@ -331,6 +297,17 @@ def _campaign_status(
     infrastructure_failures = sum(1 for record in records if _infrastructure_failure(record))
     cheap_passes = sum(1 for record in usable if _accepted(record.get("cheap")))
     cheap_failures = len(usable) - cheap_passes
+    advice_attempted = 0
+    advice_delivered = 0
+    for record in usable:
+        advice = record.get("advice_failure")
+        if not isinstance(advice, Mapping):
+            continue
+        advice_attempted += 1
+        chars = advice.get("chars")
+        if isinstance(chars, int) and chars > 0 and advice.get("route_failed") is not True:
+            advice_delivered += 1
+    retry_attempted = sum(1 for record in usable if isinstance(record.get("retry"), Mapping))
     advised_rescues = sum(
         1
         for record in usable
@@ -341,7 +318,11 @@ def _campaign_status(
     failure_stages: dict[str, int] = {}
     result_shapes: dict[str, int] = {}
     child_failure_codes: dict[str, int] = {}
+    attempt_counts = {stage: 0 for stage in STAGES}
     for record in records:
+        for stage_name in STAGES:
+            if isinstance(record.get(stage_name), Mapping):
+                attempt_counts[stage_name] += 1
         for stage_name in ("cheap", "retry", "expensive"):
             attempt = record.get(stage_name)
             if not isinstance(attempt, Mapping):
@@ -375,6 +356,9 @@ def _campaign_status(
         "max_tasks": manifest["max_tasks"],
         "advised_failures": progress.advised_failures,
         "minimum_advised_failures": manifest["minimum_advised_failures"],
+        "advice_attempted": advice_attempted,
+        "advice_delivered": advice_delivered,
+        "retry_attempted": retry_attempted,
         "cheap_passes": cheap_passes,
         "cheap_failures": cheap_failures,
         "advised_rescues": advised_rescues,
@@ -384,6 +368,9 @@ def _campaign_status(
         "failure_stages": dict(sorted(failure_stages.items())),
         "result_shapes": dict(sorted(result_shapes.items())),
         "child_failure_codes": dict(sorted(child_failure_codes.items())),
+        "metric_records": len(records),
+        "usable_metric_records": len(usable),
+        "attempt_counts": attempt_counts,
         "decision_eligible": progress.decision_eligible,
         "reached_cap": progress.reached_cap,
         "abstention_reason": progress.reason,

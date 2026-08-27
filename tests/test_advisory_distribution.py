@@ -40,6 +40,7 @@ class AdvisoryDistributionTests(unittest.TestCase):
             "cli-check",
             "provider-check",
             "review",
+            "consult",
             "dispatch",
             "status",
             "cleanup",

@@ -1,5 +1,7 @@
 """Command-line interface for rendering, never executing, route commands."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -22,6 +24,7 @@ from .agent_discovery import (
     resolve_builtin_executable,
 )
 from .classification import (
+    CLASSIFICATION_POLICY_VERSION,
     InvalidTaskError,
     Tier,
     apply_cautious_posture,
@@ -69,16 +72,7 @@ from .delegation_schema import (
     validate_runtime_path_lexically,
 )
 from .delegation_types import DelegationTier, DirectChildCleanup, VendorFamily
-from .delegation_v2_compile import compile_delegation_v2
-from .delegation_v2_protocol import DelegationFrameV2Error, encode_delegation_frame_v2
-from .delegation_v2_runtime import run_delegation_v2_runtime
-from .delegation_v2_schema import (
-    DelegationV2InvalidInputError,
-    parse_delegation_manifest_v2,
-    parse_delegation_policy_v2,
-)
-from .delegation_v2_versions import DelegationVersionError, dispatch_delegation_versions
-from .executable_observation import observe_executable
+from .executable_observation import ExecutableObservation, observe_executable
 from .foreground_process import run_owned_foreground
 from .json_input import JsonInputError, load_json_object
 from .native_v2_compile import compile_native_v2
@@ -154,6 +148,24 @@ EXAMPLE_POLICY_RESOURCES: Final = {
     "codex-cost-focused": "codex_cost_focused_policy.json",
     "grok-cost-focused": "grok_cost_focused_policy.json",
 }
+
+
+def encode_delegation_frame_v2(descriptor: bytes, task: bytes) -> bytes:
+    """Compatibility seam that imports protocol 2 only when delegation uses it."""
+    from .delegation_v2_protocol import encode_delegation_frame_v2 as encode
+
+    return encode(descriptor, task)
+
+
+def run_delegation_v2_runtime(
+    compiled: CompiledExecutionV2,
+    frame: bytes,
+    first_observation: ExecutableObservation,
+) -> subprocess.CompletedProcess[bytes]:
+    """Compatibility seam that imports the protocol-2 runtime on demand."""
+    from .delegation_v2_runtime import run_delegation_v2_runtime as run
+
+    return run(compiled, frame, first_observation)
 
 
 class InvalidInputError(ValueError):
@@ -914,6 +926,12 @@ def build_parser() -> argparse.ArgumentParser:
         # wclass classify 가 낸 티어를 그대로 받는다. route 와 run 은 이 경로에서도
         # 네트워크를 쓰지 않는다. 판정은 별도 명령에서 이미 끝났다.
         native.add_argument("--tier", choices=("low", "standard", "high"))
+        if name == "route":
+            native.add_argument(
+                "--explain",
+                action="store_true",
+                help="Include task-free classification provenance in the route receipt.",
+            )
         if name == "run":
             native.add_argument("--ack-route-fingerprint")
             native.add_argument("--confirm-endpoint-transition", action="store_true")
@@ -1051,6 +1069,14 @@ def _dispatch_delegation_cli_version(
     require_qualified_runtime: bool,
 ) -> int | CompiledExecutionV2 | None:
     """Dispatch v2 parsing while leaving the protocol-1 compiler untouched."""
+    from .delegation_v2_compile import compile_delegation_v2
+    from .delegation_v2_schema import (
+        DelegationV2InvalidInputError,
+        parse_delegation_manifest_v2,
+        parse_delegation_policy_v2,
+    )
+    from .delegation_v2_versions import DelegationVersionError, dispatch_delegation_versions
+
     try:
         raw_policy = _read_json_object(policy_path, max_bytes=262_144)
         raw_manifest = _read_json_object(manifest_path, max_bytes=262_144)
@@ -1244,6 +1270,8 @@ def _delegation_v2_run(
     acknowledged_fingerprint: str | None,
 ) -> int:
     """Run one already-compiled protocol-2 route without v1 lifecycle calls."""
+    from .delegation_v2_protocol import DelegationFrameV2Error
+
     if not confirm_trusted_runtime:
         print(json.dumps({"error": "delegation_confirmation_required"}), file=sys.stderr)
         return 5
@@ -1627,6 +1655,17 @@ def review_cost_profile(cost_profile_path: Path) -> int:
     return 0
 
 
+def _route_confidence_class(reason_code: str) -> str:
+    """Return a stable, task-free interpretation of a routing reason."""
+    if reason_code == "explicit.requested_tier":
+        return "explicit"
+    if reason_code in {"high.cautious_ambiguity", "standard.not_clearly_mechanical"}:
+        return "ambiguous"
+    if reason_code == "standard.length_floor":
+        return "length_floor"
+    return "rule_match"
+
+
 def route_from_standard_input(
     policy_path: Path | None,
     source_vendor: str | None,
@@ -1636,6 +1675,7 @@ def route_from_standard_input(
     model: str | None = None,
     preset: str | None = None,
     overrides: PresetOverrides | None = None,
+    explain: bool = False,
 ) -> int:
     """Select and render a command without echoing or persisting the task."""
     overrides = overrides or PresetOverrides()
@@ -1659,6 +1699,9 @@ def route_from_standard_input(
             raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
             version, dispatched = dispatch_native_policy_schema(raw_policy)
         except (InvalidInputError, V2ValidationError):
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        if explain and version in {2, 3}:
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
         if version == 2:
@@ -1738,6 +1781,10 @@ def route_from_standard_input(
     if policy.posture is not None:
         response["posture"] = policy.posture
         response["reason_code"] = reason_code
+    if explain:
+        response["reason_code"] = reason_code
+        response["classification_policy_version"] = CLASSIFICATION_POLICY_VERSION
+        response["confidence_class"] = _route_confidence_class(reason_code)
     if automatic_policy is not None:
         assert effective_source_vendor is not None
         response["configuration_status"] = _packaged_configuration_status(
@@ -2408,6 +2455,7 @@ def main(
             arguments.model,
             arguments.preset,
             _preset_overrides_from_arguments(arguments),
+            arguments.explain,
         )
     if arguments.command == "run":
         return run_from_standard_input(

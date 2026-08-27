@@ -92,6 +92,25 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   upgraded to managed onboarding 11. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/b2/b3/e9d011103d7dde79614064359d34effb724babe32842a66387d328365624/weightclass-0.17.9.tar.gz`
   - sha256: `634dcbe9f66934f15262611115ca3e7dace51712cb9883fd1e1254f6f6d19a75`
+- **Unreleased roadmap implementation is active on
+  `feat/advisory-consult-roadmap`.** It centralizes advisory failure enums,
+  adds distinct managed preflight reason codes, additive attempt/advice/metric
+  denominators, task-free vendor heartbeat/completion receipts, and explicit
+  untrusted evidence framing. A new read-only `consult` path runs exactly one
+  selected role without lanes or campaign records; custom providers must pass
+  a confirmed task-free conformance check before task inspection. Schema-1
+  profile-only `review --consult` makes that route review independent of sealed
+  campaign records and renders exact argv plus a child-enforced profile digest.
+  `route --explain` adds task-free provenance, delegation-v2 dependencies are
+  loaded only for delegation, and isolated `experiment` analysis covers
+  conservative sequential stopping, Context Guard 2x2, generator-critic
+  brainstorming, and confidence/abstention without changing core routing.
+  PR review additionally hardened every internal advisory Python child with an
+  isolated, parent-package-pinned bootstrap and bounded experiment input to
+  10,000 prevalidated records with recursive-parser failures redacted. Current
+  offline gates pass 1,365 unittest tests with 27 skips, Ruff over the
+  full source/test/verifier set, strict mypy over 172 source files, wheel/sdist
+  build plus strict metadata/isolation checks, and a clean-wheel CLI smoke test.
 - Release 0.17.8 adds a
   task-free local `cli-check`, installed-CLI status to `doctor`, a separately
   confirmed and non-persisted `provider-check`, and task-before-inspection

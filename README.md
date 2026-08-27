@@ -71,6 +71,9 @@ wclass-advisory init --vendor codex \
 wclass-advisory doctor --vendor codex --workflow all
 wclass-advisory cli-check --vendor all
 wclass-advisory review --vendor codex --workflow implementation
+wclass-advisory consult --vendor codex --workflow review \
+  --repo /absolute/clean/repository --task-file /absolute/private/task \
+  --ack-route-sha256 codex=sha256:REVIEWED --confirm-task-egress
 wclass-advisory install-skill --target codex --dry-run
 ```
 
@@ -84,6 +87,8 @@ must commit the workflow's prospective `.weightclass/verify*` before
 the [campaign contract](docs/advisory-campaign.md). Distribution makes the
 tool available; it does not establish cost savings, model quality, pricing,
 entitlement, or subscription availability.
+Offline stopping, Context Guard, brainstorming, and confidence study inputs are
+specified in [Advisory experiment records](docs/advisory-experiments.md).
 
 `doctor` locally invokes installed-CLI `--help`/`--version` with a minimal
 environment and temporary working directory, sends no task bytes or provider prompt,
@@ -93,6 +98,18 @@ all three configured model roles without sending a project task, explicitly run
 `wclass-advisory provider-check --vendor codex --workflow review
 --confirm-provider-egress`. That command may consume quota or incur cost, never
 writes a campaign sample, and stores no provider output.
+
+`consult` is the one-shot, non-recording alternative for review, research,
+diagnosis, and design. It runs one selected cheap or expensive evidence route,
+emits one tagged NDJSON receipt whose nested result is explicitly marked
+`untrusted_model_authored`, and never acquires a campaign lane or appends a
+sample. A custom schema-2 vendor profile additionally requires
+`--confirm-provider-egress` and passes its task-free provider conformance check
+before the task file is inspected. Review its profile-only route surface first
+with `wclass-advisory review --consult --vendor VENDOR --workflow WORKFLOW`,
+then acknowledge each workflow-specific `route_sha256` as
+`--ack-route-sha256 VENDOR=sha256:...`. The digest binds the profile, workflow,
+and exact argv; the child rechecks it before reading the task.
 
 Managed dispatch binds each spawned runner to the package version already
 loaded by its parent. If `uv`, Homebrew, or another installer replaces
@@ -569,6 +586,12 @@ unchanged. Narrow security-failure phrases use `high.risk_floor`; broader
 complexity vocabulary uses `high.complexity_signal`. Reason-only changes do not
 enter route fingerprints, while a corrected tier can select a different route
 and therefore a different fingerprint.
+
+The same flag on the schema-1 `route` command adds the static reason code,
+classification policy version, and a coarse `confidence_class` to the reviewed
+route receipt. It never adds task text or changes the route fingerprint. Native
+schema-2/3 descriptors are already explicit-selector contracts and do not use
+this classification explanation.
 
 **Keyword matching has a measured ceiling.** Before explicit high-impact
 outcome patterns were added, the local classifier agreed with 15 of 40 tasks on

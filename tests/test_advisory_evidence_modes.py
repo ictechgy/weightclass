@@ -467,6 +467,7 @@ class EvidenceRunnerTests(unittest.TestCase):
             ).stdout
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("UNTRUSTED MODEL-AUTHORED CONTENT", completed.stdout)
         self.assertIn("REVIEW-SUMMARY", completed.stdout)
         self.assertNotIn("PRIVATE-TASK-MATERIAL", completed.stdout + completed.stderr)
         self.assertEqual(record["workflow"], "review")

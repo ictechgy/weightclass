@@ -89,6 +89,7 @@ if TYPE_CHECKING or __package__:
         validate_record_bindings,
         validate_run_configuration,
     )
+    from .advisory_diagnostics import CHILD_FAILURE_CODES, FAILURE_STAGES, RESULT_SHAPES
     from .advisory_evidence_contract import (
         EVIDENCE_WORKFLOWS,
         EvidenceResultError,
@@ -117,6 +118,11 @@ else:
         validate_price_rate_fields,
         validate_record_bindings,
         validate_run_configuration,
+    )
+    from advisory_diagnostics import (  # type: ignore[import-not-found]
+        CHILD_FAILURE_CODES,
+        FAILURE_STAGES,
+        RESULT_SHAPES,
     )
     from advisory_evidence_contract import (  # type: ignore[import-not-found]
         EVIDENCE_WORKFLOWS,
@@ -249,53 +255,11 @@ class LanePruneResult(TypedDict):
 # output.  These sets are also the complete public vocabulary of the receipt.
 FAILURE_RECEIPT_ROUTES = frozenset({"cheap", "retry", "expensive"})
 FAILURE_RECEIPT_KINDS = frozenset({"route", "infrastructure", "unknown"})
-FAILURE_RECEIPT_STAGES = frozenset(
-    {
-        "setup",
-        "execution",
-        "result",
-        "handover",
-        "verification",
-        "verification_integrity",
-        "acceptance",
-        "persistence",
-        "unknown",
-    }
-)
+FAILURE_RECEIPT_STAGES = FAILURE_STAGES
 MAX_RECEIPT_EXIT_CODE = 255
 MAX_RECEIPT_SECONDS = 86_400.0
 MAX_RECEIPT_COUNT = 1_000_000
-EVIDENCE_RESULT_SHAPES = frozenset(
-    {
-        "empty",
-        "unstructured",
-        "structured_output",
-        "json_text",
-        "fenced_json",
-        "prose",
-        "envelope_without_result",
-        "malformed_envelope",
-        "unknown",
-    }
-)
-CHILD_FAILURE_CODES = frozenset(
-    {
-        "none",
-        "timeout",
-        "authentication",
-        "rate_limit",
-        "context_limit",
-        "invalid_invocation",
-        "permission_or_approval",
-        "network",
-        "provider_unavailable",
-        "model_unavailable",
-        "account_limit",
-        "configuration",
-        "result_contract",
-        "unknown",
-    }
-)
+EVIDENCE_RESULT_SHAPES = RESULT_SHAPES
 SAFE_DIAGNOSTIC_CODES = frozenset(
     {
         "workspace_not_owned",
@@ -5139,7 +5103,7 @@ def main() -> int:
                 rendered = winner_payload.decode("utf-8", errors="strict")
             except UnicodeError:
                 parser.error("verified evidence result could not be rendered")
-            print("\n검증 통과. 구조화 결과:")
+            print("\n검증 통과. 구조화 결과 (UNTRUSTED MODEL-AUTHORED CONTENT):")
             print(rendered)
             return 0
         print(f"\n검증 통과. 패치: {winner['patch']}  ({winner['patch_lines']}줄)")

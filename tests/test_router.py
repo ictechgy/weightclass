@@ -2197,6 +2197,48 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(run.stdout, "")
         self.assertEqual(run.stderr, "")
 
+    def test_route_explain_adds_only_task_free_classification_provenance(self) -> None:
+        task = "Fix the typo in sentinel-private-route-9371."
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = Path(temporary_directory, "policy.json")
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "quiet-low",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": [sys.executable, "-c", "pass"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--policy",
+                    str(policy_path),
+                    "--explain",
+                ],
+                capture_output=True,
+                check=False,
+                input=task,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = self._rendered_route(result)
+        self.assertEqual(rendered["reason_code"], "low.mechanical")
+        self.assertEqual(rendered["classification_policy_version"], "4")
+        self.assertEqual(rendered["confidence_class"], "rule_match")
+        self.assertNotIn("sentinel-private-route-9371", result.stdout)
+
     def test_rejects_an_empty_task_with_a_redacted_diagnostic(self) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "weightclass", "classify"],

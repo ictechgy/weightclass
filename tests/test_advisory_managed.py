@@ -99,8 +99,10 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
         accepted = subprocess.run(
             [
                 sys.executable,
+                "-I",
                 "-c",
                 managed_advisory._RUNNER_BOOTSTRAP,
+                str(managed_advisory.PACKAGE_ROOT),
                 managed_advisory.PACKAGE_VERSION,
                 "--help",
             ],
@@ -112,8 +114,10 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
         completed = subprocess.run(
             [
                 sys.executable,
+                "-I",
                 "-c",
                 managed_advisory._RUNNER_BOOTSTRAP,
+                str(managed_advisory.PACKAGE_ROOT),
                 "definitely-not-the-loaded-version",
                 "--help",
             ],
@@ -542,6 +546,51 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
 
 
 class ManagedAdvisoryOperationTests(unittest.TestCase):
+    def test_consult_route_review_does_not_require_campaign_records(self) -> None:
+        selected = managed_advisory.CampaignPaths(
+            Path("/state/profile"),
+            Path("/state/prices"),
+            Path("/state/campaign"),
+            Path("/state/results"),
+        )
+        routes = advisory_routes.AdvisoryRoutes(
+            ("vendor", "--cheap"),
+            ("vendor", "--advisor"),
+            ("vendor", "--expensive"),
+        )
+        profile_sha256 = "sha256:" + "d" * 64
+        route_sha256 = "sha256:" + "6" * 64
+        with (
+            mock.patch.object(
+                managed_advisory,
+                "_consult_configuration",
+                return_value=managed_advisory.ConsultConfiguration(
+                    selected, routes, False, profile_sha256, route_sha256
+                ),
+            ) as consult_configuration,
+            mock.patch.object(
+                managed_advisory,
+                "_configuration",
+                side_effect=AssertionError("campaign inspected"),
+            ),
+        ):
+            receipt = managed_advisory.review_payload(
+                Path("/state"),
+                vendors=("vendor",),
+                workflow="review",
+                require_campaign=False,
+            )
+
+        self.assertFalse(receipt["campaign_bound"])
+        reviewed = receipt["routes"]
+        assert isinstance(reviewed, list) and isinstance(reviewed[0], dict)
+        self.assertEqual(reviewed[0]["profile_sha256"], profile_sha256)
+        self.assertEqual(reviewed[0]["route_sha256"], route_sha256)
+        rendered_routes = reviewed[0]["routes"]
+        assert isinstance(rendered_routes, dict)
+        self.assertEqual(rendered_routes["cheap"], ["vendor", "--cheap"])
+        consult_configuration.assert_called_once_with(Path("/state"), "vendor", "review")
+
     def test_output_replay_failure_does_not_change_a_completed_result(self) -> None:
         buffer = io.BytesIO()
         with mock.patch.object(buffer, "write", side_effect=BrokenPipeError):
@@ -642,6 +691,71 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             },
         )
         self.assertNotIn(str(private_path).encode(), receipt)
+
+    def test_dispatch_progress_receipts_are_closed_and_task_free(self) -> None:
+        heartbeat = managed_advisory._dispatch_progress_receipt(
+            "research", "claude", "heartbeat", 61
+        )
+        completed = managed_advisory._dispatch_progress_receipt(
+            "research", "claude", "completed", 125
+        )
+
+        self.assertEqual(
+            json.loads(heartbeat),
+            {
+                "schema_version": 1,
+                "event": "managed_vendor_heartbeat",
+                "workflow": "research",
+                "vendor": "claude",
+                "elapsed_seconds": 61,
+            },
+        )
+        self.assertEqual(json.loads(completed)["event"], "managed_vendor_completed")
+        self.assertEqual(
+            managed_advisory._dispatch_progress_receipt("research", "PRIVATE TASK", "heartbeat", 1),
+            b"",
+        )
+
+    def test_preflight_reasons_are_distinct_and_value_free(self) -> None:
+        with self.assertRaises(managed_advisory.ManagedPreflightError) as task_error:
+            managed_advisory._preflight_task_file(Path("relative-task"))
+        self.assertEqual(task_error.exception.code, "managed_task_input_rejected")
+
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            verifier = Path(directory) / "verify"
+            verifier.write_text("#!/bin/sh\nexit 42\n", encoding="utf-8")
+            verifier.chmod(0o700)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            (repo / "tracked").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "tracked"], cwd=repo, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "-qm",
+                    "baseline",
+                ],
+                cwd=repo,
+                check=True,
+            )
+            (repo / "untracked").write_text("dirty\n", encoding="utf-8")
+            with self.assertRaises(managed_advisory.ManagedPreflightError) as dirty:
+                managed_advisory._preflight_repo(repo, "research", verifier)
+            self.assertEqual(dirty.exception.code, "managed_repo_dirty")
+            (repo / "untracked").unlink()
+            verifier.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            with self.assertRaises(managed_advisory.ManagedPreflightError) as baseline:
+                managed_advisory._preflight_repo(repo, "research", verifier)
+            self.assertEqual(
+                baseline.exception.code,
+                "managed_verifier_baseline_rejected",
+            )
 
     def test_dispatch_rejects_missing_confirmation_before_touching_task_or_state(self) -> None:
         secret_named_task = Path("/never/read/PRIVATE-TASK-CONTENT")
@@ -837,7 +951,11 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
 
             def complete_jobs(
                 jobs: tuple[advisory_parallel.AdvisoryJob, ...],
+                *,
+                progress: advisory_parallel.ProgressCallback | None = None,
+                heartbeat_seconds: float = advisory_parallel.DEFAULT_HEARTBEAT_SECONDS,
             ) -> tuple[advisory_parallel.AdvisoryResult, ...]:
+                self.assertGreater(heartbeat_seconds, 0)
                 captured_jobs.extend(jobs)
                 results: list[advisory_parallel.AdvisoryResult] = []
                 for job in jobs:
@@ -854,6 +972,8 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                     with (output / "runs.jsonl").open("a", encoding="utf-8") as handle:
                         handle.write(json.dumps(record) + "\n")
                     results.append(advisory_parallel.AdvisoryResult(job.label, 0, b"", b"", True))
+                    if progress is not None:
+                        progress(job.label, "completed", 1)
                 return tuple(results)
 
             with (
@@ -876,11 +996,13 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             self.assertEqual([job.label for job in captured_jobs], ["vendor-a", "vendor-b"])
             self.assertTrue(
                 all(
-                    job.command[:4]
+                    job.command[:6]
                     == (
                         sys.executable,
+                        "-I",
                         "-c",
                         managed_advisory._RUNNER_BOOTSTRAP,
+                        str(managed_advisory.PACKAGE_ROOT),
                         managed_advisory.PACKAGE_VERSION,
                     )
                     for job in captured_jobs
@@ -915,23 +1037,37 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             cases = (
                 (
                     advisory_orchestration.LaneUnavailableError(),
-                    "managed_lane_unavailable",
+                    {"error": "managed_lane_unavailable"},
                 ),
                 (
                     advisory_orchestration.CampaignCapacityError(),
-                    "managed_campaign_capacity_reached",
+                    {"error": "managed_campaign_capacity_reached"},
                 ),
                 (
                     advisory_orchestration.AllocatorUnavailableError(),
-                    "managed_allocator_busy",
+                    {"error": "managed_allocator_busy"},
                 ),
                 (
                     managed_advisory.RunnerVersionChangedError(),
-                    "managed_runner_version_changed",
+                    {"error": "managed_runner_version_changed"},
+                ),
+                (
+                    managed_advisory.ManagedPreflightError("managed_repo_dirty"),
+                    {
+                        "error": "managed_dispatch_rejected",
+                        "reason_code": "managed_repo_dirty",
+                    },
+                ),
+                (
+                    managed_advisory.ManagedPreflightError("managed_verifier_baseline_rejected"),
+                    {
+                        "error": "managed_dispatch_rejected",
+                        "reason_code": "managed_verifier_baseline_rejected",
+                    },
                 ),
             )
             for error, expected in cases:
-                with self.subTest(expected=expected):
+                with self.subTest(expected=expected.get("reason_code", expected["error"])):
                     stderr = io.StringIO()
                     with (
                         mock.patch.object(managed_advisory, "dispatch", side_effect=error),
@@ -939,7 +1075,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                     ):
                         code = managed_advisory.dispatch_main(base_arguments)
                     self.assertEqual(code, 2)
-                    self.assertEqual(json.loads(stderr.getvalue())["error"], expected)
+                    self.assertEqual(json.loads(stderr.getvalue()), expected)
 
 
 class ManagedVerifierTests(unittest.TestCase):
@@ -1013,6 +1149,7 @@ class ManagedAdvisoryCliTests(unittest.TestCase):
             "doctor",
             "cli-check",
             "provider-check",
+            "consult",
             "dispatch",
             "status",
             "review",

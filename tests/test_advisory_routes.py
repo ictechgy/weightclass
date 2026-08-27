@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from weightclass.advisory.advisory_routes import (
         AdvisoryRouteError,
         build_routes,
+        evidence_routes_digest,
         load_profile,
         profile_sha256,
     )
@@ -31,6 +32,7 @@ elif ROUTES_TOOL.is_file() and CAMPAIGN_TOOL.is_file() and RUNNER.is_file():
     from advisory_routes import (  # noqa: E402
         AdvisoryRouteError,
         build_routes,
+        evidence_routes_digest,
         load_profile,
         profile_sha256,
     )
@@ -42,6 +44,31 @@ elif ROUTES_TOOL.is_file() and CAMPAIGN_TOOL.is_file() and RUNNER.is_file():
     "repository-only advisory tools unavailable",
 )
 class AdvisoryRouteProfileTests(unittest.TestCase):
+    def test_evidence_route_digest_binds_profile_workflow_and_exact_argv(self) -> None:
+        profile = {
+            "schema_version": 2,
+            "vendor": "custom",
+            "commands": {
+                workflow: {
+                    role: ["custom", "--role", role] for role in ("cheap", "advisor", "expensive")
+                }
+                for workflow in ("implementation", "evidence")
+            },
+        }
+        routes = build_routes(profile, read_only_executors=True, evidence_workflow="review")
+        review_digest = evidence_routes_digest(profile, routes, "review")
+        research_digest = evidence_routes_digest(profile, routes, "research")
+        changed_routes = type(routes)(
+            (*routes.cheap, "--changed"), routes.advisor, routes.expensive
+        )
+
+        self.assertRegex(review_digest, r"^sha256:[0-9a-f]{64}$")
+        self.assertNotEqual(review_digest, research_digest)
+        self.assertNotEqual(
+            review_digest,
+            evidence_routes_digest(profile, changed_routes, "review"),
+        )
+
     def write_profile(self, directory: str, vendor: str) -> Path:
         path = Path(directory) / f"{vendor}.json"
         path.write_text(
