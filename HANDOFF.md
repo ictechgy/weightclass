@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-26 KST by Codex_
+_Last updated: 2026-08-27 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
@@ -113,6 +113,24 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   measured 15,804,217 total tokens (15,784,225 input; 15,544,320 cached input).
   The known path-based spawn TOCTOU remains an explicitly documented
   pre-existing architecture residual rather than a 0.17.8 regression.
+- The 0.17.9 candidate closes the reviewed advisory
+  follow-ups. Vendor credential families now require exact built-in executable
+  basenames; Grok/custom `{{task_file}}` delivery streams through an inherited
+  pipe without creating a task pathname or file; setup locks have
+  a bounded `managed_setup_busy` result; slow outer timeout reaps transfer to a
+  daemon; CLI probes reject relative PATH results and the complete nearest Git
+  workspace while still allowing nested user installs outside a repository;
+  and the package identity no longer names only Claude/Codex. Managed dispatch
+  also binds its internal runner to the parent-loaded package version. A
+  concurrent uv/Homebrew/package replacement now stops before task access with
+  `managed_runner_version_changed`, instead of mixing an old campaign parent
+  with a newly imported result-contract runner. The change preserves raw-output
+  non-retention and emits only the fixed reason. The packaged skill documents
+  both new errors, advances to managed onboarding 11, and safely recognizes the
+  exact published 0.17.8 bundle for upgrade. Focused 81 tests, all 1,341
+  unittest tests with 27 skips, 1,314 pytest tests with 27 skips plus 1,587
+  subtests, Ruff, formatting, compileall, and strict mypy over 167 source files
+  pass.
 - `v0.16.0` and `v0.16.1` reached
   immutable candidate validation but failed Python 3.10 installed-route smoke
   before publication; retain both tags and never reuse them. Homebrew 0.16.2 is
@@ -656,10 +674,10 @@ human to read.
   commands byte-compatible while adding deterministic schema-1 agy and Grok
   builders.
 - Advisory agy routes use the reviewed `{{task}}` argv slot and disclose local
-  process-inspection exposure. Advisory Grok routes use a private transient
-  `{{task_file}}` outside the Git workspace, preventing `git add -A` from
-  staging task bytes; the runner deletes the owner-only file on success,
-  failure, timeout, and child-start errors.
+  process-inspection exposure. Advisory Grok routes use an inherited
+  `{{task_file}}` pipe outside the Git workspace, preventing `git add -A` from
+  staging task bytes; no task pathname or file is created, and both pipe ends
+  are closed on success, failure, timeout, and child-start errors.
 - Schema-2 profiles are closed, bounded, duplicate-key-safe arbitrary-vendor
   profiles with exact implementation/evidence command matrices for cheap,
   advisor, and expensive roles. Each command permits at most one exact

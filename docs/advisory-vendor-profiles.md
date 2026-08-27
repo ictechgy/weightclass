@@ -146,8 +146,9 @@ exactly `cheap`, `advisor`, and `expensive` command arrays.
 Each command may contain zero or one exact `{{task}}` or `{{task_file}}` token. A token cannot be
 the executable or embedded in another argument; duplicate keys, unknown keys, unbounded commands,
 and multiple delivery tokens fail closed. Zero tokens means stdin. `{{task}}` means argv and carries
-the documented process-inspection exposure. `{{task_file}}` means the same private transient-file
-delivery used by Grok. Review reports one delivery string when all roles agree, or a per-role map
+the documented process-inspection exposure. `{{task_file}}` means the same anonymous inherited
+`/dev/fd/N` pipe delivery used by Grok; no task pathname or task file is created.
+Review reports one delivery string when all roles agree, or a per-role map
 when they do not, plus whether any selected role enters argv.
 
 An executable whose basename is not a built-in vendor receives no vendor-prefixed credentials by

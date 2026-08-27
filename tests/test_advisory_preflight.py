@@ -66,6 +66,76 @@ class AdvisoryPreflightTests(unittest.TestCase):
         self.assertEqual(result.status, "custom_unverified")
         self.assertIsNone(result.version)
 
+    def test_custom_vendor_still_requires_safe_executable_admission(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = self._fake_cli(root, "acme", "custom help")
+            executable.chmod(0o707)
+            with mock.patch.dict(os.environ, {"PATH": str(root)}, clear=True):
+                result = advisory_preflight.check_local_capability("acme", "acme")
+
+        self.assertEqual((result.status, result.failure_code), ("unsafe", "unsafe_executable"))
+
+    def test_relative_path_entry_is_rejected_before_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools = root / "tools"
+            tools.mkdir()
+            self._fake_cli(
+                tools,
+                "claude",
+                " ".join(advisory_preflight._SPECS["claude"].required_help_tokens),
+            )
+            with (
+                mock.patch.object(Path, "cwd", return_value=root),
+                mock.patch(
+                    "weightclass.advisory.advisory_preflight.shutil.which",
+                    return_value="tools/claude",
+                ),
+            ):
+                result = advisory_preflight.check_local_capability("claude", "claude")
+
+        self.assertEqual((result.status, result.failure_code), ("unsafe", "unsafe_executable"))
+
+    def test_repository_sibling_binary_is_rejected_from_nested_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").mkdir()
+            nested = root / "src"
+            tools = root / "tools"
+            nested.mkdir()
+            tools.mkdir()
+            self._fake_cli(
+                tools,
+                "claude",
+                " ".join(advisory_preflight._SPECS["claude"].required_help_tokens),
+            )
+            with (
+                mock.patch.object(Path, "cwd", return_value=nested),
+                mock.patch.dict(os.environ, {"PATH": str(tools)}, clear=True),
+            ):
+                result = advisory_preflight.check_local_capability("claude", "claude")
+
+        self.assertEqual((result.status, result.failure_code), ("unsafe", "unsafe_executable"))
+
+    def test_non_repository_cwd_does_not_reject_a_nested_user_install(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools = root / ".local" / "bin"
+            tools.mkdir(parents=True)
+            self._fake_cli(
+                tools,
+                "claude",
+                " ".join(advisory_preflight._SPECS["claude"].required_help_tokens),
+            )
+            with (
+                mock.patch.object(Path, "cwd", return_value=root),
+                mock.patch.dict(os.environ, {"PATH": str(tools)}, clear=True),
+            ):
+                result = advisory_preflight.check_local_capability("claude", "claude")
+
+        self.assertTrue(result.ready)
+
     def test_probe_output_and_time_are_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

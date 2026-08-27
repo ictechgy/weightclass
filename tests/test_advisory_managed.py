@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import io
 import json
 import os
@@ -49,6 +50,85 @@ def custom_profile(vendor: str) -> dict[str, object]:
 
 
 class ManagedAdvisoryInitializationTests(unittest.TestCase):
+    def test_setup_lock_has_a_bounded_task_free_busy_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            state_root.mkdir(mode=0o700)
+            descriptor = os.open(state_root / ".setup.lock", os.O_RDWR | os.O_CREAT, 0o600)
+            self.addCleanup(os.close, descriptor)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with (
+                mock.patch.object(managed_advisory, "SETUP_LOCK_TIMEOUT", 0.01),
+                mock.patch.object(managed_advisory, "SETUP_LOCK_POLL_SECONDS", 0.001),
+                self.assertRaisesRegex(managed_advisory.SetupUnavailableError, "^$"),
+            ):
+                managed_advisory._setup_lock(state_root)
+
+    def test_init_reports_setup_contention_without_configuration_details(self) -> None:
+        arguments = [
+            "--vendor",
+            "codex",
+            "--model",
+            "cheap=c",
+            "--model",
+            "advisor=a",
+            "--model",
+            "expensive=e",
+            "--effort",
+            "cheap=low",
+            "--effort",
+            "advisor=high",
+            "--effort",
+            "expensive=high",
+        ]
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                managed_advisory,
+                "initialize_campaign_set",
+                side_effect=managed_advisory.SetupUnavailableError(),
+            ),
+            mock.patch("sys.stderr", stderr),
+        ):
+            code = managed_advisory.init_main(arguments)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(stderr.getvalue()), {"error": "managed_setup_busy"})
+
+    def test_runner_bootstrap_rejects_an_installed_version_change_before_runner_start(self) -> None:
+        accepted = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                managed_advisory._RUNNER_BOOTSTRAP,
+                managed_advisory.PACKAGE_VERSION,
+                "--help",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                managed_advisory._RUNNER_BOOTSTRAP,
+                "definitely-not-the-loaded-version",
+                "--help",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertIn("--task-file", accepted.stdout)
+        self.assertEqual(completed.returncode, managed_advisory.RUNNER_VERSION_CHANGED_EXIT)
+        self.assertEqual(completed.stdout, "")
+        self.assertEqual(completed.stderr, "")
+
     def test_claude_evidence_migration_preserves_legacy_population(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state_root = Path(directory) / "advisory-v1"
@@ -794,6 +874,18 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertEqual([job.label for job in captured_jobs], ["vendor-a", "vendor-b"])
+            self.assertTrue(
+                all(
+                    job.command[:4]
+                    == (
+                        sys.executable,
+                        "-c",
+                        managed_advisory._RUNNER_BOOTSTRAP,
+                        managed_advisory.PACKAGE_VERSION,
+                    )
+                    for job in captured_jobs
+                )
+            )
             flattened = "\0".join(argument for job in captured_jobs for argument in job.command)
             self.assertNotIn(task_content, flattened)
             self.assertIn(str(task_file), flattened)
@@ -832,6 +924,10 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                 (
                     advisory_orchestration.AllocatorUnavailableError(),
                     "managed_allocator_busy",
+                ),
+                (
+                    managed_advisory.RunnerVersionChangedError(),
+                    "managed_runner_version_changed",
                 ),
             )
             for error, expected in cases:

@@ -93,6 +93,13 @@ all three configured model roles without sending a project task, explicitly run
 `wclass-advisory provider-check --vendor codex --workflow review
 --confirm-provider-egress`. That command may consume quota or incur cost, never
 writes a campaign sample, and stores no provider output.
+
+Managed dispatch binds each spawned runner to the package version already
+loaded by its parent. If `uv`, Homebrew, or another installer replaces
+weightclass during an active dispatch, the child exits before reading the task
+and the command reports `managed_runner_version_changed`; start a fresh
+dispatch after the install completes. `init` and migration setup locks also
+have a bounded wait and report `managed_setup_busy` instead of hanging.
 Upgrades that change sealed provider argv use preserving, explicit migrations:
 `migrate-evidence` for Claude/Grok evidence and `migrate-routes` for agy.
 
@@ -1425,6 +1432,10 @@ credential management, background execution, or a bundled provider runtime.
   optional price tables, sealed contracts, and owner-private aggregate result
   lanes under the platform advisory state root. The caller owns the task file;
   `wclass run` never reads this advisory state.
+- Advisory `{{task_file}}` routes stream task bytes through an inherited pipe
+  and pass only `/dev/fd/N` to the child. No task pathname or task file is
+  created. If anonymous descriptor delivery cannot be established, no vendor
+  child starts.
 - Advisory children own provider authentication and may read files visible
   through their supplied HOME and sandbox. The runner narrows environment
   variables but is not a credential sandbox; use separate minimally staged
