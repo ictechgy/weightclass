@@ -74,7 +74,7 @@ wclass-advisory review --vendor codex --workflow implementation
 wclass-advisory consult --vendor codex --workflow review \
   --repo /absolute/clean/repository --task-file /absolute/private/task \
   --ack-route-sha256 codex=sha256:REVIEWED --confirm-task-egress
-wclass-advisory install-skill --target codex --dry-run
+wclass-advisory install-skill --target both --dry-run
 ```
 
 The labels above are placeholders, not recommendations. Use only labels and
@@ -90,6 +90,30 @@ entitlement, or subscription availability.
 Offline stopping, Context Guard, brainstorming, and confidence study inputs are
 specified in [Advisory experiment records](docs/advisory-experiments.md).
 
+For a formal statistical claim, preregister one primary vendor/workflow in the
+managed state root before its first dispatch. `migrate-gate` validates the
+current schema-1/2 source population, preserves all of its bytes, and starts a
+separate empty schema-3 generation. It never copies or rebinds old records:
+
+```sh
+wclass-advisory migrate-gate --vendor codex --workflow review \
+  --gate-metric cheap_acceptance \
+  --gate-target-rate-bps 7500 --gate-alpha-bps 500
+wclass-advisory campaign-gate --vendor codex --workflow review
+```
+
+The schema-3 fingerprint seals the metric, nonzero target, alpha, versioned
+simultaneous-Hoeffding method, and population rule. One managed state root
+accepts exactly one primary vendor/workflow; a second unadjusted primary is
+rejected instead of silently multiplying the false-positive budget. The
+pre-gate source remains available with `campaign-gate --generation source` for
+explicitly exploratory analysis, but it always reports
+`gate_preregistered:false` and `promotion_eligible:false`. If the selected
+Claude, Grok, or agy population uses an older route generation, complete its
+documented `migrate-evidence` or `migrate-routes` step first. Even a registered
+gate can only become `eligible_for_human_review`; it never authorizes or changes
+core routing.
+
 `doctor` locally invokes installed-CLI `--help`/`--version` with a minimal
 environment and temporary working directory, sends no task bytes or provider prompt,
 and reports
@@ -97,7 +121,11 @@ and reports
 all three configured model roles without sending a project task, explicitly run
 `wclass-advisory provider-check --vendor codex --workflow review
 --confirm-provider-egress`. That command may consume quota or incur cost, never
-writes a campaign sample, and stores no provider output.
+writes a campaign sample, and stores no provider output. It checks all three
+roles per vendor. Calls resolving to the same executable identity remain
+serial; distinct executable groups use separate temporary workspaces under a
+fixed concurrency ceiling of four, and receipts are restored to deterministic
+vendor/role order.
 
 `consult` is the one-shot, non-recording alternative for review, research,
 diagnosis, and design. It runs one selected cheap or expensive evidence route,
@@ -105,7 +133,9 @@ emits one tagged NDJSON receipt whose nested result is explicitly marked
 `untrusted_model_authored`, and never acquires a campaign lane or appends a
 sample. A custom schema-2 vendor profile additionally requires
 `--confirm-provider-egress` and passes its task-free provider conformance check
-before the task file is inspected. Review its profile-only route surface first
+before the task file is inspected. One-shot consult checks only its selected
+cheap or expensive role; full `provider-check` and campaign dispatch retain the
+all-role check. Review its profile-only route surface first
 with `wclass-advisory review --consult --vendor VENDOR --workflow WORKFLOW`,
 then acknowledge each workflow-specific `route_sha256` as
 `--ack-route-sha256 VENDOR=sha256:...`. The digest binds the profile, workflow,
@@ -128,6 +158,28 @@ dispatch after the install completes. `init` and migration setup locks also
 have a bounded wait and report `managed_setup_busy` instead of hanging.
 Upgrades that change sealed provider argv use preserving, explicit migrations:
 `migrate-evidence` for Claude/Grok evidence and `migrate-routes` for agy.
+
+Read-only evidence workspaces use a bounded parent-owned, no-follow snapshot
+without trusting the vendor child's `.git`. When execution already failed, the
+result contract is invalid, or a repository mutation is detected, acceptance
+is impossible and the runner skips the otherwise wasted second clone and
+verifier. A valid unchanged result still runs its repository-aware verifier in
+the original fresh full handover clone; the verifier never runs in the
+child-owned workspace. The snapshot covers path set, content, file type, mode,
+symlink target, hardlink/root identity, mount boundary, ignored files,
+scaffolding, and nested `.git` under explicit entry/size/depth bounds. Extended
+attributes remain outside the existing Git-visible contract, and true host
+filesystem isolation still requires an external sandbox.
+
+The optional packaged advisory skill currently uses managed onboarding 14.
+Previewing never overwrites an installed skill; `--upgrade` replaces only an
+exact package-owned older bundle and rejects customized, extra-file, or
+symlinked destinations:
+
+```sh
+wclass-advisory install-skill --target both --upgrade --dry-run
+wclass-advisory install-skill --target both --upgrade
+```
 
 Native schema 2 and delegation protocol 2 add explicit source/account profiles,
 closed model-and-effort builders, directional profile/vendor authorization, and
