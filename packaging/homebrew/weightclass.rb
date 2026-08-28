@@ -7,8 +7,8 @@ class Weightclass < Formula
 
   desc "Local, policy-driven routing for agent CLI workflows"
   homepage "https://github.com/ictechgy/weightclass"
-  url "https://files.pythonhosted.org/packages/db/ef/f2d98183e68b32e756368874db4236fc8e4e6fbb09f1d1154d781c494921/weightclass-0.19.0.tar.gz"
-  sha256 "04a87d4c87dacb51fc50bd5c10f5168a54715daef363745040a6487e25d975d2"
+  url "https://files.pythonhosted.org/packages/ec/d5/e968d6fdfa7b7cf722de1793e77ecd7e8e83edb5b8bfceef2c692c62d55a/weightclass-0.20.0.tar.gz"
+  sha256 "f56d135948e7f075943f9d87a90354556b310f5bcd4f631e677775d133857c4e"
   license "MIT"
 
   depends_on "python@3.13"
@@ -44,6 +44,13 @@ class Weightclass < Formula
     assert_match '"campaign_ready":true',
                  shell_output("#{bin}/wclass-advisory doctor --state-root #{managed_root} " \
                               "--vendor codex --workflow all")
+    system bin/"wclass-advisory", "migrate-gate", "--state-root", managed_root,
+           "--vendor", "codex", "--workflow", "review",
+           "--gate-metric", "cheap_acceptance", "--gate-target-rate-bps", "7500",
+           "--gate-alpha-bps", "500"
+    assert_match '"gate_preregistered":true',
+                 shell_output("#{bin}/wclass-advisory campaign-gate --state-root #{managed_root} " \
+                              "--vendor codex --workflow review")
     assert_match "usage: wclass-advisory cli-check",
                  shell_output("#{bin}/wclass-advisory cli-check --help")
     assert_match "--confirm-provider-egress",
