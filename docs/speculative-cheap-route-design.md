@@ -79,10 +79,15 @@ gets thrown away.
 ```
 1. clone the repo at HEAD into a temp workspace        (no vendor, no tokens)
 2. run the cheap route's reviewed command there         (child 1)
-3. rebuild that work in a second clone the child never touched:
-   copy its files, leave its .git behind, keep symlinks as links
-4. stage, drop whatever .gitignore kept out of the patch, then emit it
-5. run the reviewed verify command on that tree         (child 2, no tokens)
+3. for implementation, rebuild that work in a second full clone the child
+   never touched; for read-only evidence, compare a parent-owned no-follow
+   snapshot and, when execution/result/mutation has already failed, stop
+   without building the second clone; a valid result still uses the full clean
+   handover clone for verification
+4. for implementation, stage, drop whatever .gitignore kept out of the patch,
+   then emit it; read-only evidence has no patch
+5. run the reviewed verify command on the fresh clean handover when the result
+   is still eligible         (child 2, no tokens)
    pass -> hand over the patch + base commit, stop
    fail -> delete both trees
 6. repeat 1-5 with the escalation route the router names (children 3, 4)
@@ -159,7 +164,13 @@ something, and **2 on failure**, so an unreadable path turns into "clean". And
 here.
 
 **Verification runs on the handover tree, not on the child's workspace.** The
-runner rebuilds the child's work inside a clone the child never had a handle on,
+runner rebuilds implementation work inside a full clone the child never had a
+handle on. For read-only evidence it first compares a bounded parent-owned
+snapshot without trusting the child's `.git`. If the child exits, returns an
+invalid result, or changes any repository content, acceptance is impossible and
+the second clone/verifier is skipped. A valid, unchanged result still runs in
+the existing fresh full handover clone, preserving repository-aware verifier
+semantics.
 takes the patch there, deletes anything `.gitignore` kept out of that patch, and
 verifies what is left. Two things follow. The `.git` under the verify script is
 ours, so a `filter.<name>.clean` the child planted has no config to name it. And
