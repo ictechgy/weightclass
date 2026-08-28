@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, NoReturn, TypedDict
@@ -89,6 +90,7 @@ SETUP_LOCK_TIMEOUT = 2.0
 SETUP_LOCK_POLL_SECONDS = 0.02
 RUNNER_VERSION_CHANGED_EXIT = 78
 CONSULT_DEFAULT_TIMEOUT_SECONDS = 5_400.0
+PROVIDER_CHECK_MAX_EXECUTABLE_GROUPS = 4
 _VENDOR = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _PROFILE_SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _RUNNER_BOOTSTRAP = """\
@@ -277,6 +279,13 @@ class ConsultConfiguration:
     custom: bool
     profile_sha256: str
     route_sha256: str
+
+
+@dataclass(frozen=True)
+class _ProviderProbe:
+    vendor: str
+    role: str
+    command: tuple[str, ...]
 
 
 def _fail() -> NoReturn:
@@ -967,11 +976,15 @@ def _consult_route_acknowledgements(
 
 
 def _route_capabilities(
-    vendor: str, routes: advisory_routes.AdvisoryRoutes
+    vendor: str,
+    routes: advisory_routes.AdvisoryRoutes,
+    *,
+    required_roles: Sequence[str] | None = None,
 ) -> tuple[tuple[str, advisory_preflight.CapabilityResult], ...]:
+    roles = _validated_required_roles(required_roles)
     cache: dict[str, advisory_preflight.CapabilityResult] = {}
     checked: list[tuple[str, advisory_preflight.CapabilityResult]] = []
-    for role in ROLES:
+    for role in roles:
         command = getattr(routes, role)
         executable = command[0]
         result = cache.get(executable)
@@ -980,6 +993,28 @@ def _route_capabilities(
             cache[executable] = result
         checked.append((role, result))
     return tuple(checked)
+
+
+def _validated_required_roles(required_roles: Sequence[str] | None) -> tuple[str, ...]:
+    """Normalize an optional provider-check role subset in canonical order."""
+    if required_roles is None:
+        return ROLES
+    if isinstance(required_roles, (str, bytes)):
+        _fail()
+    try:
+        selected = tuple(required_roles)
+    except (TypeError, ValueError):
+        _fail()
+    if (
+        not selected
+        or len(selected) > len(ROLES)
+        or any(not isinstance(role, str) for role in selected)
+        or len(set(selected)) != len(selected)
+        or any(role not in ROLES for role in selected)
+    ):
+        _fail()
+    # Receipt order is stable even when a caller supplies a different order.
+    return tuple(role for role in ROLES if role in selected)
 
 
 def _require_route_capabilities(
@@ -1081,7 +1116,9 @@ def _require_consult_capabilities(
     role: str,
 ) -> None:
     for vendor, configuration in configurations.items():
-        result = dict(_route_capabilities(vendor, configuration.routes))[role]
+        result = dict(_route_capabilities(vendor, configuration.routes, required_roles=(role,)))[
+            role
+        ]
         if not result.ready:
             raise ProviderCapabilityError(vendor, role, result.failure_code)
 
@@ -1528,6 +1565,7 @@ def consult(
             confirm_provider_egress=True,
             require_campaign=False,
             expected_route_sha256=acknowledged_route_sha256,
+            required_roles=(role,),
         )
         if readiness.get("ready") is not True:
             raise ProviderConformanceError
@@ -1717,6 +1755,128 @@ def dispatch(
         raise ManagedAdvisoryError() from error
 
 
+def _provider_check_environment() -> dict[str, str]:
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def _run_provider_probe(
+    probe: _ProviderProbe, prompt: str, target_workflow: str
+) -> dict[str, object]:
+    """Run one task-free probe in a private workspace and retain no output."""
+    with tempfile.TemporaryDirectory(prefix="wclass-provider-check-") as directory:
+        workspace = Path(directory)
+        try:
+            initialized = subprocess.run(
+                ["git", "init", "-q"],
+                cwd=workspace,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=30,
+                env=_provider_check_environment(),
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise ManagedAdvisoryError() from error
+        if initialized.returncode != 0:
+            _fail()
+        child: speculative_run.ChildResult | None = None
+        stdout = ""
+        try:
+            command = list(probe.command)
+            child, stdout = speculative_run.run_child(
+                command,
+                workspace,
+                prompt,
+                allowed_env=speculative_run.default_child_env(command[0]),
+                timeout_seconds=120.0,
+            )
+            shape = speculative_run.evidence_result_shape(stdout, command)
+            _, parsed = speculative_run.extract_evidence_result(stdout, command, target_workflow)
+            contract_ready = isinstance(parsed, dict)
+        except advisory_evidence_contract.EvidenceResultError:
+            shape = speculative_run.evidence_result_shape(stdout, list(probe.command))
+            contract_ready = False
+        except (OSError, ValueError, speculative_run.RunFailure):
+            child = None
+            shape = "unknown"
+            contract_ready = False
+        ready = bool(
+            child is not None
+            and child["exit_code"] == 0
+            and not child["timed_out"]
+            and contract_ready
+        )
+        failure_code = (
+            (
+                child["failure_code"]
+                if child["exit_code"] != 0 or contract_ready
+                else "result_contract"
+            )
+            if child is not None
+            else "local_probe_failed"
+        )
+        if failure_code not in PROVIDER_CHECK_FAILURE_CODES:
+            failure_code = "unknown"
+        return {
+            "vendor": probe.vendor,
+            "role": probe.role,
+            "ready": ready,
+            "child_exit_code": child["exit_code"] if child is not None else None,
+            "child_timed_out": child["timed_out"] if child is not None else False,
+            "child_seconds": child["seconds"] if child is not None else 0.0,
+            "child_failure_code": failure_code,
+            "child_stdout_present": child["stdout_present"] if child is not None else False,
+            "child_stderr_present": child["stderr_present"] if child is not None else False,
+            "result_shape": shape,
+            "envelope_extracted": contract_ready,
+        }
+
+
+def _run_provider_probe_group(
+    probes: Sequence[_ProviderProbe], prompt: str, target_workflow: str
+) -> tuple[tuple[_ProviderProbe, dict[str, object]], ...]:
+    """Run one executable group serially to avoid provider-local races."""
+    return tuple((probe, _run_provider_probe(probe, prompt, target_workflow)) for probe in probes)
+
+
+def _run_provider_probe_groups(
+    probes: Sequence[_ProviderProbe], prompt: str, target_workflow: str
+) -> tuple[dict[str, object], ...]:
+    """Run at most four independent executable groups and restore input order."""
+    groups: dict[str, list[_ProviderProbe]] = {}
+    for probe in probes:
+        groups.setdefault(probe.command[0], []).append(probe)
+    if len(groups) <= 1:
+        grouped_results = tuple(
+            _run_provider_probe_group(group, prompt, target_workflow) for group in groups.values()
+        )
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(PROVIDER_CHECK_MAX_EXECUTABLE_GROUPS, len(groups)),
+            thread_name_prefix="wclass-provider-check",
+        ) as executor:
+            futures = tuple(
+                executor.submit(_run_provider_probe_group, group, prompt, target_workflow)
+                for group in groups.values()
+            )
+            # Reading futures in submission order makes exception propagation and
+            # deterministic result reconstruction independent of completion order.
+            grouped_results = tuple(future.result() for future in futures)
+    by_probe = {
+        (probe.vendor, probe.role): result
+        for grouped in grouped_results
+        for probe, result in grouped
+    }
+    return tuple(by_probe[(probe.vendor, probe.role)] for probe in probes)
+
+
 def provider_check(
     state_root: Path,
     *,
@@ -1726,11 +1886,13 @@ def provider_check(
     require_campaign: bool = True,
     expected_route_sha256: Mapping[str, str] | None = None,
     routes_by_vendor: Mapping[str, advisory_routes.AdvisoryRoutes] | None = None,
+    required_roles: Sequence[str] | None = None,
 ) -> dict[str, object]:
     """Run task-free, non-persisted checks for all configured provider roles."""
 
     if not confirm_provider_egress or not vendors or workflow not in WORKFLOWS:
         _fail()
+    selected_roles = _validated_required_roles(required_roles)
     if routes_by_vendor is not None and (
         set(routes_by_vendor) != set(vendors) or expected_route_sha256 is not None
     ):
@@ -1742,117 +1904,33 @@ def provider_check(
         "This is a task-free provider readiness check. Do not inspect files or use tools. "
         "Return exactly this JSON object and no other text:\n" + expected.decode("utf-8")
     )
-    results: list[dict[str, object]] = []
-    all_ready = True
-    with tempfile.TemporaryDirectory(prefix="wclass-provider-check-") as directory:
-        workspace = Path(directory)
-        environment = {
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": os.environ.get("HOME", ""),
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": "/dev/null",
-            "GIT_TERMINAL_PROMPT": "0",
-        }
-        try:
-            initialized = subprocess.run(
-                ["git", "init", "-q"],
-                cwd=workspace,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=30,
-                env=environment,
+    probes: list[_ProviderProbe] = []
+    for vendor in vendors:
+        if routes_by_vendor is not None:
+            routes = routes_by_vendor[vendor]
+            if not isinstance(routes, advisory_routes.AdvisoryRoutes):
+                _fail()
+        elif require_campaign:
+            selected, _, _ = _configuration(state_root, vendor, workflow)
+            routes = advisory_routes.routes_from_profile(
+                selected.profile,
+                read_only_executors=True,
+                evidence_workflow=target_workflow,
             )
-        except (OSError, subprocess.SubprocessError) as error:
-            raise ManagedAdvisoryError() from error
-        if initialized.returncode != 0:
-            _fail()
-        for vendor in vendors:
-            if routes_by_vendor is not None:
-                routes = routes_by_vendor[vendor]
-                if not isinstance(routes, advisory_routes.AdvisoryRoutes):
-                    _fail()
-            elif require_campaign:
-                selected, _, _ = _configuration(state_root, vendor, workflow)
-                routes = advisory_routes.routes_from_profile(
-                    selected.profile,
-                    read_only_executors=True,
-                    evidence_workflow=target_workflow,
-                )
-            else:
-                configuration = _consult_configuration(state_root, vendor, target_workflow)
-                if (
-                    expected_route_sha256 is None
-                    or expected_route_sha256.get(vendor) != configuration.route_sha256
-                ):
-                    raise ManagedPreflightError("managed_consult_route_mismatch")
-                routes = configuration.routes
-            for role, capability in _route_capabilities(vendor, routes):
-                if not capability.ready:
-                    raise ProviderCapabilityError(vendor, role, capability.failure_code)
-                command = list(getattr(routes, role))
-                child: speculative_run.ChildResult | None = None
-                stdout = ""
-                try:
-                    child, stdout = speculative_run.run_child(
-                        command,
-                        workspace,
-                        prompt,
-                        allowed_env=speculative_run.default_child_env(command[0]),
-                        timeout_seconds=120.0,
-                    )
-                    shape = speculative_run.evidence_result_shape(stdout, command)
-                    _, parsed = speculative_run.extract_evidence_result(
-                        stdout, command, target_workflow
-                    )
-                    contract_ready = isinstance(parsed, dict)
-                except advisory_evidence_contract.EvidenceResultError:
-                    shape = speculative_run.evidence_result_shape(stdout, command)
-                    contract_ready = False
-                except (OSError, ValueError, speculative_run.RunFailure):
-                    child = None
-                    shape = "unknown"
-                    contract_ready = False
-                ready = bool(
-                    child is not None
-                    and child["exit_code"] == 0
-                    and not child["timed_out"]
-                    and contract_ready
-                )
-                all_ready = all_ready and ready
-                failure_code = (
-                    (
-                        child["failure_code"]
-                        if child["exit_code"] != 0 or contract_ready
-                        else "result_contract"
-                    )
-                    if child is not None
-                    else "local_probe_failed"
-                )
-                if failure_code not in PROVIDER_CHECK_FAILURE_CODES:
-                    failure_code = "unknown"
-                results.append(
-                    {
-                        "vendor": vendor,
-                        "role": role,
-                        "ready": ready,
-                        "child_exit_code": child["exit_code"] if child is not None else None,
-                        "child_timed_out": child["timed_out"] if child is not None else False,
-                        "child_seconds": child["seconds"] if child is not None else 0.0,
-                        "child_failure_code": failure_code,
-                        "child_stdout_present": (
-                            child["stdout_present"] if child is not None else False
-                        ),
-                        "child_stderr_present": (
-                            child["stderr_present"] if child is not None else False
-                        ),
-                        "result_shape": shape,
-                        "envelope_extracted": contract_ready,
-                    }
-                )
-                child = None
-                stdout = ""
+        else:
+            configuration = _consult_configuration(state_root, vendor, target_workflow)
+            if (
+                expected_route_sha256 is None
+                or expected_route_sha256.get(vendor) != configuration.route_sha256
+            ):
+                raise ManagedPreflightError("managed_consult_route_mismatch")
+            routes = configuration.routes
+        capabilities = _route_capabilities(vendor, routes, required_roles=selected_roles)
+        for role, capability in capabilities:
+            if not capability.ready:
+                raise ProviderCapabilityError(vendor, role, capability.failure_code)
+            probes.append(_ProviderProbe(vendor, role, tuple(getattr(routes, role))))
+    results = list(_run_provider_probe_groups(probes, prompt, target_workflow))
     return {
         "schema_version": 1,
         "event": "managed_provider_check",
@@ -1861,7 +1939,7 @@ def provider_check(
         "provider_egress_confirmed": True,
         "sample_recorded": False,
         "calls": len(results),
-        "ready": all_ready,
+        "ready": all(bool(result["ready"]) for result in results),
         "workflow": workflow,
         "results": results,
     }

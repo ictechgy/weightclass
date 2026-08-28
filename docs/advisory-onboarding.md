@@ -122,10 +122,13 @@ wclass-advisory provider-check --vendor all --workflow review \
 ```
 
 It makes three task-free provider calls per vendor and may consume quota or
-incur cost. It returns only vendor, role, fixed failure code, exit/timing
-fields, presence booleans, and result shape. It never writes provider output or
-a campaign sample. A failed check therefore cannot contaminate effectiveness
-or cost evidence.
+incur cost. Calls sharing one executable are serialized; distinct executable
+groups use separate temporary Git workspaces and a fixed concurrency ceiling
+of four. Managed one-shot consult checks only the selected role for a custom
+provider. The command returns only vendor, role, fixed failure code,
+exit/timing fields, presence booleans, and result shape. It never writes
+provider output or a campaign sample. A failed check therefore cannot
+contaminate effectiveness or cost evidence.
 
 Use `wclass-advisory status --vendor VENDOR_OR_ALL --workflow WORKFLOW_OR_ALL`
 for filtered aggregate readiness and evidence. A single sealed population can

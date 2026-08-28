@@ -38,8 +38,11 @@ their labels are user-selected opaque configuration.
 `doctor` reports local CLI compatibility after invoking `--help`/`--version`
 with a minimal environment and temporary working directory; it sends no task or
 provider prompt. An optional
-`provider-check --confirm-provider-egress` makes three task-free calls, stores
-nothing, and never contributes a campaign sample.
+`provider-check --confirm-provider-egress` makes three task-free calls per
+vendor, stores nothing, and never contributes a campaign sample. Calls that
+use the same executable remain serial; distinct executable groups run with a
+bounded concurrency of four and use separate temporary workspaces. A one-shot
+custom-provider `consult` checks only the selected role before task access.
 Existing agy installations use `migrate-routes --vendor agy`; existing Grok
 evidence installations use `migrate-evidence --vendor grok`. Both preserve old
 populations without merging records.
