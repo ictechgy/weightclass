@@ -122,8 +122,17 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   build plus strict metadata/isolation checks, and a clean-wheel CLI smoke test.
   PR #119 merged as `fadf362`; its final immutable security diff review found
   no reportable findings after independently rechecking both review-time fixes.
-- **`weightclass 0.19.0` is the current release candidate from merged PR
-  #123.** It adds filtered managed status, a
+- **`weightclass 0.19.0` is published on PyPI and Homebrew.** Implementation
+  PR #123, release PR #124, source-formula PR #125, and tap PR
+  `ictechgy/homebrew-tap#27` are merged. Release run `33135546910` passed the
+  immutable Python 3.13 build, macOS 3.10/3.14 boundaries, Python 3.10/3.14
+  candidate validation, explicit PyPI environment approval, and exact trusted
+  publication. The user-level uv tool and Homebrew source install both report
+  0.19.0, `brew test` passes, and exact 0.18.0 Codex/Claude skills upgraded to
+  managed onboarding 13. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/db/ef/f2d98183e68b32e756368874db4236fc8e4e6fbb09f1d1154d781c494921/weightclass-0.19.0.tar.gz`
+  - sha256: `04a87d4c87dacb51fc50bd5c10f5168a54715daef363745040a6487e25d975d2`
+  This release adds filtered managed status, a
   provenance-bound sealed campaign gate that never authorizes policy, closed
   consult failure stages/reasons with arbitrary internal stderr rejection,
   completion-order consult NDJSON and a 5,400-second default deadline, and an
