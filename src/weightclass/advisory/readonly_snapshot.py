@@ -78,7 +78,9 @@ def _require_descriptor_support() -> tuple[int, int, int]:
         raise SnapshotUnsupported()
     if os.open not in getattr(os, "supports_dir_fd", ()):
         raise SnapshotUnsupported()
-    if os.lstat not in getattr(os, "supports_dir_fd", ()):
+    if os.stat not in getattr(os, "supports_dir_fd", ()):
+        raise SnapshotUnsupported()
+    if os.stat not in getattr(os, "supports_follow_symlinks", ()):
         raise SnapshotUnsupported()
     if os.readlink not in getattr(os, "supports_dir_fd", ()):
         raise SnapshotUnsupported()
@@ -163,7 +165,7 @@ def find_child_root(parent: Path, expected: tuple[int, int]) -> Path | None:
                 if visited > MAX_SNAPSHOT_ENTRIES:
                     return None
                 try:
-                    metadata = os.lstat(name, dir_fd=selected_descriptor)
+                    metadata = os.stat(name, dir_fd=selected_descriptor, follow_symlinks=False)
                 except OSError:
                     continue
                 if not stat.S_ISDIR(metadata.st_mode) or metadata.st_dev != parent_device:
@@ -264,7 +266,7 @@ def _read_symlink(
         encoded = os.fsencode(target)
         if len(encoded) > MAX_SYMLINK_TARGET_BYTES:
             raise SnapshotUnsupported()
-        after = os.lstat(name, dir_fd=parent_fd)
+        after = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         if _identity(before) != _identity(after):
             raise SnapshotUnsupported()
         total[0] += len(encoded)
@@ -323,7 +325,7 @@ def _scan_directory(
         if len(entries) >= MAX_SNAPSHOT_ENTRIES:
             raise SnapshotUnsupported()
         try:
-            metadata = os.lstat(name, dir_fd=descriptor)
+            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
             if metadata.st_dev != root_device:
                 raise SnapshotRejected()
             mode = metadata.st_mode
