@@ -167,6 +167,16 @@ class ReadonlyClonePathTests(unittest.TestCase):
             self.assertEqual(list(work_root.iterdir()), [])
             self.assertEqual(registry.read_text(encoding="utf-8"), "")
 
+            replaced = runner.create_registered_workspace(
+                "spec-cheap-", work_root, registry, out_dir
+            )
+            replaced_identity = runner.readonly_snapshot.root_identity(replaced)
+            replaced.rmdir()
+            replaced.write_text("replacement-only", encoding="utf-8")
+            runner.discard_relocated(registry, replaced, replaced_identity, work_root, out_dir)
+            self.assertFalse(replaced.exists())
+            self.assertEqual(registry.read_text(encoding="utf-8"), "")
+
     def test_initial_root_identity_failure_is_closed_and_cleaned(self) -> None:
         runner = load_module(RUNNER, "readonly_snapshot_runner_initial_root")
         with tempfile.TemporaryDirectory() as directory:

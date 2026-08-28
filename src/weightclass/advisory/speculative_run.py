@@ -3607,7 +3607,7 @@ def discard_relocated(
         except OSError:
             emit_safe_diagnostic("workspace_registry_update_failed")
         return
-    if stat.S_ISLNK(metadata.st_mode) and workspace.parent == work_root:
+    if not stat.S_ISDIR(metadata.st_mode) and workspace.parent == work_root:
         try:
             workspace.unlink()
             register(registry, workspace, add=False)
