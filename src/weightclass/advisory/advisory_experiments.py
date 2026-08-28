@@ -235,7 +235,7 @@ def analyze_sequential(
         elif len(outcomes) == maximum_samples:
             decision = "capacity_reached"
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "analysis": "sequential_acceptance",
         "method": "simultaneous_hoeffding_union_bound",
         "samples": len(outcomes),

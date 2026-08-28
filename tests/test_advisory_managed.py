@@ -629,6 +629,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             )
 
         self.assertEqual(receipt["decision"], "eligible_for_human_review")
+        self.assertEqual(receipt["schema_version"], 2)
         self.assertEqual(receipt["statistical_signal"], "signal_above_target")
         self.assertEqual(receipt["evidence_origin"], "sealed_campaign")
         self.assertTrue(receipt["campaign_bound"])
@@ -638,6 +639,24 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
         rendered = json.dumps(receipt, sort_keys=True)
         self.assertNotIn("/state", rendered)
         self.assertNotIn("fingerprint", rendered)
+
+    def test_advised_rescue_counts_empty_advice_without_retry_as_a_failed_outcome(self) -> None:
+        outcomes = managed_advisory._campaign_gate_outcomes(
+            [
+                {
+                    "cheap": {"accepted": False},
+                    "advice_failure": {"empty": True, "route_failed": False},
+                    "retry": None,
+                    "expensive": None,
+                }
+            ],
+            "advised_rescue",
+        )
+
+        self.assertEqual(
+            outcomes,
+            [{"schema_version": 1, "experiment": "sequential", "accepted": False}],
+        )
 
     def test_consult_route_review_does_not_require_campaign_records(self) -> None:
         selected = managed_advisory.CampaignPaths(
@@ -956,6 +975,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
         events: list[str] = []
 
         def provider(*args: object, **kwargs: object) -> dict[str, object]:
+            self.assertEqual(kwargs.get("routes_by_vendor"), {"custom": routes})
             events.append("provider")
             return {"ready": True}
 
@@ -990,6 +1010,60 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             )
 
         self.assertEqual(events, ["provider", "task"])
+
+    def test_provider_check_can_probe_the_exact_prevalidated_workflow_routes(self) -> None:
+        routes = advisory_routes.AdvisoryRoutes(
+            ("custom-implementation", "--cheap"),
+            ("custom-implementation", "--advisor"),
+            ("custom-implementation", "--expensive"),
+        )
+        capability = advisory_preflight.CapabilityResult(
+            "custom", "custom_unverified", "none", None
+        )
+        child = {
+            "exit_code": 0,
+            "timed_out": False,
+            "seconds": 0.1,
+            "tokens": None,
+            "usage": None,
+            "failure_code": "none",
+            "stdout_present": True,
+            "stderr_present": False,
+        }
+        response = managed_advisory._baseline_probe("review")
+        assert response is not None
+        with (
+            mock.patch.object(
+                managed_advisory,
+                "_configuration",
+                side_effect=AssertionError("profile reloaded"),
+            ),
+            mock.patch.object(
+                managed_advisory,
+                "_route_capabilities",
+                return_value=tuple(
+                    (role, capability) for role in ("cheap", "advisor", "expensive")
+                ),
+            ),
+            mock.patch.object(
+                speculative_run,
+                "run_child",
+                return_value=(child, response.decode("utf-8")),
+            ) as run_child,
+        ):
+            receipt = managed_advisory.provider_check(
+                Path("/state"),
+                vendors=("custom",),
+                workflow="implementation",
+                confirm_provider_egress=True,
+                routes_by_vendor={"custom": routes},
+            )
+
+        self.assertTrue(receipt["ready"])
+        self.assertEqual(
+            [call.args[0] for call in run_child.call_args_list],
+            [list(routes.cheap), list(routes.advisor), list(routes.expensive)],
+        )
 
     def test_provider_check_is_task_free_and_never_records_a_campaign_sample(self) -> None:
         routes = advisory_routes.AdvisoryRoutes(("fake",), ("fake",), ("fake",))

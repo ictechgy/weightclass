@@ -1637,6 +1637,7 @@ def dispatch(
             vendors=custom_vendors,
             workflow=workflow,
             confirm_provider_egress=True,
+            routes_by_vendor={vendor: configurations[vendor][2] for vendor in custom_vendors},
         )
         if readiness.get("ready") is not True:
             raise ProviderConformanceError
@@ -1724,10 +1725,15 @@ def provider_check(
     confirm_provider_egress: bool,
     require_campaign: bool = True,
     expected_route_sha256: Mapping[str, str] | None = None,
+    routes_by_vendor: Mapping[str, advisory_routes.AdvisoryRoutes] | None = None,
 ) -> dict[str, object]:
     """Run task-free, non-persisted checks for all configured provider roles."""
 
     if not confirm_provider_egress or not vendors or workflow not in WORKFLOWS:
+        _fail()
+    if routes_by_vendor is not None and (
+        set(routes_by_vendor) != set(vendors) or expected_route_sha256 is not None
+    ):
         _fail()
     target_workflow = "review" if workflow == "implementation" else workflow
     expected = _baseline_probe(target_workflow)
@@ -1763,7 +1769,11 @@ def provider_check(
         if initialized.returncode != 0:
             _fail()
         for vendor in vendors:
-            if require_campaign:
+            if routes_by_vendor is not None:
+                routes = routes_by_vendor[vendor]
+                if not isinstance(routes, advisory_routes.AdvisoryRoutes):
+                    _fail()
+            elif require_campaign:
                 selected, _, _ = _configuration(state_root, vendor, workflow)
                 routes = advisory_routes.routes_from_profile(
                     selected.profile,
@@ -1884,7 +1894,7 @@ def _campaign_gate_outcomes(
         elif metric == "advised_rescue":
             if not isinstance(record.get("advice_failure"), Mapping):
                 continue
-            accepted = _gate_attempt_accepted(record.get("retry"))
+            accepted = _gate_attempt_accepted(record.get("retry"), optional=True)
         elif metric == "final_acceptance":
             retry_accepted = _gate_attempt_accepted(record.get("retry"), optional=True)
             expensive_accepted = _gate_attempt_accepted(record.get("expensive"), optional=True)

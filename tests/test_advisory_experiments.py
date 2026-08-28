@@ -33,6 +33,7 @@ class AdvisoryExperimentTests(unittest.TestCase):
         )
 
         self.assertEqual(result["decision"], "signal_above_target")
+        self.assertEqual(result["schema_version"], 2)
         self.assertEqual(result["method"], "simultaneous_hoeffding_union_bound")
         self.assertEqual(result["evidence_origin"], "caller_jsonl")
         self.assertFalse(result["promotion_eligible"])

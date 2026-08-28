@@ -28,7 +28,8 @@ Rates and error levels use basis points (`10000` = 100%). The analyzer uses a
 simultaneous Hoeffding interval with a summable error budget across looks. It
 returns `signal_above_target`, `signal_below_target`, `continue`, or
 `capacity_reached`. Caller JSONL always reports `promotion_eligible:false` and
-never changes production routing.
+never changes production routing. Sequential analysis output uses schema 2;
+input records remain schema 1.
 
 For a sealed managed population, use the separate gate:
 
