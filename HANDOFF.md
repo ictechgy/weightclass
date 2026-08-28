@@ -122,8 +122,8 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   build plus strict metadata/isolation checks, and a clean-wheel CLI smoke test.
   PR #119 merged as `fadf362`; its final immutable security diff review found
   no reportable findings after independently rechecking both review-time fixes.
-- **Unreleased post-0.18.0 advisory product follow-up is active on
-  `feat/advisory-product-roadmap-2`.** It adds filtered managed status, a
+- **`weightclass 0.19.0` is the current release candidate from merged PR
+  #123.** It adds filtered managed status, a
   provenance-bound sealed campaign gate that never authorizes policy, closed
   consult failure stages/reasons with arbitrary internal stderr rejection,
   completion-order consult NDJSON and a 5,400-second default deadline, and an
@@ -133,6 +133,11 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   and recognizes the exact published 0.18.0 bundle for safe upgrade. Current
   offline gates pass 1,374 unittest tests with 27 skips, Ruff, formatting, and
   strict mypy over 172 source files.
+  Breaking changes are confined to the explicit advisory companion: sequential
+  analysis output advances to schema 2 with signal-oriented decision values,
+  schema-2 custom dispatch requires explicit provider-egress confirmation, and
+  multi-vendor consult NDJSON is emitted in completion order. Core `wclass`
+  routing and its one-child contract are unchanged.
 - Release 0.17.8 adds a
   task-free local `cli-check`, installed-CLI status to `doctor`, a separately
   confirmed and non-persisted `provider-check`, and task-before-inspection
