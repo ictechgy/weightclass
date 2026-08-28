@@ -133,34 +133,70 @@ def find_child_root(parent: Path, expected: tuple[int, int]) -> Path | None:
     """Find one bounded relocated directory without following child links."""
 
     try:
-        parent_device = parent.lstat().st_dev
-    except OSError:
+        nofollow, directory, cloexec = _require_descriptor_support()
+    except SnapshotUnsupported:
         return None
-    pending: list[tuple[Path, int]] = [(parent, 0)]
+    root_descriptor: int | None = None
+    descriptors: set[int] = set()
+    try:
+        root_descriptor = os.open(parent, os.O_RDONLY | directory | nofollow | cloexec)
+        parent_device = os.fstat(root_descriptor).st_dev
+        descriptors.add(root_descriptor)
+        root_descriptor = None
+    except (OSError, ValueError):
+        if root_descriptor is not None:
+            os.close(root_descriptor)
+        return None
+    pending: list[tuple[Path, int, int]] = [(parent, next(iter(descriptors)), 0)]
     visited = 0
-    while pending:
-        selected, depth = pending.pop()
-        if depth > MAX_SNAPSHOT_DEPTH:
-            return None
-        try:
-            children = tuple(os.scandir(selected))
-        except (OSError, ValueError):
-            return None
-        for child in children:
-            visited += 1
-            if visited > MAX_SNAPSHOT_ENTRIES:
+    try:
+        while pending:
+            selected, selected_descriptor, depth = pending.pop()
+            if depth > MAX_SNAPSHOT_DEPTH:
                 return None
             try:
-                metadata = child.stat(follow_symlinks=False)
+                names = os.listdir(selected_descriptor)
+            except (OSError, ValueError):
+                return None
+            for name in names:
+                visited += 1
+                if visited > MAX_SNAPSHOT_ENTRIES:
+                    return None
+                try:
+                    metadata = os.lstat(name, dir_fd=selected_descriptor)
+                except OSError:
+                    continue
+                if not stat.S_ISDIR(metadata.st_mode) or metadata.st_dev != parent_device:
+                    continue
+                candidate = selected / name
+                if (metadata.st_dev, metadata.st_ino) == expected:
+                    return candidate
+                child_descriptor: int | None = None
+                try:
+                    child_descriptor = os.open(
+                        name,
+                        os.O_RDONLY | directory | nofollow | cloexec,
+                        dir_fd=selected_descriptor,
+                    )
+                    opened = os.fstat(child_descriptor)
+                    if _identity(metadata) != _identity(opened):
+                        os.close(child_descriptor)
+                        continue
+                    descriptors.add(child_descriptor)
+                    pending.append((candidate, child_descriptor, depth + 1))
+                except (OSError, ValueError):
+                    if child_descriptor is not None:
+                        os.close(child_descriptor)
+                    continue
+            os.close(selected_descriptor)
+            descriptors.discard(selected_descriptor)
+        return None
+    finally:
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
             except OSError:
-                continue
-            if not stat.S_ISDIR(metadata.st_mode) or metadata.st_dev != parent_device:
-                continue
-            candidate = Path(child.path)
-            if (metadata.st_dev, metadata.st_ino) == expected:
-                return candidate
-            pending.append((candidate, depth + 1))
-    return None
+                pass
 
 
 def _read_regular(

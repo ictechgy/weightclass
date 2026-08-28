@@ -145,6 +145,28 @@ class ReadonlySnapshotTests(unittest.TestCase):
 
 
 class ReadonlyClonePathTests(unittest.TestCase):
+    def test_regular_file_replacement_does_not_strand_a_relocated_workspace(self) -> None:
+        runner = load_module(RUNNER, "readonly_snapshot_runner_regular_replacement")
+        with tempfile.TemporaryDirectory() as directory:
+            out_dir = Path(directory) / "out"
+            work_root = out_dir / ".work"
+            work_root.mkdir(mode=0o700, parents=True)
+            registry = out_dir / "workspaces.txt"
+            workspace = runner.create_registered_workspace(
+                "spec-cheap-", work_root, registry, out_dir
+            )
+            identity = runner.readonly_snapshot.root_identity(workspace)
+            quarantine = work_root / "nested" / "quarantine"
+            quarantine.mkdir(parents=True)
+            relocated = quarantine / workspace.name
+            workspace.rename(relocated)
+            workspace.write_text("replacement", encoding="utf-8")
+
+            runner.discard_relocated(registry, workspace, identity, work_root, out_dir)
+
+            self.assertEqual(list(work_root.iterdir()), [])
+            self.assertEqual(registry.read_text(encoding="utf-8"), "")
+
     def test_initial_root_identity_failure_is_closed_and_cleaned(self) -> None:
         runner = load_module(RUNNER, "readonly_snapshot_runner_initial_root")
         with tempfile.TemporaryDirectory() as directory:
