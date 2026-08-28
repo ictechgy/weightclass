@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -180,7 +180,7 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                 },
             ):
                 with self.subTest(kwargs=kwargs), self.assertRaisesRegex(CampaignError, "^$"):
-                    build_manifest(**common, **kwargs)
+                    cast(Any, build_manifest)(**common, **kwargs)
 
     def test_tampering_duplicates_unknown_fields_and_nonfinite_values_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

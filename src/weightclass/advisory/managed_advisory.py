@@ -977,8 +977,7 @@ def migrate_gate_campaigns(
     try:
         source = [campaign_paths(state_root, vendor, workflow) for workflow in WORKFLOWS]
         destination = [
-            preregistered_campaign_paths(state_root, vendor, workflow)
-            for workflow in WORKFLOWS
+            preregistered_campaign_paths(state_root, vendor, workflow) for workflow in WORKFLOWS
         ]
         destination_presence = [
             selected.campaign.exists() or selected.results.exists() for selected in destination
@@ -987,9 +986,9 @@ def migrate_gate_campaigns(
             if not all(destination_presence):
                 _fail()
             for workflow, selected in zip(WORKFLOWS, destination, strict=True):
-                _private_regular(selected.campaign)
-                _private_directory(selected.results, create=False)
-                manifest = advisory_campaign.load_manifest(selected.campaign)
+                configured, manifest, _ = _configuration(state_root, vendor, workflow)
+                if configured != selected:
+                    _fail()
                 if manifest.get("gate") != dict(validated_gate):
                     _fail()
             return _migration_receipt(
@@ -1017,16 +1016,9 @@ def migrate_gate_campaigns(
             selected_prices = prices_path
         source_manifests: list[advisory_campaign.CampaignManifest] = []
         for workflow, selected in zip(WORKFLOWS, source, strict=True):
-            _private_regular(selected.campaign)
-            _private_directory(selected.results, create=False)
-            manifest = advisory_campaign.load_manifest(selected.campaign)
-            if (manifest["cost_basis"] == "price_table") != (selected_prices is not None):
+            configured, manifest, _ = _configuration(state_root, vendor, workflow)
+            if configured != selected:
                 _fail()
-            advisory_campaign.load_merged_lane_records(
-                manifest,
-                selected.results,
-                advisory_campaign.ANONYMOUS_LANE_COUNT,
-            )
             source_manifests.append(manifest)
         if dry_run:
             return _migration_receipt(
@@ -2165,7 +2157,7 @@ def provider_check(
     }
 
 
-CAMPAIGN_GATE_METRICS = ("cheap_acceptance", "advised_rescue", "final_acceptance")
+CAMPAIGN_GATE_METRICS = tuple(sorted(advisory_campaign.CAMPAIGN_GATE_METRICS))
 
 
 def _gate_attempt_accepted(value: object, *, optional: bool = False) -> bool:
@@ -2226,8 +2218,7 @@ def campaign_gate(
     selected, manifest, _ = _configuration(state_root, vendor, workflow, validate_records=False)
     sealed_gate = manifest.get("gate")
     gate_preregistered = (
-        manifest.get("schema_version")
-        == advisory_campaign.PREREGISTERED_CAMPAIGN_SCHEMA_VERSION
+        manifest.get("schema_version") == advisory_campaign.PREREGISTERED_CAMPAIGN_SCHEMA_VERSION
     )
     if gate_preregistered:
         if not isinstance(sealed_gate, Mapping):

@@ -14,6 +14,7 @@ from unittest import mock
 
 from weightclass.advisory import (
     advisory_campaign,
+    advisory_experiments,
     advisory_orchestration,
     advisory_parallel,
     advisory_preflight,
@@ -681,7 +682,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             ),
             mock.patch.object(advisory_campaign, "campaign_progress", return_value=progress),
             mock.patch.object(
-                managed_advisory.advisory_experiments,
+                advisory_experiments,
                 "analyze_sequential",
                 return_value=analysis,
             ) as analyze,
@@ -738,12 +739,17 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             )
             gated = managed_advisory.preregistered_campaign_paths(state_root, "codex", "review")
             loaded = advisory_campaign.load_manifest(gated.campaign)
+            active, active_manifest, _ = managed_advisory._configuration(
+                state_root, "codex", "review"
+            )
             legacy_unchanged = legacy.campaign.read_bytes() == before
 
         self.assertFalse(receipt["already_migrated"])
         self.assertTrue(legacy_unchanged)
         self.assertEqual(loaded["schema_version"], 3)
         self.assertEqual(loaded["gate"]["metric"], "cheap_acceptance")
+        self.assertEqual(active, gated)
+        self.assertEqual(active_manifest, loaded)
         self.assertFalse((gated.results / "runs.jsonl").exists())
 
     def test_advised_rescue_counts_empty_advice_without_retry_as_a_failed_outcome(self) -> None:
@@ -1325,7 +1331,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                     record: dict[str, object] = {
                         "campaign": advisory_campaign.record_binding(manifest, ordinal),
                     }
-                    if manifest["schema_version"] == 2:
+                    if manifest["schema_version"] in (2, 3):
                         record["workflow"] = manifest["workflow"]
                     with (output / "runs.jsonl").open("a", encoding="utf-8") as handle:
                         handle.write(json.dumps(record) + "\n")
