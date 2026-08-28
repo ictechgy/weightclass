@@ -51,9 +51,23 @@ wclass-advisory run \
 ```
 
 Profile-based evidence executors compile to Claude `plan` permission without
-`Edit`, or Codex `read-only` sandboxing. Exact commands remain operator-owned,
-but any filesystem change is still detected in a clean handover clone and
-rejects the attempt.
+`Edit`, or Codex `read-only` sandboxing. Exact commands remain operator-owned.
+The runner takes a bounded, parent-owned, descriptor-based snapshot of the
+first clone before the executor starts. It compares every non-`.git` path
+afterwards without following symlinks or invoking Git, so tracked, untracked,
+ignored, scaffolding, mode, content, type, and nested-`.git` changes reject the
+attempt. Snapshot races, special files, unsupported descriptor APIs, and size
+limits fail closed into the existing full handover path.
+Extended attributes are intentionally outside the Git-visible contract; they
+are neither read nor persisted, and the trusted handover is rebuilt from the
+committed tree before verification.
+
+When execution, result parsing, or the snapshot gate already makes acceptance
+impossible, the runner skips the second clone and verifier entirely. A clean,
+valid read-only result still proceeds through a fresh parent-owned full
+handover clone: the verifier must never run in the child workspace because its
+`.git` may be poisoned. This keeps Git semantics and repository-aware verifier
+behavior unchanged while removing wasted clone work from rejected routes.
 
 The winning JSON is printed only after aggregate logging succeeds. Task,
 result, advice, verifier output, paths, hashes, and source locators are never

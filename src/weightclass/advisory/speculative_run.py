@@ -73,6 +73,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, TypedDict
 
 if TYPE_CHECKING or __package__:
+    from . import readonly_snapshot
     from .advisory_campaign import (
         ANONYMOUS_LANE_COUNT,
         MAX_CAMPAIGN_RECORD_BYTES,
@@ -104,6 +105,7 @@ if TYPE_CHECKING or __package__:
         routes_from_profile,
     )
 else:
+    import readonly_snapshot  # type: ignore[import-not-found]
     from advisory_campaign import (  # type: ignore[import-not-found]
         ANONYMOUS_LANE_COUNT,
         MAX_CAMPAIGN_RECORD_BYTES,
@@ -4075,6 +4077,11 @@ def attempt(
     verify_output = ""
     evidence_result_text = ""
     parsed_evidence: dict[str, object] | None = None
+    readonly_baseline: readonly_snapshot.TreeSnapshot | None = None
+    readonly_comparison: readonly_snapshot.SnapshotComparison | None = None
+    readonly_snapshot_fallback = False
+    skip_handover = False
+    handover_ready = False
     failure_stage = "setup"
     try:
         work_root.mkdir(mode=0o700, exist_ok=True)
@@ -4082,12 +4089,22 @@ def attempt(
         # 이 try 안에서 회수되어, 두 번째 디렉터리를 만들기 전의 틈도 남지 않는다.
         workspace = create_registered_workspace(f"spec-{name}-", work_root, registry, out_dir)
         handover = create_registered_workspace(f"spec-{name}-", work_root, registry, out_dir)
-        record["workspace"] = str(handover)
+        record["workspace"] = str(handover) if handover is not None else None
         # 패치 이름에 무작위 접미사를 물려 준다. 고정 이름이면 과제를 20개 재는
         # 동안 out_dir/cheap.patch 를 계속 덮어써 마지막 하나만 남고, 그 20개를
         # 재는 것이 이 스크립트의 목적이다.
-        patch = out_dir / f"{handover.name}.patch"
+        if handover is not None:
+            patch = out_dir / f"{handover.name}.patch"
         clone_at(repo, commit, workspace)
+        if workflow != "implementation":
+            try:
+                readonly_baseline = readonly_snapshot.snapshot_tree(workspace)
+            except readonly_snapshot.SnapshotError:
+                # A platform without the required descriptor primitives, an
+                # over-limit tree, or a raced snapshot is not evidence of a
+                # clean tree.  The existing handover path remains the safe
+                # compatibility fallback.
+                readonly_snapshot_fallback = True
         # attempt 는 stdout 을 쓰지 않는다. 과제 내용과 자식이 쓴 텍스트가
         # 로그로 새지 않게 여기서 버린다.
         failure_stage = "execution"
@@ -4123,22 +4140,73 @@ def attempt(
                     record["error"] = "read-only route returned an invalid result"
                     record["failure_kind"] = "route"
                     record["failure_stage"] = "result"
-        # 자식의 작업을 자식이 손댄 적 없는 클론으로 옮긴 뒤, 패치와 검증을
-        # 모두 그 트리에서 한다. 검증한 것과 건네는 것이 같아야 하고, 자식이
-        # 오염시킨 .git 위에서는 git 도 검증 스크립트도 돌리지 않는다.
+        # Read-only routes can compare the parent-owned snapshot directly.
+        # The comparison includes every non-.git path, including ignored and
+        # known agent-scaffolding names.  No Git command or child-owned .git
+        # metadata is consulted after the child exits.
         failure_stage = "handover"
-        build_scaffolding = build_handover_tree(repo, commit, workspace, handover, scaffolding)
-        # 패치는 검증 **전에** 뜬다. 검증은 테스트를 돌리므로 __pycache__,
-        # 커버리지 파일, 빌드 산출물을 남기고, 나중에 뜨면 그것들이 패치에
-        # 섞여 들어가 적용이 깨진다.
-        record["excluded_scaffolding"] = build_scaffolding
-        patch_bytes, dropped = make_patch(handover)
-        record["patch_lines"] = patch_bytes.count(b"\n")
-        # 경로명 자체를 남기지 않는다. 파일 이름은 에이전트가 짓고, 거기에
-        # 태스크 내용이나 자격증명을 실을 수 있다. 이 스크립트가 내건 계약은
-        # 결과와 수치만 기록한다는 것이므로 개수만 남긴다.
-        record["dropped_ignored"] = len(dropped)
-        record["made_changes"] = record["patch_lines"] > 0
+        if (
+            workflow != "implementation"
+            and readonly_baseline is not None
+            and not readonly_snapshot_fallback
+        ):
+            try:
+                readonly_comparison = readonly_snapshot.compare_tree(
+                    workspace, readonly_baseline, scaffolding
+                )
+            except readonly_snapshot.SnapshotRejected:
+                readonly_comparison = readonly_snapshot.SnapshotComparison(True, 1, ())
+            except readonly_snapshot.SnapshotUnsupported:
+                readonly_snapshot_fallback = True
+            if readonly_comparison is not None:
+                build_scaffolding = list(readonly_comparison.scaffolding)
+                record["excluded_scaffolding"] = build_scaffolding
+                record["dropped_ignored"] = 0
+                record["made_changes"] = readonly_comparison.changed and not bool(
+                    readonly_comparison.scaffolding
+                )
+                if readonly_comparison.changed:
+                    record["error"] = (
+                        "read-only route created excluded repository content"
+                        if readonly_comparison.scaffolding
+                        else "read-only route changed the repository"
+                    )
+                    record["failure_kind"] = "route"
+                    record["failure_stage"] = "handover"
+
+        # A snapshot failure is an infrastructure limitation, not permission
+        # to accept the child tree.  The existing clean clone handover remains
+        # the safe compatibility fallback.  If execution/result already
+        # failed, or the snapshot found a mutation, acceptance is impossible;
+        # skip the second clone and verifier entirely.
+        skip_handover = (
+            workflow != "implementation"
+            and not readonly_snapshot_fallback
+            and (
+                child_execution_failed
+                or record.get("error") is not None
+                or bool(readonly_comparison and readonly_comparison.changed)
+            )
+        )
+        if not skip_handover:
+            build_scaffolding = build_handover_tree(repo, commit, workspace, handover, scaffolding)
+            handover_ready = True
+            # 패치는 검증 **전에** 뜬다. 검증은 테스트를 돌리므로 __pycache__,
+            # 커버리지 파일, 빌드 산출물을 남기고, 나중에 뜨면 그것들이 패치에
+            # 섞여 들어가 적용이 깨진다.
+            record["excluded_scaffolding"] = build_scaffolding
+            patch_bytes, dropped = make_patch(handover)
+            record["patch_lines"] = patch_bytes.count(b"\n")
+            # 경로명 자체를 남기지 않는다. 파일 이름은 에이전트가 짓고, 거기에
+            # 태스크 내용이나 자격증명을 실을 수 있다. 이 스크립트가 내건 계약은
+            # 결과와 수치만 기록한다는 것이므로 개수만 남긴다.
+            record["dropped_ignored"] = len(dropped)
+            record["made_changes"] = record["patch_lines"] > 0
+        elif workflow != "implementation":
+            # There is no patch when a read-only route is rejected before its
+            # clean handover is built.
+            patch_bytes = b""
+            record["patch_lines"] = 0
         if workflow == "implementation" and child_execution_failed and not record["made_changes"]:
             record["error"] = (
                 "route_execution_timed_out"
@@ -4175,6 +4243,9 @@ def attempt(
                 else:
                     record["verify"], verify_output = run_verify(verify, handover, verify_home)
             elif record.get("error") is None and parsed_evidence is not None:
+                # Every repository-aware verifier runs in a parent-owned
+                # handover. The child workspace is never used as verifier cwd.
+                assert handover is not None and handover_ready
                 record["verify"], verify_output = run_evidence_verify(
                     verify,
                     handover,
@@ -4217,7 +4288,7 @@ def attempt(
         # 생기고 그것은 패치에 없다. 인덱스에는 방금 스테이징한 에이전트의
         # 작업이 들어 있으므로, 작업 트리와 인덱스를 비교하면 정확히 그
         # 질문에 답한다. 새로 생긴 미추적 파일은 여기 잡히지 않는다.
-        if not tracked_files_unchanged(handover):
+        if handover_ready and handover is not None and not tracked_files_unchanged(handover):
             record["verify"]["passed"] = False
             record["error"] = "verification modified the patched files; patch no longer matches"
             record["failure_kind"] = "route"
@@ -4267,11 +4338,12 @@ def attempt(
             and record.get("error") is None
         )
     if record["accepted"]:
-        assert handover is not None and patch is not None
         if workflow != "implementation":
-            discard(registry, handover, out_dir)
+            if handover is not None:
+                discard(registry, handover, out_dir)
             record["workspace"] = None
             return record, verify_output, evidence_result_text.encode("utf-8")
+        assert handover is not None and patch is not None
         # 검증을 통과한 뒤에야 디스크에 쓴다. 여기서 실패해도 이 함수의 계약은
         # 지켜야 한다 — 무슨 일이 있어도 판정을 남기고 정상 반환한다.
         try:
