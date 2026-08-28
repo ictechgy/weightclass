@@ -147,8 +147,18 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   schema-2 custom dispatch requires explicit provider-egress confirmation, and
   multi-vendor consult NDJSON is emitted in completion order. Core `wclass`
   routing and its one-child contract are unchanged.
-- **Post-0.19.0 performance and evidence hardening is merged but not yet
-  released.** PR #127 (`e5e8865`) lazy-loads core/advisory command families,
+- **`weightclass 0.20.0` is published on PyPI and Homebrew.** Implementation
+  PRs #127-#129, release PR #131, source-formula PR #132, and tap PR
+  `ictechgy/homebrew-tap#28` are merged. Release run `33166192142` passed the
+  immutable Python 3.13 build, macOS 3.10/3.14 boundaries, Python 3.10/3.14
+  candidate validation, explicit PyPI environment approval, and exact trusted
+  publication. The user-level uv tool and Homebrew source install both report
+  0.20.0, `brew test` passes, and exact 0.19.0 Codex/Claude skills upgraded to
+  managed onboarding 14. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/ec/d5/e968d6fdfa7b7cf722de1793e77ecd7e8e83edb5b8bfceef2c692c62d55a/weightclass-0.20.0.tar.gz`
+  - sha256: `f56d135948e7f075943f9d87a90354556b310f5bcd4f631e677775d133857c4e`
+- **0.20.0 performance and evidence hardening.** PR #127 (`e5e8865`)
+  lazy-loads core/advisory command families,
   streams bounded lane-capacity validation without full record copies, scopes
   custom consult conformance to the selected role, and runs distinct executable
   identities under a fixed four-group provider-check ceiling. Interleaved local
@@ -180,9 +190,8 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 - Current merged-source gates pass 1,408 unittest tests with 28 skips, Ruff and
   formatting over 179 files, and strict mypy over 175 source files. Each of PRs
   #127-#129 passed Linux Python 3.10-3.14, macOS Python 3.10/3.14, lint, typing,
-  and package-build CI. None of these commits changes the published 0.19.0
-  artifacts or the locally installed 0.19.0 tools; a future release must use a
-  new version and the normal immutable release/formula/skill-upgrade process.
+  and package-build CI. Release validation additionally exercised installed
+  `migrate-gate` and `campaign-gate` on Python 3.10 and 3.14.
 - Release 0.17.8 adds a
   task-free local `cli-check`, installed-CLI status to `doctor`, a separately
   confirmed and non-persisted `provider-check`, and task-before-inspection
