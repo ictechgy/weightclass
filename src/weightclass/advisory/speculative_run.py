@@ -3559,25 +3559,53 @@ def discard_relocated(
     work_root: Path,
     out_dir: Path,
 ) -> None:
-    """Clean a directly renamed workspace and its replacement without following links."""
+    """Restore a bounded relocated workspace, then use the normal safe deletion path."""
 
+    relocated: Path | None = None
     if expected_identity is not None:
         relocated = readonly_snapshot.find_child_root(work_root, expected_identity)
-        if relocated is not None and relocated != workspace:
-            try:
-                register(registry, relocated, add=True)
-            except OSError:
-                emit_safe_diagnostic("workspace_registry_update_failed")
-            discard(registry, relocated, out_dir)
     try:
         metadata = workspace.lstat()
     except FileNotFoundError:
+        metadata = None
+    except OSError:
+        return
+    if relocated is not None and relocated != workspace:
+        assert expected_identity is not None
+        if metadata is not None:
+            if stat.S_ISDIR(metadata.st_mode):
+                discard(registry, workspace, out_dir)
+            elif workspace.parent == work_root:
+                try:
+                    workspace.unlink()
+                except OSError:
+                    emit_safe_diagnostic("workspace_cleanup_failed")
+                    return
+            else:
+                return
+        relocated_parent = relocated.parent
+        if not readonly_snapshot.same_root(relocated, expected_identity):
+            return
+        try:
+            relocated.rename(workspace)
+        except OSError:
+            with contextlib.suppress(OSError):
+                register(registry, relocated, add=True)
+            emit_safe_diagnostic("workspace_cleanup_failed")
+            return
+        while relocated_parent != work_root:
+            try:
+                relocated_parent.rmdir()
+            except OSError:
+                break
+            relocated_parent = relocated_parent.parent
+        discard(registry, workspace, out_dir)
+        return
+    if metadata is None:
         try:
             register(registry, workspace, add=False)
         except OSError:
             emit_safe_diagnostic("workspace_registry_update_failed")
-        return
-    except OSError:
         return
     if stat.S_ISLNK(metadata.st_mode) and workspace.parent == work_root:
         try:

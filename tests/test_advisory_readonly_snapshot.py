@@ -447,7 +447,8 @@ class ReadonlyClonePathTests(unittest.TestCase):
             verify.chmod(0o700)
             child = (
                 "import json,pathlib,sys;sys.stdin.read();"
-                "cwd=pathlib.Path.cwd();moved=cwd.with_name(cwd.name+'-moved');"
+                "cwd=pathlib.Path.cwd();quarantine=cwd.parent/'quarantine';quarantine.mkdir();"
+                "moved=quarantine/cwd.name;"
                 "cwd.rename(moved);cwd.symlink_to(pathlib.Path(sys.argv[1]),target_is_directory=True);"
                 f"print(json.dumps({review_result()!r}))"
             )

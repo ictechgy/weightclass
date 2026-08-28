@@ -130,22 +130,36 @@ def same_root(root: Path, expected: tuple[int, int]) -> bool:
 
 
 def find_child_root(parent: Path, expected: tuple[int, int]) -> Path | None:
-    """Find a directly renamed real directory without following child paths."""
+    """Find one bounded relocated directory without following child links."""
 
     try:
-        names = os.listdir(parent)
-    except (OSError, ValueError):
+        parent_device = parent.lstat().st_dev
+    except OSError:
         return None
-    if len(names) > MAX_SNAPSHOT_ENTRIES:
-        return None
-    for name in names:
-        candidate = parent / name
+    pending: list[tuple[Path, int]] = [(parent, 0)]
+    visited = 0
+    while pending:
+        selected, depth = pending.pop()
+        if depth > MAX_SNAPSHOT_DEPTH:
+            return None
         try:
-            metadata = candidate.lstat()
-        except OSError:
-            continue
-        if stat.S_ISDIR(metadata.st_mode) and (metadata.st_dev, metadata.st_ino) == expected:
-            return candidate
+            children = tuple(os.scandir(selected))
+        except (OSError, ValueError):
+            return None
+        for child in children:
+            visited += 1
+            if visited > MAX_SNAPSHOT_ENTRIES:
+                return None
+            try:
+                metadata = child.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if not stat.S_ISDIR(metadata.st_mode) or metadata.st_dev != parent_device:
+                continue
+            candidate = Path(child.path)
+            if (metadata.st_dev, metadata.st_ino) == expected:
+                return candidate
+            pending.append((candidate, depth + 1))
     return None
 
 

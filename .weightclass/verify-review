@@ -41,13 +41,13 @@ SEEDS = {
         frozenset({"info", "low", "medium"}),
     ),
     "[seed:verification-classification]": (
-        "src/weightclass/advisory/speculative_run.py:4319",
+        "src/weightclass/advisory/speculative_run.py:4347",
         "failure_kind",
         frozenset({"reportable", "suppressed", "deferred"}),
         frozenset({"info", "low", "medium"}),
     ),
     "[seed:measurement-compatibility]": (
-        "src/weightclass/advisory/speculative_run.py:4415",
+        "src/weightclass/advisory/speculative_run.py:4443",
         "emit_failure_receipt",
         frozenset({"reportable", "suppressed", "deferred"}),
         frozenset({"info", "low", "medium"}),
