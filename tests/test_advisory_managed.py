@@ -546,6 +546,99 @@ class ManagedAdvisoryInitializationTests(unittest.TestCase):
 
 
 class ManagedAdvisoryOperationTests(unittest.TestCase):
+    def test_status_filters_one_vendor_and_workflow_without_touching_other_populations(
+        self,
+    ) -> None:
+        captured: list[str] = []
+
+        def portfolio() -> int:
+            captured.extend(sys.argv)
+            return 0
+
+        with (
+            mock.patch.object(managed_advisory, "_root", return_value=Path("/state")),
+            mock.patch.object(
+                managed_advisory,
+                "_selected_vendors",
+                return_value=("claude",),
+            ),
+            mock.patch(
+                "weightclass.advisory.managed_advisory.advisory_portfolio.main",
+                side_effect=portfolio,
+            ),
+        ):
+            code = managed_advisory.status_main(["--vendor", "claude", "--workflow", "design"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(captured.count("--campaign"), 1)
+        self.assertIn("claude", captured)
+        self.assertIn("design", captured)
+        self.assertNotIn("codex", captured)
+        self.assertNotIn("research", captured)
+
+    def test_campaign_gate_requires_bound_minimums_and_never_authorizes_policy(self) -> None:
+        selected = managed_advisory.CampaignPaths(
+            Path("/state/profile"),
+            Path("/state/prices"),
+            Path("/state/campaign"),
+            Path("/state/results"),
+        )
+        manifest = {
+            "planned_tasks": 60,
+            "minimum_advised_failures": 12,
+            "max_tasks": 150,
+        }
+        routes = advisory_routes.AdvisoryRoutes(("vendor",), ("vendor",), ("vendor",))
+        records = [
+            {
+                "cheap": {"accepted": True},
+                "advice_failure": {} if index < 12 else None,
+                "retry": None,
+                "expensive": None,
+            }
+            for index in range(60)
+        ]
+        progress = mock.Mock(
+            decision_eligible=True,
+            reason="minimums_met",
+        )
+        with (
+            mock.patch.object(
+                managed_advisory,
+                "_configuration",
+                return_value=(selected, manifest, routes),
+            ),
+            mock.patch.object(
+                advisory_campaign,
+                "load_merged_lane_records",
+                return_value=records,
+            ),
+            mock.patch.object(
+                advisory_campaign,
+                "campaign_progress",
+                return_value=progress,
+            ),
+        ):
+            receipt = managed_advisory.campaign_gate(
+                Path("/state"),
+                vendor="claude",
+                workflow="design",
+                metric="cheap_acceptance",
+                target_rate_bps=5_000,
+                alpha_bps=500,
+            )
+
+        self.assertEqual(receipt["decision"], "eligible_for_human_review")
+        self.assertEqual(receipt["statistical_signal"], "signal_above_target")
+        self.assertEqual(receipt["evidence_origin"], "sealed_campaign")
+        self.assertTrue(receipt["campaign_bound"])
+        self.assertTrue(receipt["promotion_eligible"])
+        self.assertFalse(receipt["policy_decision_allowed"])
+        self.assertFalse(receipt["core_routing_changed"])
+        rendered = json.dumps(receipt, sort_keys=True)
+        self.assertNotIn("/state", rendered)
+        self.assertNotIn("fingerprint", rendered)
+
     def test_consult_route_review_does_not_require_campaign_records(self) -> None:
         selected = managed_advisory.CampaignPaths(
             Path("/state/profile"),
@@ -565,7 +658,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                 managed_advisory,
                 "_consult_configuration",
                 return_value=managed_advisory.ConsultConfiguration(
-                    selected, routes, False, profile_sha256, route_sha256
+                    selected, routes, True, profile_sha256, route_sha256
                 ),
             ) as consult_configuration,
             mock.patch.object(
@@ -586,6 +679,12 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
         assert isinstance(reviewed, list) and isinstance(reviewed[0], dict)
         self.assertEqual(reviewed[0]["profile_sha256"], profile_sha256)
         self.assertEqual(reviewed[0]["route_sha256"], route_sha256)
+        self.assertEqual(
+            reviewed[0]["provider_contract"],
+            "custom_exact_argv_unverified_containment",
+        )
+        self.assertFalse(reviewed[0]["host_filesystem_isolated"])
+        self.assertEqual(reviewed[0]["repository_write_enforcement"], "post_run_check_only")
         rendered_routes = reviewed[0]["routes"]
         assert isinstance(rendered_routes, dict)
         self.assertEqual(rendered_routes["cheap"], ["vendor", "--cheap"])
@@ -813,6 +912,85 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             ("codex", "cheap", "executable_missing"),
         )
 
+    def test_custom_dispatch_requires_and_runs_provider_conformance_before_task(self) -> None:
+        selected = managed_advisory.CampaignPaths(
+            Path("/state/profile"),
+            Path("/state/prices"),
+            Path("/state/campaign"),
+            Path("/state/results"),
+        )
+        routes = advisory_routes.AdvisoryRoutes(("custom",), ("custom",), ("custom",))
+        configuration: tuple[
+            managed_advisory.CampaignPaths,
+            dict[str, object],
+            advisory_routes.AdvisoryRoutes,
+        ] = (selected, {}, routes)
+        with (
+            mock.patch.object(
+                managed_advisory,
+                "_configuration",
+                return_value=configuration,
+            ),
+            mock.patch.object(managed_advisory, "_require_route_capabilities"),
+            mock.patch.object(
+                managed_advisory,
+                "_profile_from_path",
+                return_value={"schema_version": 2},
+            ),
+            mock.patch.object(
+                managed_advisory,
+                "_preflight_task_file",
+                side_effect=AssertionError("task inspected"),
+            ),
+            self.assertRaises(managed_advisory.ProviderConfirmationRequiredError),
+        ):
+            managed_advisory.dispatch(
+                Path("/state"),
+                repo=Path("/repo"),
+                task_file=Path("/task"),
+                vendors=("custom",),
+                workflow="design",
+                confirm_task_egress=True,
+            )
+
+        events: list[str] = []
+
+        def provider(*args: object, **kwargs: object) -> dict[str, object]:
+            events.append("provider")
+            return {"ready": True}
+
+        def task(_path: Path) -> None:
+            events.append("task")
+            raise managed_advisory.ManagedPreflightError("managed_task_input_rejected")
+
+        with (
+            mock.patch.object(
+                managed_advisory,
+                "_configuration",
+                return_value=configuration,
+            ),
+            mock.patch.object(managed_advisory, "_require_route_capabilities"),
+            mock.patch.object(
+                managed_advisory,
+                "_profile_from_path",
+                return_value={"schema_version": 2},
+            ),
+            mock.patch.object(managed_advisory, "provider_check", side_effect=provider),
+            mock.patch.object(managed_advisory, "_preflight_task_file", side_effect=task),
+            self.assertRaises(managed_advisory.ManagedPreflightError),
+        ):
+            managed_advisory.dispatch(
+                Path("/state"),
+                repo=Path("/repo"),
+                task_file=Path("/task"),
+                vendors=("custom",),
+                workflow="design",
+                confirm_task_egress=True,
+                confirm_provider_egress=True,
+            )
+
+        self.assertEqual(events, ["provider", "task"])
+
     def test_provider_check_is_task_free_and_never_records_a_campaign_sample(self) -> None:
         routes = advisory_routes.AdvisoryRoutes(("fake",), ("fake",), ("fake",))
         selected = managed_advisory.CampaignPaths(
@@ -982,6 +1160,11 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                     side_effect=complete_jobs,
                 ),
                 mock.patch.object(managed_advisory, "_require_route_capabilities"),
+                mock.patch.object(
+                    managed_advisory,
+                    "provider_check",
+                    return_value={"ready": True},
+                ),
             ):
                 code = managed_advisory.dispatch(
                     state_root,
@@ -990,6 +1173,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                     vendors=("vendor-a", "vendor-b"),
                     workflow="implementation",
                     confirm_task_egress=True,
+                    confirm_provider_egress=True,
                 )
 
             self.assertEqual(code, 0)

@@ -226,13 +226,12 @@ def analyze_sequential(
         raise ExperimentInputError()
     successes = sum(outcomes)
     interval = _confidence_sequence(successes, len(outcomes), alpha_bps)
-    assert interval is not None
     decision = "continue"
-    if len(outcomes) >= minimum_samples:
+    if interval is not None and len(outcomes) >= minimum_samples:
         if interval["lower_bps"] >= target_rate_bps:
-            decision = "promote"
+            decision = "signal_above_target"
         elif interval["upper_bps"] < target_rate_bps:
-            decision = "reject"
+            decision = "signal_below_target"
         elif len(outcomes) == maximum_samples:
             decision = "capacity_reached"
     return {
@@ -248,6 +247,9 @@ def analyze_sequential(
         "minimum_samples": minimum_samples,
         "maximum_samples": maximum_samples,
         "decision": decision,
+        "evidence_origin": "caller_jsonl",
+        "promotion_eligible": False,
+        "policy_decision_allowed": False,
         "core_routing_changed": False,
     }
 

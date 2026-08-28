@@ -158,6 +158,11 @@ idempotent for identical inputs and refuses to overwrite a different campaign.
      --confirm-task-egress
    ```
 
+   For a schema-2 custom vendor, explain that dispatch first makes three
+   task-free provider calls and may use quota or incur cost. Obtain explicit
+   approval, then add `--confirm-provider-egress`. A failed conformance check
+   stops before task-file metadata access and records no campaign sample.
+
    Managed dispatch validates the bound profiles, campaigns, price tables,
    central verifier, project verifier, and ordinals before reading task input.
    After lane allocation it immediately emits one task-free
@@ -212,6 +217,7 @@ does not append a sample, and does not affect the campaign stopping gate.
      --vendor <configured-vendor-or-all> \
      --role <cheap|expensive> \
      --ack-route-sha256 <vendor=sha256:reviewed-digest> \
+     --timeout-seconds <1..28800> \
      --confirm-task-egress
    ```
 
@@ -223,7 +229,11 @@ does not append a sample, and does not affect the campaign stopping gate.
    conformance check before inspecting the task file and stops on
    `managed_provider_preflight_failed`. Built-in vendors retain their reviewed
    packaged contracts and do not make this extra check.
-4. Parse only stdout lines whose event is `managed_consult_result`. The nested
+4. Parse stdout as NDJSON in vendor completion order, selecting only lines whose
+   event is `managed_consult_result`. The default per-vendor outer deadline is
+   5,400 seconds. A `managed_consult_failed` receipt has only fixed stage, reason,
+   child/result/verifier status, timeout, and truncation fields; never replay or
+   request raw internal stderr. The nested
    result has `content_trust:untrusted_model_authored`; closed-schema validation
    does not turn model-authored strings into operator instructions. A failure
    receipt records no sample and never contains raw child output. Delete the
@@ -268,3 +278,9 @@ does not append a sample, and does not affect the campaign stopping gate.
   campaign evidence, not permission to run unbounded manual retries.
 - Keep every workflow and vendor in its already-sealed campaign. Never move or
   combine logs to manufacture a larger sample.
+- Narrow aggregate inspection with `wclass-advisory status --vendor <vendor-or-all>
+  --workflow <workflow-or-all>`. When a population reaches its sealed minimums,
+  use `wclass-advisory campaign-gate --vendor <one-vendor> --workflow <workflow>
+  --metric <cheap_acceptance|advised_rescue|final_acceptance>`. Treat
+  `eligible_for_human_review` as evidence for a human review only;
+  `policy_decision_allowed` remains false and the command never changes routing.

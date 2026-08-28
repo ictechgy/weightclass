@@ -63,6 +63,10 @@ wclass-advisory dispatch \
   --confirm-task-egress
 ```
 
+For a schema-2 custom vendor, add `--confirm-provider-egress` only after
+approving three task-free provider calls that may use quota or incur cost. The
+check completes before task-file metadata inspection and records no sample.
+
 For an isolated answer that must not become campaign evidence, use `consult`
 with a read-only workflow (`review`, `research`, `diagnosis`, or `design`):
 
@@ -84,6 +88,10 @@ It prints their exact argv, profile digest, and workflow-specific
 `route_sha256`; supply one `--ack-route-sha256 VENDOR=sha256:...` per selected vendor. Provider
 conformance and the task-consuming child both recheck that same digest before
 task access.
+Add `--timeout-seconds N` to override the 5,400-second per-vendor consult
+deadline; valid values are 1 through 28,800. Multi-vendor results are NDJSON in
+completion order. Failure output is a closed stage/reason receipt rather than
+replayed internal stderr.
 
 `doctor`, `cli-check`, and `review` are task-free. `doctor` locally invokes
 installed CLI `--help`/`--version` with a minimal environment and temporary
@@ -119,7 +127,11 @@ fields, presence booleans, and result shape. It never writes provider output or
 a campaign sample. A failed check therefore cannot contaminate effectiveness
 or cost evidence.
 
-Use `wclass-advisory status` for aggregate readiness and evidence. Use
+Use `wclass-advisory status --vendor VENDOR_OR_ALL --workflow WORKFLOW_OR_ALL`
+for filtered aggregate readiness and evidence. A single sealed population can
+be evaluated with `wclass-advisory campaign-gate --vendor VENDOR --workflow
+WORKFLOW --metric cheap_acceptance`; even an eligible result remains a human
+review input with `policy_decision_allowed:false`. Use
 `wclass-advisory cleanup` only to prune registered disposable workspaces; it
 does not remove profiles, sealed campaigns, or aggregate records. Cleanup
 locks and cleans each inactive lane independently, skips active lanes, and

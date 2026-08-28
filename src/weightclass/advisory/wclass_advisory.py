@@ -152,6 +152,7 @@ def _top_parser() -> argparse.ArgumentParser:
             "consult",
             "dispatch",
             "status",
+            "campaign-gate",
             "cleanup",
             "run",
             "prune",
@@ -244,6 +245,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return managed_advisory.dispatch_main(arguments[1:])
     if command == "status":
         return managed_advisory.status_main(arguments[1:])
+    if command == "campaign-gate":
+        return managed_advisory.campaign_gate_main(arguments[1:])
     if command == "cleanup":
         return managed_advisory.prune_main(arguments[1:])
     if command == "run":

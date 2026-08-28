@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
@@ -43,6 +44,79 @@ def custom_profile(command: list[str]) -> dict[str, object]:
 
 
 class AdvisoryConsultTests(unittest.TestCase):
+    def test_managed_consult_emits_verified_results_in_completion_order(self) -> None:
+        routes = advisory_routes.AdvisoryRoutes(("vendor",), ("vendor",), ("vendor",))
+        configurations = {
+            vendor: managed_advisory.ConsultConfiguration(
+                managed_advisory.CampaignPaths(
+                    Path(f"/state/{vendor}-profile"),
+                    Path("/state/prices"),
+                    Path("/state/campaign"),
+                    Path("/state/results"),
+                ),
+                routes,
+                False,
+                "sha256:" + digit * 64,
+                "sha256:" + digit * 64,
+            )
+            for vendor, digit in (("codex", "1"), ("claude", "2"))
+        }
+        result_payload = json.dumps(research_result(), separators=(",", ":")).encode("utf-8")
+
+        def run(
+            jobs: tuple[advisory_parallel.AdvisoryJob, ...],
+            *,
+            progress: advisory_parallel.ProgressCallback | None = None,
+            result_callback: advisory_parallel.ResultCallback | None = None,
+            heartbeat_seconds: float = advisory_parallel.DEFAULT_HEARTBEAT_SECONDS,
+        ) -> tuple[advisory_parallel.AdvisoryResult, ...]:
+            self.assertGreater(heartbeat_seconds, 0)
+            self.assertEqual([job.timeout_seconds for job in jobs], [123.0, 123.0])
+            results = tuple(
+                advisory_parallel.AdvisoryResult(job.label, 0, result_payload, b"", True)
+                for job in jobs
+            )
+            assert result_callback is not None
+            result_callback(results[1])
+            result_callback(results[0])
+            return results
+
+        stdout = mock.Mock(buffer=io.BytesIO())
+        stderr = mock.Mock(buffer=io.BytesIO())
+        with (
+            mock.patch.object(
+                managed_advisory,
+                "_consult_configuration",
+                side_effect=lambda _root, vendor, _workflow: configurations[vendor],
+            ),
+            mock.patch.object(managed_advisory, "_require_consult_capabilities"),
+            mock.patch.object(managed_advisory, "_preflight_task_file"),
+            mock.patch.object(managed_advisory, "_private_regular"),
+            mock.patch.object(managed_advisory, "_preflight_repo"),
+            mock.patch.object(advisory_parallel, "run_parallel", side_effect=run),
+            mock.patch("sys.stdout", stdout),
+            mock.patch("sys.stderr", stderr),
+        ):
+            code = managed_advisory.consult(
+                Path("/state"),
+                repo=Path("/repo"),
+                task_file=Path("/task"),
+                vendors=("codex", "claude"),
+                workflow="research",
+                role="cheap",
+                acknowledged_route_sha256={
+                    vendor: configuration.route_sha256
+                    for vendor, configuration in configurations.items()
+                },
+                confirm_task_egress=True,
+                confirm_provider_egress=False,
+                timeout_seconds=123,
+            )
+
+        self.assertEqual(code, 0)
+        receipts = [json.loads(line) for line in stdout.buffer.getvalue().splitlines()]
+        self.assertEqual([receipt["vendor"] for receipt in receipts], ["claude", "codex"])
+
     def test_managed_consult_bootstrap_rejects_cwd_module_shadowing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -75,8 +149,31 @@ class AdvisoryConsultTests(unittest.TestCase):
             shadow_imported = marker.exists()
 
         self.assertEqual(job.command[1], "-I")
+        self.assertEqual(job.timeout_seconds, managed_advisory.CONSULT_DEFAULT_TIMEOUT_SECONDS)
         self.assertEqual(completed.returncode, 2, completed.stderr)
         self.assertFalse(shadow_imported)
+
+    def test_consult_timeout_is_validated_before_configuration_or_task_access(self) -> None:
+        with (
+            mock.patch.object(
+                managed_advisory,
+                "_consult_configuration",
+                side_effect=AssertionError("configuration inspected"),
+            ),
+            self.assertRaisesRegex(managed_advisory.ManagedAdvisoryError, "^$"),
+        ):
+            managed_advisory.consult(
+                Path("/state"),
+                repo=Path("/repo"),
+                task_file=Path("/task"),
+                vendors=("custom",),
+                workflow="research",
+                role="cheap",
+                acknowledged_route_sha256={"custom": "sha256:" + "1" * 64},
+                confirm_task_egress=True,
+                confirm_provider_egress=False,
+                timeout_seconds=0,
+            )
 
     def test_internal_consult_rejects_profile_mismatch_before_task_access(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -120,6 +217,10 @@ class AdvisoryConsultTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 2)
         self.assertNotIn("PRIVATE-TASK-MUST-NOT-BE-OPENED", completed.stdout + completed.stderr)
+        diagnostics = [json.loads(line) for line in completed.stderr.splitlines() if line]
+        self.assertEqual(diagnostics[-1]["event"], "advisory_consult_failed")
+        self.assertEqual(diagnostics[-1]["failure_stage"], "configuration")
+        self.assertEqual(diagnostics[-1]["reason_code"], "route_digest_mismatch")
 
     def test_internal_consult_prints_only_canonical_json_and_records_no_sample(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -386,6 +487,41 @@ class AdvisoryConsultTests(unittest.TestCase):
             advisory_parallel.AdvisoryResult("grok", 1, b"PRIVATE", b"", True),
         )
         self.assertNotIn(b"PRIVATE", failed)
+        self.assertEqual(json.loads(failed)["reason_code"], "internal_diagnostic_unavailable")
+
+    def test_managed_consult_accepts_only_the_closed_internal_failure_receipt(self) -> None:
+        diagnostic = {
+            "schema_version": 1,
+            "event": "advisory_consult_failed",
+            "failure_stage": "verification",
+            "reason_code": "verification_rejected",
+            "child_exit_code": 0,
+            "child_timed_out": False,
+            "child_failure_code": "none",
+            "result_shape": "structured_output",
+            "verify_exit_code": 1,
+            "verify_timed_out": False,
+        }
+        payload = (
+            b"PRIVATE RAW PROVIDER STDERR\n"
+            + json.dumps(diagnostic, separators=(",", ":")).encode("utf-8")
+            + b"\n"
+        )
+
+        parsed = managed_advisory._consult_child_diagnostic(payload)
+
+        self.assertEqual(parsed, diagnostic)
+        receipt = managed_advisory._consult_failure_receipt(
+            "claude",
+            "design",
+            advisory_parallel.AdvisoryResult("claude", 1, b"", payload, True),
+            parsed,
+        )
+        self.assertNotIn(b"PRIVATE", receipt)
+        self.assertEqual(json.loads(receipt)["reason_code"], "verification_rejected")
+
+        poisoned = json.dumps({**diagnostic, "reason_code": "PRIVATE"}).encode("utf-8")
+        self.assertIsNone(managed_advisory._consult_child_diagnostic(poisoned))
 
 
 if __name__ == "__main__":

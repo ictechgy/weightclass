@@ -26,8 +26,21 @@ wclass-advisory experiment sequential --records outcomes.jsonl \
 
 Rates and error levels use basis points (`10000` = 100%). The analyzer uses a
 simultaneous Hoeffding interval with a summable error budget across looks. It
-returns `promote`, `reject`, `continue`, or `capacity_reached`; that label is an
-experiment result only and never changes production routing.
+returns `signal_above_target`, `signal_below_target`, `continue`, or
+`capacity_reached`. Caller JSONL always reports `promotion_eligible:false` and
+never changes production routing.
+
+For a sealed managed population, use the separate gate:
+
+```sh
+wclass-advisory campaign-gate --vendor codex --workflow design \
+  --metric cheap_acceptance --target-rate-bps 7500
+```
+
+It accepts exactly one vendor/workflow, validates the manifest and every lane
+binding, and derives outcomes without writing another record.
+`eligible_for_human_review` requires both campaign minimums and the statistical
+target. `policy_decision_allowed` and `core_routing_changed` remain false.
 
 ## Context Guard × advisory
 

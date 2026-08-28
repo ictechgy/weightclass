@@ -32,8 +32,11 @@ class AdvisoryExperimentTests(unittest.TestCase):
             maximum_samples=100,
         )
 
-        self.assertEqual(result["decision"], "promote")
+        self.assertEqual(result["decision"], "signal_above_target")
         self.assertEqual(result["method"], "simultaneous_hoeffding_union_bound")
+        self.assertEqual(result["evidence_origin"], "caller_jsonl")
+        self.assertFalse(result["promotion_eligible"])
+        self.assertFalse(result["policy_decision_allowed"])
         self.assertFalse(result["core_routing_changed"])
 
     def test_context_matrix_reports_the_descriptive_interaction_only_when_complete(self) -> None:

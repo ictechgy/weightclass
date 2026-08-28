@@ -52,6 +52,12 @@ class Weightclass < Formula
                  shell_output("#{bin}/wclass-advisory consult --help")
     assert_match "context-2x2",
                  shell_output("#{bin}/wclass-advisory experiment --help")
+    assert_match "campaign-gate",
+                 shell_output("#{bin}/wclass-advisory --help")
+    assert_match "--timeout-seconds",
+                 shell_output("#{bin}/wclass-advisory consult --help")
+    assert_match "--confirm-provider-egress",
+                 shell_output("#{bin}/wclass-advisory dispatch --help")
 
     # 잘못된 입력은 닫히는 방향으로 실패하고 태스크를 되비추지 않아야 한다.
     output = pipe_output("#{bin}/wclass classify 2>&1", "", 2)
