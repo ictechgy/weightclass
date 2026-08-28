@@ -24,6 +24,7 @@ if TYPE_CHECKING or __package__:
     from . import (
         advisory_campaign,
         advisory_evidence_contract,
+        advisory_experiments,
         advisory_orchestration,
         advisory_parallel,
         advisory_portfolio,
@@ -32,10 +33,17 @@ if TYPE_CHECKING or __package__:
         managed_verify,
         speculative_run,
     )
-    from .advisory_diagnostics import PROVIDER_CHECK_FAILURE_CODES
+    from .advisory_diagnostics import (
+        CHILD_FAILURE_CODES,
+        CONSULT_FAILURE_CODES,
+        CONSULT_FAILURE_STAGES,
+        PROVIDER_CHECK_FAILURE_CODES,
+        RESULT_SHAPES,
+    )
 else:
     import advisory_campaign  # type: ignore[import-not-found]
     import advisory_evidence_contract  # type: ignore[import-not-found]
+    import advisory_experiments  # type: ignore[import-not-found]
     import advisory_orchestration  # type: ignore[import-not-found]
     import advisory_parallel  # type: ignore[import-not-found]
     import advisory_portfolio  # type: ignore[import-not-found]
@@ -43,7 +51,13 @@ else:
     import advisory_routes  # type: ignore[import-not-found]
     import managed_verify  # type: ignore[import-not-found]
     import speculative_run  # type: ignore[import-not-found]
-    from advisory_diagnostics import PROVIDER_CHECK_FAILURE_CODES  # type: ignore[import-not-found]
+    from advisory_diagnostics import (  # type: ignore[import-not-found]
+        CHILD_FAILURE_CODES,
+        CONSULT_FAILURE_CODES,
+        CONSULT_FAILURE_STAGES,
+        PROVIDER_CHECK_FAILURE_CODES,
+        RESULT_SHAPES,
+    )
 
     try:
         from weightclass import __version__ as _PACKAGE_VERSION
@@ -74,6 +88,7 @@ MAX_PROFILE_BYTES = 131_072
 SETUP_LOCK_TIMEOUT = 2.0
 SETUP_LOCK_POLL_SECONDS = 0.02
 RUNNER_VERSION_CHANGED_EXIT = 78
+CONSULT_DEFAULT_TIMEOUT_SECONDS = 5_400.0
 _VENDOR = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _PROFILE_SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _RUNNER_BOOTSTRAP = """\
@@ -149,7 +164,7 @@ class ManagedPreflightError(RuntimeError):
 
 
 class ProviderConfirmationRequiredError(RuntimeError):
-    """A custom consult profile needs an explicit task-free provider check."""
+    """A custom provider route needs an explicit task-free provider check."""
 
 
 class ProviderConformanceError(RuntimeError):
@@ -168,6 +183,10 @@ class ProviderCapabilityError(ValueError):
         self.role = role
         self.code = code
         super().__init__(code)
+
+
+class ConsultDiagnosticError(ValueError):
+    """An internal consult diagnostic did not match the closed contract."""
 
 
 def _replay_output(stream: BinaryIO, payload: bytes) -> None:
@@ -980,7 +999,11 @@ def _require_route_capabilities(
 
 
 def _configuration(
-    state_root: Path, vendor: str, workflow: str
+    state_root: Path,
+    vendor: str,
+    workflow: str,
+    *,
+    validate_records: bool = True,
 ) -> tuple[CampaignPaths, advisory_campaign.CampaignManifest, advisory_routes.AdvisoryRoutes]:
     selected = campaign_paths(state_root, vendor, workflow)
     verifier = state_root / "verify-project.py"
@@ -1017,14 +1040,15 @@ def _configuration(
         )
     except (OSError, advisory_campaign.CampaignError, advisory_routes.AdvisoryRouteError) as error:
         raise ManagedAdvisoryError() from error
-    try:
-        advisory_campaign.load_merged_lane_records(
-            manifest,
-            selected.results,
-            advisory_campaign.ANONYMOUS_LANE_COUNT,
-        )
-    except advisory_campaign.CampaignError as error:
-        raise advisory_orchestration.CampaignRecordsInvalidError(error) from None
+    if validate_records:
+        try:
+            advisory_campaign.load_merged_lane_records(
+                manifest,
+                selected.results,
+                advisory_campaign.ANONYMOUS_LANE_COUNT,
+            )
+        except advisory_campaign.CampaignError as error:
+            raise advisory_orchestration.CampaignRecordsInvalidError(error) from None
     return selected, manifest, routes
 
 
@@ -1295,6 +1319,7 @@ def _consult_job(
     profile: Path,
     route_sha256: str,
     verifier: Path,
+    timeout_seconds: float = CONSULT_DEFAULT_TIMEOUT_SECONDS,
 ) -> advisory_parallel.AdvisoryJob:
     return advisory_parallel.AdvisoryJob(
         vendor,
@@ -1324,6 +1349,7 @@ def _consult_job(
             "--verify",
             str(verifier),
         ),
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -1340,14 +1366,114 @@ def _consult_result_receipt(vendor: str, workflow: str, result: Mapping[str, obj
     return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
+_CONSULT_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "schema_version",
+        "event",
+        "failure_stage",
+        "reason_code",
+        "child_exit_code",
+        "child_timed_out",
+        "child_failure_code",
+        "result_shape",
+        "verify_exit_code",
+        "verify_timed_out",
+    }
+)
+
+
+def _consult_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ConsultDiagnosticError()
+        result[key] = value
+    return result
+
+
+def _consult_exit_code(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not -255 <= value <= 255:
+        raise ConsultDiagnosticError()
+    return value
+
+
+def _consult_child_diagnostic(payload: bytes) -> dict[str, object] | None:
+    if not payload:
+        return None
+    selected: dict[str, object] | None = None
+    for raw_line in payload.splitlines():
+        if not raw_line or len(raw_line) > 4_096:
+            continue
+        try:
+            value = json.loads(
+                raw_line.decode("utf-8", errors="strict"),
+                object_pairs_hook=_consult_json_object,
+            )
+            if (
+                not isinstance(value, dict)
+                or set(value) != _CONSULT_DIAGNOSTIC_KEYS
+                or value["schema_version"] != 1
+                or isinstance(value["schema_version"], bool)
+                or value["event"] != "advisory_consult_failed"
+                or not isinstance(value["failure_stage"], str)
+                or value["failure_stage"] not in CONSULT_FAILURE_STAGES
+                or not isinstance(value["reason_code"], str)
+                or value["reason_code"] not in CONSULT_FAILURE_CODES
+                or not isinstance(value["child_failure_code"], str)
+                or value["child_failure_code"] not in CHILD_FAILURE_CODES
+                or not isinstance(value["result_shape"], str)
+                or value["result_shape"] not in RESULT_SHAPES
+                or not isinstance(value["child_timed_out"], bool)
+                or not isinstance(value["verify_timed_out"], bool)
+            ):
+                raise ConsultDiagnosticError()
+            value["child_exit_code"] = _consult_exit_code(value["child_exit_code"])
+            value["verify_exit_code"] = _consult_exit_code(value["verify_exit_code"])
+            selected = value
+        except (UnicodeError, ValueError, RecursionError):
+            continue
+    return selected
+
+
 def _consult_failure_receipt(
-    vendor: str, workflow: str, result: advisory_parallel.AdvisoryResult
+    vendor: str,
+    workflow: str,
+    result: advisory_parallel.AdvisoryResult,
+    diagnostic: Mapping[str, object] | None = None,
 ) -> bytes:
+    fallback_stage = "execution" if result.timed_out or not result.started else "unknown"
+    fallback_reason = (
+        "route_execution_failed"
+        if result.timed_out
+        else "internal_failure"
+        if not result.started
+        else "internal_diagnostic_unavailable"
+    )
+    detail = diagnostic or {
+        "failure_stage": fallback_stage,
+        "reason_code": fallback_reason,
+        "child_exit_code": None,
+        "child_timed_out": False,
+        "child_failure_code": "unknown",
+        "result_shape": "unknown",
+        "verify_exit_code": None,
+        "verify_timed_out": False,
+    }
     payload = {
         "schema_version": 1,
         "event": "managed_consult_failed",
         "vendor": vendor,
         "workflow": workflow,
+        "failure_stage": detail["failure_stage"],
+        "reason_code": detail["reason_code"],
+        "child_exit_code": detail["child_exit_code"],
+        "child_timed_out": detail["child_timed_out"],
+        "child_failure_code": detail["child_failure_code"],
+        "result_shape": detail["result_shape"],
+        "verify_exit_code": detail["verify_exit_code"],
+        "verify_timed_out": detail["verify_timed_out"],
         "returncode": result.returncode,
         "started": result.started,
         "timed_out": result.timed_out,
@@ -1368,10 +1494,17 @@ def consult(
     acknowledged_route_sha256: Mapping[str, str],
     confirm_task_egress: bool,
     confirm_provider_egress: bool,
+    timeout_seconds: float = CONSULT_DEFAULT_TIMEOUT_SECONDS,
 ) -> int:
     if not confirm_task_egress or not vendors or workflow not in EVIDENCE_WORKFLOWS:
         _fail()
     if role not in {"cheap", "expensive"}:
+        _fail()
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not 1 <= timeout_seconds <= advisory_parallel.MAX_TIMEOUT_SECONDS
+    ):
         _fail()
     configurations = {
         vendor: _consult_configuration(state_root, vendor, workflow) for vendor in vendors
@@ -1412,35 +1545,67 @@ def consult(
             configurations[vendor].paths.profile,
             configurations[vendor].route_sha256,
             verifier,
+            float(timeout_seconds),
         )
         for vendor in vendors
     )
+    outcomes: dict[str, int] = {}
+    runner_version_changed = False
+
+    def handle_result(result: advisory_parallel.AdvisoryResult) -> None:
+        nonlocal runner_version_changed
+        vendor = result.label
+        if vendor in outcomes or vendor not in configurations:
+            raise ValueError
+        diagnostic = _consult_child_diagnostic(result.stderr)
+        if result.returncode == RUNNER_VERSION_CHANGED_EXIT:
+            outcomes[vendor] = 1
+            runner_version_changed = True
+            return
+        if result.returncode != 0:
+            _replay_output(
+                sys.stderr.buffer,
+                _consult_failure_receipt(vendor, workflow, result, diagnostic),
+            )
+            outcomes[vendor] = 1
+            return
+        try:
+            rendered = result.stdout.decode("utf-8", errors="strict")
+            parsed = advisory_evidence_contract.parse_evidence_result(rendered, workflow)
+        except (UnicodeError, advisory_evidence_contract.EvidenceResultError):
+            result_diagnostic = diagnostic or {
+                "failure_stage": "result",
+                "reason_code": "route_result_rejected",
+                "child_exit_code": None,
+                "child_timed_out": False,
+                "child_failure_code": "result_contract",
+                "result_shape": "unknown",
+                "verify_exit_code": None,
+                "verify_timed_out": False,
+            }
+            _replay_output(
+                sys.stderr.buffer,
+                _consult_failure_receipt(vendor, workflow, result, result_diagnostic),
+            )
+            outcomes[vendor] = 1
+            return
+        _replay_output(sys.stdout.buffer, _consult_result_receipt(vendor, workflow, parsed))
+        outcomes[vendor] = 0
+
     results = advisory_parallel.run_parallel(
         jobs,
         progress=lambda vendor, event, elapsed: _replay_output(
             sys.stderr.buffer,
             _dispatch_progress_receipt(workflow, vendor, event, elapsed),
         ),
+        result_callback=handle_result,
     )
-    returncode = 0
-    for vendor, result in zip(vendors, results, strict=True):
-        if result.stderr:
-            _replay_output(sys.stderr.buffer, result.stderr)
-        if result.returncode == RUNNER_VERSION_CHANGED_EXIT:
-            raise RunnerVersionChangedError
-        if result.returncode != 0:
-            _replay_output(sys.stderr.buffer, _consult_failure_receipt(vendor, workflow, result))
-            returncode = 1
-            continue
-        try:
-            rendered = result.stdout.decode("utf-8", errors="strict")
-            parsed = advisory_evidence_contract.parse_evidence_result(rendered, workflow)
-        except (UnicodeError, advisory_evidence_contract.EvidenceResultError):
-            _replay_output(sys.stderr.buffer, _consult_failure_receipt(vendor, workflow, result))
-            returncode = 1
-            continue
-        _replay_output(sys.stdout.buffer, _consult_result_receipt(vendor, workflow, parsed))
-    return returncode
+    for result in results:
+        if result.label not in outcomes:
+            handle_result(result)
+    if runner_version_changed:
+        raise RunnerVersionChangedError
+    return 0 if outcomes and all(value == 0 for value in outcomes.values()) else 1
 
 
 def dispatch(
@@ -1451,6 +1616,7 @@ def dispatch(
     vendors: Sequence[str],
     workflow: str,
     confirm_task_egress: bool,
+    confirm_provider_egress: bool = False,
 ) -> int:
     if not confirm_task_egress:
         _fail()
@@ -1458,6 +1624,23 @@ def dispatch(
         _fail()
     configurations = {vendor: _configuration(state_root, vendor, workflow) for vendor in vendors}
     _require_route_capabilities(configurations)
+    custom_vendors = tuple(
+        vendor
+        for vendor, (paths, _, _) in configurations.items()
+        if _profile_from_path(paths.profile).get("schema_version") == 2
+    )
+    if custom_vendors:
+        if not confirm_provider_egress:
+            raise ProviderConfirmationRequiredError
+        readiness = provider_check(
+            state_root,
+            vendors=custom_vendors,
+            workflow=workflow,
+            confirm_provider_egress=True,
+            routes_by_vendor={vendor: configurations[vendor][2] for vendor in custom_vendors},
+        )
+        if readiness.get("ready") is not True:
+            raise ProviderConformanceError
     _preflight_task_file(task_file)
     verifier = state_root / "verify-project.py"
     _private_regular(verifier, executable=True)
@@ -1542,10 +1725,15 @@ def provider_check(
     confirm_provider_egress: bool,
     require_campaign: bool = True,
     expected_route_sha256: Mapping[str, str] | None = None,
+    routes_by_vendor: Mapping[str, advisory_routes.AdvisoryRoutes] | None = None,
 ) -> dict[str, object]:
     """Run task-free, non-persisted checks for all configured provider roles."""
 
     if not confirm_provider_egress or not vendors or workflow not in WORKFLOWS:
+        _fail()
+    if routes_by_vendor is not None and (
+        set(routes_by_vendor) != set(vendors) or expected_route_sha256 is not None
+    ):
         _fail()
     target_workflow = "review" if workflow == "implementation" else workflow
     expected = _baseline_probe(target_workflow)
@@ -1581,7 +1769,11 @@ def provider_check(
         if initialized.returncode != 0:
             _fail()
         for vendor in vendors:
-            if require_campaign:
+            if routes_by_vendor is not None:
+                routes = routes_by_vendor[vendor]
+                if not isinstance(routes, advisory_routes.AdvisoryRoutes):
+                    _fail()
+            elif require_campaign:
                 selected, _, _ = _configuration(state_root, vendor, workflow)
                 routes = advisory_routes.routes_from_profile(
                     selected.profile,
@@ -1675,6 +1867,113 @@ def provider_check(
     }
 
 
+CAMPAIGN_GATE_METRICS = ("cheap_acceptance", "advised_rescue", "final_acceptance")
+
+
+def _gate_attempt_accepted(value: object, *, optional: bool = False) -> bool:
+    if value is None and optional:
+        return False
+    if not isinstance(value, Mapping) or not isinstance(value.get("accepted"), bool):
+        _fail()
+    return value["accepted"] is True
+
+
+def _campaign_gate_outcomes(
+    records: Sequence[Mapping[str, object]], metric: str
+) -> list[dict[str, object]]:
+    outcomes: list[dict[str, object]] = []
+    for record in records:
+        cheap = record.get("cheap")
+        if not isinstance(cheap, Mapping):
+            _fail()
+        if cheap.get("failure_kind") == "infrastructure":
+            continue
+        cheap_accepted = _gate_attempt_accepted(cheap)
+        if metric == "cheap_acceptance":
+            accepted = cheap_accepted
+        elif metric == "advised_rescue":
+            if not isinstance(record.get("advice_failure"), Mapping):
+                continue
+            accepted = _gate_attempt_accepted(record.get("retry"), optional=True)
+        elif metric == "final_acceptance":
+            retry_accepted = _gate_attempt_accepted(record.get("retry"), optional=True)
+            expensive_accepted = _gate_attempt_accepted(record.get("expensive"), optional=True)
+            accepted = cheap_accepted or retry_accepted or expensive_accepted
+        else:
+            _fail()
+        outcomes.append({"schema_version": 1, "experiment": "sequential", "accepted": accepted})
+    return outcomes
+
+
+def campaign_gate(
+    state_root: Path,
+    *,
+    vendor: str,
+    workflow: str,
+    metric: str,
+    target_rate_bps: int,
+    alpha_bps: int,
+) -> dict[str, object]:
+    if metric not in CAMPAIGN_GATE_METRICS:
+        _fail()
+    selected, manifest, _ = _configuration(state_root, vendor, workflow, validate_records=False)
+    try:
+        records = advisory_campaign.load_merged_lane_records(manifest, selected.results)
+    except advisory_campaign.CampaignError as error:
+        raise advisory_orchestration.CampaignRecordsInvalidError(error) from None
+    try:
+        progress = advisory_campaign.campaign_progress(manifest, records)
+        outcomes = _campaign_gate_outcomes(records, metric)
+        minimum_samples = (
+            manifest["minimum_advised_failures"]
+            if metric == "advised_rescue"
+            else manifest["planned_tasks"]
+        )
+        analysis = advisory_experiments.analyze_sequential(
+            outcomes,
+            target_rate_bps=target_rate_bps,
+            alpha_bps=alpha_bps,
+            minimum_samples=minimum_samples,
+            maximum_samples=manifest["max_tasks"],
+        )
+    except (
+        advisory_experiments.ExperimentInputError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as error:
+        raise ManagedAdvisoryError() from error
+    signal = analysis["decision"]
+    if not progress.decision_eligible:
+        decision = "abstain"
+        reason = progress.reason
+    elif signal == "signal_above_target":
+        decision = "eligible_for_human_review"
+        reason = "statistical_target_met"
+    elif signal == "signal_below_target":
+        decision = "reject"
+        reason = "statistical_target_missed"
+    else:
+        decision = "abstain"
+        reason = "statistical_evidence_incomplete"
+    return {
+        **analysis,
+        "analysis": "sealed_campaign_gate",
+        "vendor": vendor,
+        "workflow": workflow,
+        "metric": metric,
+        "decision": decision,
+        "decision_reason": reason,
+        "statistical_signal": signal,
+        "evidence_origin": "sealed_campaign",
+        "campaign_bound": True,
+        "campaign_minimums_met": progress.decision_eligible,
+        "promotion_eligible": decision == "eligible_for_human_review",
+        "policy_decision_allowed": False,
+        "core_routing_changed": False,
+    }
+
+
 def review_payload(
     state_root: Path,
     *,
@@ -1685,11 +1984,14 @@ def review_payload(
     reviewed: list[dict[str, object]] = []
     for vendor in vendors:
         configuration: ConsultConfiguration | None = None
+        custom = False
         if require_campaign:
-            _, _, routes = _configuration(state_root, vendor, workflow)
+            paths, _, routes = _configuration(state_root, vendor, workflow)
+            custom = _profile_from_path(paths.profile).get("schema_version") == 2
         else:
             configuration = _consult_configuration(state_root, vendor, workflow)
             routes = configuration.routes
+            custom = configuration.custom
         deliveries = {
             role: advisory_routes.command_task_delivery(getattr(routes, role)) for role in ROLES
         }
@@ -1701,6 +2003,13 @@ def review_payload(
             "task_delivery": next(iter(distinct)) if len(distinct) == 1 else deliveries,
             "task_process_exposure": "argv" in distinct,
             "task_egress": True,
+            "provider_contract": (
+                "custom_exact_argv_unverified_containment" if custom else "built_in_reviewed"
+            ),
+            "host_filesystem_isolated": False,
+            "repository_write_enforcement": (
+                "post_run_check_only" if custom else "vendor_read_only_flags_plus_post_run_check"
+            ),
         }
         if configuration is not None:
             review["profile_sha256"] = configuration.profile_sha256
@@ -1958,6 +2267,12 @@ def consult_main(argv: Sequence[str]) -> int:
     )
     parser.add_argument("--confirm-task-egress", action="store_true", required=True)
     parser.add_argument("--confirm-provider-egress", action="store_true")
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=CONSULT_DEFAULT_TIMEOUT_SECONDS,
+        help="per-vendor outer deadline from 1 through 28800 seconds",
+    )
     arguments = parser.parse_args(argv)
     try:
         root = _root(arguments.state_root)
@@ -1974,6 +2289,7 @@ def consult_main(argv: Sequence[str]) -> int:
             ),
             confirm_task_egress=arguments.confirm_task_egress,
             confirm_provider_egress=arguments.confirm_provider_egress,
+            timeout_seconds=arguments.timeout_seconds,
         )
     except ProviderConfirmationRequiredError:
         print(json.dumps({"error": "managed_provider_confirmation_required"}), file=sys.stderr)
@@ -2012,6 +2328,7 @@ def dispatch_main(argv: Sequence[str]) -> int:
     parser.add_argument("--vendor", default="all")
     parser.add_argument("--workflow", choices=WORKFLOWS, default="implementation")
     parser.add_argument("--confirm-task-egress", action="store_true", required=True)
+    parser.add_argument("--confirm-provider-egress", action="store_true")
     arguments = parser.parse_args(argv)
     try:
         root = _root(arguments.state_root)
@@ -2022,7 +2339,14 @@ def dispatch_main(argv: Sequence[str]) -> int:
             vendors=_selected_vendors(root, arguments.vendor),
             workflow=arguments.workflow,
             confirm_task_egress=arguments.confirm_task_egress,
+            confirm_provider_egress=arguments.confirm_provider_egress,
         )
+    except ProviderConfirmationRequiredError:
+        print(json.dumps({"error": "managed_provider_confirmation_required"}), file=sys.stderr)
+        return 2
+    except ProviderConformanceError:
+        print(json.dumps({"error": "managed_provider_preflight_failed"}), file=sys.stderr)
+        return 2
     except ProviderCapabilityError as error:
         print(json.dumps(_provider_capability_payload(error), sort_keys=True), file=sys.stderr)
         return 2
@@ -2058,13 +2382,52 @@ def dispatch_main(argv: Sequence[str]) -> int:
         return 2
 
 
+def campaign_gate_main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(prog="wclass-advisory campaign-gate", allow_abbrev=False)
+    parser.add_argument("--state-root", type=Path)
+    parser.add_argument("--vendor", required=True)
+    parser.add_argument("--workflow", required=True, choices=WORKFLOWS)
+    parser.add_argument("--metric", required=True, choices=CAMPAIGN_GATE_METRICS)
+    parser.add_argument("--target-rate-bps", type=int, default=7_500)
+    parser.add_argument("--alpha-bps", type=int, default=500)
+    arguments = parser.parse_args(argv)
+    try:
+        if not 0 <= arguments.target_rate_bps <= 10_000:
+            _fail()
+        if not 1 <= arguments.alpha_bps <= 5_000:
+            _fail()
+        root = _root(arguments.state_root)
+        vendors = _selected_vendors(root, arguments.vendor)
+        if len(vendors) != 1:
+            _fail()
+        receipt = campaign_gate(
+            root,
+            vendor=vendors[0],
+            workflow=arguments.workflow,
+            metric=arguments.metric,
+            target_rate_bps=arguments.target_rate_bps,
+            alpha_bps=arguments.alpha_bps,
+        )
+    except advisory_orchestration.CampaignRecordsInvalidError as error:
+        print(json.dumps({"error": error.code}), file=sys.stderr)
+        return 2
+    except (OSError, ValueError, ManagedAdvisoryError):
+        print(json.dumps({"error": "managed_campaign_gate_rejected"}), file=sys.stderr)
+        return 2
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
 def status_main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(prog="wclass-advisory status", allow_abbrev=False)
     parser.add_argument("--state-root", type=Path)
+    parser.add_argument("--vendor", default="all")
+    parser.add_argument("--workflow", choices=("all", *WORKFLOWS), default="all")
     arguments = parser.parse_args(argv)
     try:
         root = _root(arguments.state_root)
-        vendors = configured_vendors(root)
+        vendors = _selected_vendors(root, arguments.vendor)
+        workflows = _selected_workflows(arguments.workflow)
     except (OSError, ManagedAdvisoryError):
         print(json.dumps({"error": "managed_configuration_unavailable"}), file=sys.stderr)
         return 2
@@ -2072,7 +2435,7 @@ def status_main(argv: Sequence[str]) -> int:
     try:
         portfolio_arguments = ["wclass-advisory status"]
         for vendor in vendors:
-            for workflow in WORKFLOWS:
+            for workflow in workflows:
                 selected = campaign_paths(root, vendor, workflow)
                 portfolio_arguments.extend(
                     (

@@ -147,6 +147,23 @@ class ParallelAdvisoryTests(unittest.TestCase):
         self.assertTrue(any(label == "slow" and event == "heartbeat" for label, event, _ in events))
         self.assertTrue(any(label == "slow" and event == "completed" for label, event, _ in events))
 
+    def test_result_callback_streams_completion_order_while_return_stays_input_order(self) -> None:
+        parallel = load_module(PARALLEL, "prospective_advisory_parallel_results")
+        streamed: list[str] = []
+        results = parallel.run_parallel(
+            (
+                parallel.AdvisoryJob(
+                    "slow",
+                    (sys.executable, "-c", "import time;time.sleep(.1)"),
+                ),
+                parallel.AdvisoryJob("fast", (sys.executable, "-c", "pass")),
+            ),
+            result_callback=lambda result: streamed.append(result.label),
+        )
+
+        self.assertEqual(streamed, ["fast", "slow"])
+        self.assertEqual([result.label for result in results], ["slow", "fast"])
+
 
 if __name__ == "__main__":
     unittest.main()

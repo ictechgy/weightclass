@@ -111,6 +111,15 @@ then acknowledge each workflow-specific `route_sha256` as
 `--ack-route-sha256 VENDOR=sha256:...`. The digest binds the profile, workflow,
 and exact argv; the child rechecks it before reading the task.
 
+Consult defaults to a 5,400-second per-vendor outer deadline, accepts an
+explicit `--timeout-seconds` from 1 through 28,800, and emits multi-vendor NDJSON
+in completion order. Failure receipts contain only closed stage/reason and
+numeric or boolean child/result/verifier status; arbitrary internal stderr is
+discarded. Schema-2 custom campaign dispatch also requires
+`--confirm-provider-egress`, allowing three task-free conformance calls before
+task inspection. That check does not prove recipient, billing, entitlement, or
+host filesystem containment.
+
 Managed dispatch binds each spawned runner to the package version already
 loaded by its parent. If `uv`, Homebrew, or another installer replaces
 weightclass during an active dispatch, the child exits before reading the task

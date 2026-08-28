@@ -205,7 +205,7 @@ never renders discovered paths.
 The portfolio sorts populations deterministically, rejects duplicate labels or
 inputs, and reports the sealed task/failure floors, abstention reason, and next
 collection action. It does not combine populations or make a promotion
-decision; `speculative_report.py` remains the per-campaign statistical gate.
+decision; `speculative_report.py` remains the per-campaign economic report.
 Actual money cost, token volume, and child latency are separate metrics with
 per-stage totals. If any executed stage lacks one metric, that metric's total is
 `null` rather than a partial value and the population automatically abstains.
@@ -216,6 +216,15 @@ Even a population with complete sample floors and metrics is only
 never sets `policy_decision_allowed`. Incomplete measurements instead direct
 the operator to `repair_measurement`. Policy changes remain outside this
 task-free status command.
+
+`speculative_report.py` remains the price/cost report; the managed acceptance
+signal is the provenance-bound gate below. Managed users can apply it without
+handling private paths:
+`wclass-advisory campaign-gate --vendor VENDOR --workflow WORKFLOW --metric
+METRIC`. It validates the exact sealed population and can emit only
+`eligible_for_human_review`, never permission to change routing. Unbound
+`experiment sequential --records` input remains descriptive and cannot become
+promotion-eligible.
 
 Legacy logs may skip a damaged trailing line for descriptive recovery. A sealed
 campaign discovers lane 0 and every existing bounded lane automatically, then

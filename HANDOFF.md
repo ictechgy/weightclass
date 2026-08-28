@@ -122,6 +122,17 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   build plus strict metadata/isolation checks, and a clean-wheel CLI smoke test.
   PR #119 merged as `fadf362`; its final immutable security diff review found
   no reportable findings after independently rechecking both review-time fixes.
+- **Unreleased post-0.18.0 advisory product follow-up is active on
+  `feat/advisory-product-roadmap-2`.** It adds filtered managed status, a
+  provenance-bound sealed campaign gate that never authorizes policy, closed
+  consult failure stages/reasons with arbitrary internal stderr rejection,
+  completion-order consult NDJSON and a 5,400-second default deadline, and an
+  explicitly confirmed task-free conformance check before custom-provider
+  dispatch task access. Core `wclass run`, existing campaign bytes, and schema-2
+  profile shape remain unchanged; the packaged skill advances to onboarding 13
+  and recognizes the exact published 0.18.0 bundle for safe upgrade. Current
+  offline gates pass 1,374 unittest tests with 27 skips, Ruff, formatting, and
+  strict mypy over 172 source files.
 - Release 0.17.8 adds a
   task-free local `cli-check`, installed-CLI status to `doctor`, a separately
   confirmed and non-persisted `provider-check`, and task-before-inspection

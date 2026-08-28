@@ -43,6 +43,7 @@ class AdvisoryDistributionTests(unittest.TestCase):
             "consult",
             "dispatch",
             "status",
+            "campaign-gate",
             "cleanup",
             "run",
             "prune",

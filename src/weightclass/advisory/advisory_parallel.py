@@ -235,6 +235,7 @@ def _run_job(job: AdvisoryJob) -> AdvisoryResult:
 
 
 ProgressCallback = Callable[[str, str, int], None]
+ResultCallback = Callable[[AdvisoryResult], None]
 
 
 def _notify_progress(
@@ -248,10 +249,20 @@ def _notify_progress(
         pass
 
 
+def _notify_result(callback: ResultCallback | None, result: AdvisoryResult) -> None:
+    if callback is None:
+        return
+    try:
+        callback(result)
+    except (OSError, ValueError):
+        pass
+
+
 def run_parallel(
     jobs: Sequence[AdvisoryJob],
     *,
     progress: ProgressCallback | None = None,
+    result_callback: ResultCallback | None = None,
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
 ) -> tuple[AdvisoryResult, ...]:
     """Run a validated batch concurrently and return results in input order."""
@@ -290,8 +301,10 @@ def run_parallel(
                 continue
             for future in sorted(completed, key=indexes.__getitem__):
                 index = indexes[future]
-                results[index] = future.result()
+                result = future.result()
+                results[index] = result
                 _notify_progress(progress, selected[index].label, "completed", elapsed)
+                _notify_result(result_callback, result)
         if any(result is None for result in results):
             raise ValueError
         return tuple(cast(AdvisoryResult, result) for result in results)
