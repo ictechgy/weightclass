@@ -2,7 +2,8 @@
 """Seal and validate a task-free advisory measurement campaign contract.
 
 The manifest binds only reviewed configuration: route digests, verifier bytes,
-pricing basis, sample bounds, and the already-fixed advisory decision rule. It
+pricing basis, sample bounds, and the already-fixed advisory decision rule. A
+schema-3 manifest may additionally bind one task-free statistical gate. It
 never contains task text, task hashes, repository paths, timestamps, profiles,
 or credentials.
 """
@@ -32,7 +33,11 @@ else:
 
 CAMPAIGN_SCHEMA_VERSION = 1
 EVIDENCE_CAMPAIGN_SCHEMA_VERSION = 2
+PREREGISTERED_CAMPAIGN_SCHEMA_VERSION = 3
 CAMPAIGN_WORKFLOWS = frozenset({"implementation", "review", "research", "diagnosis", "design"})
+CAMPAIGN_GATE_METRICS = frozenset({"cheap_acceptance", "advised_rescue", "final_acceptance"})
+CAMPAIGN_GATE_METHOD = "simultaneous_hoeffding_union_bound_v1"
+CAMPAIGN_GATE_POPULATION_RULE = "metric_eligible_non_infrastructure_v1"
 MINIMUM_ADVISED_FAILURES = 12
 MAX_CAMPAIGN_BYTES = 16_384
 MAX_VERIFY_BYTES = 1_048_576
@@ -153,6 +158,15 @@ class CampaignManifest(TypedDict, total=False):
     prices_sha256: str | None
     campaign_fingerprint: str
     workflow: str
+    gate: dict[str, object]
+
+
+class CampaignGate(TypedDict):
+    metric: str
+    target_rate_bps: int
+    alpha_bps: int
+    method: str
+    population_rule: str
 
 
 class CampaignProgress(NamedTuple):
@@ -381,6 +395,39 @@ def _route(value: object) -> RouteContract:
     }
 
 
+def _gate(value: object, *, allow_contract_defaults: bool = False) -> CampaignGate:
+    base_keys = {
+        "metric",
+        "target_rate_bps",
+        "alpha_bps",
+    }
+    contract_keys = {"method", "population_rule"}
+    if not isinstance(value, Mapping) or set(value) not in (
+        base_keys | contract_keys,
+        base_keys if allow_contract_defaults else set(),
+    ):
+        raise CampaignError()
+    metric = _string(value["metric"], CAMPAIGN_GATE_METRICS)
+    target_rate_bps = _integer(value["target_rate_bps"], 1, 10_000)
+    alpha_bps = _integer(value["alpha_bps"], 1, 5_000)
+    method = value.get("method", CAMPAIGN_GATE_METHOD)
+    population_rule = value.get("population_rule", CAMPAIGN_GATE_POPULATION_RULE)
+    if method != CAMPAIGN_GATE_METHOD or population_rule != CAMPAIGN_GATE_POPULATION_RULE:
+        raise CampaignError()
+    return {
+        "metric": metric,
+        "target_rate_bps": target_rate_bps,
+        "alpha_bps": alpha_bps,
+        "method": CAMPAIGN_GATE_METHOD,
+        "population_rule": CAMPAIGN_GATE_POPULATION_RULE,
+    }
+
+
+def validate_gate(value: object) -> CampaignGate:
+    """Validate and normalize a task-free preregistered statistical gate."""
+    return _gate(value, allow_contract_defaults=True)
+
+
 def _manifest_payload(raw: object) -> CampaignManifest:
     common_keys = {
         "schema_version",
@@ -401,15 +448,22 @@ def _manifest_payload(raw: object) -> CampaignManifest:
     if not isinstance(raw, Mapping):
         raise CampaignError()
     schema_version = _integer(
-        raw.get("schema_version"), CAMPAIGN_SCHEMA_VERSION, EVIDENCE_CAMPAIGN_SCHEMA_VERSION
+        raw.get("schema_version"), CAMPAIGN_SCHEMA_VERSION, PREREGISTERED_CAMPAIGN_SCHEMA_VERSION
     )
-    expected = common_keys | ({"workflow"} if schema_version == 2 else set())
+    expected = common_keys | ({"workflow"} if schema_version in (2, 3) else set())
+    if schema_version == PREREGISTERED_CAMPAIGN_SCHEMA_VERSION:
+        expected.add("gate")
     if set(raw) != expected:
         raise CampaignError()
     workflow = (
         "implementation"
         if schema_version == CAMPAIGN_SCHEMA_VERSION
-        else _string(raw["workflow"], CAMPAIGN_WORKFLOWS - {"implementation"})
+        else _string(
+            raw["workflow"],
+            CAMPAIGN_WORKFLOWS
+            if schema_version == PREREGISTERED_CAMPAIGN_SCHEMA_VERSION
+            else CAMPAIGN_WORKFLOWS - {"implementation"},
+        )
     )
     arm = _string(raw["arm"], frozenset({"shape_b", "shape_a_b"}))
     planned_tasks = _integer(raw["planned_tasks"], MINIMUM_ADVISED_FAILURES, MAX_TASKS)
@@ -460,6 +514,9 @@ def _manifest_payload(raw: object) -> CampaignManifest:
     }
     if schema_version == EVIDENCE_CAMPAIGN_SCHEMA_VERSION:
         manifest["workflow"] = workflow
+    if schema_version == PREREGISTERED_CAMPAIGN_SCHEMA_VERSION:
+        manifest["workflow"] = workflow
+        manifest["gate"] = dict(_gate(raw["gate"]))
     unsigned = dict(manifest)
     del unsigned["campaign_fingerprint"]
     if _sha256(_canonical_bytes(unsigned)) != fingerprint:
@@ -568,12 +625,32 @@ def build_manifest(
     verify: Path,
     prices: Path | None,
     workflow: str = "implementation",
+    gate: Mapping[str, object] | None = None,
+    gate_metric: str | None = None,
+    gate_target_rate_bps: int | None = None,
+    gate_alpha_bps: int | None = None,
 ) -> CampaignManifest:
+    supplied_gate_fields = (gate_metric, gate_target_rate_bps, gate_alpha_bps)
+    if gate is not None and any(value is not None for value in supplied_gate_fields):
+        raise CampaignError()
+    if gate is None and any(value is not None for value in supplied_gate_fields):
+        if any(value is None for value in supplied_gate_fields):
+            raise CampaignError()
+        gate = {
+            "metric": gate_metric,
+            "target_rate_bps": gate_target_rate_bps,
+            "alpha_bps": gate_alpha_bps,
+        }
+    normalized_gate = _gate(gate, allow_contract_defaults=True) if gate is not None else None
     selected_workflow = _string(workflow, CAMPAIGN_WORKFLOWS)
     schema_version = (
-        CAMPAIGN_SCHEMA_VERSION
-        if selected_workflow == "implementation"
-        else EVIDENCE_CAMPAIGN_SCHEMA_VERSION
+        PREREGISTERED_CAMPAIGN_SCHEMA_VERSION
+        if normalized_gate is not None
+        else (
+            CAMPAIGN_SCHEMA_VERSION
+            if selected_workflow == "implementation"
+            else EVIDENCE_CAMPAIGN_SCHEMA_VERSION
+        )
     )
     unsigned: dict[str, object] = {
         "schema_version": schema_version,
@@ -596,8 +673,10 @@ def build_manifest(
         "verify_sha256": file_sha256(verify, MAX_VERIFY_BYTES),
         "prices_sha256": price_table_sha256(prices) if prices is not None else None,
     }
-    if schema_version == EVIDENCE_CAMPAIGN_SCHEMA_VERSION:
+    if schema_version in (EVIDENCE_CAMPAIGN_SCHEMA_VERSION, PREREGISTERED_CAMPAIGN_SCHEMA_VERSION):
         unsigned["workflow"] = selected_workflow
+    if normalized_gate is not None:
+        unsigned["gate"] = normalized_gate
     raw = dict(unsigned)
     raw["campaign_fingerprint"] = _sha256(_canonical_bytes(unsigned))
     return _manifest_payload(raw)
@@ -687,7 +766,10 @@ def record_binding(manifest: CampaignManifest, sample_ordinal: int) -> dict[str,
         "arm": manifest["arm"],
         "sample_ordinal": sample_ordinal,
     }
-    if manifest["schema_version"] == EVIDENCE_CAMPAIGN_SCHEMA_VERSION:
+    if manifest["schema_version"] in (
+        EVIDENCE_CAMPAIGN_SCHEMA_VERSION,
+        PREREGISTERED_CAMPAIGN_SCHEMA_VERSION,
+    ):
         binding["workflow"] = manifest["workflow"]
     return binding
 
@@ -711,7 +793,10 @@ def validate_record_bindings(
 
 def _record_ordinal(manifest: CampaignManifest, record: Mapping[str, object]) -> int:
     expected_binding_keys = {"campaign_fingerprint", "arm", "sample_ordinal"}
-    if manifest["schema_version"] == EVIDENCE_CAMPAIGN_SCHEMA_VERSION:
+    if manifest["schema_version"] in (
+        EVIDENCE_CAMPAIGN_SCHEMA_VERSION,
+        PREREGISTERED_CAMPAIGN_SCHEMA_VERSION,
+    ):
         expected_binding_keys.add("workflow")
     binding = record.get("campaign")
     if not isinstance(binding, Mapping) or set(binding) != expected_binding_keys:
@@ -723,7 +808,8 @@ def _record_ordinal(manifest: CampaignManifest, record: Mapping[str, object]) ->
     ):
         raise CampaignError("campaign_record_binding_mismatch")
     if (
-        manifest["schema_version"] == EVIDENCE_CAMPAIGN_SCHEMA_VERSION
+        manifest["schema_version"]
+        in (EVIDENCE_CAMPAIGN_SCHEMA_VERSION, PREREGISTERED_CAMPAIGN_SCHEMA_VERSION)
         and record.get("workflow") != manifest["workflow"]
     ):
         raise CampaignError("campaign_record_binding_mismatch")
@@ -896,6 +982,9 @@ def main() -> int:
         ),
     )
     parser.add_argument("--advisor-context", choices=("prompt", "repo"), default="prompt")
+    parser.add_argument("--gate-metric", choices=tuple(sorted(CAMPAIGN_GATE_METRICS)))
+    parser.add_argument("--gate-target-rate-bps", type=int)
+    parser.add_argument("--gate-alpha-bps", type=int)
     parser.add_argument("--verify", required=True, type=Path)
     parser.add_argument("--prices", type=Path)
     parser.add_argument("--output", required=True, type=Path)
@@ -938,6 +1027,9 @@ def main() -> int:
             verify=arguments.verify.expanduser().resolve(),
             prices=arguments.prices.expanduser().resolve() if arguments.prices else None,
             workflow=arguments.workflow,
+            gate_metric=arguments.gate_metric,
+            gate_target_rate_bps=arguments.gate_target_rate_bps,
+            gate_alpha_bps=arguments.gate_alpha_bps,
         )
         write_manifest(arguments.output.expanduser().resolve(), manifest)
     except CampaignError:

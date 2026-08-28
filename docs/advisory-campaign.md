@@ -226,8 +226,8 @@ task-free status command.
 `speculative_report.py` remains the price/cost report; the managed acceptance
 signal is the provenance-bound gate below. Managed users can apply it without
 handling private paths:
-`wclass-advisory campaign-gate --vendor VENDOR --workflow WORKFLOW --metric
-METRIC`. It validates the exact sealed population and can emit only
+`wclass-advisory campaign-gate --vendor VENDOR --workflow WORKFLOW`. It
+validates the exact schema-3 population and sealed gate and can emit only
 `eligible_for_human_review`, never permission to change routing. Unbound
 `experiment sequential --records` input remains descriptive and cannot become
 promotion-eligible.

@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -102,6 +102,107 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
         self.assertNotIn(b"cheap-model", encoded)
         self.assertNotIn(os.fsencode(directory), encoded)
         self.assertNotIn(b"PRIVATE-TASK-CONTENT", encoded)
+
+    def test_preregistered_gate_is_schema3_and_part_of_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            verify, prices = self.files(directory)
+            gated = build_manifest(
+                arm="shape_b",
+                planned_tasks=60,
+                max_tasks=150,
+                cost_basis="price_table",
+                cheap=["/opt/agent/codex", "--model", "cheap-model"],
+                expensive=["/opt/agent/codex", "--model", "strong-model"],
+                advisor=["/opt/agent/codex", "--model", "advisor-model"],
+                advisor_context="prompt",
+                verify=verify,
+                prices=prices,
+                gate={"metric": "cheap_acceptance", "target_rate_bps": 7_500, "alpha_bps": 500},
+            )
+            changed = build_manifest(
+                arm="shape_b",
+                planned_tasks=60,
+                max_tasks=150,
+                cost_basis="price_table",
+                cheap=["/opt/agent/codex", "--model", "cheap-model"],
+                expensive=["/opt/agent/codex", "--model", "strong-model"],
+                advisor=["/opt/agent/codex", "--model", "advisor-model"],
+                advisor_context="prompt",
+                verify=verify,
+                prices=prices,
+                gate_metric="cheap_acceptance",
+                gate_target_rate_bps=8_000,
+                gate_alpha_bps=500,
+            )
+            path = Path(directory) / "gated.json"
+            write_manifest(path, gated)
+            loaded = load_manifest(path)
+
+        self.assertEqual(loaded["schema_version"], 3)
+        self.assertEqual(loaded["workflow"], "implementation")
+        self.assertEqual(
+            loaded["gate"],
+            {
+                "metric": "cheap_acceptance",
+                "target_rate_bps": 7_500,
+                "alpha_bps": 500,
+                "method": "simultaneous_hoeffding_union_bound_v1",
+                "population_rule": "metric_eligible_non_infrastructure_v1",
+            },
+        )
+        self.assertNotEqual(gated["campaign_fingerprint"], changed["campaign_fingerprint"])
+
+    def test_partial_or_invalid_gate_registration_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            verify, prices = self.files(directory)
+            common = dict(
+                arm="shape_b",
+                planned_tasks=12,
+                max_tasks=20,
+                cost_basis="price_table",
+                cheap=["codex", "cheap"],
+                expensive=["codex", "strong"],
+                advisor=["codex", "advisor"],
+                advisor_context="prompt",
+                verify=verify,
+                prices=prices,
+            )
+            for kwargs in (
+                {"gate_metric": "cheap_acceptance"},
+                {"gate": {"metric": "cheap_acceptance", "target_rate_bps": 7_500}},
+                {
+                    "gate": {
+                        "metric": "cheap_acceptance",
+                        "target_rate_bps": True,
+                        "alpha_bps": 500,
+                    }
+                },
+                {
+                    "gate": {
+                        "metric": "unknown",
+                        "target_rate_bps": 7_500,
+                        "alpha_bps": 500,
+                    }
+                },
+                {
+                    "gate": {
+                        "metric": "cheap_acceptance",
+                        "target_rate_bps": 0,
+                        "alpha_bps": 500,
+                    }
+                },
+                {
+                    "gate": {
+                        "metric": "cheap_acceptance",
+                        "target_rate_bps": 7_500,
+                        "alpha_bps": 500,
+                        "method": "unsealed_future_method",
+                        "population_rule": "metric_eligible_non_infrastructure_v1",
+                    }
+                },
+            ):
+                with self.subTest(kwargs=kwargs), self.assertRaisesRegex(CampaignError, "^$"):
+                    cast(Any, build_manifest)(**common, **kwargs)
 
     def test_tampering_duplicates_unknown_fields_and_nonfinite_values_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

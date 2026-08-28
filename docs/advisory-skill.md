@@ -47,6 +47,17 @@ Existing agy installations use `migrate-routes --vendor agy`; existing Grok
 evidence installations use `migrate-evidence --vendor grok`. Both preserve old
 populations without merging records.
 
+New campaigns may preregister one primary statistical gate by running
+`migrate-gate` immediately after ordinary `init` and before dispatch. Its
+`--gate-metric`, `--gate-target-rate-bps`, and `--gate-alpha-bps` flags are all
+required and are sealed in a separate schema-3 generation. Existing
+schema-1/2 populations use the same explicit command to start an empty gate
+generation; old campaign and record bytes are never copied, rewritten, or
+rebound. One state root admits exactly one primary vendor/workflow gate, so the
+requested `migrate-gate` must name `--workflow` and a second primary population
+is rejected rather than silently multiplying alpha. Legacy gate analysis is
+exploratory only and cannot make a promotion-eligible claim.
+
 ## Preview and install
 
 The installer never reads task stdin or contacts a provider. Ordinary install never overwrites an

@@ -28,6 +28,39 @@ table. Without it the campaign uses the vendor-reported basis; incomplete cost
 reporting causes an economic abstention rather than invented pricing. A
 schema-2 arbitrary vendor can use `init --profile /path/to/profile.json`.
 
+To preregister the statistical gate for a new population, first initialize the
+ordinary empty campaigns, then migrate them before any dispatch. All three gate
+flags are required together. They are sealed into a separate schema-3
+generation together with the versioned simultaneous-Hoeffding method and the
+metric-eligible, non-infrastructure population rule. They cannot be changed by
+a later analysis command. One managed state root accepts only one primary
+vendor/workflow population, preventing an unadjusted pick among several gates:
+
+```sh
+wclass-advisory init --vendor codex \
+  --model cheap=CHEAP --model advisor=ADVISOR --model expensive=EXPENSIVE \
+  --effort cheap=low --effort advisor=high --effort expensive=high
+wclass-advisory migrate-gate --vendor codex --workflow review \
+  --gate-metric cheap_acceptance --gate-target-rate-bps 7500 --gate-alpha-bps 500
+```
+
+For an already populated schema-1/2 installation, use an explicit migration.
+It validates the old population, preserves its campaign and records, and
+starts an empty schema-3 generation:
+
+`migrate-gate` uses the currently configured managed route/evidence
+generation; it never guesses among historical generations. Complete any
+required `migrate-routes` or `migrate-evidence` step first, then review that
+current generation before sealing its gate.
+
+```sh
+wclass-advisory migrate-gate --vendor codex --workflow review \
+  --gate-metric cheap_acceptance --gate-target-rate-bps 7500 --gate-alpha-bps 500 \
+  --dry-run
+wclass-advisory migrate-gate --vendor codex --workflow review \
+  --gate-metric cheap_acceptance --gate-target-rate-bps 7500 --gate-alpha-bps 500
+```
+
 The default root is `~/Library/Application Support/weightclass/advisory-v1` on
 macOS and `$XDG_STATE_HOME/weightclass/advisory-v1` (or
 `~/.local/state/weightclass/advisory-v1`) on other POSIX systems. The root and
@@ -133,7 +166,11 @@ contaminate effectiveness or cost evidence.
 Use `wclass-advisory status --vendor VENDOR_OR_ALL --workflow WORKFLOW_OR_ALL`
 for filtered aggregate readiness and evidence. A single sealed population can
 be evaluated with `wclass-advisory campaign-gate --vendor VENDOR --workflow
-WORKFLOW --metric cheap_acceptance`; even an eligible result remains a human
+WORKFLOW`. For schema 3 the sealed metric, target, and alpha are used; a
+different override is rejected. Legacy schema-1/2 campaigns remain available
+for exploratory analysis with `--generation source`, but report
+`gate_preregistered:false` and can never report `promotion_eligible:true`.
+Even an eligible result remains a human
 review input with `policy_decision_allowed:false`. Use
 `wclass-advisory cleanup` only to prune registered disposable workspaces; it
 does not remove profiles, sealed campaigns, or aggregate records. Cleanup
