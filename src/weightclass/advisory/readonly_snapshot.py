@@ -129,6 +129,26 @@ def same_root(root: Path, expected: tuple[int, int]) -> bool:
         return False
 
 
+def find_child_root(parent: Path, expected: tuple[int, int]) -> Path | None:
+    """Find a directly renamed real directory without following child paths."""
+
+    try:
+        names = os.listdir(parent)
+    except (OSError, ValueError):
+        return None
+    if len(names) > MAX_SNAPSHOT_ENTRIES:
+        return None
+    for name in names:
+        candidate = parent / name
+        try:
+            metadata = candidate.lstat()
+        except OSError:
+            continue
+        if stat.S_ISDIR(metadata.st_mode) and (metadata.st_dev, metadata.st_ino) == expected:
+            return candidate
+    return None
+
+
 def _read_regular(
     parent_fd: int,
     name: str,

@@ -57,7 +57,7 @@ def accepted_result() -> dict[str, object]:
                 "[seed:verification-classification] Ordinary verifier failures are explicit",
                 "info",
                 "suppressed",
-                "src/weightclass/advisory/speculative_run.py:4282",
+                "src/weightclass/advisory/speculative_run.py:4319",
                 "failure_kind and failure_stage are fixed before cleanup when verification fails.",
             ),
             finding(
@@ -65,7 +65,7 @@ def accepted_result() -> dict[str, object]:
                 "fallback values into records",
                 "info",
                 "suppressed",
-                "src/weightclass/advisory/speculative_run.py:4373",
+                "src/weightclass/advisory/speculative_run.py:4415",
                 "emit_failure_receipt reads fallback values without mutating the stored attempt.",
             ),
         ],

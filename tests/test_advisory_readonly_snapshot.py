@@ -145,6 +145,43 @@ class ReadonlySnapshotTests(unittest.TestCase):
 
 
 class ReadonlyClonePathTests(unittest.TestCase):
+    def test_initial_root_identity_failure_is_closed_and_cleaned(self) -> None:
+        runner = load_module(RUNNER, "readonly_snapshot_runner_initial_root")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "out"
+            output.mkdir()
+            registry = output / "workspaces.txt"
+            verify = root / "verify"
+            verify.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            verify.chmod(0o700)
+            with mock.patch.object(
+                runner.readonly_snapshot,
+                "root_identity",
+                side_effect=runner.readonly_snapshot.SnapshotRejected(),
+            ):
+                record, _, _ = runner.attempt(
+                    "cheap",
+                    [sys.executable, "-c", "raise SystemExit(0)"],
+                    root / "unused-repo",
+                    "0" * 40,
+                    "bounded task",
+                    verify,
+                    output,
+                    registry,
+                    frozenset(),
+                    None,
+                    None,
+                    None,
+                    False,
+                    workflow="review",
+                )
+
+            self.assertFalse(record["accepted"])
+            self.assertEqual(record["failure_kind"], "infrastructure")
+            self.assertEqual(list((output / ".work").iterdir()), [])
+            self.assertEqual(registry.read_text(encoding="utf-8"), "")
+
     def test_clean_read_only_attempt_keeps_trusted_full_handover(self) -> None:
         runner = load_module(RUNNER, "readonly_snapshot_runner_clean")
         with tempfile.TemporaryDirectory() as directory:
@@ -446,6 +483,8 @@ class ReadonlyClonePathTests(unittest.TestCase):
             self.assertEqual(clone_calls, ["full"])
             self.assertFalse(verify_marker.exists())
             self.assertEqual((outside / "sentinel").read_text(encoding="utf-8"), "OUTSIDE")
+            self.assertEqual(list((output / ".work").iterdir()), [])
+            self.assertEqual(registry.read_text(encoding="utf-8"), "")
 
 
 if __name__ == "__main__":

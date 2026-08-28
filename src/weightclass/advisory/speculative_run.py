@@ -3552,6 +3552,43 @@ def discard(registry: Path, workspace: Path, out_dir: Path) -> None:
         emit_safe_diagnostic("workspace_registry_update_failed")
 
 
+def discard_relocated(
+    registry: Path,
+    workspace: Path,
+    expected_identity: tuple[int, int] | None,
+    work_root: Path,
+    out_dir: Path,
+) -> None:
+    """Clean a directly renamed workspace and its replacement without following links."""
+
+    if expected_identity is not None:
+        relocated = readonly_snapshot.find_child_root(work_root, expected_identity)
+        if relocated is not None and relocated != workspace:
+            try:
+                register(registry, relocated, add=True)
+            except OSError:
+                emit_safe_diagnostic("workspace_registry_update_failed")
+            discard(registry, relocated, out_dir)
+    try:
+        metadata = workspace.lstat()
+    except FileNotFoundError:
+        try:
+            register(registry, workspace, add=False)
+        except OSError:
+            emit_safe_diagnostic("workspace_registry_update_failed")
+        return
+    except OSError:
+        return
+    if stat.S_ISLNK(metadata.st_mode) and workspace.parent == work_root:
+        try:
+            workspace.unlink()
+            register(registry, workspace, add=False)
+        except OSError:
+            emit_safe_diagnostic("workspace_cleanup_failed")
+        return
+    discard(registry, workspace, out_dir)
+
+
 def resolved_own_workspace(candidate: Path, out_dir: Path) -> Path | None:
     """Whether a registry line names a directory this script actually created.
 
@@ -4308,7 +4345,12 @@ def attempt(
             record["error"] = "verification modified the patched files; patch no longer matches"
             record["failure_kind"] = "route"
             record["failure_stage"] = "verification_integrity"
-    except (RunFailure, subprocess.SubprocessError, OSError) as error:
+    except (
+        RunFailure,
+        subprocess.SubprocessError,
+        OSError,
+        readonly_snapshot.SnapshotError,
+    ) as error:
         # RunFailure 만 잡으면 clone_at 의 CalledProcessError 나 복사 중의
         # OSError 가 그대로 올라가, 등록된 채 지워지지 않은 작업공간이 남는다.
         # 이 함수의 계약은 "무슨 일이 있어도 검증 실패로 끝난다" 여야 한다.
@@ -4323,7 +4365,7 @@ def attempt(
     # 자식이 돌던 워크스페이스는 어느 쪽이든 항상 버린다. 넘길 것은 재구성한
     # 트리이고, 자식의 .git 을 살려 둘 이유가 없다.
     if workspace is not None:
-        discard(registry, workspace, out_dir)
+        discard_relocated(registry, workspace, workspace_root_identity, work_root, out_dir)
 
     verdict = record.get("verify")
     # 변경이 없으면 통과로 치지 않는다. 저장소의 기존 테스트는 이미 초록이므로,
@@ -4355,7 +4397,7 @@ def attempt(
     if record["accepted"]:
         if workflow != "implementation":
             if handover is not None:
-                discard(registry, handover, out_dir)
+                discard_relocated(registry, handover, handover_root_identity, work_root, out_dir)
             record["workspace"] = None
             return record, verify_output, evidence_result_text.encode("utf-8")
         assert handover is not None and patch is not None
@@ -4368,7 +4410,7 @@ def attempt(
             record["error"] = f"could not write the patch: {type(error).__name__}"
             record["failure_kind"] = "infrastructure"
             record["failure_stage"] = "persistence"
-            discard(registry, handover, out_dir)
+            discard_relocated(registry, handover, handover_root_identity, work_root, out_dir)
             record["workspace"] = None
             emit_failure_receipt(record, route=name, vendor=vendor)
             return record, verify_output, patch_bytes
@@ -4377,11 +4419,11 @@ def attempt(
         # second full repository clone made successful campaigns grow by the
         # repository size even though applying or reviewing the patch does not
         # need that clone.
-        discard(registry, handover, out_dir)
+        discard_relocated(registry, handover, handover_root_identity, work_root, out_dir)
         record["workspace"] = None
     else:
         if handover is not None:
-            discard(registry, handover, out_dir)
+            discard_relocated(registry, handover, handover_root_identity, work_root, out_dir)
         record["workspace"] = None
     transient = (
         patch_bytes if workflow == "implementation" else evidence_result_text.encode("utf-8")
