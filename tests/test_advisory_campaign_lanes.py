@@ -313,6 +313,12 @@ class AdvisoryCampaignLaneAcceptanceTests(unittest.TestCase):
             with self.assertRaisesRegex(campaign.CampaignError, "^campaign_records_invalid$"):
                 campaign.count_bound_lane_records(value, root, 1)
 
+            log.write_text(json.dumps(record(1)), encoding="utf-8")
+            self.assertEqual(
+                campaign.count_bound_lane_records(value, root, 1, busy_lane_indexes=frozenset({0})),
+                1,
+            )
+
     def test_lane_record_loader_preserves_a_value_free_binding_reason(self) -> None:
         campaign = load_module(CAMPAIGN, "prospective_lane_campaign_diagnostic")
         value = manifest()

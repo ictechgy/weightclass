@@ -530,8 +530,7 @@ def _iter_bound_records(
                 consumed += len(raw_line)
                 if consumed > MAX_CAMPAIGN_LOG_BYTES or len(raw_line) > MAX_CAMPAIGN_RECORD_BYTES:
                     raise CampaignError()
-                if allow_trailing_partial and not raw_line.endswith(b"\n"):
-                    break
+                trailing_partial_candidate = allow_trailing_partial and not raw_line.endswith(b"\n")
                 if not raw_line.strip():
                     continue
                 try:
@@ -541,6 +540,8 @@ def _iter_bound_records(
                         parse_constant=lambda _value: (_ for _ in ()).throw(CampaignError()),
                     )
                 except (UnicodeDecodeError, ValueError, RecursionError, CampaignError) as error:
+                    if trailing_partial_candidate:
+                        break
                     raise CampaignError() from error
                 if not isinstance(value, dict):
                     raise CampaignError()
