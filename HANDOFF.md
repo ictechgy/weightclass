@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-27 KST by Codex_
+_Last updated: 2026-08-28 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
@@ -147,6 +147,42 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   schema-2 custom dispatch requires explicit provider-egress confirmation, and
   multi-vendor consult NDJSON is emitted in completion order. Core `wclass`
   routing and its one-child contract are unchanged.
+- **Post-0.19.0 performance and evidence hardening is merged but not yet
+  released.** PR #127 (`e5e8865`) lazy-loads core/advisory command families,
+  streams bounded lane-capacity validation without full record copies, scopes
+  custom consult conformance to the selected role, and runs distinct executable
+  identities under a fixed four-group provider-check ceiling. Interleaved local
+  source-worktree medians improved from 105.81 ms to 64.28 ms for core help,
+  105.15 ms to 68.11 ms for schema-1 route, 107.20 ms to 34.22 ms for advisory
+  help, and 106.59 ms to 34.04 ms for advisory run help. A synthetic 500-record,
+  32-KiB-per-record capacity check reduced traced peak memory from 46.42 MiB to
+  0.29 MiB and elapsed time from 27.0 ms to 17.3 ms. These are local comparative
+  measurements, not product guarantees.
+- PR #128 (`7d7ade7`) adds a separate schema-3 `gate-v1` population that seals
+  one nonzero target, metric, alpha, simultaneous-Hoeffding method version, and
+  population-rule version. `migrate-gate` creates exactly one primary
+  vendor/workflow per managed state root, never copies or rebinds old records,
+  recovers only matching empty partial generations, and preserves the current
+  pre-gate source generation for explicitly exploratory, never
+  promotion-eligible analysis. The packaged optional skill advances to managed
+  onboarding 14 and recognizes the exact published 0.19.0 bundle for safe
+  upgrade.
+- PR #129 (`8a12e53`) adds a bounded parent-owned no-follow snapshot for
+  read-only evidence. Execution failure, invalid result, or detected mutation
+  now skips the already-doomed second clone and verifier. A valid unchanged
+  result still uses the original fresh full handover clone; design review
+  rejected exposing a repository-aware verifier to the child workspace or a
+  shared object store. Root/symlink/hardlink/mount replacement, nested
+  relocation, special files, and cleanup races are covered on Python
+  3.10/3.12/3.14. Moving a workspace entirely outside `.work` remains part of
+  the documented same-user host-isolation non-goal: the child already has host
+  filesystem authority without an external sandbox.
+- Current merged-source gates pass 1,408 unittest tests with 28 skips, Ruff and
+  formatting over 179 files, and strict mypy over 175 source files. Each of PRs
+  #127-#129 passed Linux Python 3.10-3.14, macOS Python 3.10/3.14, lint, typing,
+  and package-build CI. None of these commits changes the published 0.19.0
+  artifacts or the locally installed 0.19.0 tools; a future release must use a
+  new version and the normal immutable release/formula/skill-upgrade process.
 - Release 0.17.8 adds a
   task-free local `cli-check`, installed-CLI status to `doctor`, a separately
   confirmed and non-persisted `provider-check`, and task-before-inspection
@@ -1170,7 +1206,10 @@ human to read.
    dispatch rejection by their exact codes. Do not synthesize samples, repair
    fingerprints, or merge sealed populations. The legacy local implementation
    population is still unhealthy by design; use only an independently valid,
-   explicitly selected managed population.
+   explicitly selected managed population. For a formal new claim, run
+   `migrate-gate` before the first dispatch and choose exactly one primary
+   vendor/workflow in that managed state root. The pre-gate source remains
+   available only for exploratory, never promotion-eligible analysis.
 2. **Verified-object execution remains an open architecture item.** Current
    double observation narrows replacement but `Popen` still resolves a path.
    Before enforcing safe ancestors, settle sticky-directory and group-writable
