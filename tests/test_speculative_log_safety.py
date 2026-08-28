@@ -37,6 +37,18 @@ def load_runner() -> types.ModuleType:
     "prospective campaign acceptance only",
 )
 class SpeculativeLogSafetyTests(unittest.TestCase):
+    def test_record_larger_than_the_reader_bound_is_rejected_before_open(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "runs.jsonl"
+            with (
+                mock.patch.object(runner, "MAX_CAMPAIGN_RECORD_BYTES", 16),
+                mock.patch.object(runner.os, "open") as opened,
+                self.assertRaisesRegex(runner.RunLogError, "^$"),
+            ):
+                runner.append_run_record(log, {"payload": "x" * 64})
+            opened.assert_not_called()
+
     def test_private_regular_log_is_created_and_appended(self) -> None:
         runner = load_runner()
         with tempfile.TemporaryDirectory() as directory:

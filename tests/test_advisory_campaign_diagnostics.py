@@ -110,7 +110,7 @@ class AdvisoryCampaignDiagnosticsAcceptanceTests(unittest.TestCase):
             with (
                 mock.patch.object(
                     advisory_orchestration,
-                    "load_merged_lane_records",
+                    "count_bound_lane_records",
                     side_effect=error,
                 ),
                 self.assertRaisesRegex(ValueError, "^campaign_record_binding_mismatch$"),

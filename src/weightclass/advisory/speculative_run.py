@@ -75,6 +75,7 @@ from typing import TYPE_CHECKING, BinaryIO, TypedDict
 if TYPE_CHECKING or __package__:
     from .advisory_campaign import (
         ANONYMOUS_LANE_COUNT,
+        MAX_CAMPAIGN_RECORD_BYTES,
         MAX_PRICES_BYTES,
         MAX_VERIFY_BYTES,
         CampaignError,
@@ -105,6 +106,7 @@ if TYPE_CHECKING or __package__:
 else:
     from advisory_campaign import (  # type: ignore[import-not-found]
         ANONYMOUS_LANE_COUNT,
+        MAX_CAMPAIGN_RECORD_BYTES,
         MAX_PRICES_BYTES,
         MAX_VERIFY_BYTES,
         CampaignError,
@@ -625,6 +627,8 @@ def append_run_record(path: Path, record: object) -> None:
         payload = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
     except (TypeError, ValueError, UnicodeError, OverflowError):
         raise RunLogError() from None
+    if len(payload) > MAX_CAMPAIGN_RECORD_BYTES:
+        raise RunLogError()
 
     nofollow = getattr(os, "O_NOFOLLOW", None)
     nonblock = getattr(os, "O_NONBLOCK", None)

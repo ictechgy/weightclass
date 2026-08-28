@@ -45,6 +45,9 @@ def load_orchestration(name: str) -> types.ModuleType:
 
 
 def load_runner(name: str) -> types.ModuleType:
+    tools = str(TOOLS)
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
     spec = importlib.util.spec_from_file_location(name, RUNNER)
     if spec is None or spec.loader is None:
         raise AssertionError("could not load speculative runner")
@@ -181,7 +184,7 @@ class AdvisoryLaneHardeningTests(unittest.TestCase):
             with (
                 mock.patch.object(orchestration, "_open_lane_lock", side_effect=one_busy),
                 mock.patch.object(orchestration, "load_manifest", return_value={"max_tasks": 1}),
-                mock.patch.object(orchestration, "load_merged_lane_records", return_value=[]),
+                mock.patch.object(orchestration, "count_bound_lane_records", return_value=0),
                 self.assertRaisesRegex(ValueError, "^$"),
             ):
                 with orchestration.acquire_campaign_lanes((request,)):
