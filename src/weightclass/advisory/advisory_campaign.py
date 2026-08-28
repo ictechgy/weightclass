@@ -18,7 +18,7 @@ import os
 import shlex
 import stat
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, TypedDict, cast
 
@@ -501,6 +501,52 @@ def load_bound_records(path: Path) -> list[dict[str, object]]:
     return records
 
 
+def _iter_bound_records(path: Path) -> Iterator[dict[str, object]]:
+    """Stream one bounded JSONL log without retaining the complete payload."""
+
+    if not path.exists():
+        return
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise CampaignError()
+    flags = os.O_RDONLY | nofollow
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_CAMPAIGN_LOG_BYTES:
+            raise CampaignError()
+        consumed = 0
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = None
+            for raw_line in handle:
+                consumed += len(raw_line)
+                if consumed > MAX_CAMPAIGN_LOG_BYTES:
+                    raise CampaignError()
+                if not raw_line.strip():
+                    continue
+                try:
+                    value = json.loads(
+                        raw_line.decode("utf-8", errors="strict"),
+                        object_pairs_hook=_object_without_duplicates,
+                        parse_constant=lambda _value: (_ for _ in ()).throw(CampaignError()),
+                    )
+                except (UnicodeDecodeError, ValueError, RecursionError, CampaignError) as error:
+                    raise CampaignError() from error
+                if not isinstance(value, dict):
+                    raise CampaignError()
+                yield value
+    except CampaignError:
+        raise
+    except OSError as error:
+        raise CampaignError() from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def build_manifest(
     *,
     arm: str,
@@ -642,29 +688,9 @@ def validate_record_bindings(
     manifest: CampaignManifest, records: Sequence[Mapping[str, object]]
 ) -> set[int]:
     ordinals: set[int] = set()
-    expected_binding_keys = {"campaign_fingerprint", "arm", "sample_ordinal"}
-    if manifest["schema_version"] == EVIDENCE_CAMPAIGN_SCHEMA_VERSION:
-        expected_binding_keys.add("workflow")
+
     for record in records:
-        binding = record.get("campaign")
-        if not isinstance(binding, Mapping) or set(binding) != expected_binding_keys:
-            raise CampaignError("campaign_record_binding_invalid")
-        if (
-            binding["campaign_fingerprint"] != manifest["campaign_fingerprint"]
-            or binding["arm"] != manifest["arm"]
-            or binding.get("workflow", "implementation")
-            != manifest.get("workflow", "implementation")
-        ):
-            raise CampaignError("campaign_record_binding_mismatch")
-        if (
-            manifest["schema_version"] == EVIDENCE_CAMPAIGN_SCHEMA_VERSION
-            and record.get("workflow") != manifest["workflow"]
-        ):
-            raise CampaignError("campaign_record_binding_mismatch")
-        try:
-            ordinal = _integer(binding["sample_ordinal"], 1, manifest["max_tasks"])
-        except CampaignError:
-            raise CampaignError("campaign_record_ordinal_invalid") from None
+        ordinal = _record_ordinal(manifest, record)
         if ordinal in ordinals:
             raise CampaignError("campaign_record_ordinal_duplicate")
         ordinals.add(ordinal)
@@ -673,6 +699,46 @@ def validate_record_bindings(
     if ordinals != set(range(1, len(ordinals) + 1)):
         raise CampaignError("campaign_record_ordinal_gap")
     return ordinals
+
+
+def _record_ordinal(manifest: CampaignManifest, record: Mapping[str, object]) -> int:
+    expected_binding_keys = {"campaign_fingerprint", "arm", "sample_ordinal"}
+    if manifest["schema_version"] == EVIDENCE_CAMPAIGN_SCHEMA_VERSION:
+        expected_binding_keys.add("workflow")
+    binding = record.get("campaign")
+    if not isinstance(binding, Mapping) or set(binding) != expected_binding_keys:
+        raise CampaignError("campaign_record_binding_invalid")
+    if (
+        binding["campaign_fingerprint"] != manifest["campaign_fingerprint"]
+        or binding["arm"] != manifest["arm"]
+        or binding.get("workflow", "implementation") != manifest.get("workflow", "implementation")
+    ):
+        raise CampaignError("campaign_record_binding_mismatch")
+    if (
+        manifest["schema_version"] == EVIDENCE_CAMPAIGN_SCHEMA_VERSION
+        and record.get("workflow") != manifest["workflow"]
+    ):
+        raise CampaignError("campaign_record_binding_mismatch")
+    try:
+        return _integer(binding["sample_ordinal"], 1, manifest["max_tasks"])
+    except CampaignError:
+        raise CampaignError("campaign_record_ordinal_invalid") from None
+
+
+def count_bound_records(manifest: CampaignManifest, path: Path) -> int:
+    """Validate one lane while retaining only its bounded ordinal set."""
+
+    ordinals: set[int] = set()
+    for record in _iter_bound_records(path):
+        ordinal = _record_ordinal(manifest, record)
+        if ordinal in ordinals:
+            raise CampaignError("campaign_record_ordinal_duplicate")
+        ordinals.add(ordinal)
+        if len(ordinals) > manifest["max_tasks"]:
+            raise CampaignError("campaign_record_capacity_exceeded")
+    if ordinals != set(range(1, len(ordinals) + 1)):
+        raise CampaignError("campaign_record_ordinal_gap")
+    return len(ordinals)
 
 
 def merge_lane_records(
@@ -719,6 +785,25 @@ def load_merged_lane_records(
             manifest,
             tuple(load_bound_records(directory / "runs.jsonl") for directory in lanes),
         )
+    except CampaignError as error:
+        raise CampaignError(campaign_record_error_code(error)) from None
+    except OSError:
+        raise CampaignError(CAMPAIGN_RECORDS_INVALID) from None
+
+
+def count_bound_lane_records(
+    manifest: CampaignManifest, root: Path, lane_count: int = ANONYMOUS_LANE_COUNT
+) -> int:
+    """Validate every lane and return its combined count without deep copies."""
+
+    try:
+        total = sum(
+            count_bound_records(manifest, directory / "runs.jsonl")
+            for directory in existing_lane_result_directories(root, lane_count)
+        )
+        if total > manifest["max_tasks"]:
+            raise CampaignError("campaign_record_capacity_exceeded")
+        return total
     except CampaignError as error:
         raise CampaignError(campaign_record_error_code(error)) from None
     except OSError:

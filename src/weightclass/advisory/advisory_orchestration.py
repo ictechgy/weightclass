@@ -19,9 +19,9 @@ if TYPE_CHECKING or __package__:
         MAX_ANONYMOUS_LANES,
         CampaignError,
         campaign_record_error_code,
+        count_bound_lane_records,
         lane_result_directories,
         load_manifest,
-        load_merged_lane_records,
     )
     from .advisory_parallel import AdvisoryJob, AdvisoryResult, run_parallel
 else:
@@ -30,9 +30,9 @@ else:
         MAX_ANONYMOUS_LANES,
         CampaignError,
         campaign_record_error_code,
+        count_bound_lane_records,
         lane_result_directories,
         load_manifest,
-        load_merged_lane_records,
     )
     from advisory_parallel import (  # type: ignore[import-not-found]
         AdvisoryJob,
@@ -241,8 +241,8 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
                 available.append((tuple(descriptors), results_dir, lane_index))
             if request.campaign_path is not None:
                 manifest = load_manifest(request.campaign_path)
-                completed = len(
-                    load_merged_lane_records(manifest, request.results_dir, request.lane_count)
+                completed = count_bound_lane_records(
+                    manifest, request.results_dir, request.lane_count
                 )
                 if completed + busy >= manifest["max_tasks"]:
                     for held_descriptors, _, _ in available:

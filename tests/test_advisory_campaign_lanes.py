@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import stat
 import subprocess
 import sys
@@ -180,8 +181,8 @@ class AdvisoryCampaignLaneAcceptanceTests(unittest.TestCase):
                 mock.patch.object(orchestration, "load_manifest", return_value=manifest(1)),
                 mock.patch.object(
                     orchestration,
-                    "load_merged_lane_records",
-                    return_value=[record(1)],
+                    "count_bound_lane_records",
+                    return_value=1,
                 ),
                 self.assertRaisesRegex(orchestration.CampaignCapacityError, "^$"),
             ):
@@ -211,6 +212,34 @@ class AdvisoryCampaignLaneAcceptanceTests(unittest.TestCase):
             campaign.merge_lane_records(value, (first, mismatched))
         with self.assertRaisesRegex(campaign.CampaignError, "^$"):
             campaign.merge_lane_records(manifest(max_tasks=2), (first, second))
+
+    def test_count_only_lane_loader_validates_without_merging_or_copying(self) -> None:
+        campaign = load_module(CAMPAIGN, "prospective_lane_campaign_count")
+        value = manifest()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "results"
+            second = root / ".lanes" / "lane-01"
+            root.mkdir(mode=0o700)
+            second.parent.mkdir(mode=0o700)
+            second.mkdir(mode=0o700)
+            (root / "runs.jsonl").write_text(
+                "".join(f"{json.dumps(record(index))}\n" for index in (1, 2)),
+                encoding="utf-8",
+            )
+            (second / "runs.jsonl").write_text(f"{json.dumps(record(1))}\n", encoding="utf-8")
+            with mock.patch.object(
+                campaign.copy,
+                "deepcopy",
+                side_effect=AssertionError("count-only loading must not copy records"),
+            ):
+                self.assertEqual(campaign.count_bound_lane_records(value, root, 2), 3)
+
+            (second / "runs.jsonl").write_text(
+                "".join(f"{json.dumps(record(index))}\n" for index in (1, 3)),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(campaign.CampaignError, "^campaign_record_ordinal_gap$"):
+                campaign.count_bound_lane_records(value, root, 2)
 
     def test_lane_record_loader_preserves_a_value_free_binding_reason(self) -> None:
         campaign = load_module(CAMPAIGN, "prospective_lane_campaign_diagnostic")

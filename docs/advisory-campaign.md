@@ -44,7 +44,10 @@ The cross-lane allocator has a two-second bounded wait; expiration is reported
 as `managed_allocator_busy` instead of an unbounded foreground stall. The
 legacy lane-0 `dispatch.lock` is probed nonblocking, so a legacy owner moves a
 new run to another free lane. Availability reported by `doctor` is a
-point-in-time snapshot rather than a reservation.
+point-in-time snapshot rather than a reservation. Capacity checks stream and
+validate lane bindings and local ordinals while retaining only counts; full
+record merging and global in-memory ordinal rewriting remain confined to
+reporting and analysis.
 Every job runs in its own process session with an eight-hour outer deadline and a
 1 MiB combined stdout/stderr retention ceiling;
 the inner runner's narrower per-child and verifier limits still apply. Timeout
