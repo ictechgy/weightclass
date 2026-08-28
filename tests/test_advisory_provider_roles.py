@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 import threading
 import time
 import unittest
@@ -46,6 +47,42 @@ def _child_result() -> dict[str, object]:
 
 
 class AdvisoryProviderRoleTests(unittest.TestCase):
+    def test_provider_check_rejects_duplicate_vendors(self) -> None:
+        with self.assertRaises(managed_advisory.ManagedAdvisoryError):
+            managed_advisory.provider_check(
+                Path("/state"),
+                vendors=("duplicate", "duplicate"),
+                workflow="review",
+                confirm_provider_egress=True,
+            )
+
+    def test_provider_group_identity_collapses_executable_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "provider"
+            alias = Path(directory) / "provider-alias"
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            executable.chmod(0o700)
+            alias.symlink_to(executable)
+
+            self.assertEqual(
+                managed_advisory._provider_executable_group(str(executable)),
+                managed_advisory._provider_executable_group(str(alias)),
+            )
+
+    def test_local_probe_setup_failure_becomes_a_closed_receipt(self) -> None:
+        probe = managed_advisory._ProviderProbe(
+            "vendor", "cheap", ("provider",), ("command", "provider")
+        )
+        with mock.patch.object(
+            managed_advisory,
+            "_run_provider_probe_inner",
+            side_effect=managed_advisory.ManagedAdvisoryError(),
+        ):
+            result = managed_advisory._run_provider_probe(probe, "prompt", "review")
+
+        self.assertEqual(result["child_failure_code"], "local_probe_failed")
+        self.assertIs(result["ready"], False)
+
     def test_route_capabilities_only_checks_requested_roles(self) -> None:
         routes = advisory_routes.AdvisoryRoutes(
             ("cheap-cli",),

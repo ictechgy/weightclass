@@ -227,13 +227,20 @@ def __getattr__(name: str) -> object:
 
 def _load_symbols(module_names: Sequence[str]) -> None:
     """Import execution-only families on demand while preserving monkeypatch seams."""
-    for module_name in module_names:
-        module = importlib.import_module(f".{module_name}", __package__)
-        for name in vars(module):
-            if name.startswith("_"):
-                continue
-            if name not in globals():
-                globals()[name] = getattr(module, name)
+    selected = frozenset(module_names)
+    modules: dict[str, object] = {}
+    for name, module_name in _LAZY_SYMBOL_MODULES.items():
+        if module_name not in selected or name in globals():
+            continue
+        module = modules.get(module_name)
+        if module is None:
+            module = importlib.import_module(f".{module_name}", __package__)
+            modules[module_name] = module
+        globals()[name] = getattr(module, name)
+
+
+def _load_native_schema_family() -> None:
+    _load_symbols(("native_v2_schema", "v2_validation"))
 
 
 def _load_native_family() -> None:
@@ -266,6 +273,7 @@ def _load_delegation_family() -> None:
             "delegation_types",
             "native_v2_types",
             "task_v2",
+            "v2_validation",
         )
     )
 
@@ -276,6 +284,10 @@ def _load_api_family() -> None:
 
 def _load_agent_family() -> None:
     _load_symbols(("agent_discovery",))
+
+
+def _load_legacy_run_family() -> None:
+    _load_symbols(("delegation_runtime",))
 
 
 EXECUTOR_FAILED_EXIT_CODE: Final = 7
@@ -542,7 +554,6 @@ def _automatic_cost_policy(
     overrides: PresetOverrides | None = None,
 ) -> RoutingPolicy | None:
     """Resolve one packaged opt-in without writing router state or policy files."""
-    _load_native_family()
     overrides = overrides or PresetOverrides()
     if not enabled:
         if model is not None:
@@ -550,6 +561,7 @@ def _automatic_cost_policy(
         if overrides.is_empty():
             return None
         return _built_in_override_policy(policy_path, source_vendor, source_profile, overrides)
+    _load_native_schema_family()
     if policy_path is not None or source_vendor is None or source_profile is not None:
         raise InvalidInputError()
     try:
@@ -814,7 +826,7 @@ def load_routes(policy_path: Path) -> tuple[Route, ...]:
 
 def load_routing_policy(policy_path: Path) -> RoutingPolicy:
     """Load routing options and strictly shaped trusted-local routes."""
-    _load_native_family()
+    _load_native_schema_family()
     policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
     try:
         version, dispatched = dispatch_native_policy_schema(policy)
@@ -1840,7 +1852,7 @@ def route_from_standard_input(
 ) -> int:
     """Select and render a command without echoing or persisting the task."""
     _load_agent_family()
-    _load_native_family()
+    _load_native_schema_family()
     overrides = overrides or PresetOverrides()
     try:
         automatic_enabled, effective_source_vendor = _resolve_packaged_policy_selection(
@@ -1870,6 +1882,7 @@ def route_from_standard_input(
         if version == 2:
             return _native_v2_route(dispatched, source_vendor, source_profile, explicit_tier)
         if version == 3:
+            _load_native_family()
             if source_vendor is None or source_profile is None or explicit_tier is None:
                 print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
                 return 2
@@ -1982,7 +1995,7 @@ def run_from_standard_input(
 ) -> int:
     """Run a selected native command without a shell or output capture."""
     _load_agent_family()
-    _load_native_family()
+    _load_native_schema_family()
     overrides = overrides or PresetOverrides()
     try:
         automatic_enabled, effective_source_vendor = _resolve_packaged_policy_selection(
@@ -2023,6 +2036,7 @@ def run_from_standard_input(
                 explicit_tier,
             )
         if version == 3:
+            _load_native_family()
             return _native_v3_run(
                 dispatched,
                 source_vendor,
@@ -2059,6 +2073,7 @@ def run_from_standard_input(
     ):
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
+    _load_legacy_run_family()
     try:
         validate_runtime_process_context()
     except DelegationRuntimeUnavailableError:

@@ -52,6 +52,35 @@ print(json.dumps({"exit_code": exit_code, "forbidden": forbidden}))
             {"exit_code": 0, "forbidden": []},
         )
 
+    def test_advisory_run_help_parses_before_loading_the_runner(self) -> None:
+        program = """
+import json
+import sys
+from weightclass.advisory.wclass_advisory import main
+try:
+    main(["run", "--help"])
+except SystemExit as error:
+    exit_code = error.code
+forbidden = sorted(name for name in sys.modules if name in {
+    "weightclass.advisory.advisory_campaign",
+    "weightclass.advisory.advisory_orchestration",
+    "weightclass.advisory.speculative_run",
+})
+print(json.dumps({"exit_code": exit_code, "forbidden": forbidden}))
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", program],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout.splitlines()[-1]),
+            {"exit_code": 0, "forbidden": []},
+        )
+
     def test_full_cli_import_defers_execution_command_families(self) -> None:
         program = """
 import json
@@ -107,6 +136,37 @@ print(json.dumps(loaded))
 
         self.assertEqual(AGENT_IDS, BUILT_IN_AGENT_IDS)
         self.assertEqual(frozenset(API_SOURCE_VENDORS), V2_API_SOURCE_VENDORS)
+
+    def test_schema_one_route_does_not_load_native_execution_families(self) -> None:
+        program = """
+import json
+import sys
+from unittest import mock
+from weightclass.cli import main
+with mock.patch("weightclass.cli.resolve_builtin_executable", return_value="/bin/echo"):
+    exit_code = main(["route"])
+forbidden = sorted(name for name in sys.modules if name in {
+    "weightclass.native_v2_compile",
+    "weightclass.native_v2_runtime",
+    "weightclass.native_v3_compile",
+    "weightclass.native_v3_runtime",
+    "weightclass.native_v3_selector",
+})
+print(json.dumps({"exit_code": exit_code, "forbidden": forbidden}))
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", program],
+            capture_output=True,
+            check=False,
+            input="Fix a spelling typo.",
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout.splitlines()[-1]),
+            {"exit_code": 0, "forbidden": []},
+        )
 
     def test_local_classify_does_not_mislabel_unexpected_failures_as_vendor_unavailable(
         self,

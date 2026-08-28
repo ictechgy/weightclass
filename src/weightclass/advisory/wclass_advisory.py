@@ -163,9 +163,6 @@ def _top_parser() -> argparse.ArgumentParser:
 
 
 def _run(arguments: Sequence[str], *, prune: bool) -> int:
-    advisory_campaign = _load_module("advisory_campaign")
-    advisory_orchestration = _load_module("advisory_orchestration")
-    speculative_run = _load_module("speculative_run")
     parser = _run_parser("prune" if prune else "run")
     parsed, forwarded = parser.parse_known_args(arguments)
     if any(argument == "--out-dir" or argument.startswith("--out-dir=") for argument in forwarded):
@@ -181,6 +178,9 @@ def _run(arguments: Sequence[str], *, prune: bool) -> int:
         )
     except (OSError, ValueError):
         parser.error("invalid campaign option")
+    advisory_campaign = _load_module("advisory_campaign")
+    advisory_orchestration = _load_module("advisory_orchestration")
+    speculative_run = _load_module("speculative_run")
     if prune:
         return _invoke(
             speculative_run.main,

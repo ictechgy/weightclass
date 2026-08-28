@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -286,6 +287,7 @@ class _ProviderProbe:
     vendor: str
     role: str
     command: tuple[str, ...]
+    executable_group: tuple[str, int, int] | tuple[str, str]
 
 
 def _fail() -> NoReturn:
@@ -1765,7 +1767,36 @@ def _provider_check_environment() -> dict[str, str]:
     }
 
 
-def _run_provider_probe(
+def _provider_executable_group(executable: str) -> tuple[str, int, int] | tuple[str, str]:
+    """Group aliases of the same observed executable without exposing its path."""
+
+    resolved = shutil.which(executable)
+    if resolved is None:
+        return ("command", executable)
+    try:
+        metadata = os.stat(resolved, follow_symlinks=True)
+    except OSError:
+        return ("command", executable)
+    return ("file", metadata.st_dev, metadata.st_ino)
+
+
+def _provider_probe_failure(probe: _ProviderProbe) -> dict[str, object]:
+    return {
+        "vendor": probe.vendor,
+        "role": probe.role,
+        "ready": False,
+        "child_exit_code": None,
+        "child_timed_out": False,
+        "child_seconds": 0.0,
+        "child_failure_code": "local_probe_failed",
+        "child_stdout_present": False,
+        "child_stderr_present": False,
+        "result_shape": "unknown",
+        "envelope_extracted": False,
+    }
+
+
+def _run_provider_probe_inner(
     probe: _ProviderProbe, prompt: str, target_workflow: str
 ) -> dict[str, object]:
     """Run one task-free probe in a private workspace and retain no output."""
@@ -1839,6 +1870,17 @@ def _run_provider_probe(
         }
 
 
+def _run_provider_probe(
+    probe: _ProviderProbe, prompt: str, target_workflow: str
+) -> dict[str, object]:
+    """Translate local setup failures so every confirmed probe gets one receipt."""
+
+    try:
+        return _run_provider_probe_inner(probe, prompt, target_workflow)
+    except (OSError, ManagedAdvisoryError):
+        return _provider_probe_failure(probe)
+
+
 def _run_provider_probe_group(
     probes: Sequence[_ProviderProbe], prompt: str, target_workflow: str
 ) -> tuple[tuple[_ProviderProbe, dict[str, object]], ...]:
@@ -1850,9 +1892,9 @@ def _run_provider_probe_groups(
     probes: Sequence[_ProviderProbe], prompt: str, target_workflow: str
 ) -> tuple[dict[str, object], ...]:
     """Run at most four independent executable groups and restore input order."""
-    groups: dict[str, list[_ProviderProbe]] = {}
+    groups: dict[tuple[str, int, int] | tuple[str, str], list[_ProviderProbe]] = {}
     for probe in probes:
-        groups.setdefault(probe.command[0], []).append(probe)
+        groups.setdefault(probe.executable_group, []).append(probe)
     if len(groups) <= 1:
         grouped_results = tuple(
             _run_provider_probe_group(group, prompt, target_workflow) for group in groups.values()
@@ -1890,7 +1932,12 @@ def provider_check(
 ) -> dict[str, object]:
     """Run task-free, non-persisted checks for all configured provider roles."""
 
-    if not confirm_provider_egress or not vendors or workflow not in WORKFLOWS:
+    if (
+        not confirm_provider_egress
+        or not vendors
+        or len(set(vendors)) != len(vendors)
+        or workflow not in WORKFLOWS
+    ):
         _fail()
     selected_roles = _validated_required_roles(required_roles)
     if routes_by_vendor is not None and (
@@ -1929,7 +1976,10 @@ def provider_check(
         for role, capability in capabilities:
             if not capability.ready:
                 raise ProviderCapabilityError(vendor, role, capability.failure_code)
-            probes.append(_ProviderProbe(vendor, role, tuple(getattr(routes, role))))
+            command = tuple(getattr(routes, role))
+            probes.append(
+                _ProviderProbe(vendor, role, command, _provider_executable_group(command[0]))
+            )
     results = list(_run_provider_probe_groups(probes, prompt, target_workflow))
     return {
         "schema_version": 1,

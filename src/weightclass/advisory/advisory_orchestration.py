@@ -228,6 +228,7 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
             paths = prepared[request.results_dir]
             available: list[tuple[tuple[int, ...], Path, int]] = []
             busy = 0
+            busy_lane_indexes: set[int] = set()
             for lane_index, results_dir in enumerate(paths):
                 descriptors: list[int] = []
                 try:
@@ -237,12 +238,16 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
                 except _LockUnavailableError:
                     _release_descriptors(descriptors)
                     busy += 1
+                    busy_lane_indexes.add(lane_index)
                     continue
                 available.append((tuple(descriptors), results_dir, lane_index))
             if request.campaign_path is not None:
                 manifest = load_manifest(request.campaign_path)
                 completed = count_bound_lane_records(
-                    manifest, request.results_dir, request.lane_count
+                    manifest,
+                    request.results_dir,
+                    request.lane_count,
+                    busy_lane_indexes=frozenset(busy_lane_indexes),
                 )
                 if completed + busy >= manifest["max_tasks"]:
                     for held_descriptors, _, _ in available:

@@ -38,6 +38,7 @@ MAX_CAMPAIGN_BYTES = 16_384
 MAX_VERIFY_BYTES = 1_048_576
 MAX_PRICES_BYTES = 65_536
 MAX_CAMPAIGN_LOG_BYTES = 67_108_864
+MAX_CAMPAIGN_RECORD_BYTES = 1_048_576
 MAX_TASKS = 500
 ANONYMOUS_LANE_COUNT = 10
 MAX_ANONYMOUS_LANES = 16
@@ -487,6 +488,8 @@ def load_bound_records(path: Path) -> list[dict[str, object]]:
     for raw_line in payload.splitlines():
         if not raw_line.strip():
             continue
+        if len(raw_line) > MAX_CAMPAIGN_RECORD_BYTES:
+            raise CampaignError()
         try:
             value = json.loads(
                 raw_line.decode("utf-8", errors="strict"),
@@ -501,7 +504,9 @@ def load_bound_records(path: Path) -> list[dict[str, object]]:
     return records
 
 
-def _iter_bound_records(path: Path) -> Iterator[dict[str, object]]:
+def _iter_bound_records(
+    path: Path, *, allow_trailing_partial: bool = False
+) -> Iterator[dict[str, object]]:
     """Stream one bounded JSONL log without retaining the complete payload."""
 
     if not path.exists():
@@ -523,8 +528,10 @@ def _iter_bound_records(path: Path) -> Iterator[dict[str, object]]:
             descriptor = None
             for raw_line in handle:
                 consumed += len(raw_line)
-                if consumed > MAX_CAMPAIGN_LOG_BYTES:
+                if consumed > MAX_CAMPAIGN_LOG_BYTES or len(raw_line) > MAX_CAMPAIGN_RECORD_BYTES:
                     raise CampaignError()
+                if allow_trailing_partial and not raw_line.endswith(b"\n"):
+                    break
                 if not raw_line.strip():
                     continue
                 try:
@@ -725,11 +732,13 @@ def _record_ordinal(manifest: CampaignManifest, record: Mapping[str, object]) ->
         raise CampaignError("campaign_record_ordinal_invalid") from None
 
 
-def count_bound_records(manifest: CampaignManifest, path: Path) -> int:
+def count_bound_records(
+    manifest: CampaignManifest, path: Path, *, allow_trailing_partial: bool = False
+) -> int:
     """Validate one lane while retaining only its bounded ordinal set."""
 
     ordinals: set[int] = set()
-    for record in _iter_bound_records(path):
+    for record in _iter_bound_records(path, allow_trailing_partial=allow_trailing_partial):
         ordinal = _record_ordinal(manifest, record)
         if ordinal in ordinals:
             raise CampaignError("campaign_record_ordinal_duplicate")
@@ -792,14 +801,29 @@ def load_merged_lane_records(
 
 
 def count_bound_lane_records(
-    manifest: CampaignManifest, root: Path, lane_count: int = ANONYMOUS_LANE_COUNT
+    manifest: CampaignManifest,
+    root: Path,
+    lane_count: int = ANONYMOUS_LANE_COUNT,
+    *,
+    busy_lane_indexes: frozenset[int] = frozenset(),
 ) -> int:
     """Validate every lane and return its combined count without deep copies."""
 
     try:
+        if any(
+            isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < lane_count
+            for index in busy_lane_indexes
+        ):
+            raise CampaignError()
+        existing = set(existing_lane_result_directories(root, lane_count))
         total = sum(
-            count_bound_records(manifest, directory / "runs.jsonl")
-            for directory in existing_lane_result_directories(root, lane_count)
+            count_bound_records(
+                manifest,
+                directory / "runs.jsonl",
+                allow_trailing_partial=index in busy_lane_indexes,
+            )
+            for index, directory in enumerate(lane_result_directories(root, lane_count))
+            if directory in existing
         )
         if total > manifest["max_tasks"]:
             raise CampaignError("campaign_record_capacity_exceeded")
