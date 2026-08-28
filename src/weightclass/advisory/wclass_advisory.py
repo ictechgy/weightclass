@@ -141,6 +141,7 @@ def _top_parser() -> argparse.ArgumentParser:
             "init",
             "migrate-evidence",
             "migrate-routes",
+            "migrate-gate",
             "doctor",
             "cli-check",
             "provider-check",
@@ -226,6 +227,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "migrate-routes":
         managed_advisory = _load_module("managed_advisory")
         return _call(managed_advisory.migrate_routes_main, arguments[1:])
+    if command == "migrate-gate":
+        managed_advisory = _load_module("managed_advisory")
+        return _call(managed_advisory.migrate_gate_main, arguments[1:])
     if command == "doctor":
         managed_advisory = _load_module("managed_advisory")
         return _call(managed_advisory.doctor_main, arguments[1:])

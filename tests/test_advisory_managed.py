@@ -633,12 +633,118 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
         self.assertEqual(receipt["statistical_signal"], "signal_above_target")
         self.assertEqual(receipt["evidence_origin"], "sealed_campaign")
         self.assertTrue(receipt["campaign_bound"])
-        self.assertTrue(receipt["promotion_eligible"])
+        self.assertFalse(receipt["gate_preregistered"])
+        self.assertFalse(receipt["promotion_eligible"])
         self.assertFalse(receipt["policy_decision_allowed"])
         self.assertFalse(receipt["core_routing_changed"])
         rendered = json.dumps(receipt, sort_keys=True)
         self.assertNotIn("/state", rendered)
         self.assertNotIn("fingerprint", rendered)
+
+    def test_preregistered_gate_uses_sealed_values_and_rejects_overrides(self) -> None:
+        selected = managed_advisory.CampaignPaths(
+            Path("/state/profile"),
+            Path("/state/prices"),
+            Path("/state/campaign"),
+            Path("/state/results"),
+        )
+        manifest = {
+            "schema_version": 3,
+            "workflow": "design",
+            "gate": {
+                "metric": "cheap_acceptance",
+                "target_rate_bps": 5_000,
+                "alpha_bps": 500,
+            },
+            "planned_tasks": 1,
+            "minimum_advised_failures": 12,
+            "max_tasks": 150,
+        }
+        records = [{"cheap": {"accepted": True}}]
+        progress = mock.Mock(decision_eligible=True, reason="minimums_met")
+        analysis = {
+            "schema_version": 2,
+            "decision": "signal_above_target",
+            "samples": 1,
+            "accepted": 1,
+        }
+        with (
+            mock.patch.object(
+                managed_advisory,
+                "_configuration",
+                return_value=(selected, manifest, mock.Mock()),
+            ),
+            mock.patch.object(
+                advisory_campaign,
+                "load_merged_lane_records",
+                return_value=records,
+            ),
+            mock.patch.object(advisory_campaign, "campaign_progress", return_value=progress),
+            mock.patch.object(
+                managed_advisory.advisory_experiments,
+                "analyze_sequential",
+                return_value=analysis,
+            ) as analyze,
+        ):
+            receipt = managed_advisory.campaign_gate(
+                Path("/state"),
+                vendor="codex",
+                workflow="design",
+                metric=None,
+                target_rate_bps=None,
+                alpha_bps=None,
+            )
+            with self.assertRaisesRegex(
+                managed_advisory.ManagedPreflightError,
+                "^managed_campaign_gate_override_mismatch$",
+            ):
+                managed_advisory.campaign_gate(
+                    Path("/state"),
+                    vendor="codex",
+                    workflow="design",
+                    metric="cheap_acceptance",
+                    target_rate_bps=6_000,
+                    alpha_bps=500,
+                )
+
+        self.assertTrue(receipt["gate_preregistered"])
+        self.assertTrue(receipt["promotion_eligible"])
+        analyze.assert_called_once_with(
+            mock.ANY,
+            target_rate_bps=5_000,
+            alpha_bps=500,
+            minimum_samples=1,
+            maximum_samples=150,
+        )
+
+    def test_gate_migration_creates_new_generation_without_rewriting_legacy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=12,
+                max_tasks=24,
+                dry_run=False,
+            )
+            legacy = managed_advisory.campaign_paths(state_root, "codex", "review")
+            before = legacy.campaign.read_bytes()
+            receipt = managed_advisory.migrate_gate_campaigns(
+                state_root,
+                vendor="codex",
+                gate={"metric": "cheap_acceptance", "target_rate_bps": 7_500, "alpha_bps": 500},
+                dry_run=False,
+            )
+            gated = managed_advisory.preregistered_campaign_paths(state_root, "codex", "review")
+            loaded = advisory_campaign.load_manifest(gated.campaign)
+            legacy_unchanged = legacy.campaign.read_bytes() == before
+
+        self.assertFalse(receipt["already_migrated"])
+        self.assertTrue(legacy_unchanged)
+        self.assertEqual(loaded["schema_version"], 3)
+        self.assertEqual(loaded["gate"]["metric"], "cheap_acceptance")
+        self.assertFalse((gated.results / "runs.jsonl").exists())
 
     def test_advised_rescue_counts_empty_advice_without_retry_as_a_failed_outcome(self) -> None:
         outcomes = managed_advisory._campaign_gate_outcomes(

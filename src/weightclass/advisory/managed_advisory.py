@@ -75,6 +75,7 @@ EVIDENCE_WORKFLOWS = WORKFLOWS[1:]
 CLAUDE_EVIDENCE_GENERATION = "structured-v6"
 AGY_ROUTE_GENERATION = "cli-v2"
 GROK_EVIDENCE_GENERATION = "structured-v1"
+PREREGISTERED_CAMPAIGN_GENERATION = "gate-v1"
 PREVIOUS_CLAUDE_EVIDENCE_GENERATIONS = (
     "structured-v5",
     "structured-v4",
@@ -92,6 +93,8 @@ SETUP_LOCK_POLL_SECONDS = 0.02
 RUNNER_VERSION_CHANGED_EXIT = 78
 CONSULT_DEFAULT_TIMEOUT_SECONDS = 5_400.0
 PROVIDER_CHECK_MAX_EXECUTABLE_GROUPS = 4
+LEGACY_GATE_TARGET_RATE_BPS = 7_500
+LEGACY_GATE_ALPHA_BPS = 500
 _VENDOR = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _PROFILE_SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _RUNNER_BOOTSTRAP = """\
@@ -336,6 +339,27 @@ def campaign_paths(state_root: Path, vendor: str, workflow: str) -> CampaignPath
     )
 
 
+def preregistered_campaign_paths(state_root: Path, vendor: str, workflow: str) -> CampaignPaths:
+    """Return the separate sealed-gate generation without touching old bytes."""
+    selected = campaign_paths(state_root, vendor, workflow)
+    return CampaignPaths(
+        selected.profile,
+        selected.prices,
+        selected.campaign.with_name(
+            f"{selected.campaign.stem}-{PREREGISTERED_CAMPAIGN_GENERATION}.json"
+        ),
+        selected.results.with_name(f"{selected.results.name}-{PREREGISTERED_CAMPAIGN_GENERATION}"),
+    )
+
+
+def _active_campaign_paths(state_root: Path, vendor: str, workflow: str) -> CampaignPaths:
+    """Select a complete gated generation, otherwise retain the legacy path."""
+    gated = preregistered_campaign_paths(state_root, vendor, workflow)
+    if gated.campaign.exists() or gated.results.exists():
+        return gated
+    return campaign_paths(state_root, vendor, workflow)
+
+
 def legacy_campaign_paths(state_root: Path, vendor: str, workflow: str) -> CampaignPaths:
     if not state_root.is_absolute() or not _VENDOR.fullmatch(vendor) or workflow not in WORKFLOWS:
         _fail()
@@ -551,6 +575,7 @@ def _manifest_for(
     prices: Path | None,
     planned_tasks: int,
     max_tasks: int,
+    gate: Mapping[str, object] | None = None,
 ) -> advisory_campaign.CampaignManifest:
     try:
         routes = advisory_routes.routes_from_profile(
@@ -570,6 +595,7 @@ def _manifest_for(
             advisor_context="prompt",
             verify=verifier,
             prices=prices,
+            gate=gate,
         )
     except (OSError, advisory_campaign.CampaignError, advisory_routes.AdvisoryRouteError) as error:
         raise ManagedAdvisoryError() from error
@@ -583,6 +609,7 @@ def _existing_matches(
     prices_payload: bytes | None,
     planned_tasks: int,
     max_tasks: int,
+    gate: Mapping[str, object] | None = None,
 ) -> bool:
     verifier = state_root / "verify-project.py"
     try:
@@ -590,6 +617,12 @@ def _existing_matches(
         profile_path = campaign_paths(state_root, vendor, "implementation").profile
         _private_regular(profile_path)
         if _regular_bytes(profile_path, MAX_PROFILE_BYTES) != profile_payload:
+            return False
+        if gate is None and any(
+            preregistered_campaign_paths(state_root, vendor, workflow).campaign.exists()
+            or preregistered_campaign_paths(state_root, vendor, workflow).results.exists()
+            for workflow in WORKFLOWS
+        ):
             return False
         prices_path = campaign_paths(state_root, vendor, "implementation").prices
         if prices_payload is None:
@@ -602,7 +635,11 @@ def _existing_matches(
                 return False
             selected_prices = prices_path
         for workflow in WORKFLOWS:
-            selected = campaign_paths(state_root, vendor, workflow)
+            selected = (
+                preregistered_campaign_paths(state_root, vendor, workflow)
+                if gate is not None
+                else campaign_paths(state_root, vendor, workflow)
+            )
             _private_regular(selected.campaign)
             _private_directory(selected.results, create=False)
             actual = advisory_campaign.canonical_manifest_bytes(
@@ -616,6 +653,7 @@ def _existing_matches(
                     prices=selected_prices,
                     planned_tasks=planned_tasks,
                     max_tasks=max_tasks,
+                    gate=gate,
                 )
             )
             if actual != expected:
@@ -642,6 +680,7 @@ def _validate_prospective_campaigns(
     prices: Path | None,
     planned_tasks: int,
     max_tasks: int,
+    gate: Mapping[str, object] | None = None,
 ) -> None:
     try:
         for workflow in WORKFLOWS:
@@ -660,6 +699,7 @@ def _validate_prospective_campaigns(
                 advisor_context="prompt",
                 verify=Path(managed_verify.__file__),
                 prices=prices,
+                gate=gate,
             )
     except (OSError, advisory_campaign.CampaignError, advisory_routes.AdvisoryRouteError) as error:
         raise ManagedAdvisoryError() from error
@@ -673,6 +713,7 @@ def initialize_campaign_set(
     planned_tasks: int,
     max_tasks: int,
     dry_run: bool,
+    gate: Mapping[str, object] | None = None,
 ) -> InitializationReceipt:
     normalized, profile_payload = _canonical_profile(profile)
     vendor = normalized["vendor"]
@@ -683,6 +724,7 @@ def initialize_campaign_set(
         prices=prices,
         planned_tasks=planned_tasks,
         max_tasks=max_tasks,
+        gate=gate,
     )
     if dry_run:
         return _receipt(vendor, prices=prices_payload is not None, already=False, dry_run=True)
@@ -698,6 +740,7 @@ def initialize_campaign_set(
                 prices_payload=prices_payload,
                 planned_tasks=planned_tasks,
                 max_tasks=max_tasks,
+                gate=gate,
             ):
                 _fail()
             return _receipt(vendor, prices=prices_payload is not None, already=True, dry_run=False)
@@ -720,7 +763,11 @@ def initialize_campaign_set(
                 _write_private(selected_prices, prices_payload)
                 created_files.append(selected_prices)
             for workflow in WORKFLOWS:
-                selected = campaign_paths(state_root, vendor, workflow)
+                selected = (
+                    preregistered_campaign_paths(state_root, vendor, workflow)
+                    if gate is not None
+                    else campaign_paths(state_root, vendor, workflow)
+                )
                 manifest = _manifest_for(
                     profile_path,
                     workflow=workflow,
@@ -728,6 +775,7 @@ def initialize_campaign_set(
                     prices=selected_prices,
                     planned_tasks=planned_tasks,
                     max_tasks=max_tasks,
+                    gate=gate,
                 )
                 advisory_campaign.write_manifest(selected.campaign, manifest)
                 created_files.append(selected.campaign)
@@ -911,6 +959,128 @@ def migrate_evidence_campaigns(
     return migrate_vendor_campaigns(state_root, vendor=vendor, dry_run=dry_run)
 
 
+def migrate_gate_campaigns(
+    state_root: Path,
+    *,
+    vendor: str,
+    gate: Mapping[str, object],
+    dry_run: bool,
+) -> EvidenceMigrationReceipt:
+    """Create a sealed gate generation while preserving every prior population."""
+    if vendor not in BUILTIN_VENDORS and not _VENDOR.fullmatch(vendor):
+        _fail()
+    validated_gate = advisory_campaign.validate_gate(gate)
+    _private_directory(state_root, create=False)
+    descriptor = _setup_lock(state_root)
+    created_files: list[Path] = []
+    created_directories: list[Path] = []
+    try:
+        source = [campaign_paths(state_root, vendor, workflow) for workflow in WORKFLOWS]
+        destination = [
+            preregistered_campaign_paths(state_root, vendor, workflow)
+            for workflow in WORKFLOWS
+        ]
+        destination_presence = [
+            selected.campaign.exists() or selected.results.exists() for selected in destination
+        ]
+        if any(destination_presence):
+            if not all(destination_presence):
+                _fail()
+            for workflow, selected in zip(WORKFLOWS, destination, strict=True):
+                _private_regular(selected.campaign)
+                _private_directory(selected.results, create=False)
+                manifest = advisory_campaign.load_manifest(selected.campaign)
+                if manifest.get("gate") != dict(validated_gate):
+                    _fail()
+            return _migration_receipt(
+                vendor,
+                WORKFLOWS,
+                PREREGISTERED_CAMPAIGN_GENERATION,
+                already=True,
+                dry_run=dry_run,
+            )
+        if not all(
+            selected.campaign.is_file() and selected.results.is_dir() for selected in source
+        ):
+            _fail()
+        profile_path = source[0].profile
+        _private_regular(profile_path)
+        profile = _profile_from_path(profile_path)
+        if profile.get("vendor") != vendor:
+            _fail()
+        verifier = state_root / "verify-project.py"
+        _private_regular(verifier, executable=True)
+        prices_path = source[0].prices
+        selected_prices: Path | None = None
+        if prices_path.exists() or prices_path.is_symlink():
+            _private_regular(prices_path)
+            selected_prices = prices_path
+        source_manifests: list[advisory_campaign.CampaignManifest] = []
+        for workflow, selected in zip(WORKFLOWS, source, strict=True):
+            _private_regular(selected.campaign)
+            _private_directory(selected.results, create=False)
+            manifest = advisory_campaign.load_manifest(selected.campaign)
+            if (manifest["cost_basis"] == "price_table") != (selected_prices is not None):
+                _fail()
+            advisory_campaign.load_merged_lane_records(
+                manifest,
+                selected.results,
+                advisory_campaign.ANONYMOUS_LANE_COUNT,
+            )
+            source_manifests.append(manifest)
+        if dry_run:
+            return _migration_receipt(
+                vendor,
+                WORKFLOWS,
+                PREREGISTERED_CAMPAIGN_GENERATION,
+                already=False,
+                dry_run=True,
+            )
+        try:
+            for workflow, selected, previous in zip(
+                WORKFLOWS, destination, source_manifests, strict=True
+            ):
+                manifest = _manifest_for(
+                    profile_path,
+                    workflow=workflow,
+                    verifier=verifier,
+                    prices=selected_prices,
+                    planned_tasks=previous["planned_tasks"],
+                    max_tasks=previous["max_tasks"],
+                    gate=validated_gate,
+                )
+                advisory_campaign.write_manifest(selected.campaign, manifest)
+                created_files.append(selected.campaign)
+                selected.results.mkdir(mode=0o700)
+                created_directories.append(selected.results)
+            directory_descriptor = os.open(state_root, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
+            for directory in reversed(created_directories):
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+            for file_path in reversed(created_files):
+                try:
+                    file_path.unlink()
+                except OSError:
+                    pass
+            raise ManagedAdvisoryError() from None
+    finally:
+        _release_lock(descriptor)
+    return _migration_receipt(
+        vendor,
+        WORKFLOWS,
+        PREREGISTERED_CAMPAIGN_GENERATION,
+        already=False,
+        dry_run=False,
+    )
+
+
 def configured_vendors(state_root: Path) -> tuple[str, ...]:
     _private_directory(state_root, create=False)
     try:
@@ -1042,7 +1212,7 @@ def _configuration(
     *,
     validate_records: bool = True,
 ) -> tuple[CampaignPaths, advisory_campaign.CampaignManifest, advisory_routes.AdvisoryRoutes]:
-    selected = campaign_paths(state_root, vendor, workflow)
+    selected = _active_campaign_paths(state_root, vendor, workflow)
     verifier = state_root / "verify-project.py"
     _private_regular(verifier, executable=True)
     _private_regular(selected.profile)
@@ -2009,13 +2179,24 @@ def _gate_attempt_accepted(value: object, *, optional: bool = False) -> bool:
 def _campaign_gate_outcomes(
     records: Sequence[Mapping[str, object]], metric: str
 ) -> list[dict[str, object]]:
+    return _campaign_gate_population(records, metric)[0]
+
+
+def _campaign_gate_population(
+    records: Sequence[Mapping[str, object]], metric: str
+) -> tuple[list[dict[str, object]], int, int]:
+    """Return outcomes plus usable and infrastructure-excluded denominators."""
     outcomes: list[dict[str, object]] = []
+    usable_records = 0
+    excluded_infrastructure = 0
     for record in records:
         cheap = record.get("cheap")
         if not isinstance(cheap, Mapping):
             _fail()
         if cheap.get("failure_kind") == "infrastructure":
+            excluded_infrastructure += 1
             continue
+        usable_records += 1
         cheap_accepted = _gate_attempt_accepted(cheap)
         if metric == "cheap_acceptance":
             accepted = cheap_accepted
@@ -2030,7 +2211,7 @@ def _campaign_gate_outcomes(
         else:
             _fail()
         outcomes.append({"schema_version": 1, "experiment": "sequential", "accepted": accepted})
-    return outcomes
+    return outcomes, usable_records, excluded_infrastructure
 
 
 def campaign_gate(
@@ -2038,20 +2219,61 @@ def campaign_gate(
     *,
     vendor: str,
     workflow: str,
-    metric: str,
-    target_rate_bps: int,
-    alpha_bps: int,
+    metric: str | None,
+    target_rate_bps: int | None,
+    alpha_bps: int | None,
 ) -> dict[str, object]:
+    selected, manifest, _ = _configuration(state_root, vendor, workflow, validate_records=False)
+    sealed_gate = manifest.get("gate")
+    gate_preregistered = (
+        manifest.get("schema_version")
+        == advisory_campaign.PREREGISTERED_CAMPAIGN_SCHEMA_VERSION
+    )
+    if gate_preregistered:
+        if not isinstance(sealed_gate, Mapping):
+            _fail()
+        try:
+            normalized_gate = advisory_campaign.validate_gate(sealed_gate)
+        except advisory_campaign.CampaignError:
+            _fail()
+        if (
+            (metric is not None and metric != normalized_gate["metric"])
+            or (
+                target_rate_bps is not None
+                and target_rate_bps != normalized_gate["target_rate_bps"]
+            )
+            or (alpha_bps is not None and alpha_bps != normalized_gate["alpha_bps"])
+        ):
+            raise ManagedPreflightError("managed_campaign_gate_override_mismatch")
+        metric = normalized_gate["metric"]
+        target_rate_bps = normalized_gate["target_rate_bps"]
+        alpha_bps = normalized_gate["alpha_bps"]
+    else:
+        metric = metric or "cheap_acceptance"
+        target_rate_bps = (
+            LEGACY_GATE_TARGET_RATE_BPS if target_rate_bps is None else target_rate_bps
+        )
+        alpha_bps = LEGACY_GATE_ALPHA_BPS if alpha_bps is None else alpha_bps
     if metric not in CAMPAIGN_GATE_METRICS:
         _fail()
-    selected, manifest, _ = _configuration(state_root, vendor, workflow, validate_records=False)
+    if (
+        isinstance(target_rate_bps, bool)
+        or not isinstance(target_rate_bps, int)
+        or not 0 <= target_rate_bps <= 10_000
+        or isinstance(alpha_bps, bool)
+        or not isinstance(alpha_bps, int)
+        or not 1 <= alpha_bps <= 5_000
+    ):
+        _fail()
     try:
         records = advisory_campaign.load_merged_lane_records(manifest, selected.results)
     except advisory_campaign.CampaignError as error:
         raise advisory_orchestration.CampaignRecordsInvalidError(error) from None
     try:
         progress = advisory_campaign.campaign_progress(manifest, records)
-        outcomes = _campaign_gate_outcomes(records, metric)
+        outcomes, usable_records, excluded_infrastructure = _campaign_gate_population(
+            records, metric
+        )
         minimum_samples = (
             manifest["minimum_advised_failures"]
             if metric == "advised_rescue"
@@ -2090,13 +2312,17 @@ def campaign_gate(
         "vendor": vendor,
         "workflow": workflow,
         "metric": metric,
+        "gate_preregistered": gate_preregistered,
+        "metric_samples": len(outcomes),
+        "usable_samples": usable_records,
+        "excluded_infrastructure": excluded_infrastructure,
         "decision": decision,
         "decision_reason": reason,
         "statistical_signal": signal,
         "evidence_origin": "sealed_campaign",
         "campaign_bound": True,
         "campaign_minimums_met": progress.decision_eligible,
-        "promotion_eligible": decision == "eligible_for_human_review",
+        "promotion_eligible": gate_preregistered and decision == "eligible_for_human_review",
         "policy_decision_allowed": False,
         "core_routing_changed": False,
     }
@@ -2162,6 +2388,35 @@ def _role_values(values: Sequence[str]) -> dict[str, str]:
     return result
 
 
+def _gate_arguments(
+    metric: str | None,
+    target_rate_bps: int | None,
+    alpha_bps: int | None,
+) -> dict[str, object] | None:
+    """Require all gate settings together; partial registration is unsafe."""
+    values = (metric, target_rate_bps, alpha_bps)
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        _fail()
+    if metric not in advisory_campaign.CAMPAIGN_GATE_METRICS:
+        _fail()
+    if (
+        isinstance(target_rate_bps, bool)
+        or not isinstance(target_rate_bps, int)
+        or not 0 <= target_rate_bps <= 10_000
+        or isinstance(alpha_bps, bool)
+        or not isinstance(alpha_bps, int)
+        or not 1 <= alpha_bps <= 5_000
+    ):
+        _fail()
+    return {
+        "metric": metric,
+        "target_rate_bps": target_rate_bps,
+        "alpha_bps": alpha_bps,
+    }
+
+
 def _root(value: Path | None) -> Path:
     selected = default_state_root() if value is None else value.expanduser()
     if not selected.is_absolute():
@@ -2179,9 +2434,20 @@ def init_main(argv: Sequence[str]) -> int:
     parser.add_argument("--prices", type=Path)
     parser.add_argument("--planned-tasks", type=int, default=60)
     parser.add_argument("--max-tasks", type=int, default=150)
+    parser.add_argument(
+        "--gate-metric",
+        choices=tuple(sorted(advisory_campaign.CAMPAIGN_GATE_METRICS)),
+    )
+    parser.add_argument("--gate-target-rate-bps", type=int)
+    parser.add_argument("--gate-alpha-bps", type=int)
     parser.add_argument("--dry-run", action="store_true")
     arguments = parser.parse_args(argv)
     try:
+        gate = _gate_arguments(
+            arguments.gate_metric,
+            arguments.gate_target_rate_bps,
+            arguments.gate_alpha_bps,
+        )
         if arguments.profile is not None:
             if arguments.vendor is not None or arguments.model or arguments.effort:
                 _fail()
@@ -2202,6 +2468,7 @@ def init_main(argv: Sequence[str]) -> int:
             planned_tasks=arguments.planned_tasks,
             max_tasks=arguments.max_tasks,
             dry_run=arguments.dry_run,
+            gate=gate,
         )
     except SetupUnavailableError:
         print(json.dumps({"error": "managed_setup_busy"}), file=sys.stderr)
@@ -2252,6 +2519,42 @@ def migrate_routes_main(argv: Sequence[str]) -> int:
         return 2
     except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
         print(json.dumps({"error": "managed_route_migration_rejected"}), file=sys.stderr)
+        return 2
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def migrate_gate_main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(prog="wclass-advisory migrate-gate", allow_abbrev=False)
+    parser.add_argument("--state-root", type=Path)
+    parser.add_argument("--vendor", required=True)
+    parser.add_argument(
+        "--gate-metric",
+        required=True,
+        choices=tuple(sorted(advisory_campaign.CAMPAIGN_GATE_METRICS)),
+    )
+    parser.add_argument("--gate-target-rate-bps", required=True, type=int)
+    parser.add_argument("--gate-alpha-bps", required=True, type=int)
+    parser.add_argument("--dry-run", action="store_true")
+    arguments = parser.parse_args(argv)
+    try:
+        gate = _gate_arguments(
+            arguments.gate_metric,
+            arguments.gate_target_rate_bps,
+            arguments.gate_alpha_bps,
+        )
+        assert gate is not None
+        receipt = migrate_gate_campaigns(
+            _root(arguments.state_root),
+            vendor=arguments.vendor,
+            gate=gate,
+            dry_run=arguments.dry_run,
+        )
+    except SetupUnavailableError:
+        print(json.dumps({"error": "managed_setup_busy"}), file=sys.stderr)
+        return 2
+    except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
+        print(json.dumps({"error": "managed_gate_migration_rejected"}), file=sys.stderr)
         return 2
     print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
     return 0
@@ -2515,14 +2818,14 @@ def campaign_gate_main(argv: Sequence[str]) -> int:
     parser.add_argument("--state-root", type=Path)
     parser.add_argument("--vendor", required=True)
     parser.add_argument("--workflow", required=True, choices=WORKFLOWS)
-    parser.add_argument("--metric", required=True, choices=CAMPAIGN_GATE_METRICS)
-    parser.add_argument("--target-rate-bps", type=int, default=7_500)
-    parser.add_argument("--alpha-bps", type=int, default=500)
+    parser.add_argument("--metric", choices=CAMPAIGN_GATE_METRICS)
+    parser.add_argument("--target-rate-bps", type=int)
+    parser.add_argument("--alpha-bps", type=int)
     arguments = parser.parse_args(argv)
     try:
-        if not 0 <= arguments.target_rate_bps <= 10_000:
+        if arguments.target_rate_bps is not None and not 0 <= arguments.target_rate_bps <= 10_000:
             _fail()
-        if not 1 <= arguments.alpha_bps <= 5_000:
+        if arguments.alpha_bps is not None and not 1 <= arguments.alpha_bps <= 5_000:
             _fail()
         root = _root(arguments.state_root)
         vendors = _selected_vendors(root, arguments.vendor)
@@ -2537,6 +2840,9 @@ def campaign_gate_main(argv: Sequence[str]) -> int:
             alpha_bps=arguments.alpha_bps,
         )
     except advisory_orchestration.CampaignRecordsInvalidError as error:
+        print(json.dumps({"error": error.code}), file=sys.stderr)
+        return 2
+    except ManagedPreflightError as error:
         print(json.dumps({"error": error.code}), file=sys.stderr)
         return 2
     except (OSError, ValueError, ManagedAdvisoryError):
@@ -2564,7 +2870,7 @@ def status_main(argv: Sequence[str]) -> int:
         portfolio_arguments = ["wclass-advisory status"]
         for vendor in vendors:
             for workflow in workflows:
-                selected = campaign_paths(root, vendor, workflow)
+                selected = _active_campaign_paths(root, vendor, workflow)
                 portfolio_arguments.extend(
                     (
                         "--campaign",
@@ -2599,7 +2905,7 @@ def prune_main(argv: Sequence[str]) -> int:
         }
         for vendor in vendors:
             for workflow in _selected_workflows(arguments.workflow):
-                selected = campaign_paths(root, vendor, workflow)
+                selected = _active_campaign_paths(root, vendor, workflow)
                 result = speculative_run.prune_available_lanes(selected.results)
                 totals["populations"] += 1
                 for field in (
