@@ -7,8 +7,8 @@ class Weightclass < Formula
 
   desc "Local, policy-driven routing for agent CLI workflows"
   homepage "https://github.com/ictechgy/weightclass"
-  url "https://files.pythonhosted.org/packages/af/59/127e1df37ea364cc34161b2916c0d319fe197bcc403e03db176d79f72b6a/weightclass-0.18.0.tar.gz"
-  sha256 "1b6813901cdad9ddfd8fc9508befa5a0138ece89069bcefe3ad444a627d0a60f"
+  url "https://files.pythonhosted.org/packages/db/ef/f2d98183e68b32e756368874db4236fc8e4e6fbb09f1d1154d781c494921/weightclass-0.19.0.tar.gz"
+  sha256 "04a87d4c87dacb51fc50bd5c10f5168a54715daef363745040a6487e25d975d2"
   license "MIT"
 
   depends_on "python@3.13"
@@ -52,6 +52,14 @@ class Weightclass < Formula
                  shell_output("#{bin}/wclass-advisory consult --help")
     assert_match "context-2x2",
                  shell_output("#{bin}/wclass-advisory experiment --help")
+    assert_match "campaign-gate",
+                 shell_output("#{bin}/wclass-advisory --help")
+    assert_match "--workflow",
+                 shell_output("#{bin}/wclass-advisory status --help")
+    assert_match "--timeout-seconds",
+                 shell_output("#{bin}/wclass-advisory consult --help")
+    assert_match "--confirm-provider-egress",
+                 shell_output("#{bin}/wclass-advisory dispatch --help")
 
     # 잘못된 입력은 닫히는 방향으로 실패하고 태스크를 되비추지 않아야 한다.
     output = pipe_output("#{bin}/wclass classify 2>&1", "", 2)
