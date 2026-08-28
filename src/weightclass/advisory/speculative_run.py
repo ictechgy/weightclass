@@ -4082,6 +4082,8 @@ def attempt(
     readonly_snapshot_fallback = False
     skip_handover = False
     handover_ready = False
+    workspace_root_identity: tuple[int, int] | None = None
+    handover_root_identity: tuple[int, int] | None = None
     failure_stage = "setup"
     try:
         work_root.mkdir(mode=0o700, exist_ok=True)
@@ -4089,6 +4091,8 @@ def attempt(
         # 이 try 안에서 회수되어, 두 번째 디렉터리를 만들기 전의 틈도 남지 않는다.
         workspace = create_registered_workspace(f"spec-{name}-", work_root, registry, out_dir)
         handover = create_registered_workspace(f"spec-{name}-", work_root, registry, out_dir)
+        workspace_root_identity = readonly_snapshot.root_identity(workspace)
+        handover_root_identity = readonly_snapshot.root_identity(handover)
         record["workspace"] = str(handover) if handover is not None else None
         # 패치 이름에 무작위 접미사를 물려 준다. 고정 이름이면 과제를 20개 재는
         # 동안 out_dir/cheap.patch 를 계속 덮어써 마지막 하나만 남고, 그 20개를
@@ -4145,10 +4149,24 @@ def attempt(
         # known agent-scaffolding names.  No Git command or child-owned .git
         # metadata is consulted after the child exits.
         failure_stage = "handover"
+        roots_replaced = (
+            workspace_root_identity is None
+            or handover_root_identity is None
+            or not readonly_snapshot.same_root(workspace, workspace_root_identity)
+            or not readonly_snapshot.same_root(handover, handover_root_identity)
+        )
+        if roots_replaced:
+            if workflow == "implementation":
+                raise RunFailure("workspace root changed")
+            record["error"] = "read-only route changed the repository"
+            record["failure_kind"] = "route"
+            record["failure_stage"] = "handover"
+        already_rejected = child_execution_failed or record.get("error") is not None
         if (
             workflow != "implementation"
             and readonly_baseline is not None
             and not readonly_snapshot_fallback
+            and not already_rejected
         ):
             try:
                 readonly_comparison = readonly_snapshot.compare_tree(
@@ -4179,14 +4197,8 @@ def attempt(
         # the safe compatibility fallback.  If execution/result already
         # failed, or the snapshot found a mutation, acceptance is impossible;
         # skip the second clone and verifier entirely.
-        skip_handover = (
-            workflow != "implementation"
-            and not readonly_snapshot_fallback
-            and (
-                child_execution_failed
-                or record.get("error") is not None
-                or bool(readonly_comparison and readonly_comparison.changed)
-            )
+        skip_handover = workflow != "implementation" and (
+            already_rejected or bool(readonly_comparison and readonly_comparison.changed)
         )
         if not skip_handover:
             build_scaffolding = build_handover_tree(repo, commit, workspace, handover, scaffolding)
@@ -4207,6 +4219,9 @@ def attempt(
             # clean handover is built.
             patch_bytes = b""
             record["patch_lines"] = 0
+            record.setdefault("excluded_scaffolding", [])
+            record.setdefault("dropped_ignored", 0)
+            record.setdefault("made_changes", False)
         if workflow == "implementation" and child_execution_failed and not record["made_changes"]:
             record["error"] = (
                 "route_execution_timed_out"

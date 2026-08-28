@@ -58,6 +58,7 @@ class SnapshotEntry:
 
 @dataclass(frozen=True)
 class TreeSnapshot:
+    root: SnapshotEntry
     entries: tuple[tuple[str, SnapshotEntry], ...]
     total_bytes: int
 
@@ -107,6 +108,25 @@ def _entry_metadata(metadata: os.stat_result, kind: str) -> SnapshotEntry:
         uid=metadata.st_uid,
         gid=metadata.st_gid,
     )
+
+
+def root_identity(root: Path) -> tuple[int, int]:
+    """Return one real directory identity without following its pathname."""
+
+    try:
+        metadata = root.lstat()
+    except OSError:
+        raise SnapshotRejected() from None
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise SnapshotRejected()
+    return metadata.st_dev, metadata.st_ino
+
+
+def same_root(root: Path, expected: tuple[int, int]) -> bool:
+    try:
+        return root_identity(root) == expected
+    except SnapshotRejected:
+        return False
 
 
 def _read_regular(
@@ -300,7 +320,18 @@ def snapshot_tree(root: Path) -> TreeSnapshot:
     nofollow, directory, cloexec = _require_descriptor_support()
     descriptor: int | None = None
     try:
+        expected_root = root_identity(root)
         descriptor = os.open(root, os.O_RDONLY | directory | nofollow | cloexec)
+        opened_root = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(opened_root.st_mode)
+            or (
+                opened_root.st_dev,
+                opened_root.st_ino,
+            )
+            != expected_root
+        ):
+            raise SnapshotRejected()
         entries: dict[str, SnapshotEntry] = {}
         total = [0]
         _scan_directory(
@@ -315,7 +346,12 @@ def snapshot_tree(root: Path) -> TreeSnapshot:
             skip_top_level_git=True,
             root_device=os.fstat(descriptor).st_dev,
         )
-        return TreeSnapshot(tuple(sorted(entries.items())), total[0])
+        final_root = os.fstat(descriptor)
+        if (final_root.st_dev, final_root.st_ino) != expected_root:
+            raise SnapshotRejected()
+        return TreeSnapshot(
+            _entry_metadata(final_root, "directory"), tuple(sorted(entries.items())), total[0]
+        )
     except SnapshotError:
         raise
     except (OSError, ValueError):
@@ -332,7 +368,12 @@ def compare_tree(
     root: Path, baseline: TreeSnapshot, scaffolding: frozenset[str]
 ) -> SnapshotComparison:
     """Compare a post-child tree and return only task-free aggregate details."""
+    expected_root = (baseline.root.device, baseline.root.inode)
+    if not same_root(root, expected_root):
+        raise SnapshotRejected()
     current = snapshot_tree(root)
+    if (current.root.device, current.root.inode) != expected_root:
+        raise SnapshotRejected()
     before = dict(baseline.entries)
     after = dict(current.entries)
     changed_names = {name for name in before.keys() ^ after.keys()}
@@ -342,8 +383,9 @@ def compare_tree(
     scaffolding_names = {
         part for name in changed_names for part in name.split("/") if part in scaffolding
     }
+    root_changed = current.root != baseline.root
     return SnapshotComparison(
-        changed=bool(changed_names),
-        changed_count=len(changed_names),
+        changed=bool(changed_names) or root_changed,
+        changed_count=len(changed_names) + int(root_changed),
         scaffolding=tuple(sorted(scaffolding_names)),
     )

@@ -118,13 +118,30 @@ class ReadonlySnapshotTests(unittest.TestCase):
             target.mkdir()
             link = root / "link"
             link.symlink_to(target, target_is_directory=True)
-            with self.assertRaises(snapshot.SnapshotUnsupported):
+            with self.assertRaises(snapshot.SnapshotRejected):
                 snapshot.snapshot_tree(link)
 
             (root / "large").write_bytes(b"12345")
             with mock.patch.object(snapshot, "MAX_SNAPSHOT_FILE_BYTES", 4):
                 with self.assertRaises(snapshot.SnapshotUnsupported):
                     snapshot.snapshot_tree(root)
+
+    def test_replaced_root_is_rejected_instead_of_following_a_symlink(self) -> None:
+        snapshot = load_module(SNAPSHOT, "readonly_snapshot_root_replacement")
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            root = parent / "workspace"
+            moved = parent / "moved"
+            outside = parent / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (root / "tracked").write_text("base", encoding="utf-8")
+            baseline = snapshot.snapshot_tree(root)
+            root.rename(moved)
+            root.symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaises(snapshot.SnapshotRejected):
+                snapshot.compare_tree(root, baseline, frozenset())
 
 
 class ReadonlyClonePathTests(unittest.TestCase):
@@ -228,10 +245,17 @@ class ReadonlyClonePathTests(unittest.TestCase):
             registry = output / "workspaces.txt"
             clone_calls: list[str] = []
             real_clone = runner.clone_at
-            with mock.patch.object(
-                runner,
-                "clone_at",
-                side_effect=recording_clone(clone_calls, real_clone),
+            with (
+                mock.patch.object(
+                    runner.readonly_snapshot,
+                    "snapshot_tree",
+                    side_effect=runner.readonly_snapshot.SnapshotUnsupported(),
+                ),
+                mock.patch.object(
+                    runner,
+                    "clone_at",
+                    side_effect=recording_clone(clone_calls, real_clone),
+                ),
             ):
                 record, _, _ = runner.attempt(
                     "cheap",
@@ -361,6 +385,67 @@ class ReadonlyClonePathTests(unittest.TestCase):
             self.assertEqual(record["failure_stage"], "handover")
             self.assertEqual(record["verify"]["exit_code"], None)
             self.assertEqual(clone_calls, ["full"])
+
+    def test_workspace_root_symlink_never_reaches_handover_or_verifier(self) -> None:
+        runner = load_module(RUNNER, "readonly_snapshot_runner_root_symlink")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            outside = root / "outside"
+            repo.mkdir()
+            outside.mkdir()
+            (outside / "sentinel").write_text("OUTSIDE", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "config", "user.email", "test@example.invalid"],
+                check=True,
+            )
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+            verify_marker = root / "verified"
+            verify = root / "verify"
+            verify.write_text(f"#!/bin/sh\ntouch {verify_marker}\n", encoding="utf-8")
+            verify.chmod(0o700)
+            child = (
+                "import json,pathlib,sys;sys.stdin.read();"
+                "cwd=pathlib.Path.cwd();moved=cwd.with_name(cwd.name+'-moved');"
+                "cwd.rename(moved);cwd.symlink_to(pathlib.Path(sys.argv[1]),target_is_directory=True);"
+                f"print(json.dumps({review_result()!r}))"
+            )
+            output = root / "out"
+            output.mkdir()
+            registry = output / "workspaces.txt"
+            clone_calls: list[str] = []
+            real_clone = runner.clone_at
+            with mock.patch.object(
+                runner,
+                "clone_at",
+                side_effect=recording_clone(clone_calls, real_clone),
+            ):
+                record, _, _ = runner.attempt(
+                    "cheap",
+                    [sys.executable, "-c", child, str(outside)],
+                    repo,
+                    runner.head_commit(repo),
+                    "bounded task",
+                    verify,
+                    output,
+                    registry,
+                    frozenset(),
+                    None,
+                    None,
+                    None,
+                    False,
+                    workflow="review",
+                )
+
+            self.assertFalse(record["accepted"])
+            self.assertEqual(record["failure_stage"], "handover")
+            self.assertEqual(clone_calls, ["full"])
+            self.assertFalse(verify_marker.exists())
+            self.assertEqual((outside / "sentinel").read_text(encoding="utf-8"), "OUTSIDE")
 
 
 if __name__ == "__main__":
