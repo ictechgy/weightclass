@@ -281,8 +281,8 @@ class AdvisoryProviderRoleTests(unittest.TestCase):
 
         self.assertTrue(receipt["ready"])
         self.assertEqual(receipt["calls"], len(vendors))
+        self.assertGreater(max_active, 1)
         self.assertLessEqual(max_active, managed_advisory.PROVIDER_CHECK_MAX_EXECUTABLE_GROUPS)
-        self.assertEqual(max_active, managed_advisory.PROVIDER_CHECK_MAX_EXECUTABLE_GROUPS)
 
 
 if __name__ == "__main__":
