@@ -36,6 +36,8 @@ EVIDENCE_CAMPAIGN_SCHEMA_VERSION = 2
 PREREGISTERED_CAMPAIGN_SCHEMA_VERSION = 3
 CAMPAIGN_WORKFLOWS = frozenset({"implementation", "review", "research", "diagnosis", "design"})
 CAMPAIGN_GATE_METRICS = frozenset({"cheap_acceptance", "advised_rescue", "final_acceptance"})
+CAMPAIGN_GATE_METHOD = "simultaneous_hoeffding_union_bound_v1"
+CAMPAIGN_GATE_POPULATION_RULE = "metric_eligible_non_infrastructure_v1"
 MINIMUM_ADVISED_FAILURES = 12
 MAX_CAMPAIGN_BYTES = 16_384
 MAX_VERIFY_BYTES = 1_048_576
@@ -163,6 +165,8 @@ class CampaignGate(TypedDict):
     metric: str
     target_rate_bps: int
     alpha_bps: int
+    method: str
+    population_rule: str
 
 
 class CampaignProgress(NamedTuple):
@@ -391,26 +395,37 @@ def _route(value: object) -> RouteContract:
     }
 
 
-def _gate(value: object) -> CampaignGate:
-    if not isinstance(value, Mapping) or set(value) != {
+def _gate(value: object, *, allow_contract_defaults: bool = False) -> CampaignGate:
+    base_keys = {
         "metric",
         "target_rate_bps",
         "alpha_bps",
-    }:
+    }
+    contract_keys = {"method", "population_rule"}
+    if not isinstance(value, Mapping) or set(value) not in (
+        base_keys | contract_keys,
+        base_keys if allow_contract_defaults else set(),
+    ):
         raise CampaignError()
     metric = _string(value["metric"], CAMPAIGN_GATE_METRICS)
     target_rate_bps = _integer(value["target_rate_bps"], 0, 10_000)
     alpha_bps = _integer(value["alpha_bps"], 1, 5_000)
+    method = value.get("method", CAMPAIGN_GATE_METHOD)
+    population_rule = value.get("population_rule", CAMPAIGN_GATE_POPULATION_RULE)
+    if method != CAMPAIGN_GATE_METHOD or population_rule != CAMPAIGN_GATE_POPULATION_RULE:
+        raise CampaignError()
     return {
         "metric": metric,
         "target_rate_bps": target_rate_bps,
         "alpha_bps": alpha_bps,
+        "method": CAMPAIGN_GATE_METHOD,
+        "population_rule": CAMPAIGN_GATE_POPULATION_RULE,
     }
 
 
 def validate_gate(value: object) -> CampaignGate:
     """Validate and normalize a task-free preregistered statistical gate."""
-    return _gate(value)
+    return _gate(value, allow_contract_defaults=True)
 
 
 def _manifest_payload(raw: object) -> CampaignManifest:
@@ -626,7 +641,7 @@ def build_manifest(
             "target_rate_bps": gate_target_rate_bps,
             "alpha_bps": gate_alpha_bps,
         }
-    normalized_gate = _gate(gate) if gate is not None else None
+    normalized_gate = _gate(gate, allow_contract_defaults=True) if gate is not None else None
     selected_workflow = _string(workflow, CAMPAIGN_WORKFLOWS)
     schema_version = (
         PREREGISTERED_CAMPAIGN_SCHEMA_VERSION

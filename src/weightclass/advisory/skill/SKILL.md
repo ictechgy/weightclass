@@ -278,9 +278,18 @@ does not append a sample, and does not affect the campaign stopping gate.
   campaign evidence, not permission to run unbounded manual retries.
 - Keep every workflow and vendor in its already-sealed campaign. Never move or
   combine logs to manufacture a larger sample.
+- A formal campaign gate requires one primary population per managed state
+  root. Before dispatching that population, run `wclass-advisory migrate-gate
+  --vendor <vendor> --workflow <workflow> --gate-metric
+  <cheap_acceptance|advised_rescue|final_acceptance>
+  --gate-target-rate-bps <0..10000> --gate-alpha-bps <1..5000>`. The command
+  starts an empty schema-3 generation and never copies or rebinds legacy
+  records. A second primary vendor/workflow in the same state root is rejected.
 - Narrow aggregate inspection with `wclass-advisory status --vendor <vendor-or-all>
   --workflow <workflow-or-all>`. When a population reaches its sealed minimums,
   use `wclass-advisory campaign-gate --vendor <one-vendor> --workflow <workflow>
-  --metric <cheap_acceptance|advised_rescue|final_acceptance>`. Treat
+  `. The sealed gate supplies metric, target, method, population rule, and
+  alpha. Use `--generation legacy --metric ...` only for explicitly exploratory
+  analysis; it can never set `promotion_eligible`. Treat
   `eligible_for_human_review` as evidence for a human review only;
   `policy_decision_allowed` remains false and the command never changes routing.

@@ -590,7 +590,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             "max_tasks": 150,
         }
         routes = advisory_routes.AdvisoryRoutes(("vendor",), ("vendor",), ("vendor",))
-        records = [
+        records: list[dict[str, object]] = [
             {
                 "cheap": {"accepted": True},
                 "advice_failure": {} if index < 12 else None,
@@ -665,6 +665,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
         progress = mock.Mock(decision_eligible=True, reason="minimums_met")
         analysis = {
             "schema_version": 2,
+            "method": "simultaneous_hoeffding_union_bound",
             "decision": "signal_above_target",
             "samples": 1,
             "accepted": 1,
@@ -710,6 +711,9 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
 
         self.assertTrue(receipt["gate_preregistered"])
         self.assertTrue(receipt["promotion_eligible"])
+        self.assertEqual(receipt["gate_method"], "simultaneous_hoeffding_union_bound_v1")
+        self.assertEqual(receipt["population_rule"], "metric_eligible_non_infrastructure_v1")
+        self.assertEqual(receipt["multiplicity_scope"], "single_primary_population")
         analyze.assert_called_once_with(
             mock.ANY,
             target_rate_bps=5_000,
@@ -734,6 +738,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             receipt = managed_advisory.migrate_gate_campaigns(
                 state_root,
                 vendor="codex",
+                workflow="review",
                 gate={"metric": "cheap_acceptance", "target_rate_bps": 7_500, "alpha_bps": 500},
                 dry_run=False,
             )
@@ -742,7 +747,26 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             active, active_manifest, _ = managed_advisory._configuration(
                 state_root, "codex", "review"
             )
+            legacy_active, legacy_manifest, _ = managed_advisory._configuration(
+                state_root, "codex", "review", legacy_generation=True
+            )
+            with self.assertRaises(managed_advisory.ManagedAdvisoryError):
+                managed_advisory.migrate_gate_campaigns(
+                    state_root,
+                    vendor="codex",
+                    workflow="design",
+                    gate={
+                        "metric": "cheap_acceptance",
+                        "target_rate_bps": 7_500,
+                        "alpha_bps": 500,
+                    },
+                    dry_run=False,
+                )
             legacy_unchanged = legacy.campaign.read_bytes() == before
+            design_gate_exists = managed_advisory.preregistered_campaign_paths(
+                state_root, "codex", "design"
+            ).campaign.exists()
+            gate_log_exists = (gated.results / "runs.jsonl").exists()
 
         self.assertFalse(receipt["already_migrated"])
         self.assertTrue(legacy_unchanged)
@@ -750,7 +774,95 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
         self.assertEqual(loaded["gate"]["metric"], "cheap_acceptance")
         self.assertEqual(active, gated)
         self.assertEqual(active_manifest, loaded)
-        self.assertFalse((gated.results / "runs.jsonl").exists())
+        self.assertEqual(legacy_active, legacy)
+        self.assertEqual(legacy_manifest["schema_version"], 2)
+        self.assertFalse(design_gate_exists)
+        self.assertFalse(gate_log_exists)
+
+    def test_gate_migration_recovers_only_a_matching_empty_partial_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=12,
+                max_tasks=24,
+                dry_run=False,
+            )
+            gate = {"metric": "cheap_acceptance", "target_rate_bps": 7_500, "alpha_bps": 500}
+            source = managed_advisory.campaign_paths(state_root, "codex", "review")
+            partial = managed_advisory.preregistered_campaign_paths(state_root, "codex", "review")
+            manifest = managed_advisory._manifest_for(
+                source.profile,
+                workflow="review",
+                verifier=state_root / "verify-project.py",
+                prices=None,
+                planned_tasks=12,
+                max_tasks=24,
+                gate=gate,
+            )
+            advisory_campaign.write_manifest(partial.campaign, manifest)
+
+            receipt = managed_advisory.migrate_gate_campaigns(
+                state_root,
+                vendor="codex",
+                workflow="review",
+                gate=gate,
+                dry_run=False,
+            )
+            campaign_recovered = partial.campaign.is_file()
+            results_recovered = partial.results.is_dir()
+
+        self.assertFalse(receipt["already_migrated"])
+        self.assertTrue(campaign_recovered)
+        self.assertTrue(results_recovered)
+
+    def test_advised_rescue_reports_task_and_metric_denominators_separately(self) -> None:
+        records: list[dict[str, object]] = [
+            {"cheap": {"accepted": False}, "advice_failure": {"kind": "quality"}},
+            {"cheap": {"accepted": True}},
+            {"cheap": {"accepted": False, "failure_kind": "infrastructure"}},
+        ]
+        outcomes, usable_tasks, excluded = managed_advisory._campaign_gate_population(
+            records, "advised_rescue"
+        )
+
+        self.assertEqual(len(outcomes), 1)
+        self.assertEqual(usable_tasks, 2)
+        self.assertEqual(excluded, 1)
+
+    def test_gate_migration_never_deletes_a_nonempty_partial_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=12,
+                max_tasks=24,
+                dry_run=False,
+            )
+            partial = managed_advisory.preregistered_campaign_paths(state_root, "codex", "review")
+            partial.results.mkdir(mode=0o700)
+            sentinel = partial.results / "runs.jsonl"
+            sentinel.write_text("PRESERVE\n", encoding="utf-8")
+
+            with self.assertRaises(managed_advisory.ManagedAdvisoryError):
+                managed_advisory.migrate_gate_campaigns(
+                    state_root,
+                    vendor="codex",
+                    workflow="review",
+                    gate={
+                        "metric": "cheap_acceptance",
+                        "target_rate_bps": 7_500,
+                        "alpha_bps": 500,
+                    },
+                    dry_run=False,
+                )
+            preserved = sentinel.read_text(encoding="utf-8")
+
+        self.assertEqual(preserved, "PRESERVE\n")
 
     def test_advised_rescue_counts_empty_advice_without_retry_as_a_failed_outcome(self) -> None:
         outcomes = managed_advisory._campaign_gate_outcomes(

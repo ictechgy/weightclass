@@ -28,14 +28,19 @@ table. Without it the campaign uses the vendor-reported basis; incomplete cost
 reporting causes an economic abstention rather than invented pricing. A
 schema-2 arbitrary vendor can use `init --profile /path/to/profile.json`.
 
-To preregister the statistical gate for a new population, supply all three
-gate flags together. They are sealed into a separate schema-3 generation and
-cannot be changed by a later analysis command:
+To preregister the statistical gate for a new population, first initialize the
+ordinary empty campaigns, then migrate them before any dispatch. All three gate
+flags are required together. They are sealed into a separate schema-3
+generation together with the versioned simultaneous-Hoeffding method and the
+metric-eligible, non-infrastructure population rule. They cannot be changed by
+a later analysis command. One managed state root accepts only one primary
+vendor/workflow population, preventing an unadjusted pick among several gates:
 
 ```sh
 wclass-advisory init --vendor codex \
   --model cheap=CHEAP --model advisor=ADVISOR --model expensive=EXPENSIVE \
-  --effort cheap=low --effort advisor=high --effort expensive=high \
+  --effort cheap=low --effort advisor=high --effort expensive=high
+wclass-advisory migrate-gate --vendor codex --workflow review \
   --gate-metric cheap_acceptance --gate-target-rate-bps 7500 --gate-alpha-bps 500
 ```
 
@@ -44,10 +49,10 @@ It validates the old population, preserves its campaign and records, and
 starts an empty schema-3 generation:
 
 ```sh
-wclass-advisory migrate-gate --vendor codex \
+wclass-advisory migrate-gate --vendor codex --workflow review \
   --gate-metric cheap_acceptance --gate-target-rate-bps 7500 --gate-alpha-bps 500 \
   --dry-run
-wclass-advisory migrate-gate --vendor codex \
+wclass-advisory migrate-gate --vendor codex --workflow review \
   --gate-metric cheap_acceptance --gate-target-rate-bps 7500 --gate-alpha-bps 500
 ```
 
@@ -158,8 +163,9 @@ for filtered aggregate readiness and evidence. A single sealed population can
 be evaluated with `wclass-advisory campaign-gate --vendor VENDOR --workflow
 WORKFLOW`. For schema 3 the sealed metric, target, and alpha are used; a
 different override is rejected. Legacy schema-1/2 campaigns remain available
-for exploratory analysis, but report `gate_preregistered:false` and can never
-report `promotion_eligible:true`. Even an eligible result remains a human
+for exploratory analysis with `--generation legacy`, but report
+`gate_preregistered:false` and can never report `promotion_eligible:true`.
+Even an eligible result remains a human
 review input with `policy_decision_allowed:false`. Use
 `wclass-advisory cleanup` only to prune registered disposable workspaces; it
 does not remove profiles, sealed campaigns, or aggregate records. Cleanup

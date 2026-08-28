@@ -142,7 +142,13 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
         self.assertEqual(loaded["workflow"], "implementation")
         self.assertEqual(
             loaded["gate"],
-            {"metric": "cheap_acceptance", "target_rate_bps": 7_500, "alpha_bps": 500},
+            {
+                "metric": "cheap_acceptance",
+                "target_rate_bps": 7_500,
+                "alpha_bps": 500,
+                "method": "simultaneous_hoeffding_union_bound_v1",
+                "population_rule": "metric_eligible_non_infrastructure_v1",
+            },
         )
         self.assertNotEqual(gated["campaign_fingerprint"], changed["campaign_fingerprint"])
 
@@ -176,6 +182,15 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                         "metric": "unknown",
                         "target_rate_bps": 7_500,
                         "alpha_bps": 500,
+                    }
+                },
+                {
+                    "gate": {
+                        "metric": "cheap_acceptance",
+                        "target_rate_bps": 7_500,
+                        "alpha_bps": 500,
+                        "method": "unsealed_future_method",
+                        "population_rule": "metric_eligible_non_infrastructure_v1",
                     }
                 },
             ):
