@@ -748,7 +748,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                 state_root, "codex", "review"
             )
             legacy_active, legacy_manifest, _ = managed_advisory._configuration(
-                state_root, "codex", "review", legacy_generation=True
+                state_root, "codex", "review", source_generation=True
             )
             with self.assertRaises(managed_advisory.ManagedAdvisoryError):
                 managed_advisory.migrate_gate_campaigns(
@@ -803,6 +803,15 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                 gate=gate,
             )
             advisory_campaign.write_manifest(partial.campaign, manifest)
+            fallback = managed_advisory._active_campaign_paths(state_root, "codex", "review")
+            preview = managed_advisory.migrate_gate_campaigns(
+                state_root,
+                vendor="codex",
+                workflow="review",
+                gate=gate,
+                dry_run=True,
+            )
+            partial_preserved_by_preview = partial.campaign.is_file()
 
             receipt = managed_advisory.migrate_gate_campaigns(
                 state_root,
@@ -815,6 +824,9 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             results_recovered = partial.results.is_dir()
 
         self.assertFalse(receipt["already_migrated"])
+        self.assertEqual(fallback, source)
+        self.assertTrue(preview["dry_run"])
+        self.assertTrue(partial_preserved_by_preview)
         self.assertTrue(campaign_recovered)
         self.assertTrue(results_recovered)
 
@@ -824,13 +836,14 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             {"cheap": {"accepted": True}},
             {"cheap": {"accepted": False, "failure_kind": "infrastructure"}},
         ]
-        outcomes, usable_tasks, excluded = managed_advisory._campaign_gate_population(
-            records, "advised_rescue"
+        outcomes, usable_tasks, excluded, population_rule = (
+            managed_advisory._campaign_gate_population(records, "advised_rescue")
         )
 
         self.assertEqual(len(outcomes), 1)
         self.assertEqual(usable_tasks, 2)
         self.assertEqual(excluded, 1)
+        self.assertEqual(population_rule, "metric_eligible_non_infrastructure_v1")
 
     def test_gate_migration_never_deletes_a_nonempty_partial_generation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

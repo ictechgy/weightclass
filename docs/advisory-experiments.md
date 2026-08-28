@@ -40,7 +40,8 @@ wclass-advisory campaign-gate --vendor codex --workflow design
 It accepts exactly one vendor/workflow, validates the manifest and every lane
 binding, and derives outcomes without writing another record. Schema 3 uses
 the sealed metric, target, alpha, method version, and population rule. Legacy
-exploration requires `--generation legacy --metric ...` and can never become
+exploration of the pre-gate source requires `--generation source --metric ...`
+and can never become
 promotion-eligible.
 `eligible_for_human_review` requires both campaign minimums and the statistical
 target. `policy_decision_allowed` and `core_routing_changed` remain false.

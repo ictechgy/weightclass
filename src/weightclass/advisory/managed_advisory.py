@@ -1234,13 +1234,13 @@ def _configuration(
     workflow: str,
     *,
     validate_records: bool = True,
-    legacy_generation: bool = False,
+    source_generation: bool = False,
 ) -> tuple[CampaignPaths, advisory_campaign.CampaignManifest, advisory_routes.AdvisoryRoutes]:
-    if not isinstance(legacy_generation, bool):
+    if not isinstance(source_generation, bool):
         _fail()
     selected = (
         campaign_paths(state_root, vendor, workflow)
-        if legacy_generation
+        if source_generation
         else _active_campaign_paths(state_root, vendor, workflow)
     )
     verifier = state_root / "verify-project.py"
@@ -2214,7 +2214,7 @@ def _campaign_gate_outcomes(
 
 def _campaign_gate_population(
     records: Sequence[Mapping[str, object]], metric: str
-) -> tuple[list[dict[str, object]], int, int]:
+) -> tuple[list[dict[str, object]], int, int, str]:
     """Return outcomes plus usable and infrastructure-excluded denominators."""
     outcomes: list[dict[str, object]] = []
     usable_task_records = 0
@@ -2241,7 +2241,12 @@ def _campaign_gate_population(
         else:
             _fail()
         outcomes.append({"schema_version": 1, "experiment": "sequential", "accepted": accepted})
-    return outcomes, usable_task_records, excluded_infrastructure
+    return (
+        outcomes,
+        usable_task_records,
+        excluded_infrastructure,
+        advisory_campaign.CAMPAIGN_GATE_POPULATION_RULE,
+    )
 
 
 def campaign_gate(
@@ -2252,14 +2257,14 @@ def campaign_gate(
     metric: str | None,
     target_rate_bps: int | None,
     alpha_bps: int | None,
-    legacy_generation: bool = False,
+    source_generation: bool = False,
 ) -> dict[str, object]:
     selected, manifest, _ = _configuration(
         state_root,
         vendor,
         workflow,
         validate_records=False,
-        legacy_generation=legacy_generation,
+        source_generation=source_generation,
     )
     sealed_gate = manifest.get("gate")
     gate_preregistered = (
@@ -2308,9 +2313,16 @@ def campaign_gate(
         raise advisory_orchestration.CampaignRecordsInvalidError(error) from None
     try:
         progress = advisory_campaign.campaign_progress(manifest, records)
-        outcomes, usable_task_records, excluded_infrastructure = _campaign_gate_population(
-            records, metric
-        )
+        (
+            outcomes,
+            usable_task_records,
+            excluded_infrastructure,
+            applied_population_rule,
+        ) = _campaign_gate_population(records, metric)
+        if gate_preregistered and (
+            normalized_gate is None or applied_population_rule != normalized_gate["population_rule"]
+        ):
+            _fail()
         minimum_samples = (
             manifest["minimum_advised_failures"]
             if metric == "advised_rescue"
@@ -2353,7 +2365,7 @@ def campaign_gate(
         "analysis": "sealed_campaign_gate",
         "vendor": vendor,
         "workflow": workflow,
-        "generation": "legacy" if legacy_generation else "active",
+        "generation": "source" if source_generation else "active",
         "metric": metric,
         "gate_preregistered": gate_preregistered,
         "gate_method": normalized_gate["method"] if normalized_gate is not None else None,
@@ -2858,7 +2870,7 @@ def campaign_gate_main(argv: Sequence[str]) -> int:
     parser.add_argument("--state-root", type=Path)
     parser.add_argument("--vendor", required=True)
     parser.add_argument("--workflow", required=True, choices=WORKFLOWS)
-    parser.add_argument("--generation", choices=("active", "legacy"), default="active")
+    parser.add_argument("--generation", choices=("active", "source"), default="active")
     parser.add_argument("--metric", choices=CAMPAIGN_GATE_METRICS)
     parser.add_argument("--target-rate-bps", type=int)
     parser.add_argument("--alpha-bps", type=int)
@@ -2879,7 +2891,7 @@ def campaign_gate_main(argv: Sequence[str]) -> int:
             metric=arguments.metric,
             target_rate_bps=arguments.target_rate_bps,
             alpha_bps=arguments.alpha_bps,
-            legacy_generation=arguments.generation == "legacy",
+            source_generation=arguments.generation == "source",
         )
     except advisory_orchestration.CampaignRecordsInvalidError as error:
         print(json.dumps({"error": error.code}), file=sys.stderr)

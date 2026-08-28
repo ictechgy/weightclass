@@ -48,6 +48,11 @@ For an already populated schema-1/2 installation, use an explicit migration.
 It validates the old population, preserves its campaign and records, and
 starts an empty schema-3 generation:
 
+`migrate-gate` uses the currently configured managed route/evidence
+generation; it never guesses among historical generations. Complete any
+required `migrate-routes` or `migrate-evidence` step first, then review that
+current generation before sealing its gate.
+
 ```sh
 wclass-advisory migrate-gate --vendor codex --workflow review \
   --gate-metric cheap_acceptance --gate-target-rate-bps 7500 --gate-alpha-bps 500 \
@@ -163,7 +168,7 @@ for filtered aggregate readiness and evidence. A single sealed population can
 be evaluated with `wclass-advisory campaign-gate --vendor VENDOR --workflow
 WORKFLOW`. For schema 3 the sealed metric, target, and alpha are used; a
 different override is rejected. Legacy schema-1/2 campaigns remain available
-for exploratory analysis with `--generation legacy`, but report
+for exploratory analysis with `--generation source`, but report
 `gate_preregistered:false` and can never report `promotion_eligible:true`.
 Even an eligible result remains a human
 review input with `policy_decision_allowed:false`. Use

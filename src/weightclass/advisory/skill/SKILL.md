@@ -289,7 +289,7 @@ does not append a sample, and does not affect the campaign stopping gate.
   --workflow <workflow-or-all>`. When a population reaches its sealed minimums,
   use `wclass-advisory campaign-gate --vendor <one-vendor> --workflow <workflow>
   `. The sealed gate supplies metric, target, method, population rule, and
-  alpha. Use `--generation legacy --metric ...` only for explicitly exploratory
+  alpha. Use `--generation source --metric ...` only for explicitly exploratory
   analysis; it can never set `promotion_eligible`. Treat
   `eligible_for_human_review` as evidence for a human review only;
   `policy_decision_allowed` remains false and the command never changes routing.
