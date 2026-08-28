@@ -282,7 +282,7 @@ does not append a sample, and does not affect the campaign stopping gate.
   root. Before dispatching that population, run `wclass-advisory migrate-gate
   --vendor <vendor> --workflow <workflow> --gate-metric
   <cheap_acceptance|advised_rescue|final_acceptance>
-  --gate-target-rate-bps <0..10000> --gate-alpha-bps <1..5000>`. The command
+  --gate-target-rate-bps <1..10000> --gate-alpha-bps <1..5000>`. The command
   starts an empty schema-3 generation and never copies or rebinds legacy
   records. A second primary vendor/workflow in the same state root is rejected.
 - Narrow aggregate inspection with `wclass-advisory status --vendor <vendor-or-all>

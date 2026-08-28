@@ -408,7 +408,7 @@ def _gate(value: object, *, allow_contract_defaults: bool = False) -> CampaignGa
     ):
         raise CampaignError()
     metric = _string(value["metric"], CAMPAIGN_GATE_METRICS)
-    target_rate_bps = _integer(value["target_rate_bps"], 0, 10_000)
+    target_rate_bps = _integer(value["target_rate_bps"], 1, 10_000)
     alpha_bps = _integer(value["alpha_bps"], 1, 5_000)
     method = value.get("method", CAMPAIGN_GATE_METHOD)
     population_rule = value.get("population_rule", CAMPAIGN_GATE_POPULATION_RULE)

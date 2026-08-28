@@ -187,6 +187,13 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                 {
                     "gate": {
                         "metric": "cheap_acceptance",
+                        "target_rate_bps": 0,
+                        "alpha_bps": 500,
+                    }
+                },
+                {
+                    "gate": {
+                        "metric": "cheap_acceptance",
                         "target_rate_bps": 7_500,
                         "alpha_bps": 500,
                         "method": "unsealed_future_method",

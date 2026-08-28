@@ -2466,7 +2466,7 @@ def _gate_arguments(
     if (
         isinstance(target_rate_bps, bool)
         or not isinstance(target_rate_bps, int)
-        or not 0 <= target_rate_bps <= 10_000
+        or not 1 <= target_rate_bps <= 10_000
         or isinstance(alpha_bps, bool)
         or not isinstance(alpha_bps, int)
         or not 1 <= alpha_bps <= 5_000
