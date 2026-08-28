@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import subprocess
@@ -12,17 +13,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 from . import __version__
-from .agent_discovery import (
-    AGENT_IDS,
-    AgentDiscoveryError,
-    AgentUnavailableError,
-    generate_selected_policy,
-    render_agent_discovery,
-    resolve_builtin_executable,
-)
 from .classification import (
     CLASSIFICATION_POLICY_VERSION,
     InvalidTaskError,
@@ -40,61 +33,8 @@ from .cost_recommendation import (
     load_cost_profile,
     load_qualification_card,
 )
-from .delegation_compile import (
-    canonical_json_bytes,
-    compile_delegation_descriptor,
-    render_review_descriptor,
-)
-from .delegation_protocol import DelegationFrameError, encode_delegation_frame
-from .delegation_qualification import (
-    QualificationRecord,
-    QualifiedRuntimeUnavailableError,
-    attach_qualification_requirement,
-    build_qualification_candidate,
-    load_conformance_evidence,
-    load_packaged_qualification_registry,
-    select_qualification_for_descriptor,
-    verify_qualified_runtime,
-)
-from .delegation_runtime import (
-    DelegationRuntimeFailedError,
-    DelegationRuntimeUnavailableError,
-    run_delegation_runtime,
-    validate_delegation_runtime,
-    validate_runtime_process_context,
-)
-from .delegation_schema import (
-    DelegationInvalidInputError,
-    DelegationUnsupportedError,
-    current_platform_contract,
-    load_delegation_manifest,
-    load_delegation_policy,
-    validate_runtime_path_lexically,
-)
-from .delegation_types import DelegationTier, DirectChildCleanup, VendorFamily
-from .executable_observation import ExecutableObservation, observe_executable
 from .foreground_process import run_owned_foreground
 from .json_input import JsonInputError, load_json_object
-from .native_v2_compile import compile_native_v2
-from .native_v2_runtime import run_native_v2
-from .native_v2_schema import (
-    NativePolicyV2,
-    dispatch_native_policy_schema,
-    validate_native_selector,
-)
-from .native_v2_types import CompiledExecutionV2
-from .native_v3_compile import (
-    PurposeV3,
-    bind_native_observation_v3,
-    compile_static_native_policy_v3,
-)
-from .native_v3_runtime import (
-    NativeV3ExecutorUnavailableError,
-    NativeV3FingerprintMismatchError,
-    run_native_v3,
-)
-from .native_v3_schema import NativePolicyV3, validate_native_selector_v3
-from .native_v3_selector import InteractiveSelectorError, run_interactive_selector
 from .process_context import ChildStatusLostError
 from .router import (
     DEFAULT_ROUTES,
@@ -113,8 +53,6 @@ from .router import (
     uses_argv_task_delivery,
     validate_vendor_label,
 )
-from .task_v2 import ValidatedTaskV2, read_validated_task_v2
-from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
 from .usage_aggregation import (
     STORE_SCHEMA_VERSION,
     UsageAggregationError,
@@ -126,16 +64,219 @@ from .usage_aggregation import (
     resolve_usage_store,
     set_relative_cost_weight,
 )
-from .v2 import (
-    API_SOURCE_VENDORS,
-    V2InvalidInputError,
-    load_api_policy,
-    observe_api_runtime,
-    render_api_route,
-    route_fingerprint,
-    select_api_route,
-)
-from .v2_validation import V2ValidationError
+
+if TYPE_CHECKING:
+    from .agent_discovery import (
+        AgentDiscoveryError,
+        AgentUnavailableError,
+        generate_selected_policy,
+        render_agent_discovery,
+        resolve_builtin_executable,
+    )
+    from .delegation_compile import (
+        canonical_json_bytes,
+        compile_delegation_descriptor,
+        render_review_descriptor,
+    )
+    from .delegation_protocol import DelegationFrameError, encode_delegation_frame
+    from .delegation_qualification import (
+        QualificationRecord,
+        QualifiedRuntimeUnavailableError,
+        attach_qualification_requirement,
+        build_qualification_candidate,
+        load_conformance_evidence,
+        load_packaged_qualification_registry,
+        select_qualification_for_descriptor,
+        verify_qualified_runtime,
+    )
+    from .delegation_runtime import (
+        DelegationRuntimeFailedError,
+        DelegationRuntimeUnavailableError,
+        run_delegation_runtime,
+        validate_delegation_runtime,
+        validate_runtime_process_context,
+    )
+    from .delegation_schema import (
+        DelegationInvalidInputError,
+        DelegationUnsupportedError,
+        current_platform_contract,
+        load_delegation_manifest,
+        load_delegation_policy,
+        validate_runtime_path_lexically,
+    )
+    from .delegation_types import DelegationTier, DirectChildCleanup, VendorFamily
+    from .executable_observation import ExecutableObservation, observe_executable
+    from .native_v2_compile import compile_native_v2
+    from .native_v2_runtime import run_native_v2
+    from .native_v2_schema import (
+        NativePolicyV2,
+        dispatch_native_policy_schema,
+        validate_native_selector,
+    )
+    from .native_v2_types import CompiledExecutionV2
+    from .native_v3_compile import (
+        PurposeV3,
+        bind_native_observation_v3,
+        compile_static_native_policy_v3,
+    )
+    from .native_v3_runtime import (
+        NativeV3ExecutorUnavailableError,
+        NativeV3FingerprintMismatchError,
+        run_native_v3,
+    )
+    from .native_v3_schema import NativePolicyV3, validate_native_selector_v3
+    from .native_v3_selector import InteractiveSelectorError, run_interactive_selector
+    from .task_v2 import ValidatedTaskV2, read_validated_task_v2
+    from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
+    from .v2 import (
+        V2InvalidInputError,
+        load_api_policy,
+        observe_api_runtime,
+        render_api_route,
+        route_fingerprint,
+        select_api_route,
+    )
+    from .v2_validation import V2ValidationError
+
+
+# These values are parser metadata. Importing discovery merely to construct help would
+# otherwise pull in executable observation and API validation modules.
+AGENT_IDS: Final = ("agy", "claude", "codex", "grok")
+
+# This is intentionally duplicated as parser metadata. Importing the API family merely to
+# construct help would defeat the command-family startup boundary.
+API_SOURCE_VENDORS: Final = ("claude", "codex")
+
+_LAZY_SYMBOL_MODULES: Final = {
+    "AgentDiscoveryError": "agent_discovery",
+    "AgentUnavailableError": "agent_discovery",
+    "generate_selected_policy": "agent_discovery",
+    "render_agent_discovery": "agent_discovery",
+    "resolve_builtin_executable": "agent_discovery",
+    "canonical_json_bytes": "delegation_compile",
+    "compile_delegation_descriptor": "delegation_compile",
+    "render_review_descriptor": "delegation_compile",
+    "DelegationFrameError": "delegation_protocol",
+    "encode_delegation_frame": "delegation_protocol",
+    "QualificationRecord": "delegation_qualification",
+    "QualifiedRuntimeUnavailableError": "delegation_qualification",
+    "attach_qualification_requirement": "delegation_qualification",
+    "build_qualification_candidate": "delegation_qualification",
+    "load_conformance_evidence": "delegation_qualification",
+    "load_packaged_qualification_registry": "delegation_qualification",
+    "select_qualification_for_descriptor": "delegation_qualification",
+    "verify_qualified_runtime": "delegation_qualification",
+    "DelegationRuntimeFailedError": "delegation_runtime",
+    "DelegationRuntimeUnavailableError": "delegation_runtime",
+    "run_delegation_runtime": "delegation_runtime",
+    "validate_delegation_runtime": "delegation_runtime",
+    "validate_runtime_process_context": "delegation_runtime",
+    "DelegationInvalidInputError": "delegation_schema",
+    "DelegationUnsupportedError": "delegation_schema",
+    "current_platform_contract": "delegation_schema",
+    "load_delegation_manifest": "delegation_schema",
+    "load_delegation_policy": "delegation_schema",
+    "validate_runtime_path_lexically": "delegation_schema",
+    "DelegationTier": "delegation_types",
+    "DirectChildCleanup": "delegation_types",
+    "VendorFamily": "delegation_types",
+    "ExecutableObservation": "executable_observation",
+    "observe_executable": "executable_observation",
+    "compile_native_v2": "native_v2_compile",
+    "run_native_v2": "native_v2_runtime",
+    "NativePolicyV2": "native_v2_schema",
+    "dispatch_native_policy_schema": "native_v2_schema",
+    "validate_native_selector": "native_v2_schema",
+    "CompiledExecutionV2": "native_v2_types",
+    "PurposeV3": "native_v3_compile",
+    "bind_native_observation_v3": "native_v3_compile",
+    "compile_static_native_policy_v3": "native_v3_compile",
+    "NativeV3ExecutorUnavailableError": "native_v3_runtime",
+    "NativeV3FingerprintMismatchError": "native_v3_runtime",
+    "run_native_v3": "native_v3_runtime",
+    "NativePolicyV3": "native_v3_schema",
+    "validate_native_selector_v3": "native_v3_schema",
+    "InteractiveSelectorError": "native_v3_selector",
+    "run_interactive_selector": "native_v3_selector",
+    "ValidatedTaskV2": "task_v2",
+    "read_validated_task_v2": "task_v2",
+    "TriageUnavailableError": "triage",
+    "ask_vendor_for_tier": "triage",
+    "triage_descriptor": "triage",
+    "V2InvalidInputError": "v2",
+    "load_api_policy": "v2",
+    "observe_api_runtime": "v2",
+    "render_api_route": "v2",
+    "route_fingerprint": "v2",
+    "select_api_route": "v2",
+    "V2ValidationError": "v2_validation",
+}
+
+
+def __getattr__(name: str) -> object:
+    """Preserve historical module patch/import seams without eager imports."""
+
+    module_name = _LAZY_SYMBOL_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(name)
+    module = importlib.import_module(f".{module_name}", __package__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
+
+def _load_symbols(module_names: Sequence[str]) -> None:
+    """Import execution-only families on demand while preserving monkeypatch seams."""
+    for module_name in module_names:
+        module = importlib.import_module(f".{module_name}", __package__)
+        for name in vars(module):
+            if name.startswith("_"):
+                continue
+            if name not in globals():
+                globals()[name] = getattr(module, name)
+
+
+def _load_native_family() -> None:
+    _load_symbols(
+        (
+            "delegation_runtime",
+            "executable_observation",
+            "native_v2_compile",
+            "native_v2_runtime",
+            "native_v2_schema",
+            "native_v2_types",
+            "native_v3_compile",
+            "native_v3_runtime",
+            "native_v3_schema",
+            "native_v3_selector",
+            "task_v2",
+            "v2_validation",
+        )
+    )
+
+
+def _load_delegation_family() -> None:
+    _load_symbols(
+        (
+            "delegation_compile",
+            "delegation_protocol",
+            "delegation_qualification",
+            "delegation_runtime",
+            "delegation_schema",
+            "delegation_types",
+            "native_v2_types",
+            "task_v2",
+        )
+    )
+
+
+def _load_api_family() -> None:
+    _load_symbols(("delegation_runtime", "v2", "v2_validation"))
+
+
+def _load_agent_family() -> None:
+    _load_symbols(("agent_discovery",))
+
 
 EXECUTOR_FAILED_EXIT_CODE: Final = 7
 USAGE_UNAVAILABLE_EXIT_CODE: Final = 9
@@ -401,6 +542,7 @@ def _automatic_cost_policy(
     overrides: PresetOverrides | None = None,
 ) -> RoutingPolicy | None:
     """Resolve one packaged opt-in without writing router state or policy files."""
+    _load_native_family()
     overrides = overrides or PresetOverrides()
     if not enabled:
         if model is not None:
@@ -672,6 +814,7 @@ def load_routes(policy_path: Path) -> tuple[Route, ...]:
 
 def load_routing_policy(policy_path: Path) -> RoutingPolicy:
     """Load routing options and strictly shaped trusted-local routes."""
+    _load_native_family()
     policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
     try:
         version, dispatched = dispatch_native_policy_schema(policy)
@@ -769,6 +912,7 @@ def _add_preset_override_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _resolve_default_route_executable(route: Route) -> Route:
     """Bind a built-in route to one admitted absolute executable from PATH."""
+    _load_agent_family()
     executable = resolve_builtin_executable(route.vendor)
     return replace(route, command=(executable, *route.command[1:]))
 
@@ -1135,6 +1279,7 @@ def delegation_route(
     source_profile: str | None = None,
 ) -> int:
     """Compile a descriptor without reading task stdin or inspecting a runtime."""
+    _load_delegation_family()
     version_result = (
         _dispatch_delegation_cli_version(
             policy_path,
@@ -1184,6 +1329,7 @@ def delegation_run_from_standard_input(
     source_profile: str | None = None,
 ) -> int:
     """Run one acknowledged external orchestrator without handling credentials."""
+    _load_delegation_family()
     version_result = (
         _dispatch_delegation_cli_version(
             policy_path,
@@ -1319,6 +1465,7 @@ def _delegation_v2_run(
 
 def delegation_qualification_candidate(evidence_path: Path, runtime_path: Path) -> int:
     """Print a review candidate without changing the package trust registry."""
+    _load_delegation_family()
     try:
         normalized_runtime_path = validate_runtime_path_lexically(str(runtime_path))
         evidence = load_conformance_evidence(evidence_path)
@@ -1336,6 +1483,7 @@ def v2_route_from_standard_input(
     runtime_path: Path,
 ) -> int:
     """Render an API review descriptor without sending data to a provider."""
+    _load_api_family()
     try:
         runtime_observation = observe_api_runtime(runtime_path)
         runtime_path = Path(runtime_observation.lexical_path)
@@ -1374,6 +1522,7 @@ def v2_run_from_standard_input(
     acknowledged_fingerprint: str | None,
 ) -> int:
     """Start one acknowledged external API runtime without handling credentials."""
+    _load_api_family()
     try:
         policy = load_api_policy(policy_path)
     except (V2InvalidInputError, InvalidInputError):
@@ -1462,14 +1611,24 @@ def classify_from_standard_input(
     """Retain the historical direct-call seam while sharing the lightweight core."""
     from .classification_cli import classify_task_input
 
+    if ask_vendor or show_triage_command:
+        _load_symbols(("triage",))
+        return classify_task_input(
+            source_vendor,
+            ask_vendor,
+            show_triage_command,
+            explain,
+            ask_vendor_for_tier=ask_vendor_for_tier,
+            triage_descriptor=triage_descriptor,
+            triage_unavailable_error=TriageUnavailableError,
+            read_task=read_task_from_standard_input,
+        )
+
     return classify_task_input(
         source_vendor,
         ask_vendor,
         show_triage_command,
         explain,
-        ask_vendor_for_tier=ask_vendor_for_tier,
-        triage_descriptor=triage_descriptor,
-        triage_unavailable_error=TriageUnavailableError,
         read_task=read_task_from_standard_input,
     )
 
@@ -1531,6 +1690,7 @@ def review_packaged_preset(
     overrides: PresetOverrides | None = None,
 ) -> int:
     """Render every bound command in one preset without accessing task input."""
+    _load_agent_family()
     overrides = overrides or PresetOverrides()
     if name not in EXAMPLE_POLICY_RESOURCES:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
@@ -1580,6 +1740,7 @@ def recommend_from_standard_input(
     overrides: PresetOverrides | None = None,
 ) -> int:
     """Render one evidence-bound recommendation without starting a vendor."""
+    _load_agent_family()
     overrides = overrides or PresetOverrides()
     source_vendor = preset.removesuffix("-cost-focused")
     try:
@@ -1678,6 +1839,8 @@ def route_from_standard_input(
     explain: bool = False,
 ) -> int:
     """Select and render a command without echoing or persisting the task."""
+    _load_agent_family()
+    _load_native_family()
     overrides = overrides or PresetOverrides()
     try:
         automatic_enabled, effective_source_vendor = _resolve_packaged_policy_selection(
@@ -1818,6 +1981,8 @@ def run_from_standard_input(
     suggest_escalation: bool = False,
 ) -> int:
     """Run a selected native command without a shell or output capture."""
+    _load_agent_family()
+    _load_native_family()
     overrides = overrides or PresetOverrides()
     try:
         automatic_enabled, effective_source_vendor = _resolve_packaged_policy_selection(
@@ -1981,6 +2146,7 @@ def _native_v2_route(
     source_profile: str | None,
     explicit_tier: Tier | None,
 ) -> int:
+    _load_native_family()
     if source_vendor is None or source_profile is None or not isinstance(policy, NativePolicyV2):
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
@@ -2017,6 +2183,7 @@ def _native_v2_run(
     acknowledged_fingerprint: str | None,
     explicit_tier: Tier | None,
 ) -> int:
+    _load_native_family()
     if source_vendor is None or source_profile is None or not isinstance(policy, NativePolicyV2):
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
@@ -2081,6 +2248,7 @@ def _execute_native_v3(
     use_default_usage_store: bool,
 ) -> int:
     """Apply schema-3 execution gates without reading task input early."""
+    _load_native_family()
     if (
         source_vendor is None
         or source_profile is None
@@ -2220,6 +2388,7 @@ def native_v3_delegation_route(
     tier: Tier,
 ) -> int:
     """Print one task-free, observation-bound native-delegation descriptor."""
+    _load_native_family()
     try:
         raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
         version, dispatched = dispatch_native_policy_schema(raw_policy)
@@ -2271,6 +2440,7 @@ def native_v3_delegation_run_from_standard_input(
     use_default_usage_store: bool = False,
 ) -> int:
     """Run one reviewed bounded subtask through the schema-3 native adapter."""
+    _load_native_family()
     try:
         raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
         version, dispatched = dispatch_native_policy_schema(raw_policy)
@@ -2335,6 +2505,7 @@ def main(
         return 2
 
     if arguments.command == "discover":
+        _load_agent_family()
         try:
             receipt = render_agent_discovery(agent=arguments.agent)
         except AgentDiscoveryError:
@@ -2343,6 +2514,7 @@ def main(
         print(json.dumps(receipt))
         return 0
     if arguments.command == "profile":
+        _load_agent_family()
         try:
             policy = generate_selected_policy(
                 agent=arguments.agent,
@@ -2360,6 +2532,7 @@ def main(
         print(json.dumps(policy))
         return 0
     if arguments.command == "select":
+        _load_native_family()
         try:
             with open(os.ctermid(), "r+", encoding="utf-8", buffering=1) as console:
                 return run_interactive_selector(
