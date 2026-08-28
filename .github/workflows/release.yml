@@ -107,6 +107,11 @@ jobs:
           "$installed_venv/bin/wclass-advisory" init --state-root "$managed_root" --vendor codex \
             --model cheap=cheap --model advisor=advisor --model expensive=expensive \
             --effort cheap=low --effort advisor=high --effort expensive=high >/dev/null
+          "$installed_venv/bin/wclass-advisory" migrate-gate --state-root "$managed_root" \
+            --vendor codex --workflow review --gate-metric cheap_acceptance \
+            --gate-target-rate-bps 7500 --gate-alpha-bps 500 >/dev/null
+          "$installed_venv/bin/wclass-advisory" campaign-gate --state-root "$managed_root" \
+            --vendor codex --workflow review >/dev/null
           "$installed_venv/bin/wclass-advisory" doctor --state-root "$managed_root" --vendor codex --workflow all >/dev/null
           "$installed_venv/bin/wclass-advisory" review --state-root "$managed_root" --vendor codex --workflow review >/dev/null
           installed_agent_bin="$RUNNER_TEMP/weightclass-installed-agent-bin"
@@ -174,6 +179,11 @@ jobs:
           "$installed_venv/bin/wclass-advisory" init --state-root "$managed_root" --vendor codex \
             --model cheap=cheap --model advisor=advisor --model expensive=expensive \
             --effort cheap=low --effort advisor=high --effort expensive=high >/dev/null
+          "$installed_venv/bin/wclass-advisory" migrate-gate --state-root "$managed_root" \
+            --vendor codex --workflow review --gate-metric cheap_acceptance \
+            --gate-target-rate-bps 7500 --gate-alpha-bps 500 >/dev/null
+          "$installed_venv/bin/wclass-advisory" campaign-gate --state-root "$managed_root" \
+            --vendor codex --workflow review >/dev/null
           "$installed_venv/bin/wclass-advisory" doctor --state-root "$managed_root" --vendor codex --workflow all >/dev/null
           "$installed_venv/bin/wclass-advisory" review --state-root "$managed_root" --vendor codex --workflow review >/dev/null
           installed_agent_bin="$RUNNER_TEMP/weightclass-installed-agent-bin"
