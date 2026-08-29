@@ -1,14 +1,14 @@
 # Handoff
 
-_Last updated: 2026-08-29 21:31 KST by Codex_
+_Last updated: 2026-08-29 21:43 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
 ## In-progress advisory hardening batch (2026-08-29)
 
-The implementation is **applied, independently re-reviewed, and fully
-validated, but not committed**. Resume on branch `docs/handoff-current-state`
-at committed HEAD `36fdd3ee3eeb`. Do not discard the working tree.
+The implementation is **applied, independently re-reviewed, fully validated,
+and submitted in PR #135** from branch `docs/handoff-current-state`. Do not
+discard the branch or its commit history before integration is confirmed.
 
 ### Managed workflow evidence
 
@@ -26,13 +26,16 @@ at committed HEAD `36fdd3ee3eeb`. Do not discard the working tree.
   `~/Library/Application Support/weightclass/advisory-v1/codex-results/spec-cheap-ydlc_srl.patch`.
   It was inspected, confirmed not to touch the protected files, checked with
   `git apply --check`, and applied.
-- `.weightclass/verify` and `tests/test_advisory_hardening_batch.py` remain
-  byte-unchanged from committed HEAD. Do not edit either after the observed
-  provider candidate.
+- `.weightclass/verify` and `tests/test_advisory_hardening_batch.py` remained
+  byte-unchanged through the observed provider candidate and final independent
+  review. After PR CI isolated the preregistered test's sole Ruff formatting
+  difference, the owner explicitly authorized a separate formatting-only
+  follow-up; `.weightclass/verify` remains unchanged.
 
-### Current working tree
+### Submitted branch
 
-Ten files are modified (609 insertions, 71 deletions at handoff time):
+The implementation commit modifies ten files; the preceding preregistration
+commit adds or updates the two protected acceptance files:
 
 - product/docs: `HANDOFF.md`, `README.md`;
 - implementation: `src/weightclass/cli.py`, `router.py`, `v2.py`,
@@ -40,6 +43,8 @@ Ten files are modified (609 insertions, 71 deletions at handoff time):
 - ordinary regression tests: `tests/test_router.py`,
   `tests/test_usage_aggregation.py`, and
   `tests/test_advisory_campaign_lanes.py`.
+- protected acceptance: `.weightclass/verify` and
+  `tests/test_advisory_hardening_batch.py`.
 
 The applied behavior is the bounded approved batch: opt-in observed executable
 binding for explicit custom schema-1 policy routes; Bedrock as a V2 destination
@@ -101,22 +106,19 @@ regressions in ordinary files without changing the protected acceptance:
   source files.
 - Focused final regressions plus protected acceptance passed: 10 tests with 7
   skips.
-- `git diff --check` passed, and both `.weightclass/verify` and
-  `tests/test_advisory_hardening_batch.py` remain byte-equal to committed HEAD.
-- Full Ruff format-check has the expected single limitation in protected
-  `tests/test_advisory_hardening_batch.py:102`; 213 other files are formatted.
-  The protected file was not modified.
+- `git diff --check` passed. `.weightclass/verify` remains byte-equal to the
+  preregistered commit; the acceptance test has only the separately authorized
+  Ruff formatting follow-up described above.
+- Full Ruff format-check passes all files after that owner-authorized formatting
+  follow-up.
 
 ### Next safe action
 
-1. Read this section and `AGENTS.md`; inspect `git diff` before changing code.
-   Preserve all ten modified files and both protected committed files.
-2. Review the retained working-tree diff. The implementation, independent
-   re-review, focused regressions, full verifier, and release-style gates are
-   complete; do not repeat the managed advisory dispatch.
-3. Do not create an implementation commit, amend `36fdd3e`, push, or open a PR
-   without fresh user approval. The only commit authorization already used was
-   for the prospective acceptance/verifier commit.
+1. PR #135 is the integration record for this batch. Confirm its CI, reviews,
+   and merge state before taking further action.
+2. The implementation, independent re-review, focused regressions, full
+   verifier, and release-style gates are complete; do not repeat the managed
+   advisory dispatch.
 
 ## Goal
 

@@ -99,9 +99,7 @@ class AdvisoryHardeningBatchAcceptanceTests(unittest.TestCase):
             {"command", "route", "tier", "vendor", "route_fingerprint"},
         )
         self.assertEqual(explained_value["executable_binding"], "legacy_lexical")
-        self.assertEqual(
-            ordinary_value["route_fingerprint"], explained_value["route_fingerprint"]
-        )
+        self.assertEqual(ordinary_value["route_fingerprint"], explained_value["route_fingerprint"])
 
     def test_observed_binding_resolves_runs_and_rejects_replacement(self) -> None:
         with tempfile.TemporaryDirectory() as directory_name:
