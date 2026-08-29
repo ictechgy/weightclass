@@ -88,6 +88,7 @@ class AdvisoryPortfolioTests(unittest.TestCase):
         self,
         records: list[dict[str, object]],
         *,
+        arm: str = "shape_b",
         decision_eligible: bool = False,
         reason: str = "planned_tasks_not_reached",
     ) -> dict[str, object]:
@@ -98,7 +99,12 @@ class AdvisoryPortfolioTests(unittest.TestCase):
             Path("/private/PRIVATE-MANIFEST.json"),
             Path("/private/PRIVATE-RESULTS"),
         )
-        manifest = {"planned_tasks": 60, "max_tasks": 150, "minimum_advised_failures": 12}
+        manifest = {
+            "arm": arm,
+            "planned_tasks": 60,
+            "max_tasks": 150,
+            "minimum_advised_failures": 12,
+        }
         progress = types.SimpleNamespace(
             usable_tasks=3,
             advised_failures=2,
@@ -121,7 +127,12 @@ class AdvisoryPortfolioTests(unittest.TestCase):
             Path("/private/PRIVATE-MANIFEST.json"),
             Path("/private/PRIVATE-RESULTS"),
         )
-        manifest = {"planned_tasks": 60, "max_tasks": 150, "minimum_advised_failures": 12}
+        manifest = {
+            "arm": "shape_b",
+            "planned_tasks": 60,
+            "max_tasks": 150,
+            "minimum_advised_failures": 12,
+        }
         progress = types.SimpleNamespace(
             usable_tasks=3,
             advised_failures=2,
@@ -252,6 +263,147 @@ class AdvisoryPortfolioTests(unittest.TestCase):
         )
         self.assertEqual(campaign["advised_failures"], 2)
 
+    def test_reports_advice_coverage_and_retry_stage_transitions(self) -> None:
+        records = sample_records()
+        second_advice = records[1]["advice_failure"]
+        third_advice = records[2]["advice_failure"]
+        second_cheap = records[1]["cheap"]
+        third_cheap = records[2]["cheap"]
+        second_retry = records[1]["retry"]
+        third_retry = records[2]["retry"]
+        assert all(
+            isinstance(value, dict)
+            for value in (
+                second_advice,
+                third_advice,
+                second_cheap,
+                third_cheap,
+                second_retry,
+                third_retry,
+            )
+        )
+        assert isinstance(second_advice, dict)
+        assert isinstance(third_advice, dict)
+        assert isinstance(second_cheap, dict)
+        assert isinstance(third_cheap, dict)
+        assert isinstance(second_retry, dict)
+        assert isinstance(third_retry, dict)
+        for advice in (second_advice, third_advice):
+            advice.update(
+                {
+                    "empty": False,
+                    "truncated": False,
+                    "route_failed": False,
+                    "envelope_only": False,
+                }
+            )
+        third_advice["chars"] = 80
+        third_advice["truncated"] = True
+        second_cheap["failure_stage"] = "verification"
+        third_cheap["failure_stage"] = "verification"
+        third_retry["failure_stage"] = "result"
+
+        campaign = first_campaign(self.build_result(records))
+
+        self.assertEqual(campaign["arm"], "shape_b")
+        self.assertEqual(
+            campaign["advice_diagnostics"],
+            {
+                "first": {
+                    "records": 0,
+                    "chars": {"recorded": 0, "complete": True, "total": 0, "max": 0},
+                    "flags": {
+                        "empty": {"recorded": 0, "true": 0},
+                        "truncated": {"recorded": 0, "true": 0},
+                        "route_failed": {"recorded": 0, "true": 0},
+                        "envelope_only": {"recorded": 0, "true": 0},
+                    },
+                },
+                "failure": {
+                    "records": 2,
+                    "chars": {"recorded": 2, "complete": True, "total": 180, "max": 100},
+                    "flags": {
+                        "empty": {"recorded": 2, "true": 0},
+                        "truncated": {"recorded": 2, "true": 1},
+                        "route_failed": {"recorded": 2, "true": 0},
+                        "envelope_only": {"recorded": 2, "true": 0},
+                    },
+                },
+            },
+        )
+        self.assertEqual(
+            campaign["failure_stages_by_attempt"],
+            {"cheap": {"verification": 2}, "retry": {"result": 1}, "expensive": {}},
+        )
+        self.assertEqual(
+            campaign["retry_diagnostics"],
+            {
+                "attempted": 2,
+                "accepted": 1,
+                "same_failure_stage": 0,
+                "changed_failure_stage": 1,
+                "unknown_failure_stage": 0,
+                "transitions": {"verification": {"accepted": 1, "result": 1}},
+            },
+        )
+
+    def test_advice_diagnostics_do_not_invent_missing_legacy_fields(self) -> None:
+        campaign = first_campaign(self.build_result(sample_records()))
+        diagnostics = cast(dict[str, object], campaign["advice_diagnostics"])
+        failure = cast(dict[str, object], diagnostics["failure"])
+        flags = cast(dict[str, object], failure["flags"])
+
+        self.assertEqual(failure["records"], 2)
+        self.assertEqual(
+            failure["chars"],
+            {"recorded": 2, "complete": True, "total": 200, "max": 100},
+        )
+        self.assertEqual(flags["empty"], {"recorded": 2, "true": 0})
+        self.assertEqual(flags["route_failed"], {"recorded": 2, "true": 0})
+        self.assertEqual(flags["truncated"], {"recorded": 0, "true": 0})
+        self.assertEqual(flags["envelope_only"], {"recorded": 0, "true": 0})
+
+    def test_shape_a_b_reports_first_advice_separately(self) -> None:
+        records = sample_records()
+        records.append(
+            {
+                "cheap": {
+                    "accepted": False,
+                    "failure_kind": "infrastructure",
+                    "failure_stage": "execution",
+                    "child": {
+                        "tokens": 1,
+                        "seconds": 1.0,
+                        "usage": {"cost_usd": 0.1},
+                    },
+                },
+                "advice_first": {
+                    "chars": 42,
+                    "empty": False,
+                    "truncated": False,
+                    "route_failed": False,
+                    "envelope_only": False,
+                },
+                "advice_failure": None,
+                "retry": None,
+                "escalated": False,
+                "expensive": None,
+            }
+        )
+
+        campaign = first_campaign(self.build_result(records, arm="shape_a_b"))
+        diagnostics = cast(dict[str, object], campaign["advice_diagnostics"])
+        first = cast(dict[str, object], diagnostics["first"])
+        stages = cast(dict[str, object], campaign["failure_stages_by_attempt"])
+
+        self.assertEqual(campaign["arm"], "shape_a_b")
+        self.assertEqual(first["records"], 1)
+        self.assertEqual(
+            first["chars"],
+            {"recorded": 1, "complete": True, "total": 42, "max": 42},
+        )
+        self.assertEqual(stages["cheap"], {"execution": 1, "unknown": 2})
+
     def test_rejects_duplicate_population_without_value_bearing_error(self) -> None:
         portfolio = load_portfolio()
         entry = portfolio.PortfolioEntry(
@@ -277,7 +429,12 @@ class AdvisoryPortfolioTests(unittest.TestCase):
             reached_cap=False,
             reason="planned_tasks_not_reached",
         )
-        manifest = {"planned_tasks": 60, "max_tasks": 150, "minimum_advised_failures": 12}
+        manifest = {
+            "arm": "shape_b",
+            "planned_tasks": 60,
+            "max_tasks": 150,
+            "minimum_advised_failures": 12,
+        }
         with (
             mock.patch.object(portfolio, "load_manifest", return_value=manifest),
             mock.patch.object(portfolio, "load_merged_lane_records", return_value=[]),

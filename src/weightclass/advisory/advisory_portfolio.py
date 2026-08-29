@@ -270,6 +270,118 @@ def _usable_records(records: Sequence[Mapping[str, object]]) -> list[Mapping[str
     return usable
 
 
+def _advice_diagnostics(
+    records: Sequence[Mapping[str, object]], stage_name: str
+) -> dict[str, object]:
+    """Summarize one advice stage without retaining advice text."""
+
+    advice_records = 0
+    chars_recorded = 0
+    chars_total = 0
+    chars_max = 0
+    flag_names = ("empty", "truncated", "route_failed", "envelope_only")
+    flags = {name: {"recorded": 0, "true": 0} for name in flag_names}
+    for record in records:
+        advice = record.get(stage_name)
+        if not isinstance(advice, Mapping):
+            continue
+        advice_records += 1
+        chars = advice.get("chars")
+        if isinstance(chars, int) and not isinstance(chars, bool) and chars >= 0:
+            chars_recorded += 1
+            chars_total += chars
+            chars_max = max(chars_max, chars)
+        for name in flag_names:
+            value = advice.get(name)
+            if not isinstance(value, bool):
+                continue
+            flags[name]["recorded"] += 1
+            if value:
+                flags[name]["true"] += 1
+    chars_complete = chars_recorded == advice_records
+    return {
+        "records": advice_records,
+        "chars": {
+            "recorded": chars_recorded,
+            "complete": chars_complete,
+            "total": chars_total if chars_complete else None,
+            "max": chars_max if chars_complete else None,
+        },
+        "flags": flags,
+    }
+
+
+def _normalized_failure_stage(value: object) -> str:
+    return value if isinstance(value, str) and value in FAILURE_STAGES else "unknown"
+
+
+def _failed_attempt_stages(
+    records: Sequence[Mapping[str, object]],
+) -> dict[str, dict[str, int]]:
+    """Count fixed failure stages separately for each executor role."""
+
+    by_attempt: dict[str, dict[str, int]] = {
+        stage_name: {} for stage_name in ("cheap", "retry", "expensive")
+    }
+    for record in records:
+        for stage_name, stage_counts in by_attempt.items():
+            attempt = record.get(stage_name)
+            if not isinstance(attempt, Mapping) or attempt.get("accepted") is not False:
+                continue
+            failure_stage = _normalized_failure_stage(attempt.get("failure_stage"))
+            stage_counts[failure_stage] = stage_counts.get(failure_stage, 0) + 1
+    return {
+        stage_name: dict(sorted(stage_counts.items()))
+        for stage_name, stage_counts in by_attempt.items()
+    }
+
+
+def _retry_diagnostics(records: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    """Describe cheap-failure to retry outcomes with closed, task-free labels."""
+
+    attempted = 0
+    accepted = 0
+    same_failure_stage = 0
+    changed_failure_stage = 0
+    unknown_failure_stage = 0
+    transitions: dict[str, dict[str, int]] = {}
+    for record in records:
+        cheap = record.get("cheap")
+        retry = record.get("retry")
+        if (
+            not isinstance(cheap, Mapping)
+            or cheap.get("accepted") is not False
+            or not isinstance(retry, Mapping)
+        ):
+            continue
+        attempted += 1
+        cheap_stage = _normalized_failure_stage(cheap.get("failure_stage"))
+        if _accepted(retry):
+            retry_outcome = "accepted"
+            accepted += 1
+        else:
+            retry_outcome = _normalized_failure_stage(retry.get("failure_stage"))
+            if "unknown" in {cheap_stage, retry_outcome}:
+                unknown_failure_stage += 1
+            elif cheap_stage == retry_outcome:
+                same_failure_stage += 1
+            else:
+                changed_failure_stage += 1
+        outcomes = transitions.setdefault(cheap_stage, {})
+        outcomes[retry_outcome] = outcomes.get(retry_outcome, 0) + 1
+    return {
+        "attempted": attempted,
+        "accepted": accepted,
+        "same_failure_stage": same_failure_stage,
+        "changed_failure_stage": changed_failure_stage,
+        "unknown_failure_stage": unknown_failure_stage,
+        "transitions": {
+            stage_name: dict(sorted(outcomes.items()))
+            for stage_name, outcomes in sorted(transitions.items())
+        },
+    }
+
+
 def _next_action(progress: CampaignProgress, abstention_reasons: Sequence[str]) -> str:
     if not abstention_reasons:
         return "run_statistical_gate"
@@ -315,6 +427,12 @@ def _campaign_status(
     )
     escalations = sum(1 for record in usable if record.get("escalated") is True)
     both_failed = sum(1 for record in usable if _both_failed(record))
+    advice_diagnostics = {
+        "first": _advice_diagnostics(records, "advice_first"),
+        "failure": _advice_diagnostics(records, "advice_failure"),
+    }
+    failed_attempt_stages = _failed_attempt_stages(records)
+    retry_diagnostics = _retry_diagnostics(records)
     failure_stages: dict[str, int] = {}
     result_shapes: dict[str, int] = {}
     child_failure_codes: dict[str, int] = {}
@@ -351,6 +469,7 @@ def _campaign_status(
     return {
         "vendor": vendor,
         "workflow": workflow,
+        "arm": manifest["arm"],
         "tasks": progress.usable_tasks,
         "planned_tasks": manifest["planned_tasks"],
         "max_tasks": manifest["max_tasks"],
@@ -366,6 +485,9 @@ def _campaign_status(
         "both_failed": both_failed,
         "infrastructure_failures": infrastructure_failures,
         "failure_stages": dict(sorted(failure_stages.items())),
+        "failure_stages_by_attempt": failed_attempt_stages,
+        "advice_diagnostics": advice_diagnostics,
+        "retry_diagnostics": retry_diagnostics,
         "result_shapes": dict(sorted(result_shapes.items())),
         "child_failure_codes": dict(sorted(child_failure_codes.items())),
         "metric_records": len(records),
