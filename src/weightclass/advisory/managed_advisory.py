@@ -891,7 +891,7 @@ def migrate_vendor_campaigns(
                     or (manifest["cost_basis"] == "price_table") != (selected_prices is not None)
                 ):
                     _fail()
-                advisory_campaign.load_merged_lane_records(
+                advisory_campaign.count_bound_lane_records(
                     manifest,
                     selected.results,
                     advisory_campaign.ANONYMOUS_LANE_COUNT,
@@ -1279,7 +1279,7 @@ def _configuration(
         raise ManagedAdvisoryError() from error
     if validate_records:
         try:
-            advisory_campaign.load_merged_lane_records(
+            advisory_campaign.count_bound_lane_records(
                 manifest,
                 selected.results,
                 advisory_campaign.ANONYMOUS_LANE_COUNT,
@@ -1491,8 +1491,7 @@ def _preflight_task_file(task_file: Path) -> None:
 
 def _next_ordinal(manifest: advisory_campaign.CampaignManifest, results: Path) -> int:
     try:
-        records = advisory_campaign.load_bound_records(results / "runs.jsonl")
-        return len(advisory_campaign.validate_record_bindings(manifest, records)) + 1
+        return advisory_campaign.count_bound_records(manifest, results / "runs.jsonl") + 1
     except (OSError, advisory_campaign.CampaignError) as error:
         raise ManagedAdvisoryError() from error
 

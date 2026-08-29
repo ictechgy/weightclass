@@ -1,8 +1,122 @@
 # Handoff
 
-_Last updated: 2026-08-29 KST by Codex_
+_Last updated: 2026-08-29 21:31 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
+
+## In-progress advisory hardening batch (2026-08-29)
+
+The implementation is **applied, independently re-reviewed, and fully
+validated, but not committed**. Resume on branch `docs/handoff-current-state`
+at committed HEAD `36fdd3ee3eeb`. Do not discard the working tree.
+
+### Managed workflow evidence
+
+- The protected prospective acceptance and verifier were committed first as
+  `36fdd3e` (`test: preregister advisory hardening batch`). Before dispatch,
+  focused acceptance failed with the seven intended missing-feature failures;
+  `.weightclass/verify` then passed all 1,415 baseline tests with 35 skips and
+  returned the required exit `42`.
+- Exactly one approved managed Codex implementation dispatch was run with an
+  owner-only temporary task file and `--confirm-task-egress`. The temporary
+  task file was deleted by the command trap. Do **not** dispatch or retry this
+  task again.
+- Codex cheap passed (958.5-second child, 138.7-second verifier). The accepted
+  622-line patch is retained at
+  `~/Library/Application Support/weightclass/advisory-v1/codex-results/spec-cheap-ydlc_srl.patch`.
+  It was inspected, confirmed not to touch the protected files, checked with
+  `git apply --check`, and applied.
+- `.weightclass/verify` and `tests/test_advisory_hardening_batch.py` remain
+  byte-unchanged from committed HEAD. Do not edit either after the observed
+  provider candidate.
+
+### Current working tree
+
+Ten files are modified (609 insertions, 71 deletions at handoff time):
+
+- product/docs: `HANDOFF.md`, `README.md`;
+- implementation: `src/weightclass/cli.py`, `router.py`, `v2.py`,
+  `advisory/advisory_campaign.py`, and `advisory/managed_advisory.py`;
+- ordinary regression tests: `tests/test_router.py`,
+  `tests/test_usage_aggregation.py`, and
+  `tests/test_advisory_campaign_lanes.py`.
+
+The applied behavior is the bounded approved batch: opt-in observed executable
+binding for explicit custom schema-1 policy routes; Bedrock as a V2 destination
+without a Kiro/source mapping; additional CLI lazy loading and deferred usage
+store defaults; count-only managed validation; corrected usage-store HANDOFF
+wording; and a marked hardened Kiro custom-policy README section. It does **not**
+implement fd/verified-object execution or a built-in Kiro adapter. The
+post-observation path-based spawn race remains documented.
+
+An independent read-only review found type/format regressions, higher-route
+executable-path disclosure through bound escalation, CR/splitlines divergence
+in the streaming counter, an unredacted default-home lookup failure, and docs
+gaps. Follow-up changes address those findings and add ordinary regressions:
+
+- binding-aware fingerprints now use a typed helper while preserving unbound
+  canonical bytes;
+- escalation retains its reusable bound fingerprint but does not print the
+  higher executable identity/path;
+- `_iter_bound_records` streams with legacy `bytes.splitlines()` boundaries,
+  including CR/CRLF and trailing-partial handling;
+- deferred default usage-path failures map to redacted `invalid_input`;
+- Bedrock destination-only, custom binding exit behavior, and escalation null
+  reasons are documented; non-symlink bound paths are normalized.
+
+The requested independent re-review after those fixes is complete. It confirmed
+the binding/fingerprint privacy, fail-closed ordering, lazy symbol loading, and
+Bedrock cross-provider behavior. It also found and fixed two final concrete
+regressions in ordinary files without changing the protected acceptance:
+
+- the streaming counter now recognizes only CR and LF byte boundaries, exactly
+  matching legacy `bytes.splitlines()` rather than also splitting on unrelated
+  control bytes or the UTF-8 continuation byte `0x85`;
+- schema-3 default usage-store home lookup failures now return the redacted
+  `usage_unavailable` diagnostic before task access instead of allowing a
+  `RuntimeError` to escape.
+
+### Validation completed after the follow-up fixes
+
+- `uvx --offline mypy==2.3.0 --strict src tests`:
+  `Success: no issues found in 176 source files`.
+- Gated prospective acceptance plus router, V2, CLI startup, usage aggregation,
+  advisory lane/managed, and productization suites: 255 tests passed with 7
+  skips in 25.934 seconds.
+- `python3 -m compileall -q src tests tools` passed.
+- CI-pinned Ruff 0.16.2 was available from the uv offline cache. Targeted
+  `ruff check --fix` fixed two import-order errors and targeted `ruff format`
+  reformatted `src/weightclass/cli.py` only.
+- An earlier post-patch targeted run also passed 252 tests with 7 skips. The
+  latest 255-test result above supersedes it.
+
+### Final validation after independent re-review
+
+- `./.weightclass/verify`: 1,419 tests passed with 35 skips, exit `0`.
+- Full `unittest` discovery with `ResourceWarning` promoted to an error: 1,419
+  tests passed with 35 skips.
+- `python3 -m compileall -q src tests tools` passed.
+- `uvx --offline ruff==0.16.2 check .` passed.
+- `uvx --offline mypy==2.3.0 --strict src tests` passed with no issues in 176
+  source files.
+- Focused final regressions plus protected acceptance passed: 10 tests with 7
+  skips.
+- `git diff --check` passed, and both `.weightclass/verify` and
+  `tests/test_advisory_hardening_batch.py` remain byte-equal to committed HEAD.
+- Full Ruff format-check has the expected single limitation in protected
+  `tests/test_advisory_hardening_batch.py:102`; 213 other files are formatted.
+  The protected file was not modified.
+
+### Next safe action
+
+1. Read this section and `AGENTS.md`; inspect `git diff` before changing code.
+   Preserve all ten modified files and both protected committed files.
+2. Review the retained working-tree diff. The implementation, independent
+   re-review, focused regressions, full verifier, and release-style gates are
+   complete; do not repeat the managed advisory dispatch.
+3. Do not create an implementation commit, amend `36fdd3e`, push, or open a PR
+   without fresh user approval. The only commit authorization already used was
+   for the prospective acceptance/verifier commit.
 
 ## Goal
 
@@ -1243,10 +1357,12 @@ human to read.
    completed hardening plan. Do not claim the medium finding is fixed by another
    metadata comparison.
 3. **Custom usage-store ancestry remains a low residual.** The parser is fixed,
-   but lock/replace operations are not directory-fd anchored. Prefer the default
-   private home location; implement ancestor admission only after the sticky and
-   shared-group rules are fixed, or move directly to a dirfd transaction if
-   privileged/shared-tree support becomes a requirement.
+   and lock/read/temp/replace/cleanup/fsync transactions are parent-directory-fd
+   anchored. The remaining residual is unsafe ancestor pathname resolution
+   before the parent is opened. Prefer the default private home location;
+   implement ancestor admission only after the sticky and shared-group rules are
+   fixed, or move directly to a dirfd transaction if privileged/shared-tree
+   support becomes a requirement.
 4. **The default tier is not being lowered. That question is settled for now.**
    The quality instrument was built, calibrated, and run
    (`QUALITY-INSTRUMENT.md`, `PRE-REGISTRATION-quality.md`, `QUALITY-RESULT.md`

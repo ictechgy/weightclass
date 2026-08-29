@@ -297,6 +297,40 @@ class AdvisoryCampaignLaneAcceptanceTests(unittest.TestCase):
             with self.assertRaisesRegex(campaign.CampaignError, "^campaign_records_invalid$"):
                 campaign.count_bound_lane_records(value, root, 1)
 
+    def test_count_only_loader_preserves_splitlines_boundaries(self) -> None:
+        campaign = load_module(CAMPAIGN, "prospective_lane_campaign_count_splitlines")
+        value = manifest(max_tasks=2)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "results"
+            root.mkdir(mode=0o700)
+            log = root / "runs.jsonl"
+            first = json.dumps(record(1)).encode("utf-8")
+            second = json.dumps(record(2)).encode("utf-8")
+
+            log.write_bytes(first + b"\r" + second + b"\r")
+            self.assertEqual(campaign.count_bound_lane_records(value, root, 1), 2)
+
+            split_record = first.replace(b'"campaign": {', b'"campaign": {\r', 1)
+            log.write_bytes(split_record)
+            with self.assertRaisesRegex(campaign.CampaignError, "^campaign_records_invalid$"):
+                campaign.count_bound_lane_records(value, root, 1)
+
+            for non_boundary in (b"\v", b"\f", b"\x1c", b"\x1d", b"\x1e", b"\x85"):
+                with self.subTest(non_boundary=non_boundary):
+                    log.write_bytes(first + non_boundary + second)
+                    with self.assertRaisesRegex(
+                        campaign.CampaignError, "^campaign_records_invalid$"
+                    ):
+                        campaign.count_bound_lane_records(value, root, 1)
+
+            record_with_nel = record(1)
+            record_with_nel["note"] = "before\u0085after"
+            log.write_text(
+                json.dumps(record_with_nel, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            self.assertEqual(campaign.count_bound_lane_records(value, root, 1), 1)
+
     def test_busy_lane_ignores_only_an_in_progress_trailing_record(self) -> None:
         campaign = load_module(CAMPAIGN, "prospective_lane_campaign_busy_tail")
         value = manifest()

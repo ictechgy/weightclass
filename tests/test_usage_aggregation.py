@@ -823,6 +823,64 @@ class UsageAggregationTests(unittest.TestCase):
                 self.assertEqual(stream.read_calls, 1)
                 spawn.assert_called_once()
 
+    def test_usage_default_path_failure_is_redacted(self) -> None:
+        cli._load_usage_family()
+        errors = io.StringIO()
+        with (
+            patch.object(sys, "stderr", errors),
+            patch.object(
+                cli,
+                "default_usage_store_path",
+                side_effect=RuntimeError("PRIVATE HOME LOOKUP"),
+            ),
+        ):
+            status = cli.main(["usage", "report"])
+
+        self.assertEqual(status, 2)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "invalid_input"})
+        self.assertNotIn("PRIVATE", errors.getvalue())
+
+    def test_schema_three_default_path_failure_is_redacted_before_task_access(self) -> None:
+        stream = HostileOneReadStream(b"PRIVATE TASK")
+        errors = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / "policy.json"
+            policy.write_text(json.dumps(valid_policy()), encoding="utf-8")
+            with (
+                patch.object(sys, "stdin", stream),
+                patch.object(sys, "stderr", errors),
+                patch(
+                    "weightclass.usage_aggregation.default_usage_store_path",
+                    side_effect=RuntimeError("PRIVATE HOME LOOKUP"),
+                ),
+                patch("weightclass.cli.validate_runtime_process_context") as context,
+                patch("weightclass.cli.observe_executable") as observe,
+            ):
+                status = cli.main(
+                    [
+                        "run",
+                        "--policy",
+                        str(policy),
+                        "--source-vendor",
+                        "codex",
+                        "--source-profile",
+                        "source",
+                        "--tier",
+                        "low",
+                        "--confirm-endpoint-transition",
+                        "--ack-route-fingerprint",
+                        "reviewed",
+                    ],
+                    use_default_usage_store=True,
+                )
+
+        self.assertEqual(status, 9)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "usage_unavailable"})
+        self.assertNotIn("PRIVATE", errors.getvalue())
+        self.assertEqual(stream.read_calls, 0)
+        context.assert_not_called()
+        observe.assert_not_called()
+
     def test_installed_entrypoint_uses_enabled_default_without_library_side_effects(
         self,
     ) -> None:
