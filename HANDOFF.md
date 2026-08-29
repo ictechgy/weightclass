@@ -1,13 +1,15 @@
 # Handoff
 
-_Last updated: 2026-08-30 00:20 KST by Codex_
+_Last updated: 2026-08-30 01:06 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
 ## Advisory next-experiment instrumentation (2026-08-30)
 
-The next measurement tools are implemented without modifying existing campaign
-manifests, records, gates, or task data:
+The next measurement tools are implemented, merged in PR #139, and released as
+weightclass 0.22.0 without modifying existing campaign manifests, records,
+gates, or task data. Release PR #140, source-formula PR #141, and tap PR
+`ictechgy/homebrew-tap#30` are merged; Release run `33260915491` succeeded.
 
 - task-free status now reports the sealed arm, coverage-aware advice
   character/flag counts, failure stages separated by cheap/retry/expensive
@@ -315,6 +317,25 @@ regressions in ordinary files without changing the protected acceptance:
   `brew test` passes. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/7d/63/d0d7235590ba420183325fd60cca5b959906530075784757bfc35d9c7aea/weightclass-0.21.0.tar.gz`
   - sha256: `33e060c06c5b9f03e75042e03fd6ff64f2870dc57ccab902961bf5d1e5621dd4`
+- **`weightclass 0.22.0` is published on PyPI and Homebrew.** Diagnostics PR
+  #139, release PR #140, source-formula PR #141, and tap PR
+  `ictechgy/homebrew-tap#30` are merged. Release run `33260915491` passed the
+  immutable Python 3.13 build, macOS 3.10/3.14 boundaries, Python 3.10/3.14
+  candidate validation, explicit PyPI environment approval, and exact trusted
+  publication. PyPI has exactly one wheel and one sdist, neither yanked. The
+  user-level uv tool and Homebrew source install both report 0.22.0, and
+  `brew test` passes. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/f2/9e/89d41c9b65e72990c66dcf18cd030516136aa21a9290b603b778d342c7f3/weightclass-0.22.0.tar.gz`
+  - sha256: `0076a9b8dca20e2e3d2b398821a8e3f5a2383b876e3250007fbcdfc16193c4fc`
+- **0.22.0 task-free advisory experiment diagnostics.** Status now exposes the
+  sealed arm, coverage-aware advice character/flag counts, failure stages by
+  executor attempt, and closed cheap-to-retry transitions without changing any
+  campaign byte or gate. The new operating plan keeps Codex review collection,
+  Shape A+B, and opaque implementation cohorts in separate populations. Source
+  gates pass 1,422 unittest tests with 35 skips, Ruff/format over 215 files,
+  strict mypy over 176 source files, extracted-sdist isolation, and clean-wheel
+  smoke. No task/provider dispatch or new population was created for this
+  release.
 - **0.21.0 advisory routing hardening.** PR #135 adds opt-in observed executable
   identity binding for explicit custom schema-1 routes, Bedrock as a
   destination-only V2 provider, additional CLI lazy loading, deferred usage
@@ -1154,7 +1175,7 @@ human to read.
 
 ## Completed
 
-- Released state is `weightclass 0.21.0`. Published tags and the failed,
+- Released state is `weightclass 0.22.0`. Published tags and the failed,
   unpublished `v0.16.0`/`v0.16.1` candidates must never be moved, reused,
   relabelled, or republished.
 - The in-progress follow-up passes the already validated source vendor to usage
@@ -1267,7 +1288,7 @@ human to read.
 - The verification venv is not an editable project install. Full local test
   commands therefore need `PYTHONPATH=<repo>/src`; omitting it produces
   `No module named weightclass` import failures and is not a product result.
-- The published `weightclass 0.21.0` is installed through both the user-level
+- The published `weightclass 0.22.0` is installed through both the user-level
   and Homebrew entrypoints; both `wclass` and `wclass-advisory` were checked.
 - The default macOS aggregate store is enabled at its platform-default private
   application-state location.
@@ -1374,7 +1395,7 @@ human to read.
   startup prompts. Ask for a redacted prompt excerpt if the issue recurs.
 - Do not assume plain `wclass` exercises the Homebrew build: the user-level
   executable can shadow the separate Homebrew entrypoint, although both now
-  report 0.21.0. Test an exact entrypoint when packaging provenance matters.
+  report 0.22.0. Test an exact entrypoint when packaging provenance matters.
 - Do not reuse/relabel the published `0.14.0` artifacts or protected tag for
   unreleased work.
 - Do not narrow `HIGH_SIGNALS` on the calibration result. `p08`/`p21` both
@@ -1481,23 +1502,22 @@ human to read.
 ## Resume Prompt
 
 Open the current repository checkout, read `HANDOFF.md` and the applicable
-`AGENTS.md`, then continue from: `weightclass 0.21.0 is published on PyPI and
-Homebrew. Implementation PR #135, release PR #136, source-formula PR #137, and
-tap PR #29 are merged. Release run 33254537431 passed the immutable build,
-Python 3.10/3.14 candidate validation, macOS 3.10/3.14 boundaries, protected
-PyPI approval, and exact publication. Both local uv and exact Homebrew
-entrypoints report 0.21.0, and brew test passes. The release adds opt-in
-observed executable binding for explicit custom schema-1 routes, Bedrock as a
-destination-only V2 provider, additional CLI lazy loading, deferred usage
-defaults, and count-only managed validation. Current source gates pass 1,419
-unittest tests with 35 skips, Ruff/format, strict mypy over 176 source files,
-protected acceptance, and a no-reportable-findings security diff review. The
-post-observation pathname-spawn race, verified-object execution, and custom
-usage-store dirfd ancestry remain deferred architecture items. The separately
-invoked advisory companion remains explicit and experimental; no campaign gate
-may authorize core routing. Never infer prices, read vendor
-credentials/config, backfill task/session data, or reuse a published version or
-tag.`
+`AGENTS.md`, then continue from: `weightclass 0.22.0 is published on PyPI and
+Homebrew. Diagnostics PR #139, release PR #140, source-formula PR #141, and tap
+PR #30 are merged. Release run 33260915491 passed the immutable build, Python
+3.10/3.14 candidate validation, macOS 3.10/3.14 boundaries, protected PyPI
+approval, and exact publication. Both local uv and exact Homebrew entrypoints
+report 0.22.0, and brew test passes. Status exposes task-free arm, advice
+coverage, per-attempt failure stages, and retry transitions without changing
+campaign bytes or gates. The next operating plan prioritizes naturally
+occurring Codex review work and keeps Shape A+B plus opaque implementation
+cohorts separate; none were synthetically populated during this release.
+Current source gates pass 1,422 unittest tests with 35 skips, Ruff/format over
+215 files, strict mypy over 176 source files, and extracted-sdist/clean-wheel
+checks. The separately invoked advisory companion remains explicit and
+experimental; no campaign gate may authorize core routing. Never infer prices,
+read vendor credentials/config, backfill task/session data, or reuse a
+published version or tag.`
 
 ## Historical Resume Prompt (obsolete; retained for audit history)
 
