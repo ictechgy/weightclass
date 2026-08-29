@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-08-28 KST by Codex_
+_Last updated: 2026-08-29 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
@@ -192,6 +192,15 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   #127-#129 passed Linux Python 3.10-3.14, macOS Python 3.10/3.14, lint, typing,
   and package-build CI. Release validation additionally exercised installed
   `migrate-gate` and `campaign-gate` on Python 3.10 and 3.14.
+- README PR #134 (`3fc1ebd`) documents the 0.20 gate workflow, source-generation
+  exploration, provider-check grouping, consult role scope, rejected-evidence
+  snapshot fast path, clean-clone verifier boundary, and onboarding-14 skill
+  upgrade. Its complete Linux/macOS CI matrix passed. On this Mac, the
+  user-level uv tool and Homebrew entrypoints both report 0.20.0; Codex and
+  Claude skills are exact onboarding-14 bundles; and `wclass-advisory-local`
+  now resolves to the official user-level `wclass-advisory` entrypoint rather
+  than the obsolete standalone cross-project script. A login-shell smoke and
+  managed Codex review `doctor` both pass with ten free lanes.
 - Release 0.17.8 adds a
   task-free local `cli-check`, installed-CLI status to `doctor`, a separately
   confirmed and non-persisted `provider-check`, and task-before-inspection
@@ -977,7 +986,7 @@ human to read.
 
 ## Completed
 
-- Released state is `weightclass 0.16.2`. Published tags and the failed,
+- Released state is `weightclass 0.20.0`. Published tags and the failed,
   unpublished `v0.16.0`/`v0.16.1` candidates must never be moved, reused,
   relabelled, or republished.
 - The in-progress follow-up passes the already validated source vendor to usage
@@ -1090,7 +1099,7 @@ human to read.
 - The verification venv is not an editable project install. Full local test
   commands therefore need `PYTHONPATH=<repo>/src`; omitting it produces
   `No module named weightclass` import failures and is not a product result.
-- The published `weightclass 0.16.2` is installed through both the user-level
+- The published `weightclass 0.20.0` is installed through both the user-level
   and Homebrew entrypoints; both `wclass` and `wclass-advisory` were checked.
 - The default macOS aggregate store is enabled at its platform-default private
   application-state location.
@@ -1115,6 +1124,14 @@ human to read.
   from the fresh 24-prompt blind direction check.
 - `docs/security-performance-followup.md`: current security findings,
   cold-start/CI evidence, implemented local fixes, and deferred architecture.
+- `src/weightclass/advisory/advisory_campaign.py` and
+  `managed_advisory.py`: schema-3 primary gate sealing, source-generation
+  exploration, provider-role checks, and managed generation selection.
+- `src/weightclass/advisory/readonly_snapshot.py`: bounded no-follow evidence
+  mutation detection and relocated-workspace identity search; successful
+  evidence still verifies in a fresh clean clone.
+- `README.md`: public 0.20 advisory onboarding, gate, provider concurrency,
+  snapshot boundary, and onboarding-14 skill upgrade guidance.
 - `src/weightclass/router.py`: `_TIER_LADDER` and `next_tier()` for escalation.
 - `src/weightclass/usage_aggregation.py`: aggregate schema, validation, locking,
   atomic writes, reporting, and default platform paths.
@@ -1189,7 +1206,7 @@ human to read.
   startup prompts. Ask for a redacted prompt excerpt if the issue recurs.
 - Do not assume plain `wclass` exercises the Homebrew build: the user-level
   executable can shadow the separate Homebrew entrypoint, although both now
-  report 0.17.2. Test an exact entrypoint when packaging provenance matters.
+  report 0.20.0. Test an exact entrypoint when packaging provenance matters.
 - Do not reuse/relabel the published `0.14.0` artifacts or protected tag for
   unreleased work.
 - Do not narrow `HIGH_SIGNALS` on the calibration result. `p08`/`p21` both
@@ -1292,6 +1309,28 @@ human to read.
    vendor merely to populate metrics without explicit task authorization.
 
 ## Resume Prompt
+
+Open the current repository checkout, read `HANDOFF.md` and the applicable
+`AGENTS.md`, then continue from: `weightclass 0.20.0 is published on PyPI and
+Homebrew. Implementation PRs #127-#129, release PR #131, source-formula PR
+#132, tap PR #28, release-handoff PR #133, and README PR #134 are merged.
+Release run 33166192142 passed the immutable build, Python 3.10/3.14 candidate
+validation, macOS 3.10/3.14 boundaries, protected PyPI approval, and exact
+publication. Both local uv and Homebrew entrypoints report 0.20.0;
+wclass-advisory-local points to the official installed entrypoint; Codex and
+Claude skills are exact onboarding-14 bundles; brew test and managed Codex
+review doctor pass. Formal evidence requires exactly one preregistered primary
+vendor/workflow per managed state root via migrate-gate before dispatch. The
+source generation is exploratory only, and no gate may authorize core routing.
+Current source gates pass 1,408 unittest tests with 28 skips, Ruff/format over
+179 files, and strict mypy over 175 source files. The next product task is to
+collect real, non-synthetic advisory evidence without merging populations or
+mislabeling infrastructure failures. Verified-object execution and custom
+usage-store dirfd ancestry remain deferred architecture items. Never infer
+prices, read vendor credentials/config, backfill task/session data, or reuse a
+published version or tag.`
+
+## Historical Resume Prompt (obsolete; retained for audit history)
 
 Open the repository checkout, read `HANDOFF.md` and
 applicable `AGENTS.md` files, then continue from: `0.16.2 is merged, tagged, and
