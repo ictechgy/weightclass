@@ -1,14 +1,14 @@
 # Handoff
 
-_Last updated: 2026-08-29 21:43 KST by Codex_
+_Last updated: 2026-08-29 22:56 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
-## In-progress advisory hardening batch (2026-08-29)
+## Completed advisory hardening batch (2026-08-29)
 
 The implementation is **applied, independently re-reviewed, fully validated,
-and submitted in PR #135** from branch `docs/handoff-current-state`. Do not
-discard the branch or its commit history before integration is confirmed.
+merged in PR #135, and released as weightclass 0.21.0**. Release PR #136,
+source-formula PR #137, and tap PR `ictechgy/homebrew-tap#29` are merged.
 
 ### Managed workflow evidence
 
@@ -32,7 +32,7 @@ discard the branch or its commit history before integration is confirmed.
   difference, the owner explicitly authorized a separate formatting-only
   follow-up; `.weightclass/verify` remains unchanged.
 
-### Submitted branch
+### Integrated changes
 
 The implementation commit modifies ten files; the preceding preregistration
 commit adds or updates the two protected acceptance files:
@@ -114,8 +114,9 @@ regressions in ordinary files without changing the protected acceptance:
 
 ### Next safe action
 
-1. PR #135 is the integration record for this batch. Confirm its CI, reviews,
-   and merge state before taking further action.
+1. PR #135 is the implementation integration record for this batch; release PR
+   #136, source-formula PR #137, tap PR #29, and Release run `33254537431`
+   complete the publication record.
 2. The implementation, independent re-review, focused regressions, full
    verifier, and release-style gates are complete; do not repeat the managed
    advisory dispatch.
@@ -273,6 +274,26 @@ regressions in ordinary files without changing the protected acceptance:
   managed onboarding 14. The canonical sdist is:
   - url: `https://files.pythonhosted.org/packages/ec/d5/e968d6fdfa7b7cf722de1793e77ecd7e8e83edb5b8bfceef2c692c62d55a/weightclass-0.20.0.tar.gz`
   - sha256: `f56d135948e7f075943f9d87a90354556b310f5bcd4f631e677775d133857c4e`
+- **`weightclass 0.21.0` is published on PyPI and Homebrew.** Implementation PR
+  #135, release PR #136, source-formula PR #137, and tap PR
+  `ictechgy/homebrew-tap#29` are merged. Release run `33254537431` passed the
+  immutable Python 3.13 build, macOS 3.10/3.14 boundaries, Python 3.10/3.14
+  candidate validation, explicit PyPI environment approval, and exact trusted
+  publication. PyPI has exactly one wheel and one sdist, neither yanked. The
+  user-level uv tool and Homebrew source install both report 0.21.0, and
+  `brew test` passes. The canonical sdist is:
+  - url: `https://files.pythonhosted.org/packages/7d/63/d0d7235590ba420183325fd60cca5b959906530075784757bfc35d9c7aea/weightclass-0.21.0.tar.gz`
+  - sha256: `33e060c06c5b9f03e75042e03fd6ff64f2870dc57ccab902961bf5d1e5621dd4`
+- **0.21.0 advisory routing hardening.** PR #135 adds opt-in observed executable
+  identity binding for explicit custom schema-1 routes, Bedrock as a
+  destination-only V2 provider, additional CLI lazy loading, deferred usage
+  defaults, and count-only managed validation. Independent review fixed
+  escalation path disclosure, streaming record-boundary divergence, and an
+  unredacted schema-3 default-home failure before merge. Final source gates pass
+  1,419 unittest tests with 35 skips, Ruff and formatting, strict mypy over 176
+  source files, protected acceptance, and a no-reportable-findings security diff
+  review. The documented pathname-spawn race remains; this release does not add
+  verified-object execution or a built-in Kiro adapter.
 - **0.20.0 performance and evidence hardening.** PR #127 (`e5e8865`)
   lazy-loads core/advisory command families,
   streams bounded lane-capacity validation without full record copies, scopes
@@ -1102,7 +1123,7 @@ human to read.
 
 ## Completed
 
-- Released state is `weightclass 0.20.0`. Published tags and the failed,
+- Released state is `weightclass 0.21.0`. Published tags and the failed,
   unpublished `v0.16.0`/`v0.16.1` candidates must never be moved, reused,
   relabelled, or republished.
 - The in-progress follow-up passes the already validated source vendor to usage
@@ -1215,7 +1236,7 @@ human to read.
 - The verification venv is not an editable project install. Full local test
   commands therefore need `PYTHONPATH=<repo>/src`; omitting it produces
   `No module named weightclass` import failures and is not a product result.
-- The published `weightclass 0.20.0` is installed through both the user-level
+- The published `weightclass 0.21.0` is installed through both the user-level
   and Homebrew entrypoints; both `wclass` and `wclass-advisory` were checked.
 - The default macOS aggregate store is enabled at its platform-default private
   application-state location.
@@ -1322,7 +1343,7 @@ human to read.
   startup prompts. Ask for a redacted prompt excerpt if the issue recurs.
 - Do not assume plain `wclass` exercises the Homebrew build: the user-level
   executable can shadow the separate Homebrew entrypoint, although both now
-  report 0.20.0. Test an exact entrypoint when packaging provenance matters.
+  report 0.21.0. Test an exact entrypoint when packaging provenance matters.
 - Do not reuse/relabel the published `0.14.0` artifacts or protected tag for
   unreleased work.
 - Do not narrow `HIGH_SIGNALS` on the calibration result. `p08`/`p21` both
@@ -1429,24 +1450,23 @@ human to read.
 ## Resume Prompt
 
 Open the current repository checkout, read `HANDOFF.md` and the applicable
-`AGENTS.md`, then continue from: `weightclass 0.20.0 is published on PyPI and
-Homebrew. Implementation PRs #127-#129, release PR #131, source-formula PR
-#132, tap PR #28, release-handoff PR #133, and README PR #134 are merged.
-Release run 33166192142 passed the immutable build, Python 3.10/3.14 candidate
-validation, macOS 3.10/3.14 boundaries, protected PyPI approval, and exact
-publication. Both local uv and Homebrew entrypoints report 0.20.0;
-wclass-advisory-local points to the official installed entrypoint; Codex and
-Claude skills are exact onboarding-14 bundles; brew test and managed Codex
-review doctor pass. Formal evidence requires exactly one preregistered primary
-vendor/workflow per managed state root via migrate-gate before dispatch. The
-source generation is exploratory only, and no gate may authorize core routing.
-Current source gates pass 1,408 unittest tests with 28 skips, Ruff/format over
-179 files, and strict mypy over 175 source files. The next product task is to
-collect real, non-synthetic advisory evidence without merging populations or
-mislabeling infrastructure failures. Verified-object execution and custom
-usage-store dirfd ancestry remain deferred architecture items. Never infer
-prices, read vendor credentials/config, backfill task/session data, or reuse a
-published version or tag.`
+`AGENTS.md`, then continue from: `weightclass 0.21.0 is published on PyPI and
+Homebrew. Implementation PR #135, release PR #136, source-formula PR #137, and
+tap PR #29 are merged. Release run 33254537431 passed the immutable build,
+Python 3.10/3.14 candidate validation, macOS 3.10/3.14 boundaries, protected
+PyPI approval, and exact publication. Both local uv and exact Homebrew
+entrypoints report 0.21.0, and brew test passes. The release adds opt-in
+observed executable binding for explicit custom schema-1 routes, Bedrock as a
+destination-only V2 provider, additional CLI lazy loading, deferred usage
+defaults, and count-only managed validation. Current source gates pass 1,419
+unittest tests with 35 skips, Ruff/format, strict mypy over 176 source files,
+protected acceptance, and a no-reportable-findings security diff review. The
+post-observation pathname-spawn race, verified-object execution, and custom
+usage-store dirfd ancestry remain deferred architecture items. The separately
+invoked advisory companion remains explicit and experimental; no campaign gate
+may authorize core routing. Never infer prices, read vendor
+credentials/config, backfill task/session data, or reuse a published version or
+tag.`
 
 ## Historical Resume Prompt (obsolete; retained for audit history)
 
