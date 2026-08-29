@@ -16,7 +16,7 @@ from .v2_validation import V2ValidationError
 POLICY_SCHEMA_VERSION: Final = 2
 MAX_POLICY_BYTES: Final = 262_144
 MAX_LABEL_LENGTH: Final = 240
-SUPPORTED_PROVIDERS: Final = frozenset({"openai", "anthropic"})
+SUPPORTED_PROVIDERS: Final = frozenset({"openai", "anthropic", "bedrock"})
 SOURCE_PROVIDER: Final = {"codex": "openai", "claude": "anthropic"}
 
 # API 경로는 벤더에서 provider 를 유도해 교차-provider 를 차단한다. 그 매핑이 없는

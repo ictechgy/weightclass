@@ -1,8 +1,124 @@
 # Handoff
 
-_Last updated: 2026-08-28 KST by Codex_
+_Last updated: 2026-08-29 21:43 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
+
+## In-progress advisory hardening batch (2026-08-29)
+
+The implementation is **applied, independently re-reviewed, fully validated,
+and submitted in PR #135** from branch `docs/handoff-current-state`. Do not
+discard the branch or its commit history before integration is confirmed.
+
+### Managed workflow evidence
+
+- The protected prospective acceptance and verifier were committed first as
+  `36fdd3e` (`test: preregister advisory hardening batch`). Before dispatch,
+  focused acceptance failed with the seven intended missing-feature failures;
+  `.weightclass/verify` then passed all 1,415 baseline tests with 35 skips and
+  returned the required exit `42`.
+- Exactly one approved managed Codex implementation dispatch was run with an
+  owner-only temporary task file and `--confirm-task-egress`. The temporary
+  task file was deleted by the command trap. Do **not** dispatch or retry this
+  task again.
+- Codex cheap passed (958.5-second child, 138.7-second verifier). The accepted
+  622-line patch is retained at
+  `~/Library/Application Support/weightclass/advisory-v1/codex-results/spec-cheap-ydlc_srl.patch`.
+  It was inspected, confirmed not to touch the protected files, checked with
+  `git apply --check`, and applied.
+- `.weightclass/verify` and `tests/test_advisory_hardening_batch.py` remained
+  byte-unchanged through the observed provider candidate and final independent
+  review. After PR CI isolated the preregistered test's sole Ruff formatting
+  difference, the owner explicitly authorized a separate formatting-only
+  follow-up; `.weightclass/verify` remains unchanged.
+
+### Submitted branch
+
+The implementation commit modifies ten files; the preceding preregistration
+commit adds or updates the two protected acceptance files:
+
+- product/docs: `HANDOFF.md`, `README.md`;
+- implementation: `src/weightclass/cli.py`, `router.py`, `v2.py`,
+  `advisory/advisory_campaign.py`, and `advisory/managed_advisory.py`;
+- ordinary regression tests: `tests/test_router.py`,
+  `tests/test_usage_aggregation.py`, and
+  `tests/test_advisory_campaign_lanes.py`.
+- protected acceptance: `.weightclass/verify` and
+  `tests/test_advisory_hardening_batch.py`.
+
+The applied behavior is the bounded approved batch: opt-in observed executable
+binding for explicit custom schema-1 policy routes; Bedrock as a V2 destination
+without a Kiro/source mapping; additional CLI lazy loading and deferred usage
+store defaults; count-only managed validation; corrected usage-store HANDOFF
+wording; and a marked hardened Kiro custom-policy README section. It does **not**
+implement fd/verified-object execution or a built-in Kiro adapter. The
+post-observation path-based spawn race remains documented.
+
+An independent read-only review found type/format regressions, higher-route
+executable-path disclosure through bound escalation, CR/splitlines divergence
+in the streaming counter, an unredacted default-home lookup failure, and docs
+gaps. Follow-up changes address those findings and add ordinary regressions:
+
+- binding-aware fingerprints now use a typed helper while preserving unbound
+  canonical bytes;
+- escalation retains its reusable bound fingerprint but does not print the
+  higher executable identity/path;
+- `_iter_bound_records` streams with legacy `bytes.splitlines()` boundaries,
+  including CR/CRLF and trailing-partial handling;
+- deferred default usage-path failures map to redacted `invalid_input`;
+- Bedrock destination-only, custom binding exit behavior, and escalation null
+  reasons are documented; non-symlink bound paths are normalized.
+
+The requested independent re-review after those fixes is complete. It confirmed
+the binding/fingerprint privacy, fail-closed ordering, lazy symbol loading, and
+Bedrock cross-provider behavior. It also found and fixed two final concrete
+regressions in ordinary files without changing the protected acceptance:
+
+- the streaming counter now recognizes only CR and LF byte boundaries, exactly
+  matching legacy `bytes.splitlines()` rather than also splitting on unrelated
+  control bytes or the UTF-8 continuation byte `0x85`;
+- schema-3 default usage-store home lookup failures now return the redacted
+  `usage_unavailable` diagnostic before task access instead of allowing a
+  `RuntimeError` to escape.
+
+### Validation completed after the follow-up fixes
+
+- `uvx --offline mypy==2.3.0 --strict src tests`:
+  `Success: no issues found in 176 source files`.
+- Gated prospective acceptance plus router, V2, CLI startup, usage aggregation,
+  advisory lane/managed, and productization suites: 255 tests passed with 7
+  skips in 25.934 seconds.
+- `python3 -m compileall -q src tests tools` passed.
+- CI-pinned Ruff 0.16.2 was available from the uv offline cache. Targeted
+  `ruff check --fix` fixed two import-order errors and targeted `ruff format`
+  reformatted `src/weightclass/cli.py` only.
+- An earlier post-patch targeted run also passed 252 tests with 7 skips. The
+  latest 255-test result above supersedes it.
+
+### Final validation after independent re-review
+
+- `./.weightclass/verify`: 1,419 tests passed with 35 skips, exit `0`.
+- Full `unittest` discovery with `ResourceWarning` promoted to an error: 1,419
+  tests passed with 35 skips.
+- `python3 -m compileall -q src tests tools` passed.
+- `uvx --offline ruff==0.16.2 check .` passed.
+- `uvx --offline mypy==2.3.0 --strict src tests` passed with no issues in 176
+  source files.
+- Focused final regressions plus protected acceptance passed: 10 tests with 7
+  skips.
+- `git diff --check` passed. `.weightclass/verify` remains byte-equal to the
+  preregistered commit; the acceptance test has only the separately authorized
+  Ruff formatting follow-up described above.
+- Full Ruff format-check passes all files after that owner-authorized formatting
+  follow-up.
+
+### Next safe action
+
+1. PR #135 is the integration record for this batch. Confirm its CI, reviews,
+   and merge state before taking further action.
+2. The implementation, independent re-review, focused regressions, full
+   verifier, and release-style gates are complete; do not repeat the managed
+   advisory dispatch.
 
 ## Goal
 
@@ -192,6 +308,15 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
   #127-#129 passed Linux Python 3.10-3.14, macOS Python 3.10/3.14, lint, typing,
   and package-build CI. Release validation additionally exercised installed
   `migrate-gate` and `campaign-gate` on Python 3.10 and 3.14.
+- README PR #134 (`3fc1ebd`) documents the 0.20 gate workflow, source-generation
+  exploration, provider-check grouping, consult role scope, rejected-evidence
+  snapshot fast path, clean-clone verifier boundary, and onboarding-14 skill
+  upgrade. Its complete Linux/macOS CI matrix passed. On this Mac, the
+  user-level uv tool and Homebrew entrypoints both report 0.20.0; Codex and
+  Claude skills are exact onboarding-14 bundles; and `wclass-advisory-local`
+  now resolves to the official user-level `wclass-advisory` entrypoint rather
+  than the obsolete standalone cross-project script. A login-shell smoke and
+  managed Codex review `doctor` both pass with ten free lanes.
 - Release 0.17.8 adds a
   task-free local `cli-check`, installed-CLI status to `doctor`, a separately
   confirmed and non-persisted `provider-check`, and task-before-inspection
@@ -977,7 +1102,7 @@ human to read.
 
 ## Completed
 
-- Released state is `weightclass 0.16.2`. Published tags and the failed,
+- Released state is `weightclass 0.20.0`. Published tags and the failed,
   unpublished `v0.16.0`/`v0.16.1` candidates must never be moved, reused,
   relabelled, or republished.
 - The in-progress follow-up passes the already validated source vendor to usage
@@ -1090,7 +1215,7 @@ human to read.
 - The verification venv is not an editable project install. Full local test
   commands therefore need `PYTHONPATH=<repo>/src`; omitting it produces
   `No module named weightclass` import failures and is not a product result.
-- The published `weightclass 0.16.2` is installed through both the user-level
+- The published `weightclass 0.20.0` is installed through both the user-level
   and Homebrew entrypoints; both `wclass` and `wclass-advisory` were checked.
 - The default macOS aggregate store is enabled at its platform-default private
   application-state location.
@@ -1115,6 +1240,14 @@ human to read.
   from the fresh 24-prompt blind direction check.
 - `docs/security-performance-followup.md`: current security findings,
   cold-start/CI evidence, implemented local fixes, and deferred architecture.
+- `src/weightclass/advisory/advisory_campaign.py` and
+  `managed_advisory.py`: schema-3 primary gate sealing, source-generation
+  exploration, provider-role checks, and managed generation selection.
+- `src/weightclass/advisory/readonly_snapshot.py`: bounded no-follow evidence
+  mutation detection and relocated-workspace identity search; successful
+  evidence still verifies in a fresh clean clone.
+- `README.md`: public 0.20 advisory onboarding, gate, provider concurrency,
+  snapshot boundary, and onboarding-14 skill upgrade guidance.
 - `src/weightclass/router.py`: `_TIER_LADDER` and `next_tier()` for escalation.
 - `src/weightclass/usage_aggregation.py`: aggregate schema, validation, locking,
   atomic writes, reporting, and default platform paths.
@@ -1189,7 +1322,7 @@ human to read.
   startup prompts. Ask for a redacted prompt excerpt if the issue recurs.
 - Do not assume plain `wclass` exercises the Homebrew build: the user-level
   executable can shadow the separate Homebrew entrypoint, although both now
-  report 0.17.2. Test an exact entrypoint when packaging provenance matters.
+  report 0.20.0. Test an exact entrypoint when packaging provenance matters.
 - Do not reuse/relabel the published `0.14.0` artifacts or protected tag for
   unreleased work.
 - Do not narrow `HIGH_SIGNALS` on the calibration result. `p08`/`p21` both
@@ -1226,10 +1359,12 @@ human to read.
    completed hardening plan. Do not claim the medium finding is fixed by another
    metadata comparison.
 3. **Custom usage-store ancestry remains a low residual.** The parser is fixed,
-   but lock/replace operations are not directory-fd anchored. Prefer the default
-   private home location; implement ancestor admission only after the sticky and
-   shared-group rules are fixed, or move directly to a dirfd transaction if
-   privileged/shared-tree support becomes a requirement.
+   and lock/read/temp/replace/cleanup/fsync transactions are parent-directory-fd
+   anchored. The remaining residual is unsafe ancestor pathname resolution
+   before the parent is opened. Prefer the default private home location;
+   implement ancestor admission only after the sticky and shared-group rules are
+   fixed, or move directly to a dirfd transaction if privileged/shared-tree
+   support becomes a requirement.
 4. **The default tier is not being lowered. That question is settled for now.**
    The quality instrument was built, calibrated, and run
    (`QUALITY-INSTRUMENT.md`, `PRE-REGISTRATION-quality.md`, `QUALITY-RESULT.md`
@@ -1292,6 +1427,28 @@ human to read.
    vendor merely to populate metrics without explicit task authorization.
 
 ## Resume Prompt
+
+Open the current repository checkout, read `HANDOFF.md` and the applicable
+`AGENTS.md`, then continue from: `weightclass 0.20.0 is published on PyPI and
+Homebrew. Implementation PRs #127-#129, release PR #131, source-formula PR
+#132, tap PR #28, release-handoff PR #133, and README PR #134 are merged.
+Release run 33166192142 passed the immutable build, Python 3.10/3.14 candidate
+validation, macOS 3.10/3.14 boundaries, protected PyPI approval, and exact
+publication. Both local uv and Homebrew entrypoints report 0.20.0;
+wclass-advisory-local points to the official installed entrypoint; Codex and
+Claude skills are exact onboarding-14 bundles; brew test and managed Codex
+review doctor pass. Formal evidence requires exactly one preregistered primary
+vendor/workflow per managed state root via migrate-gate before dispatch. The
+source generation is exploratory only, and no gate may authorize core routing.
+Current source gates pass 1,408 unittest tests with 28 skips, Ruff/format over
+179 files, and strict mypy over 175 source files. The next product task is to
+collect real, non-synthetic advisory evidence without merging populations or
+mislabeling infrastructure failures. Verified-object execution and custom
+usage-store dirfd ancestry remain deferred architecture items. Never infer
+prices, read vendor credentials/config, backfill task/session data, or reuse a
+published version or tag.`
+
+## Historical Resume Prompt (obsolete; retained for audit history)
 
 Open the repository checkout, read `HANDOFF.md` and
 applicable `AGENTS.md` files, then continue from: `0.16.2 is merged, tagged, and

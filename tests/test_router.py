@@ -3985,6 +3985,97 @@ class EscalationSuggestionTests(unittest.TestCase):
         self.assertEqual(escalation["to_tier"], "standard")
         self.assertTrue(escalation["route_fingerprint"].startswith("sha256:"))
 
+    def test_bound_suggestion_keeps_the_higher_executable_path_private(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            low = root / "low-failure"
+            higher = root / "higher-private-path"
+            low.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            higher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            low.chmod(0o700)
+            higher.chmod(0o700)
+            policy = root / "bound.json"
+            policy.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "bound-low",
+                                "vendor": "fake",
+                                "tier": "low",
+                                "command": [str(low)],
+                            },
+                            {
+                                "id": "bound-standard",
+                                "vendor": "fake",
+                                "tier": "standard",
+                                "command": [str(higher)],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            common = [
+                "--policy",
+                str(policy),
+                "--source-vendor",
+                "fake",
+                "--bind-executable-identity",
+            ]
+            reviewed_low = subprocess.run(
+                [sys.executable, "-m", "weightclass", "route", *common, "--tier", "low"],
+                capture_output=True,
+                check=True,
+                input="fix the typo",
+                text=True,
+            )
+            low_fingerprint = json.loads(reviewed_low.stdout)["route_fingerprint"]
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "run",
+                    *common,
+                    "--tier",
+                    "low",
+                    "--ack-route-fingerprint",
+                    low_fingerprint,
+                    "--suggest-escalation",
+                ],
+                capture_output=True,
+                check=False,
+                input="fix the typo",
+                text=True,
+            )
+            reviewed_higher = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    *common,
+                    "--tier",
+                    "standard",
+                ],
+                capture_output=True,
+                check=True,
+                input="fix the typo",
+                text=True,
+            )
+            lines = self._stderr_objects(result)
+
+        escalation = lines[1]["escalation"]
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(escalation["executable_binding"], "observed")
+        self.assertNotIn("executable_identity", escalation)
+        self.assertNotIn(str(higher), result.stderr)
+        self.assertEqual(
+            escalation["route_fingerprint"],
+            json.loads(reviewed_higher.stdout)["route_fingerprint"],
+        )
+
     def test_the_suggested_fingerprint_is_the_one_that_route_renders(self) -> None:
         """Breaks if the suggestion cannot be acknowledged as-is on the next run."""
         with tempfile.TemporaryDirectory() as directory:

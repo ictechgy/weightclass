@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
@@ -262,6 +263,9 @@ def native_route_fingerprint(
     route: Route,
     allow_mixed_vendors: bool,
     posture: Posture | None = None,
+    *,
+    executable_binding: str | None = None,
+    executable_identity: Mapping[str, object] | None = None,
 ) -> str:
     """Bind a rendered review to the selection it rendered.
 
@@ -294,6 +298,11 @@ def native_route_fingerprint(
             "command": list(route.command),
         },
     }
+    if executable_binding is not None:
+        if executable_identity is None:
+            raise ValueError("executable identity is required for a binding")
+        semantic_route["executable_binding"] = executable_binding
+        semantic_route["executable_identity"] = dict(executable_identity)
     encoded = json.dumps(
         semantic_route,
         ensure_ascii=True,

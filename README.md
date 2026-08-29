@@ -323,8 +323,8 @@ them:
 | `0` | Success. For `run` and `v2 run`, the selected command exited `0`. |
 | `1` | `select` was cancelled or reached terminal EOF before policy emission. |
 | `2` | `invalid_task` or `invalid_input`. |
-| `3` | `unsupported_route` — no policy route matched, or a built-in route's executable is missing or rejected during review. |
-| `4` | `executor_unavailable` — the command could not be started. |
+| `3` | `unsupported_route` — no policy route matched, or a built-in/bound custom route's executable is missing or rejected during review. |
+| `4` | `executor_unavailable` — the command could not be started or a bound custom executable could not be admitted for a run. |
 | `5` | A required API, runtime, endpoint-transition, or native-delegation confirmation is absent. |
 | `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
 | `7` | `executor_failed` — the command started and exited non-zero. |
@@ -379,7 +379,9 @@ Nothing is suggested when the router itself refused — invalid input, an
 unsupported route, a fingerprint mismatch, or an executor that never started.
 Those failures have nothing to do with the tier, and pointing at a more
 expensive route would only spend money on them. `high` reports
-`{"escalation": null, "reason": "already_highest_tier"}`.
+`{"escalation": null, "reason": "already_highest_tier"}`; a policy with no
+higher declared route reports `no_route_for_higher_tier`, and an identity-bound
+higher route that cannot be admitted reports `higher_route_unavailable`.
 
 ## Local aggregate usage accounting
 
@@ -546,8 +548,10 @@ command. Discovery and profile generation never execute the selected agent;
 Generated `agy` and Grok policies retain `task_delivery: argv` and its local
 process-inspection exposure. Built-in/default schema-1 route review resolves
 PATH to one admitted absolute executable; reviewed custom policies retain their
-existing compatibility behavior. Schema 1 binds the lexical executable path in
-the route fingerprint but does not provide schema-2 executable reobservation.
+existing compatibility behavior unless the explicit executable-identity binding
+opt-in is used. Schema 1 normally binds the lexical executable path in the route
+fingerprint; `--bind-executable-identity` adds incremental observation for an
+explicit custom policy.
 
 Code `7` carries the real status in its diagnostic, as
 `{"error": "executor_failed", "executor_exit_code": N}` or, for a command killed
@@ -571,6 +575,32 @@ as `--ack-route-fingerprint`; a missing acknowledgement stops before task
 access. Cross-profile and cross-vendor changes must be explicitly and
 directionally granted by the reviewed policy. weightclass observes only the
 one direct child's exit, never task or orchestration success.
+
+<!-- kiro-custom-policy -->
+### Hardened Kiro custom policy
+
+Kiro is not a built-in and has no Kiro V2/source family or Kiro source family.
+To use it, write an
+exact reviewed schema-1 custom policy whose `command` begins with an absolute
+resolved executable placeholder such as `/path/to/kiro/bin/kiro-cli`, followed
+by the exact argv approved for that installation. Add
+`--bind-executable-identity` to both `route` and `run` to resolve the final
+symlink, record the admitted executable observation in the review, bind it into
+the fingerprint, and reobserve it before the child starts. A replacement or
+mismatch fails closed; the reviewed resolved target is still started by path.
+
+The review must explicitly approve the Kiro trust and tool-approval posture,
+including any session and log persistence. If the policy uses a positional
+prompt, the review output has `task_delivery: argv`; the task is then visible
+through argv/process inspection (`ps`) rather than stdin. Otherwise the task is
+delivered on stdin. Kiro's own session and log persistence remains the
+responsibility of the reviewed command and its installation.
+
+This is incremental observation hardening, not verified-object or fd-based
+execution. A path-based post-observation spawn race remains: an attacker able
+to replace the executable after the final observation can affect path-based
+spawn resolution.
+<!-- /kiro-custom-policy -->
 
 The built-in routes are intentionally conservative:
 
@@ -1406,8 +1436,11 @@ credentials, HTTP, billing, and any provider output.
 Use a V2 policy only for API routes; unlike the V1 legacy policy, it cannot
 contain arbitrary command arrays. A route is eligible only for its declared
 source vendors. `codex` maps to the OpenAI provider family and `claude` maps to
-the Anthropic provider family; `allow_cross_provider` must be `true` before a
-route can cross those families.
+the Anthropic provider family. OpenAI, Anthropic, and Bedrock are supported
+destination providers, but Bedrock adds no source-vendor family; a Bedrock
+route therefore requires `allow_cross_provider: true`. Kiro likewise has no V2
+source family. The same opt-in must be `true` before any route can cross the two
+existing source-provider mappings.
 
 ```json
 {

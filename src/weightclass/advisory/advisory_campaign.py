@@ -583,26 +583,91 @@ def _iter_bound_records(
         consumed = 0
         with os.fdopen(descriptor, "rb", closefd=True) as handle:
             descriptor = None
-            for raw_line in handle:
-                consumed += len(raw_line)
-                if consumed > MAX_CAMPAIGN_LOG_BYTES or len(raw_line) > MAX_CAMPAIGN_RECORD_BYTES:
-                    raise CampaignError()
-                trailing_partial_candidate = allow_trailing_partial and not raw_line.endswith(b"\n")
-                if not raw_line.strip():
-                    continue
-                try:
-                    value = json.loads(
-                        raw_line.decode("utf-8", errors="strict"),
-                        object_pairs_hook=_object_without_duplicates,
-                        parse_constant=lambda _value: (_ for _ in ()).throw(CampaignError()),
-                    )
-                except (UnicodeDecodeError, ValueError, RecursionError, CampaignError) as error:
-                    if trailing_partial_candidate:
+            buffer = bytearray()
+            line_boundaries = b"\n\r"
+            while True:
+                chunk = handle.read(65_536)
+                at_end = not chunk
+                if chunk:
+                    consumed += len(chunk)
+                    if consumed > MAX_CAMPAIGN_LOG_BYTES:
+                        raise CampaignError()
+                    buffer.extend(chunk)
+
+                start = 0
+                index = 0
+                while index < len(buffer):
+                    boundary = buffer[index]
+                    if boundary not in line_boundaries:
+                        index += 1
+                        continue
+                    if boundary == 0x0D and index + 1 == len(buffer) and not at_end:
                         break
-                    raise CampaignError() from error
-                if not isinstance(value, dict):
-                    raise CampaignError()
-                yield value
+                    raw_line = bytes(buffer[start:index])
+                    if len(raw_line) > MAX_CAMPAIGN_RECORD_BYTES:
+                        raise CampaignError()
+                    consumed_boundary = (
+                        2
+                        if boundary == 0x0D
+                        and index + 1 < len(buffer)
+                        and buffer[index + 1] == 0x0A
+                        else 1
+                    )
+                    start = index + consumed_boundary
+                    index = start
+                    if raw_line.strip():
+                        try:
+                            value = json.loads(
+                                raw_line.decode("utf-8", errors="strict"),
+                                object_pairs_hook=_object_without_duplicates,
+                                parse_constant=lambda _value: (_ for _ in ()).throw(
+                                    CampaignError()
+                                ),
+                            )
+                        except (
+                            UnicodeDecodeError,
+                            ValueError,
+                            RecursionError,
+                            CampaignError,
+                        ) as error:
+                            raise CampaignError() from error
+                        if not isinstance(value, dict):
+                            raise CampaignError()
+                        yield value
+
+                if start:
+                    del buffer[:start]
+                if not at_end:
+                    pending_carriage_return = buffer.endswith(b"\r")
+                    record_size = len(buffer) - (1 if pending_carriage_return else 0)
+                    if record_size > MAX_CAMPAIGN_RECORD_BYTES:
+                        raise CampaignError()
+                    continue
+                if buffer:
+                    if len(buffer) > MAX_CAMPAIGN_RECORD_BYTES:
+                        raise CampaignError()
+                    if buffer.strip():
+                        try:
+                            value = json.loads(
+                                bytes(buffer).decode("utf-8", errors="strict"),
+                                object_pairs_hook=_object_without_duplicates,
+                                parse_constant=lambda _value: (_ for _ in ()).throw(
+                                    CampaignError()
+                                ),
+                            )
+                        except (
+                            UnicodeDecodeError,
+                            ValueError,
+                            RecursionError,
+                            CampaignError,
+                        ) as error:
+                            if allow_trailing_partial:
+                                break
+                            raise CampaignError() from error
+                        if not isinstance(value, dict):
+                            raise CampaignError()
+                        yield value
+                break
     except CampaignError:
         raise
     except OSError as error:

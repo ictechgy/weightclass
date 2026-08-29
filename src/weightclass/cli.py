@@ -10,7 +10,7 @@ import subprocess
 import sys
 import unicodedata
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
@@ -26,14 +26,6 @@ from .classification import (
     read_task_from_standard_input,
     validate_task,
 )
-from .cost_recommendation import (
-    CostRecommendationError,
-    build_cost_profile_review,
-    build_recommendation_receipt,
-    load_cost_profile,
-    load_qualification_card,
-)
-from .foreground_process import run_owned_foreground
 from .json_input import JsonInputError, load_json_object
 from .process_context import ChildStatusLostError
 from .router import (
@@ -53,17 +45,6 @@ from .router import (
     uses_argv_task_delivery,
     validate_vendor_label,
 )
-from .usage_aggregation import (
-    STORE_SCHEMA_VERSION,
-    UsageAggregationError,
-    UsageDimensions,
-    default_usage_store_path,
-    ensure_usage_store,
-    record_usage,
-    render_usage_report,
-    resolve_usage_store,
-    set_relative_cost_weight,
-)
 
 if TYPE_CHECKING:
     from .agent_discovery import (
@@ -72,6 +53,13 @@ if TYPE_CHECKING:
         generate_selected_policy,
         render_agent_discovery,
         resolve_builtin_executable,
+    )
+    from .cost_recommendation import (
+        CostRecommendationError,
+        build_cost_profile_review,
+        build_recommendation_receipt,
+        load_cost_profile,
+        load_qualification_card,
     )
     from .delegation_compile import (
         canonical_json_bytes,
@@ -106,6 +94,7 @@ if TYPE_CHECKING:
     )
     from .delegation_types import DelegationTier, DirectChildCleanup, VendorFamily
     from .executable_observation import ExecutableObservation, observe_executable
+    from .foreground_process import run_owned_foreground
     from .native_v2_compile import compile_native_v2
     from .native_v2_runtime import run_native_v2
     from .native_v2_schema import (
@@ -128,6 +117,17 @@ if TYPE_CHECKING:
     from .native_v3_selector import InteractiveSelectorError, run_interactive_selector
     from .task_v2 import ValidatedTaskV2, read_validated_task_v2
     from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
+    from .usage_aggregation import (
+        STORE_SCHEMA_VERSION,
+        UsageAggregationError,
+        UsageDimensions,
+        default_usage_store_path,
+        ensure_usage_store,
+        record_usage,
+        render_usage_report,
+        resolve_usage_store,
+        set_relative_cost_weight,
+    )
     from .v2 import (
         V2InvalidInputError,
         load_api_policy,
@@ -148,6 +148,12 @@ AGENT_IDS: Final = ("agy", "claude", "codex", "grok")
 API_SOURCE_VENDORS: Final = ("claude", "codex")
 
 _LAZY_SYMBOL_MODULES: Final = {
+    "CostRecommendationError": "cost_recommendation",
+    "build_cost_profile_review": "cost_recommendation",
+    "build_recommendation_receipt": "cost_recommendation",
+    "load_cost_profile": "cost_recommendation",
+    "load_qualification_card": "cost_recommendation",
+    "run_owned_foreground": "foreground_process",
     "AgentDiscoveryError": "agent_discovery",
     "AgentUnavailableError": "agent_discovery",
     "generate_selected_policy": "agent_discovery",
@@ -210,6 +216,15 @@ _LAZY_SYMBOL_MODULES: Final = {
     "route_fingerprint": "v2",
     "select_api_route": "v2",
     "V2ValidationError": "v2_validation",
+    "STORE_SCHEMA_VERSION": "usage_aggregation",
+    "UsageAggregationError": "usage_aggregation",
+    "UsageDimensions": "usage_aggregation",
+    "default_usage_store_path": "usage_aggregation",
+    "ensure_usage_store": "usage_aggregation",
+    "record_usage": "usage_aggregation",
+    "render_usage_report": "usage_aggregation",
+    "resolve_usage_store": "usage_aggregation",
+    "set_relative_cost_weight": "usage_aggregation",
 }
 
 
@@ -287,7 +302,11 @@ def _load_agent_family() -> None:
 
 
 def _load_legacy_run_family() -> None:
-    _load_symbols(("delegation_runtime",))
+    _load_symbols(("delegation_runtime", "foreground_process"))
+
+
+def _load_usage_family() -> None:
+    _load_symbols(("usage_aggregation",))
 
 
 EXECUTOR_FAILED_EXIT_CODE: Final = 7
@@ -605,10 +624,26 @@ def _resolve_packaged_policy_selection(
     return True, preset.removesuffix("-cost-focused")
 
 
+def _legacy_route_fingerprint(
+    route: Route,
+    policy: RoutingPolicy,
+    observation: ExecutableObservation | None = None,
+) -> str:
+    """Fingerprint a legacy route without changing unbound canonical bytes."""
+    return native_route_fingerprint(
+        route,
+        policy.allow_mixed_vendors,
+        policy.posture,
+        executable_binding="observed" if observation is not None else None,
+        executable_identity=asdict(observation) if observation is not None else None,
+    )
+
+
 def _print_escalation_suggestion(
     policy: RoutingPolicy,
     tier: Tier,
     source_vendor: str | None,
+    bind_executable_identity: bool = False,
 ) -> None:
     """Name the route one tier up after a child failed, without running anything.
 
@@ -643,6 +678,16 @@ def _print_escalation_suggestion(
         print(json.dumps({"escalation": None, "reason": reason}), file=sys.stderr)
         return
     assert higher is not None
+    observed: ExecutableObservation | None = None
+    if bind_executable_identity:
+        try:
+            route, observed = _observe_bound_legacy_route(route)
+        except (OSError, RuntimeError, V2ValidationError, ValueError):
+            print(
+                json.dumps({"escalation": None, "reason": "higher_route_unavailable"}),
+                file=sys.stderr,
+            )
+            return
     # 명령 자체는 싣지 않는다. 사용자가 승급을 실행하는 데 필요한 것은 티어와
     # 지문이지 argv 가 아니다.
     #
@@ -657,9 +702,7 @@ def _print_escalation_suggestion(
         "to_tier": higher,
         "route": route.route_id,
         "vendor": route.vendor,
-        "route_fingerprint": native_route_fingerprint(
-            route, policy.allow_mixed_vendors, policy.posture
-        ),
+        "route_fingerprint": _legacy_route_fingerprint(route, policy, observed),
         # 승급 실행은 이미 센 태스크의 재시도다. 이 플래그를 빠뜨리면 기준선이
         # 부풀어 실패한 저비용 라우팅이 절감처럼 보인다.
         "record_as_rework": True,
@@ -667,6 +710,8 @@ def _print_escalation_suggestion(
     }
     if uses_argv_task_delivery(route.command):
         suggestion["task_delivery"] = "argv"
+    if observed is not None:
+        suggestion["executable_binding"] = "observed"
     print(json.dumps({"escalation": suggestion}), file=sys.stderr)
 
 
@@ -929,6 +974,30 @@ def _resolve_default_route_executable(route: Route) -> Route:
     return replace(route, command=(executable, *route.command[1:]))
 
 
+def _observe_bound_legacy_route(route: Route) -> tuple[Route, ExecutableObservation]:
+    """Resolve and observe a custom schema-1 executable for opt-in binding."""
+    if not route.command or not os.path.isabs(route.command[0]):
+        raise V2ValidationError()
+    _load_native_family()
+    try:
+        executable = os.path.normpath(route.command[0])
+        visited: set[str] = set()
+        while os.path.islink(executable):
+            if executable in visited:
+                raise RuntimeError()
+            visited.add(executable)
+            target = os.readlink(executable)
+            executable = os.path.normpath(
+                target
+                if os.path.isabs(target)
+                else os.path.join(os.path.dirname(executable), target)
+            )
+        observation = observe_executable(executable)
+    except (OSError, RuntimeError, ValueError):
+        raise V2ValidationError() from None
+    return replace(route, command=(executable, *route.command[1:])), observation
+
+
 def _preset_overrides_from_arguments(arguments: argparse.Namespace) -> PresetOverrides:
     return PresetOverrides(
         low_model=arguments.low_model,
@@ -990,13 +1059,13 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
         description="Create or validate the private local aggregate store.",
     )
-    usage_enable.add_argument("--store", type=Path, default=default_usage_store_path())
+    usage_enable.add_argument("--store", type=Path)
     usage_weight = usage_subcommands.add_parser(
         "weight",
         allow_abbrev=False,
         description="Set one user-asserted relative cost weight.",
     )
-    usage_weight.add_argument("--store", type=Path, default=default_usage_store_path())
+    usage_weight.add_argument("--store", type=Path)
     usage_weight.add_argument("--agent", required=True, choices=AGENT_IDS)
     usage_weight.add_argument("--model")
     usage_weight.add_argument("--effort", required=True, choices=("low", "medium", "high"))
@@ -1006,7 +1075,7 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
         description="Print aggregate-only usage and relative-cost metrics.",
     )
-    usage_report.add_argument("--store", type=Path, default=default_usage_store_path())
+    usage_report.add_argument("--store", type=Path)
 
     classify = subcommands.add_parser(
         "classify",
@@ -1084,11 +1153,21 @@ def build_parser() -> argparse.ArgumentParser:
         native.add_argument("--tier", choices=("low", "standard", "high"))
         if name == "route":
             native.add_argument(
+                "--bind-executable-identity",
+                action="store_true",
+                help="Bind an explicit custom route to its observed executable identity.",
+            )
+            native.add_argument(
                 "--explain",
                 action="store_true",
                 help="Include task-free classification provenance in the route receipt.",
             )
         if name == "run":
+            native.add_argument(
+                "--bind-executable-identity",
+                action="store_true",
+                help="Bind an explicit custom route to its observed executable identity.",
+            )
             native.add_argument("--ack-route-fingerprint")
             native.add_argument("--confirm-endpoint-transition", action="store_true")
             native.add_argument(
@@ -1535,6 +1614,7 @@ def v2_run_from_standard_input(
 ) -> int:
     """Start one acknowledged external API runtime without handling credentials."""
     _load_api_family()
+    _load_legacy_run_family()
     try:
         policy = load_api_policy(policy_path)
     except (V2InvalidInputError, InvalidInputError):
@@ -1752,6 +1832,7 @@ def recommend_from_standard_input(
     overrides: PresetOverrides | None = None,
 ) -> int:
     """Render one evidence-bound recommendation without starting a vendor."""
+    _load_symbols(("cost_recommendation",))
     _load_agent_family()
     overrides = overrides or PresetOverrides()
     source_vendor = preset.removesuffix("-cost-focused")
@@ -1819,6 +1900,7 @@ def recommend_from_standard_input(
 
 def review_cost_profile(cost_profile_path: Path) -> int:
     """Validate and fingerprint one cost profile without reading task input."""
+    _load_symbols(("cost_recommendation",))
     try:
         profile = load_cost_profile(cost_profile_path)
     except CostRecommendationError:
@@ -1849,6 +1931,7 @@ def route_from_standard_input(
     preset: str | None = None,
     overrides: PresetOverrides | None = None,
     explain: bool = False,
+    bind_executable_identity: bool = False,
 ) -> int:
     """Select and render a command without echoing or persisting the task."""
     _load_agent_family()
@@ -1869,6 +1952,11 @@ def route_from_standard_input(
     except InvalidInputError:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
+    if bind_executable_identity and (policy_path is None or automatic_policy is not None):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    legacy_custom_policy = False
+    executable_observation: ExecutableObservation | None = None
     if policy_path is not None and automatic_policy is None:
         try:
             raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
@@ -1879,6 +1967,10 @@ def route_from_standard_input(
         if explain and version in {2, 3}:
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
+        if bind_executable_identity and version != 1:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        legacy_custom_policy = version == 1
         if version == 2:
             return _native_v2_route(dispatched, source_vendor, source_profile, explicit_tier)
         if version == 3:
@@ -1929,6 +2021,12 @@ def route_from_standard_input(
         )
         if policy_path is None:
             route = _resolve_default_route_executable(route)
+        if bind_executable_identity:
+            try:
+                route, executable_observation = _observe_bound_legacy_route(route)
+            except (OSError, RuntimeError, V2ValidationError, ValueError):
+                print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+                return 3
     except InvalidTaskError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
@@ -1943,17 +2041,20 @@ def route_from_standard_input(
         return 3
     # vendor는 항상 싣는다. 생략하면 정책이 벤더를 바꿔도 리뷰 출력만 봐서는
     # 어느 벤더로 나가는지 알 수 없다.
-    response = {
+    if bind_executable_identity:
+        assert executable_observation is not None
+    response: dict[str, object] = {
         "command": list(route.command),
         "route": route.route_id,
         "tier": tier,
         "vendor": route.vendor,
         # 이 지문을 wclass run --ack-route-fingerprint 로 넘기면 검토한 선택이
         # 실행 직전에 다시 확인된다. 넘기지 않으면 구속력은 없다.
-        "route_fingerprint": native_route_fingerprint(
-            route, policy.allow_mixed_vendors, policy.posture
-        ),
+        "route_fingerprint": _legacy_route_fingerprint(route, policy, executable_observation),
     }
+    if executable_observation is not None:
+        response["executable_binding"] = "observed"
+        response["executable_identity"] = asdict(executable_observation)
     if policy.posture is not None:
         response["posture"] = policy.posture
         response["reason_code"] = reason_code
@@ -1961,6 +2062,8 @@ def route_from_standard_input(
         response["reason_code"] = reason_code
         response["classification_policy_version"] = CLASSIFICATION_POLICY_VERSION
         response["confidence_class"] = _route_confidence_class(reason_code)
+        if legacy_custom_policy and not bind_executable_identity:
+            response["executable_binding"] = "legacy_lexical"
     if automatic_policy is not None:
         assert effective_source_vendor is not None
         response["configuration_status"] = _packaged_configuration_status(
@@ -1992,6 +2095,7 @@ def run_from_standard_input(
     usage_escalation: bool = False,
     use_default_usage_store: bool = False,
     suggest_escalation: bool = False,
+    bind_executable_identity: bool = False,
 ) -> int:
     """Run a selected native command without a shell or output capture."""
     _load_agent_family()
@@ -2012,11 +2116,17 @@ def run_from_standard_input(
     except InvalidInputError:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
+    if bind_executable_identity and (policy_path is None or automatic_policy is not None):
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
     if policy_path is not None and automatic_policy is None:
         try:
             raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
             version, dispatched = dispatch_native_policy_schema(raw_policy)
         except (InvalidInputError, V2ValidationError):
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
+        if bind_executable_identity and version != 1:
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
         if (
@@ -2095,8 +2205,16 @@ def run_from_standard_input(
         )
         if policy_path is None:
             route = _resolve_default_route_executable(route)
+        executable_observation: ExecutableObservation | None = None
+        if bind_executable_identity:
+            try:
+                route, executable_observation = _observe_bound_legacy_route(route)
+            except (OSError, RuntimeError, V2ValidationError, ValueError):
+                print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
+                return 4
+            assert executable_observation is not None
         if acknowledged_fingerprint is not None and acknowledged_fingerprint != (
-            native_route_fingerprint(route, policy.allow_mixed_vendors, policy.posture)
+            _legacy_route_fingerprint(route, policy, executable_observation)
         ):
             print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
             return 6
@@ -2111,6 +2229,15 @@ def run_from_standard_input(
                 raise InvalidTaskError()
             argv = substitute_task(route.command, task)
             child_input = b""
+        if executable_observation is not None:
+            try:
+                final_route, final_observation = _observe_bound_legacy_route(route)
+            except (OSError, RuntimeError, V2ValidationError, ValueError):
+                print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+                return 6
+            if final_route.command != route.command or final_observation != executable_observation:
+                print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+                return 6
         # text 모드는 로케일 인코딩을 사용하므로 LC_ALL=C 환경에서 비ASCII 태스크가
         # UnicodeEncodeError로 새어 나간다. 자식 출력을 읽지 않으므로 바이트로 전달한다.
         completed_process = run_owned_foreground(
@@ -2144,7 +2271,12 @@ def run_from_standard_input(
     # 라우터가 스스로 진단한 실패(2~6)에는 승급을 제안하지 않는다. 자식이 실제로
     # 돌아서 비영으로 끝난 경우에만 다음 티어를 지목하는 것이 의미를 갖는다.
     if status == EXECUTOR_FAILED_EXIT_CODE and suggest_escalation:
-        _print_escalation_suggestion(policy, selected_tier, effective_source_vendor)
+        _print_escalation_suggestion(
+            policy,
+            selected_tier,
+            effective_source_vendor,
+            bind_executable_identity,
+        )
     return status
 
 
@@ -2264,6 +2396,7 @@ def _execute_native_v3(
 ) -> int:
     """Apply schema-3 execution gates without reading task input early."""
     _load_native_family()
+    _load_usage_family()
     if (
         source_vendor is None
         or source_profile is None
@@ -2306,7 +2439,7 @@ def _execute_native_v3(
             rework=usage_rework,
             escalation=usage_escalation,
         )
-    except (OSError, UsageAggregationError):
+    except (OSError, RuntimeError, UsageAggregationError):
         print(json.dumps({"error": "usage_unavailable"}), file=sys.stderr)
         return USAGE_UNAVAILABLE_EXIT_CODE
     try:
@@ -2560,7 +2693,10 @@ def main(
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
     if arguments.command == "usage":
+        _load_usage_family()
         try:
+            if arguments.store is None:
+                arguments.store = default_usage_store_path()
             if arguments.usage_command == "enable":
                 ensure_usage_store(arguments.store)
                 usage_receipt: dict[str, object] = {
@@ -2581,7 +2717,7 @@ def main(
                 usage_receipt = render_usage_report(arguments.store)
             else:
                 raise UsageAggregationError()
-        except (OSError, UsageAggregationError, UnicodeError):
+        except (OSError, RuntimeError, UsageAggregationError, UnicodeError):
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
         print(json.dumps(usage_receipt))
@@ -2644,6 +2780,7 @@ def main(
             arguments.preset,
             _preset_overrides_from_arguments(arguments),
             arguments.explain,
+            arguments.bind_executable_identity,
         )
     if arguments.command == "run":
         return run_from_standard_input(
@@ -2662,6 +2799,7 @@ def main(
             arguments.usage_escalation,
             use_default_usage_store,
             arguments.suggest_escalation,
+            arguments.bind_executable_identity,
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
