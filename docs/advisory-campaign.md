@@ -217,6 +217,14 @@ per-stage totals. If any executed stage lacks one metric, that metric's total is
 `null` rather than a partial value and the population automatically abstains.
 Infrastructure failures also force abstention and remain included in actual
 spend/usage totals when their child reported those values.
+Status also exposes additive task-free diagnostics: the sealed arm,
+coverage-aware advice character/flag counts, failure stages separated by
+executor attempt, and a closed cheap-failure-to-retry-outcome transition
+matrix. Missing legacy fields remain visibly unrecorded instead of becoming
+false values. These diagnostics do not change eligibility or gate calculations.
+Use the separate-population procedure in
+[`advisory-next-experiments.md`](advisory-next-experiments.md) for Codex review,
+Shape A+B, and opaque implementation cohorts.
 Even a population with complete sample floors and metrics is only
 `evaluate`-ready: its next action is `run_statistical_gate`, and the portfolio
 never sets `policy_decision_allowed`. Incomplete measurements instead direct

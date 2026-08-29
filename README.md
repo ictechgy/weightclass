@@ -265,6 +265,9 @@ Any evidence intended to move the product boundary must use the sealed,
 task-free [`docs/advisory-campaign.md`](docs/advisory-campaign.md) contract. Deterministic,
 operator-selected built-in and exact-command advisory profiles are documented in
 [`docs/advisory-vendor-profiles.md`](docs/advisory-vendor-profiles.md);
+the task-free [next-experiment plan](docs/advisory-next-experiments.md) keeps
+Codex review collection, Shape A+B, and opaque implementation cohorts in
+separate sealed populations;
 the installed, explicit opt-in [`advisory` Agent Skill](docs/advisory-skill.md) can be
 installed for Codex, Claude Code, or both after private campaign inputs are configured;
 legacy unbound logs remain descriptive only.

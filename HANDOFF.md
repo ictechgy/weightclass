@@ -1,8 +1,39 @@
 # Handoff
 
-_Last updated: 2026-08-29 22:56 KST by Codex_
+_Last updated: 2026-08-30 00:20 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
+
+## Advisory next-experiment instrumentation (2026-08-30)
+
+The next measurement tools are implemented without modifying existing campaign
+manifests, records, gates, or task data:
+
+- task-free status now reports the sealed arm, coverage-aware advice
+  character/flag counts, failure stages separated by cheap/retry/expensive
+  attempts, and a closed cheap-stage-to-retry-outcome transition matrix;
+- missing legacy diagnostic fields remain explicitly unrecorded or `unknown`
+  rather than becoming false values;
+- `docs/advisory-next-experiments.md` prioritizes naturally occurring Codex
+  review tasks, defines a separate Shape A+B population, and uses separate
+  opaque state roots for implementation cohorts without persisting task labels;
+- README and the campaign contract link the new operating plan while preserving
+  `policy_decision_allowed:false` and the existing statistical gates.
+
+Applying the new source status locally to the existing Codex review population
+shows that all nine failure-stage advice calls produced nonempty, untruncated,
+successfully extracted advice. Of eight cheap verification failures, one retry
+passed, four remained verification failures, and three moved to the read-only
+`result` contract; the one cheap `result` failure remained a `result` failure.
+This is task-free evidence that advice delivery itself is healthy while fresh
+retry result shaping remains a likely bottleneck. Older implementation rows
+retain visible `unknown` stage coverage instead of being reclassified.
+
+No real task was dispatched and no Shape A+B or cohort population was created
+in this batch. Existing populations remain unchanged. Validation passes the
+protected verifier and a separate full unittest run at 1,422 tests with 35
+skips, compileall, Ruff check/format over 215 files, and strict mypy over 176
+source files.
 
 ## Completed advisory hardening batch (2026-08-29)
 
