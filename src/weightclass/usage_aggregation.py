@@ -806,7 +806,7 @@ def _capacity(value: Mapping[str, object]) -> dict[str, object]:
         "bucket_count": len(buckets),
         "bucket_limit": MAX_BUCKETS,
         "bucket_utilization_basis_points": bucket_basis_points,
-        "measurement": "canonical_next_write",
+        "measurement": "canonical_current_state",
         "status": (
             "near_limit"
             if max(bucket_basis_points, store_basis_points) >= CAPACITY_WARNING_BASIS_POINTS

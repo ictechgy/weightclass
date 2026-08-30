@@ -130,8 +130,9 @@ its sealed floors.
 
 1. Read `operating_recommendation` together with the underlying task-free diagnostics; never treat
    it as a statistical or policy decision.
-2. Keep accepting naturally occurring Codex review work, but do not synthesize tasks or prioritize
-   filling the 60-task floor when healthy advice delivery and rejected retries point to shaping.
+2. Keep accepting naturally occurring Codex review work under the existing sealed order, floor, and
+   stopping rules. Never stop early, synthesize tasks, reorder work, or reinterpret existing rows
+   because of this diagnostic; use it only when designing a separate future experiment.
 3. Review a separate, non-authorizing diagnostic Shape A+B pilot design before committing a full new
    population. Do not dispatch it until its task order, exact routes, verifier, pricing source,
    sample bounds, stopping rules, and inability to satisfy an effectiveness gate are enforced by a

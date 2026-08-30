@@ -439,8 +439,9 @@ unit consistency; cross-vendor totals are meaningful only under that common
 unit.
 
 The report also includes a task-free `capacity` object for the 4,096-bucket and
-256 KiB limits. Byte utilization measures the canonical bytes that the next
-atomic write would produce, not arbitrary whitespace in the current file.
+256 KiB limits. Byte utilization measures the canonical current state that a
+no-op atomic rewrite would produce, not arbitrary whitespace in the current
+file or the unknown growth of a future record.
 `status: near_limit` begins at 90% of either bound. The warning never prunes,
 merges, or rewrites evidence; it gives the owner time to start a separately
 managed store before a later update fails closed.

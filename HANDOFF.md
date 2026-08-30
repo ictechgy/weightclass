@@ -25,8 +25,11 @@ advised failures, one accepted retry among nine attempts, healthy advice deliver
 `review_shape_a_b_design`. The same receipt remains `decision_state:abstain` and
 `policy_decision_allowed:false`; no task was dispatched and no campaign state was written.
 
-Focused usage and portfolio tests pass at 49 tests. The protected verifier and a separate unittest
-discovery each pass all 1,425 tests with 35 skips. Ruff check and format-check pass all 215 files,
+Focused usage and portfolio tests pass at 53 tests. The protected verifier and a separate unittest
+discovery each pass all 1,429 tests with 35 skips. An independent scrubbed-diff GLM review found no
+Critical or High issue. Follow-up changes correct the canonical-capacity label, make the existing
+sealed stopping-rule boundary explicit, and add missing decision-tree, byte-threshold, onboarding,
+and enable-failure regressions. Ruff check and format-check pass all 215 files,
 strict mypy passes all 176 source files, compileall and `git diff --check` pass. The implementation
 PR, merge, and release status for this batch must still be recorded before handoff.
 
