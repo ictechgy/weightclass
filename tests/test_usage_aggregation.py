@@ -120,7 +120,10 @@ class UsageAggregationTests(unittest.TestCase):
 
         self.assertEqual(status, 2)
         self.assertEqual(stdout.getvalue(), "")
-        self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_input"})
+        self.assertEqual(
+            json.loads(stderr.getvalue()),
+            {"error": "invalid_input", "reason_code": "usage_report_failed"},
+        )
 
     def test_over_limit_integer_store_is_a_redacted_validation_error(self) -> None:
         """Breaks if CPython's integer digit limit escapes as a traceback."""
@@ -135,7 +138,10 @@ class UsageAggregationTests(unittest.TestCase):
 
         self.assertEqual(status, 2)
         self.assertEqual(stdout.getvalue(), "")
-        self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_input"})
+        self.assertEqual(
+            json.loads(stderr.getvalue()),
+            {"error": "invalid_input", "reason_code": "usage_report_failed"},
+        )
 
     def test_duplicate_store_key_is_a_redacted_validation_error(self) -> None:
         """Breaks if aggregate state uses JSON's last-key-wins behavior."""
@@ -167,7 +173,10 @@ class UsageAggregationTests(unittest.TestCase):
 
                     self.assertEqual(status, 2)
                     self.assertEqual(stdout.getvalue(), "")
-                    self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_input"})
+                    self.assertEqual(
+                        json.loads(stderr.getvalue()),
+                        {"error": "invalid_input", "reason_code": "usage_report_failed"},
+                    )
 
     def test_report_aggregates_relative_cost_status_and_self_reported_rework(self) -> None:
         """Breaks if one run becomes an event log or aggregate ratios use inferred pricing."""
@@ -193,6 +202,26 @@ class UsageAggregationTests(unittest.TestCase):
                 escalation=True,
             )
             report = usage.render_usage_report(store)
+
+        capacity = report.pop("capacity")
+        onboarding = report.pop("onboarding")
+        self.assertEqual(capacity["bucket_count"], 1)
+        self.assertEqual(capacity["bucket_limit"], usage.MAX_BUCKETS)
+        self.assertEqual(capacity["store_limit_bytes"], usage.MAX_STORE_BYTES)
+        self.assertEqual(capacity["status"], "available")
+        self.assertGreater(capacity["store_bytes"], 0)
+        self.assertEqual(
+            onboarding,
+            {
+                "baseline_weight_pattern": {"effort": "medium", "model": None},
+                "configured_baseline_agents": [],
+                "historical_unweighted_bucket_count": 0,
+                "historical_baseline_evidence": "incomplete",
+                "missing_execution_weight_bucket_count": 0,
+                "next_action": "configure_baseline_weight",
+                "reason_codes": ["no_baseline_weights", "historical_baseline_gap"],
+            },
+        )
 
         self.assertEqual(
             report,
@@ -226,6 +255,8 @@ class UsageAggregationTests(unittest.TestCase):
                     "first_attempts_self_reported": True,
                     "pricing_verified": False,
                     "relative_cost_only": True,
+                    "relative_weight_unit_consistency_verified": False,
+                    "relative_weights_require_one_common_unit": True,
                     "task_content_recorded": False,
                     "weights_apply_prospectively": True,
                 },
@@ -302,15 +333,24 @@ class UsageAggregationTests(unittest.TestCase):
             finally:
                 sys.stdin = original_stdin
 
+        enabled = json.loads(outputs[0][1])
+        self.assertEqual(outputs[0][0], 0)
+        self.assertEqual(outputs[0][2], "")
         self.assertEqual(
-            outputs[0],
-            (
-                0,
-                '{"aggregate_only": true, "coverage": "native_schema_3", '
-                '"enabled": true, "schema_version": 2}\n',
-                "",
-            ),
+            {
+                key: enabled[key]
+                for key in ("aggregate_only", "coverage", "enabled", "schema_version")
+            },
+            {
+                "aggregate_only": True,
+                "coverage": "native_schema_3",
+                "enabled": True,
+                "schema_version": 2,
+            },
         )
+        self.assertEqual(enabled["onboarding"]["next_action"], "configure_baseline_weight")
+        self.assertEqual(enabled["capacity"]["status"], "available")
+        self.assertEqual(enabled["capacity"]["measurement"], "canonical_current_state")
         self.assertEqual(
             outputs[1],
             (
@@ -415,9 +455,116 @@ class UsageAggregationTests(unittest.TestCase):
                         )
                     self.assertEqual(status, 2)
                     self.assertEqual(stdout.getvalue(), "")
-                    self.assertEqual(json.loads(stderr.getvalue()), {"error": "invalid_input"})
+                    self.assertEqual(
+                        json.loads(stderr.getvalue()),
+                        {"error": "invalid_input", "reason_code": "usage_weight_failed"},
+                    )
                     self.assertNotIn(relative_cost, stderr.getvalue())
                     self.assertEqual(store.read_bytes(), before)
+
+    def test_onboarding_separates_current_weight_gaps_from_historical_gaps(self) -> None:
+        """Breaks if prospective weights are presented as repairing earlier evidence."""
+        usage = importlib.import_module("weightclass.usage_aggregation")
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory) / "usage-v1.json"
+            usage.ensure_usage_store(store)
+            usage.set_relative_cost_weight(store, "grok", None, "medium", "1.0")
+            dimensions = usage.UsageDimensions("grok", "grok-mini", "low", "low")
+            usage.record_usage(
+                store,
+                dimensions,
+                child_returncode=0,
+                rework=False,
+                escalation=False,
+            )
+            before_weight = usage.render_usage_report(store)["onboarding"]
+            usage.set_relative_cost_weight(store, "grok", "grok-mini", "low", "0.25")
+            after_weight = usage.render_usage_report(store)["onboarding"]
+
+        self.assertEqual(before_weight["next_action"], "configure_execution_weights")
+        self.assertEqual(before_weight["missing_execution_weight_bucket_count"], 1)
+        self.assertEqual(after_weight["missing_execution_weight_bucket_count"], 0)
+        self.assertEqual(after_weight["historical_unweighted_bucket_count"], 1)
+        self.assertEqual(after_weight["next_action"], "collect_new_weighted_tasks")
+        self.assertIn("historical_unweighted_runs", after_weight["reason_codes"])
+
+    def test_report_warns_before_a_configured_capacity_limit(self) -> None:
+        """Breaks if bounded store exhaustion remains invisible until an update fails."""
+        usage = importlib.import_module("weightclass.usage_aggregation")
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory) / "usage-v1.json"
+            usage.ensure_usage_store(store)
+            usage.record_usage(
+                store,
+                usage.UsageDimensions("grok", None, "low", "low"),
+                child_returncode=0,
+                rework=False,
+                escalation=False,
+            )
+            with patch.object(usage, "MAX_BUCKETS", 1):
+                capacity = usage.render_usage_report(store)["capacity"]
+
+        self.assertEqual(capacity["bucket_count"], 1)
+        self.assertEqual(capacity["bucket_utilization_basis_points"], 10_000)
+        self.assertEqual(capacity["status"], "near_limit")
+
+    def test_report_warns_at_the_store_byte_threshold(self) -> None:
+        """Breaks if the documented 90% canonical-byte boundary is off by one."""
+        usage = importlib.import_module("weightclass.usage_aggregation")
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory) / "usage-v1.json"
+            usage.ensure_usage_store(store)
+            current_bytes = store.stat().st_size
+            warning_limit = current_bytes * 10_000 // usage.CAPACITY_WARNING_BASIS_POINTS
+            with patch.object(usage, "MAX_STORE_BYTES", warning_limit):
+                capacity = usage.render_usage_report(store)["capacity"]
+
+        self.assertGreaterEqual(
+            capacity["store_utilization_basis_points"],
+            usage.CAPACITY_WARNING_BASIS_POINTS,
+        )
+        self.assertEqual(capacity["status"], "near_limit")
+
+    def test_onboarding_reaches_collect_and_review_states(self) -> None:
+        """Breaks if a complete prospective setup never reaches usable guidance."""
+        usage = importlib.import_module("weightclass.usage_aggregation")
+        with tempfile.TemporaryDirectory() as directory:
+            store = Path(directory) / "usage-v1.json"
+            usage.ensure_usage_store(store)
+            usage.set_relative_cost_weight(store, "grok", None, "medium", "1.0")
+            before = usage.render_usage_report(store)["onboarding"]
+            usage.record_usage(
+                store,
+                usage.UsageDimensions("grok", None, "medium", "standard"),
+                child_returncode=0,
+                rework=False,
+                escalation=False,
+            )
+            after = usage.render_usage_report(store)["onboarding"]
+
+        self.assertEqual(before["configured_baseline_agents"], ["grok"])
+        self.assertEqual(before["reason_codes"], ["no_recorded_tasks"])
+        self.assertEqual(before["next_action"], "collect_usage")
+        self.assertEqual(after["historical_baseline_evidence"], "complete")
+        self.assertEqual(after["reason_codes"], [])
+        self.assertEqual(after["next_action"], "review_metrics")
+
+    def test_usage_enable_failure_has_a_value_free_operation_reason(self) -> None:
+        """Breaks if setup failures require scraping generic prose."""
+        usage = importlib.import_module("weightclass.usage_aggregation")
+        errors = io.StringIO()
+        with (
+            patch.object(cli, "ensure_usage_store", side_effect=usage.UsageAggregationError()),
+            redirect_stderr(errors),
+        ):
+            status = cli.main(["usage", "enable", "--store", "/private/usage.json"])
+
+        self.assertEqual(status, 2)
+        self.assertEqual(
+            json.loads(errors.getvalue()),
+            {"error": "invalid_input", "reason_code": "usage_enable_failed"},
+        )
+        self.assertNotIn("/private", errors.getvalue())
 
     def test_omitted_weight_model_targets_the_native_default_without_a_sentinel(self) -> None:
         """Breaks if an opaque model literally named default cannot be distinguished."""
@@ -837,7 +984,10 @@ class UsageAggregationTests(unittest.TestCase):
             status = cli.main(["usage", "report"])
 
         self.assertEqual(status, 2)
-        self.assertEqual(json.loads(errors.getvalue()), {"error": "invalid_input"})
+        self.assertEqual(
+            json.loads(errors.getvalue()),
+            {"error": "invalid_input", "reason_code": "usage_report_failed"},
+        )
         self.assertNotIn("PRIVATE", errors.getvalue())
 
     def test_schema_three_default_path_failure_is_redacted_before_task_access(self) -> None:

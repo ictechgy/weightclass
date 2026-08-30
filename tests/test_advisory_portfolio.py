@@ -346,6 +346,90 @@ class AdvisoryPortfolioTests(unittest.TestCase):
                 "transitions": {"verification": {"accepted": 1, "result": 1}},
             },
         )
+        self.assertEqual(
+            campaign["operating_recommendation"],
+            {
+                "action": "repair_advice_delivery",
+                "basis": ["advice_delivery_failure_observed"],
+                "diagnostic_only": True,
+                "existing_campaign_contract_changed": False,
+                "policy_decision_allowed": False,
+            },
+        )
+
+    def test_healthy_shape_b_delivery_with_retry_rejection_suggests_design_review(self) -> None:
+        records = sample_records()
+        for record in records:
+            advice = record.get("advice_failure")
+            if isinstance(advice, dict):
+                advice.update(
+                    {
+                        "empty": False,
+                        "truncated": False,
+                        "route_failed": False,
+                        "envelope_only": False,
+                    }
+                )
+
+        campaign = first_campaign(self.build_result(records))
+
+        self.assertEqual(
+            campaign["operating_recommendation"],
+            {
+                "action": "review_shape_a_b_design",
+                "basis": ["advice_delivery_healthy", "retry_rejections_observed"],
+                "diagnostic_only": True,
+                "existing_campaign_contract_changed": False,
+                "policy_decision_allowed": False,
+            },
+        )
+
+    def test_operating_recommendation_covers_every_non_authorizing_action(self) -> None:
+        portfolio = load_portfolio()
+
+        def diagnostics(
+            records: int, *, complete: bool = True, failed: bool = False
+        ) -> dict[str, object]:
+            recorded = records if complete else 0
+            return {
+                "records": records,
+                "chars": {"complete": complete},
+                "flags": {
+                    name: {"recorded": recorded, "true": int(failed and name == "empty")}
+                    for name in ("empty", "truncated", "route_failed", "envelope_only")
+                },
+            }
+
+        healthy = diagnostics(1)
+        empty = diagnostics(0)
+        incomplete = diagnostics(1, complete=False)
+        failed = diagnostics(1, failed=True)
+        cases: tuple[tuple[str, dict[str, object], dict[str, object], str], ...] = (
+            ("shape_b", {}, {}, "collect_complete_diagnostics"),
+            ("shape_b", {"failure": empty}, {}, "collect_advised_failures"),
+            ("shape_a_b", {"first": empty}, {}, "collect_advice_first"),
+            ("shape_b", {"failure": incomplete}, {}, "collect_complete_diagnostics"),
+            ("shape_b", {"failure": failed}, {}, "repair_advice_delivery"),
+            (
+                "shape_b",
+                {"failure": healthy},
+                {"attempted": 0, "accepted": 0},
+                "collect_retry_outcomes",
+            ),
+            (
+                "shape_b",
+                {"failure": healthy},
+                {"attempted": 1, "accepted": 1},
+                "continue_sealed_collection",
+            ),
+            ("shape_a_b", {"first": healthy}, {}, "continue_sealed_collection"),
+        )
+        for arm, advice, retry, expected in cases:
+            with self.subTest(arm=arm, expected=expected):
+                recommendation = portfolio._operating_recommendation(arm, advice, retry)
+                self.assertEqual(recommendation["action"], expected)
+                self.assertIs(recommendation["diagnostic_only"], True)
+                self.assertIs(recommendation["policy_decision_allowed"], False)
 
     def test_advice_diagnostics_do_not_invent_missing_legacy_fields(self) -> None:
         campaign = first_campaign(self.build_result(sample_records()))

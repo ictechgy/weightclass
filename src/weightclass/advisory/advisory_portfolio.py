@@ -397,6 +397,78 @@ def _next_action(progress: CampaignProgress, abstention_reasons: Sequence[str]) 
     return "collect_advised_failures"
 
 
+def _diagnostics_complete(diagnostics: Mapping[str, object]) -> bool:
+    records = diagnostics.get("records")
+    chars = diagnostics.get("chars")
+    flags = diagnostics.get("flags")
+    if (
+        not isinstance(records, int)
+        or not isinstance(chars, Mapping)
+        or not isinstance(flags, Mapping)
+    ):
+        return False
+    if chars.get("complete") is not True:
+        return False
+    return all(
+        isinstance(flag, Mapping) and flag.get("recorded") == records for flag in flags.values()
+    )
+
+
+def _delivery_failure_observed(diagnostics: Mapping[str, object]) -> bool:
+    flags = diagnostics.get("flags")
+    if not isinstance(flags, Mapping):
+        return True
+    return any(
+        not isinstance(flag, Mapping) or not isinstance(flag.get("true"), int) or bool(flag["true"])
+        for flag in flags.values()
+    )
+
+
+def _operating_recommendation(
+    arm: object,
+    advice_diagnostics: Mapping[str, object],
+    retry_diagnostics: Mapping[str, object],
+) -> dict[str, object]:
+    """Turn diagnostics into a closed, non-authorizing experiment action."""
+
+    stage_name = "first" if arm == "shape_a_b" else "failure"
+    stage = advice_diagnostics.get(stage_name)
+    if not isinstance(stage, Mapping) or not isinstance(stage.get("records"), int):
+        action = "collect_complete_diagnostics"
+        basis = ["diagnostics_unavailable"]
+    elif stage["records"] == 0:
+        action = "collect_advised_failures" if arm == "shape_b" else "collect_advice_first"
+        basis = ["no_advice_records"]
+    elif not _diagnostics_complete(stage):
+        action = "collect_complete_diagnostics"
+        basis = ["diagnostic_coverage_incomplete"]
+    elif _delivery_failure_observed(stage):
+        action = "repair_advice_delivery"
+        basis = ["advice_delivery_failure_observed"]
+    elif arm == "shape_b":
+        attempted = retry_diagnostics.get("attempted")
+        accepted = retry_diagnostics.get("accepted")
+        if not isinstance(attempted, int) or not isinstance(accepted, int) or attempted == 0:
+            action = "collect_retry_outcomes"
+            basis = ["advice_delivery_healthy", "no_retry_outcomes"]
+        elif accepted < attempted:
+            action = "review_shape_a_b_design"
+            basis = ["advice_delivery_healthy", "retry_rejections_observed"]
+        else:
+            action = "continue_sealed_collection"
+            basis = ["advice_delivery_healthy", "all_observed_retries_accepted"]
+    else:
+        action = "continue_sealed_collection"
+        basis = ["advice_delivery_healthy"]
+    return {
+        "action": action,
+        "basis": basis,
+        "diagnostic_only": True,
+        "existing_campaign_contract_changed": False,
+        "policy_decision_allowed": False,
+    }
+
+
 def _campaign_status(
     vendor: str,
     workflow: str,
@@ -488,6 +560,9 @@ def _campaign_status(
         "failure_stages_by_attempt": failed_attempt_stages,
         "advice_diagnostics": advice_diagnostics,
         "retry_diagnostics": retry_diagnostics,
+        "operating_recommendation": _operating_recommendation(
+            manifest["arm"], advice_diagnostics, retry_diagnostics
+        ),
         "result_shapes": dict(sorted(result_shapes.items())),
         "child_failure_codes": dict(sorted(child_failure_codes.items())),
         "metric_records": len(records),

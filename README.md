@@ -401,6 +401,17 @@ The `medium` weight is not optional bookkeeping. It states what the same task
 would have cost on the fixed route it would have taken without routing, and the
 report refuses to compute a saving without it.
 
+`usage enable` and `usage report` include task-free `onboarding` guidance. Its
+closed `next_action` says whether to configure a model-free `medium` baseline,
+configure currently missing weights for observed execution buckets, collect new
+prospective evidence after irreversible historical baseline or unweighted-run
+gaps, collect initial usage, or review the metrics. Current configuration gaps
+and historical gaps are reported separately. The receipt names only configured
+agent labels and aggregate counts; it never adds a task, route, repository,
+profile, or account identifier to the store. Usage-management failures retain
+`invalid_input` and add only the operation-level `usage_enable_failed`,
+`usage_weight_failed`, or `usage_report_failed` reason code.
+
 On macOS the default store is
 `~/Library/Application Support/weightclass/usage-v1.json`. On other supported
 systems it is under `$XDG_STATE_HOME/weightclass`, or `~/.local/state` when
@@ -422,6 +433,18 @@ Relative cost is a caller assertion: `0.25` means one run of that
 agent/model/effort counts as one quarter of one unit. Unconfigured buckets
 remain `unweighted`; weightclass never fills them from a price list and does not
 claim monetary, token, subscription, or quota savings.
+All configured weights in one store must use the same caller-defined relative
+unit. The report states both that requirement and that weightclass cannot verify
+unit consistency; cross-vendor totals are meaningful only under that common
+unit.
+
+The report also includes a task-free `capacity` object for the 4,096-bucket and
+256 KiB limits. Byte utilization measures the canonical current state that a
+no-op atomic rewrite would produce, not arbitrary whitespace in the current
+file or the unknown growth of a future record.
+`status: near_limit` begins at 90% of either bound. The warning never prunes,
+merges, or rewrites evidence; it gives the owner time to start a separately
+managed store before a later update fails closed.
 
 Savings are reported against a counterfactual, not against a per-run constant.
 The baseline is *the same tasks on the fixed `medium` route* — the built-in

@@ -34,6 +34,15 @@ false value. Character totals are `null` unless every advice record has a valid 
 These fields are diagnostics only; they do not change campaign eligibility, statistical gates, or
 `policy_decision_allowed:false`.
 
+Status also renders a closed `operating_recommendation`. It is diagnostic-only and never changes an
+existing campaign contract. Missing coverage requests more diagnostics, any observed empty,
+truncated, route-failed, or envelope-only advice requests delivery repair, and healthy Shape-B
+advice followed by at least one rejected retry recommends reviewing a separate Shape A+B design.
+That recommendation is not an effectiveness result, a stopping rule, or execution
+authority. It requests human review of a non-authorizing pilot contract; it does not authorize a
+pilot dispatch. This lets a human distinguish advice transport from retry shaping before committing
+more naturally occurring work to the same treatment.
+
 ## Track 1 — prioritize real Codex review tasks
 
 As of 2026-08-30, the Codex review Shape-B population has 14/60 usable tasks and 9/12 advised
@@ -119,10 +128,16 @@ its sealed floors.
 
 ## Decision order
 
-1. Continue Codex review collection because it currently has the largest non-implementation sample.
-2. Use the new task-free diagnostics to distinguish missing advice, truncation, result-contract
-   regressions, unchanged verifier failures, and genuine retry rescues.
-3. Start Shape A+B and implementation cohorts only after their task order and contracts are
-   pre-registered.
-4. Keep core `wclass` unchanged. Even a passing advisory campaign permits only human review of an
+1. Read `operating_recommendation` together with the underlying task-free diagnostics; never treat
+   it as a statistical or policy decision.
+2. Keep accepting naturally occurring Codex review work under the existing sealed order, floor, and
+   stopping rules. Never stop early, synthesize tasks, reorder work, or reinterpret existing rows
+   because of this diagnostic; use it only when designing a separate future experiment.
+3. Review a separate, non-authorizing diagnostic Shape A+B pilot design before committing a full new
+   population. Do not dispatch it until its task order, exact routes, verifier, pricing source,
+   sample bounds, stopping rules, and inability to satisfy an effectiveness gate are enforced by a
+   reviewed contract under a new root. Pilot rows never enter or reinterpret Shape-B evidence.
+4. Start a confirmatory Shape A+B population or implementation cohorts only after the pilot question
+   and their full contracts are pre-registered.
+5. Keep core `wclass` unchanged. Even a passing advisory campaign permits only human review of an
    explicit companion workflow; it never authorizes automatic routing.

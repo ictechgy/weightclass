@@ -2699,10 +2699,13 @@ def main(
                 arguments.store = default_usage_store_path()
             if arguments.usage_command == "enable":
                 ensure_usage_store(arguments.store)
+                report = render_usage_report(arguments.store)
                 usage_receipt: dict[str, object] = {
                     "aggregate_only": True,
+                    "capacity": report["capacity"],
                     "coverage": "native_schema_3",
                     "enabled": True,
+                    "onboarding": report["onboarding"],
                     "schema_version": STORE_SCHEMA_VERSION,
                 }
             elif arguments.usage_command == "weight":
@@ -2718,7 +2721,22 @@ def main(
             else:
                 raise UsageAggregationError()
         except (OSError, RuntimeError, UsageAggregationError, UnicodeError):
-            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            reason_codes = {
+                "enable": "usage_enable_failed",
+                "weight": "usage_weight_failed",
+                "report": "usage_report_failed",
+            }
+            print(
+                json.dumps(
+                    {
+                        "error": "invalid_input",
+                        "reason_code": reason_codes.get(
+                            arguments.usage_command, "usage_command_failed"
+                        ),
+                    }
+                ),
+                file=sys.stderr,
+            )
             return 2
         print(json.dumps(usage_receipt))
         return 0
