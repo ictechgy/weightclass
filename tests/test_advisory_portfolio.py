@@ -346,6 +346,43 @@ class AdvisoryPortfolioTests(unittest.TestCase):
                 "transitions": {"verification": {"accepted": 1, "result": 1}},
             },
         )
+        self.assertEqual(
+            campaign["operating_recommendation"],
+            {
+                "action": "repair_advice_delivery",
+                "basis": ["advice_delivery_failure_observed"],
+                "diagnostic_only": True,
+                "existing_campaign_contract_changed": False,
+                "policy_decision_allowed": False,
+            },
+        )
+
+    def test_healthy_shape_b_delivery_with_retry_rejection_suggests_design_review(self) -> None:
+        records = sample_records()
+        for record in records:
+            advice = record.get("advice_failure")
+            if isinstance(advice, dict):
+                advice.update(
+                    {
+                        "empty": False,
+                        "truncated": False,
+                        "route_failed": False,
+                        "envelope_only": False,
+                    }
+                )
+
+        campaign = first_campaign(self.build_result(records))
+
+        self.assertEqual(
+            campaign["operating_recommendation"],
+            {
+                "action": "review_shape_a_b_design",
+                "basis": ["advice_delivery_healthy", "retry_rejections_observed"],
+                "diagnostic_only": True,
+                "existing_campaign_contract_changed": False,
+                "policy_decision_allowed": False,
+            },
+        )
 
     def test_advice_diagnostics_do_not_invent_missing_legacy_fields(self) -> None:
         campaign = first_campaign(self.build_result(sample_records()))

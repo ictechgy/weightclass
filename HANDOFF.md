@@ -1,8 +1,34 @@
 # Handoff
 
-_Last updated: 2026-08-30 01:06 KST by Codex_
+_Last updated: 2026-08-31 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
+
+## Usage guidance and advisory operating recommendation
+
+The implementation candidate adds only task-free, additive guidance. It does not rewrite the usage
+store, existing campaign manifests, records, gates, or policy decisions.
+
+- `wclass usage enable/report` exposes closed onboarding reasons and next actions for missing
+  baseline weights, unweighted observed buckets, prospective-only historical gaps, and empty
+  evidence;
+- usage reports expose canonical-next-write capacity against the existing 4,096-bucket and 256 KiB
+  limits and explicitly require one caller-defined relative unit while admitting that consistency
+  is not verified;
+- usage management errors retain `invalid_input` with an operation-level, value-free reason code;
+- advisory status derives a closed diagnostic-only `operating_recommendation`. Healthy Shape-B
+  advice with rejected retries requests review of a non-authorizing Shape A+B design without
+  changing the existing campaign or authorizing a pilot dispatch or policy decision.
+
+Applying the source status to the existing Codex review population reports 14 usable tasks, nine
+advised failures, one accepted retry among nine attempts, healthy advice delivery, and
+`review_shape_a_b_design`. The same receipt remains `decision_state:abstain` and
+`policy_decision_allowed:false`; no task was dispatched and no campaign state was written.
+
+Focused usage and portfolio tests pass at 49 tests. The protected verifier and a separate unittest
+discovery each pass all 1,425 tests with 35 skips. Ruff check and format-check pass all 215 files,
+strict mypy passes all 176 source files, compileall and `git diff --check` pass. The implementation
+PR, merge, and release status for this batch must still be recorded before handoff.
 
 ## Advisory next-experiment instrumentation (2026-08-30)
 

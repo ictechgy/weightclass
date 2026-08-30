@@ -27,6 +27,7 @@ MAX_COUNTER: Final = (1 << 63) - 1
 WEIGHT_SCALE: Final = 1_000_000
 MIN_WEIGHT_MICROS: Final = 1
 MAX_WEIGHT_MICROS: Final = 1_000 * WEIGHT_SCALE
+CAPACITY_WARNING_BASIS_POINTS: Final = 9_000
 
 # 라우팅을 하지 않았다면 태스크가 갔을 고정 경로의 노력 수준. 내장 standard
 # 라우트가 쓰는 값과 같다.
@@ -770,18 +771,110 @@ def render_usage_report(path: Path) -> dict[str, object]:
     return {
         "aggregate_only": True,
         "buckets": [_render_metrics(bucket) | _dimensions(bucket) for bucket in buckets],
+        "capacity": _capacity(value),
         "claims": {
             "baseline_is_counterfactual": True,
             "first_attempts_self_reported": True,
             "pricing_verified": False,
             "relative_cost_only": True,
+            "relative_weight_unit_consistency_verified": False,
+            "relative_weights_require_one_common_unit": True,
             "task_content_recorded": False,
             "weights_apply_prospectively": True,
         },
         "coverage": "native_schema_3",
+        "onboarding": _onboarding(value),
         "schema_version": STORE_SCHEMA_VERSION,
         "totals": _render_metrics(totals) | _render_savings(totals, baseline),
         "weights": [_render_weight(weight) for weight in weights],
+    }
+
+
+def _utilization_basis_points(used: int, limit: int) -> int:
+    return min(10_000, used * 10_000 // limit)
+
+
+def _capacity(value: Mapping[str, object]) -> dict[str, object]:
+    """Describe bounded store headroom without exposing the store path."""
+
+    buckets = value["buckets"]
+    assert isinstance(buckets, list)
+    store_bytes = len(_canonical_bytes(value))
+    bucket_basis_points = _utilization_basis_points(len(buckets), MAX_BUCKETS)
+    store_basis_points = _utilization_basis_points(store_bytes, MAX_STORE_BYTES)
+    return {
+        "bucket_count": len(buckets),
+        "bucket_limit": MAX_BUCKETS,
+        "bucket_utilization_basis_points": bucket_basis_points,
+        "measurement": "canonical_next_write",
+        "status": (
+            "near_limit"
+            if max(bucket_basis_points, store_basis_points) >= CAPACITY_WARNING_BASIS_POINTS
+            else "available"
+        ),
+        "store_bytes": store_bytes,
+        "store_limit_bytes": MAX_STORE_BYTES,
+        "store_utilization_basis_points": store_basis_points,
+    }
+
+
+def _onboarding(value: Mapping[str, object]) -> dict[str, object]:
+    """Return task-free setup guidance derived from aggregate state only."""
+
+    weights = value["weights"]
+    buckets = value["buckets"]
+    baseline = value["baseline"]
+    assert isinstance(weights, list)
+    assert isinstance(buckets, list)
+    assert isinstance(baseline, Mapping)
+    baseline_agents = sorted(
+        {
+            str(weight["agent"])
+            for weight in weights
+            if weight["model"] is None and weight["effort"] == BASELINE_EFFORT
+        }
+    )
+    weight_keys = {_weight_key(weight) for weight in weights}
+    missing_execution_weights = sum(
+        1 for bucket in buckets if _weight_key(bucket) not in weight_keys
+    )
+    historical_unweighted_buckets = sum(
+        1 for bucket in buckets if _counter(bucket["unweighted_runs"])
+    )
+    tasks = _counter(baseline["tasks"])
+    counted_tasks = _counter(baseline["counted_tasks"])
+    historical_baseline_evidence = (
+        "no_tasks" if tasks == 0 else "complete" if tasks == counted_tasks else "incomplete"
+    )
+    reason_codes: list[str] = []
+    if not baseline_agents:
+        reason_codes.append("no_baseline_weights")
+    if missing_execution_weights:
+        reason_codes.append("observed_buckets_missing_current_weights")
+    if historical_unweighted_buckets:
+        reason_codes.append("historical_unweighted_runs")
+    if historical_baseline_evidence == "incomplete":
+        reason_codes.append("historical_baseline_gap")
+    if not tasks:
+        reason_codes.append("no_recorded_tasks")
+    if not baseline_agents:
+        next_action = "configure_baseline_weight"
+    elif missing_execution_weights:
+        next_action = "configure_execution_weights"
+    elif historical_unweighted_buckets or historical_baseline_evidence == "incomplete":
+        next_action = "collect_new_weighted_tasks"
+    elif not tasks:
+        next_action = "collect_usage"
+    else:
+        next_action = "review_metrics"
+    return {
+        "baseline_weight_pattern": {"effort": BASELINE_EFFORT, "model": None},
+        "configured_baseline_agents": baseline_agents,
+        "historical_unweighted_bucket_count": historical_unweighted_buckets,
+        "historical_baseline_evidence": historical_baseline_evidence,
+        "missing_execution_weight_bucket_count": missing_execution_weights,
+        "next_action": next_action,
+        "reason_codes": reason_codes,
     }
 
 
