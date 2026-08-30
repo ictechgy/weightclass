@@ -4,7 +4,7 @@ _Last updated: 2026-08-31 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
-## Usage guidance and advisory operating recommendation
+## Usage guidance and advisory operating recommendation (0.23.0 release candidate)
 
 The implementation candidate adds only task-free, additive guidance. It does not rewrite the usage
 store, existing campaign manifests, records, gates, or policy decisions.
@@ -31,7 +31,8 @@ Critical or High issue. Follow-up changes correct the canonical-capacity label, 
 sealed stopping-rule boundary explicit, and add missing decision-tree, byte-threshold, onboarding,
 and enable-failure regressions. Ruff check and format-check pass all 215 files,
 strict mypy passes all 176 source files, compileall and `git diff --check` pass. The implementation
-PR, merge, and release status for this batch must still be recorded before handoff.
+is merged in PR #143 at merge commit `9663d25`. The `0.23.0` release PR, tag, publication,
+Homebrew promotion, and local upgrade status must still be recorded before handoff.
 
 ## Advisory next-experiment instrumentation (2026-08-30)
 
