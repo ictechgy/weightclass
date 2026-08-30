@@ -4,17 +4,17 @@ _Last updated: 2026-08-31 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
-## Usage guidance and advisory operating recommendation (0.23.0 release candidate)
+## Usage guidance and advisory operating recommendation (released in 0.23.0)
 
-The implementation candidate adds only task-free, additive guidance. It does not rewrite the usage
+The released implementation adds only task-free, additive guidance. It does not rewrite the usage
 store, existing campaign manifests, records, gates, or policy decisions.
 
 - `wclass usage enable/report` exposes closed onboarding reasons and next actions for missing
   baseline weights, unweighted observed buckets, prospective-only historical gaps, and empty
   evidence;
-- usage reports expose canonical-next-write capacity against the existing 4,096-bucket and 256 KiB
-  limits and explicitly require one caller-defined relative unit while admitting that consistency
-  is not verified;
+- usage reports expose canonical-current-state capacity against the existing 4,096-bucket and
+  256 KiB limits and explicitly require one caller-defined relative unit while admitting that
+  consistency is not verified;
 - usage management errors retain `invalid_input` with an operation-level, value-free reason code;
 - advisory status derives a closed diagnostic-only `operating_recommendation`. Healthy Shape-B
   advice with rejected retries requests review of a non-authorizing Shape A+B design without
@@ -32,7 +32,24 @@ sealed stopping-rule boundary explicit, and add missing decision-tree, byte-thre
 and enable-failure regressions. Ruff check and format-check pass all 215 files,
 strict mypy passes all 176 source files, compileall and `git diff --check` pass. The implementation
 is merged in PR #143 at merge commit `9663d25`. The `0.23.0` release PR, tag, publication,
-Homebrew promotion, and local upgrade status must still be recorded before handoff.
+Homebrew promotion, and local upgrade are complete:
+
+- release PR #144 merged at `90c7d94`, and tag `v0.23.0` points to that exact reviewed main commit;
+- Release run `33323065111` passed the immutable Python 3.13 build, macOS 3.10/3.14 boundaries,
+  Python 3.10/3.14 candidate validation, protected PyPI approval, and exact publication;
+- PyPI exposes one wheel and one non-yanked canonical sdist at
+  `https://files.pythonhosted.org/packages/fa/b2/995e2b54f7e401c5d452f1fba3187337a5706080624bd8a5cd87862cb1e9/weightclass-0.23.0.tar.gz`
+  with SHA-256 `90d9bce1cf7d144248ef9a3d67edf1003f678903f97e25fa2e6560917036c871`;
+- source-formula PR #145 and tap PR `ictechgy/homebrew-tap#31` are merged. Targeted Homebrew style,
+  strict audit, source reinstall, `brew test`, and exact advisory smoke pass; the whole-tap style
+  command retains one unrelated pre-existing ordering warning in `Formula/relay.rb`;
+- the user-level uv tool and Homebrew source installation both report `0.23.0`. Codex and Claude
+  packaged advisory skills are exact-current, and both installed CLI paths pass usage/advisory
+  guidance smokes.
+
+No real task was dispatched, no existing campaign or usage record was rewritten, and no policy
+decision was authorized in this batch. The next safe action is to review a non-authorizing Shape A+B
+pilot contract separately; do not change the sealed Shape-B floor, order, or stopping rules.
 
 ## Advisory next-experiment instrumentation (2026-08-30)
 
