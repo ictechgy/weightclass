@@ -4,6 +4,57 @@ _Last updated: 2026-08-31 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
+## Advisory runtime cleanup follow-up (merged, unreleased)
+
+Implementation PR #155 merged at `7db1aff`. The package version remains `0.25.0`; this source
+follow-up has not been tagged or published as a new PyPI/Homebrew release.
+
+The merged change:
+
+- gives managed project verifiers a fixed environment allowlist plus workflow, a new session, and
+  process-group timeout cleanup while explicitly retaining external container/jail confinement as
+  the only honest hostile-code sandbox boundary;
+- caches one-shot leader-exit observations, distinguishes live `EPERM` from the bounded Darwin
+  exit-notification race, and keeps numeric PGID targets only while child-status ownership remains;
+- moves selector construction inside owned cleanup for verifier Git, bounded capture, safe Git, and
+  task-free preflight, including the case where an exited leader's descendant retains a pipe;
+- blocks quiet bounded-capture and Git calls on kernel events until their actual deadline instead of
+  waking every 100 ms;
+- centralizes managed schema/workflow/vendor/role/default-timeout constants, removes unreachable
+  path-based Skill walkers, retains and format-checks the complete descriptor-based historical
+  bundle ledger, and documents `install-skill` as the sole explicit vendor-recognized-path write.
+
+Two scrubbed GLM reviews completed through `packet-ask`. The architecture packet contained nine
+public files, 121,575 bytes, and SHA-256
+`f27d9c44cd02d9e37d7325a1fd7fbdd5d5f8d74b68446d689ce864a4f4e428f1`; it returned in 525.6
+seconds. The final-state review packet contained 16 public files, 175,104 bytes, and SHA-256
+`6f64b4c5895e8b8811eda87331169c2cad3acf98acc2e9dffab8ec2a78c58c54`; it returned in 726.6
+seconds. A direct `--unstaged` inspect was rejected locally with packet policy code 10 before any
+provider call, so the successful review used an explicit file list. No secret value, task, home
+path, or repository-private state was sent. Provider output was treated as untrusted; confirmed
+kqueue one-shot, selector-construction, and descendant-held-pipe findings were fixed and retested.
+A separate fresh-context Sol bypass review found the last managed-verifier Git selector lifecycle
+gap, which was also fixed.
+
+Final verification:
+
+- protected verifier and final full discovery: 1,514 tests passed with 35 skips;
+- extracted-sdist isolation: 1,507 tests passed with 79 skips;
+- advisory suite: 300 tests passed with 15 skips; speculative suite: 195 tests passed with 10 skips;
+- Ruff check and format-check pass 234 files, strict mypy passes 194 source files, and compileall plus
+  `git diff --check` pass;
+- all eight PR checks pass on Python 3.10-3.14 and macOS Python 3.10/3.14;
+- final Codex Security diff scan `f397b043-989b-47db-98c3-adaa6a556c90` reviewed all nine changed
+  production source files with complete coverage and retained no finding. It used 2,455,815 total
+  tokens, including 2,442,752 cached input tokens. TAC status was unavailable because the connector
+  was not connected.
+
+Twenty-run cold import observations moved `managed_cli` from 28.2 ms to 27.2 ms and
+`managed_advisory` from 58.8 ms to 52.9 ms; these noisy local measurements are not product
+guarantees. The durable performance regression asserts actual selector deadlines instead of fixed
+100 ms polling. No real task or campaign was dispatched, no credential/vendor configuration was
+read, and no campaign or usage record was changed.
+
 ## Advisory execution hardening and startup work (released in 0.25.0)
 
 The performance, security, and structure follow-up is implemented, reviewed, and published. Exact
