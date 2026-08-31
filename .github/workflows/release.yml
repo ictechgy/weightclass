@@ -275,10 +275,15 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           release_notes=".github/release-notes/${GITHUB_REF_NAME}.md"
           test -f "$release_notes"
+          test ! -L "$release_notes"
+          test -s "$release_notes"
+          test "$(wc -c < "$release_notes")" -le 100000
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)" = "$GITHUB_REF_NAME"
+            test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json name --jq .name)" = "weightclass ${GITHUB_REF_NAME#v}"
             test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "false"
             test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" = "false"
+            test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body)" = "$(<"$release_notes")"
             exit 0
           fi
           gh release create "$GITHUB_REF_NAME" \

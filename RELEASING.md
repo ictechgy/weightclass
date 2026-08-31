@@ -93,8 +93,10 @@ publisher once, on PyPI:
    filesystem paths. After exact PyPI publication succeeds, a final job creates
    the non-draft, non-prerelease GitHub Release for that verified tag, using the
    version-specific reviewed notes from the tag commit, and marks it latest. A
-   workflow retry accepts an existing exact final Release but never overwrites a
-   draft or prerelease. Watch the workflow finish before continuing.
+   workflow retry accepts an existing exact final Release only when its name and
+   body still match the reviewed notes, and never overwrites a draft or
+   prerelease. Release notes must be a nonempty regular file no larger than
+   100,000 bytes. Watch the workflow finish before continuing.
 
 5. Verify the PyPI artifact and GitHub Release from a clean environment:
 

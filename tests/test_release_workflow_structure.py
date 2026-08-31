@@ -248,11 +248,16 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
         self.assertIn('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', block)
         self.assertIn('release_notes=".github/release-notes/${GITHUB_REF_NAME}.md"', block)
         self.assertIn('test -f "$release_notes"', block)
+        self.assertIn('test ! -L "$release_notes"', block)
+        self.assertIn('test -s "$release_notes"', block)
+        self.assertIn('test "$(wc -c < "$release_notes")" -le 100000', block)
         self.assertIn('gh release view "$GITHUB_REF_NAME"', block)
         self.assertIn('gh release create "$GITHUB_REF_NAME"', block)
         for option in ("--verify-tag", '--notes-file "$release_notes"', "--latest"):
             self.assertIn(option, block)
         self.assertNotIn("--generate-notes", block)
+        self.assertIn("--json name", block)
+        self.assertIn("--json body", block)
         self.assertIn("--json isDraft", block)
         self.assertIn("--json isPrerelease", block)
 
