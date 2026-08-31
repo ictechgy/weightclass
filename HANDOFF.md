@@ -4,6 +4,64 @@ _Last updated: 2026-08-31 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
+## Advisory execution hardening and startup work (released in 0.25.0)
+
+The performance, security, and structure follow-up is implemented, reviewed, and published. Exact
+command, profile, campaign, and internal consult execution now require explicit task-egress
+confirmation before task access, lane allocation, output-directory creation, or child start. This
+is an intentional breaking change for callers that previously omitted `--confirm-task-egress`.
+
+The release also:
+
+- maps low-level lane failures to fixed redacted JSON codes and retains process-group ownership
+  through timeout, cancellation, and output overflow so resistant descendants are terminated even
+  after their leader exits;
+- uses shared bounded I/O and bounded Git execution with hooks, fsmonitor, and optional locks
+  disabled, and caps generated patches at 64 MiB;
+- resolves managed verifier input once to an immutable Git object, validates its type and size, and
+  streams that exact object under the configured cap;
+- makes campaign JSONL scanning linear, hardens the owner-private workspace registry and advisory
+  state-root namespace, and publishes Agent Skills through retained directory descriptors with
+  atomic rollback;
+- splits the managed CLI entrypoints, removes global `sys.argv` mutation, defers service imports,
+  and preserves the documented wrappers and patch seams.
+
+Seven-run local medians for campaign-record lookup improved from 5.6 ms to 0.105 ms at 100 KiB,
+89.7 ms to 0.433 ms at 500 KiB, and 822.5 ms to 0.837 ms at 1 MiB. `wclass --help` median/p95
+improved from 81.823/97.532 ms to 48.476/50.768 ms; `wclass-advisory status --help` improved from
+80.447/110.625 ms to 37.635/41.865 ms. A fresh task-free managed status measured
+55.034/56.236 ms median/p95 after the change.
+
+Independent review found and fixed direct-script imports, orphan descendants after leader exit,
+missing internal-consult confirmation, mutable managed-verifier references, and a symlink-ancestor
+Agent Skill install bypass. The final complete 24-file Codex Security diff scan
+`14e9f986-84a1-451c-925d-9de82fe3fd63` reviewed all changed production source files and retained no
+finding. The issue-tracker connector was unavailable, so tracker duplicate search was not run. The
+scan used 12,558,928 total tokens, including 12,512,256 cached input tokens.
+
+Release evidence:
+
+- implementation PR #151 merged at reviewed release commit
+  `7367f41b259f2cfc141403a3b7edb0aceb382176`; tag `v0.25.0` points to that exact commit;
+- Release run `33356402517` passed the immutable Python 3.13 build, Python 3.10/3.14 candidate
+  validation, macOS 3.10/3.14 routing boundaries, protected PyPI approval, and exact publication;
+- PyPI exposes one wheel and one non-yanked canonical sdist at
+  `https://files.pythonhosted.org/packages/fa/ba/4419948743082f00a1d80498df8869c006c5ae4c1e952b6587a2105e60e9/weightclass-0.25.0.tar.gz`
+  with SHA-256 `0621c94d57fd45621a376364a6b8d65ab4f0a359d700733137d74147c6f56522`;
+- source-formula PR #152 merged at `882f0a3`; tap PR `ictechgy/homebrew-tap#33` merged at
+  `e413394`. Homebrew style, strict audit, source reinstall, `brew test`, and exact binary smokes
+  pass;
+- the user-level uv tool and exact Homebrew binary both report `0.25.0`. Codex and Claude packaged
+  advisory skills are exact-current, and a dry run plans no upgrade.
+
+The protected verifier and separate full discovery each pass 1,496 tests with 35 skips. The
+advisory suite passes 285 tests with 15 skips; the speculative suite passes 195 tests with 10 skips.
+Ruff check and format-check pass 232 files, strict mypy passes 193 source files, compileall and
+`git diff --check` pass, Twine strict accepts both distributions, and extracted-sdist isolation
+passes 1,478 tests with 76 skips. No real task was dispatched during release, packaging, or local
+installation, and no campaign, usage record, policy decision, credential, or vendor configuration
+was read or changed.
+
 ## Security, performance, and structure hardening (released in 0.24.0)
 
 A repository-wide Standard Codex Security scan at `f1c7be3` completed as scan
@@ -1595,24 +1653,25 @@ human to read.
 ## Resume Prompt
 
 Open the current repository checkout, read `HANDOFF.md` and the applicable
-`AGENTS.md`, then continue from: `weightclass 0.24.0 is published on PyPI and
-Homebrew. Hardening PR #147, release PR #148, source-formula PR #149, and tap
-PR #32 are merged. Tag v0.24.0 points to reviewed release commit 729fd8f, and
-Release run 33344604461 passed the immutable build, Python 3.10/3.14 candidate
+`AGENTS.md`, then continue from: `weightclass 0.25.0 is published on PyPI and
+Homebrew. Implementation PR #151, source-formula PR #152, and tap PR #33 are
+merged. Tag v0.25.0 points to reviewed release commit 7367f41, and Release run
+33356402517 passed the immutable build, Python 3.10/3.14 candidate
 validation, macOS 3.10/3.14 boundaries, protected PyPI approval, and exact
-publication. Both local uv and exact Homebrew entrypoints report 0.24.0, brew
-test passes, and the Codex/Claude advisory skills are exact-current. The release
-bounds advisory child capture and legacy parsers, improves cancellation and
-status-loss handling, disables repository-local Git fsmonitor execution for
-advisory Git calls, narrows protocol-1 runtime replacement, and lowers task-free
-status median latency by about 11.6%. The final 11-file Security diff report has
-no surviving finding; full source gates pass 1,441 unittest tests with 35 skips,
-Ruff/format over 217 files, and strict mypy over 178 source files. Verified-object
-execution and custom usage-store ancestry remain documented architecture
-residuals. The separately invoked advisory companion remains explicit and
-experimental; no campaign gate may authorize core routing. Never infer prices,
-read vendor credentials/config, backfill task/session data, or reuse a
-published version or tag.`
+publication. Both local uv and exact Homebrew entrypoints report 0.25.0, brew
+test passes, and the Codex/Claude advisory skills are exact-current. Advisory
+execution now requires explicit task-egress confirmation across exact-command,
+profile, campaign, and internal-consult paths; bounded process-group and Git
+execution, immutable-object verification, linear campaign scanning, safe state
+roots, directory-descriptor Skill installation, and lazy managed CLI entrypoints
+are implemented. The final complete 24-file Security diff scan has no surviving
+finding; full source gates pass 1,496 unittest tests with 35 skips, Ruff/format
+over 232 files, and strict mypy over 193 source files. Verified-object execution
+for broader router paths and custom usage-store ancestry remain documented
+architecture residuals. The separately invoked advisory companion remains
+explicit and experimental; no campaign gate may authorize core routing. Never
+infer prices, read vendor credentials/config, backfill task/session data, or
+reuse a published version or tag.`
 
 ## Historical Resume Prompt (obsolete; retained for audit history)
 
