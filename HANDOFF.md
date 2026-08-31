@@ -4,6 +4,80 @@ _Last updated: 2026-08-31 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
+## One-shot usability and Skill compatibility follow-up (released in 0.27.1)
+
+The usability redesign is implemented, reviewed, and published. Core guided execution merged in
+PR #160 at `e18ea30`; stateless advisory, anonymous campaign stdin, grouped commands, verifier
+scaffolding, and Agent Skill onboarding 15 merged in PR #161 at `c36295e`. Release PR #162 and tag
+`v0.27.0` pointed to `bf75d58`.
+
+The released behavior:
+
+- `wclass run --review` selects and displays the task-free schema-1/native-schema-2/native-schema-3
+  route in the same process, asks on the controlling terminal, and starts at most one child without
+  copied fingerprint plumbing. Piped output remains JSON; terminal output is human-readable by
+  default, with global `--json`/`--human` overrides. Bare commands print help and top-level help has
+  descriptions.
+- `wclass-advisory ask` runs one stateless read-only review, research, diagnosis, or design call
+  using the selected CLI's configured default model. It needs no initialization, campaign, model
+  labels, project verifier, route digest, or task file. It performs two bounded task-free local CLI
+  probes before reading stdin, requires egress consent, records no sample, and returns
+  `quality_verified:false`, `host_filesystem_confined:false`, `worktree_unchanged:true`, and
+  `git_metadata_checked:false`.
+- New grouped `campaign`, `skill`, and `advanced` surfaces coexist with all flat compatibility
+  commands. New `campaign run` reads bounded UTF-8 stdin after task-free preflight and forwards it
+  to package-pinned runners over anonymous nonblocking pipes; task bytes are repr-hidden and never
+  enter runner argv or a pathname.
+- `campaign verifier scaffold` creates an exclusive reject-all workflow template with criteria;
+  `campaign verifier check` requires a committed customized verifier and the expected baseline
+  rejection. `skill status/install/uninstall` operates only on exact package-owned bundles, and
+  uninstall tombstones and revalidates a bound directory descriptor before deletion.
+- The installed Agent Skill generation 15 uses host-vendor one-shot `ask` for ordinary evidence
+  modes and reserves campaign setup for implementation or explicit measurement.
+
+Three scrubbed GLM implementation reviews completed through `packet-ask`. The runtime packet held
+seven public files, 214,990 bytes, SHA-256 prefix `8e5a06a7d9c3`, and returned in 594.2 seconds; the
+Skill/document packet held eight public files, 128,864 bytes, SHA-256 prefix `12cd994e2bab`, and
+returned in 386.1 seconds; the final coordinator packet held four public files, 76,635 bytes,
+SHA-256 prefix `297804216d17`, and returned in 823.1 seconds. Provider output was treated as
+untrusted. Confirmed lazy-loader, escalation fingerprint, terminal-control, task-pipe cleanup,
+boundary-claim, and exact-bundle deletion findings were fixed and retested. The final complete
+Codex Security working-tree diff scan covered all 13 changed production files and retained no
+finding; TAC status was unavailable because the connector was not connected.
+
+Final validation passed 1,540 tests with 35 skips, Ruff check and format-check over 201 files,
+strict mypy over 198 source files, and build/distribution isolation. Extracted-sdist isolation
+passed 1,528 tests with 79 skips. Cold 20-run medians were 45.1 ms for `wclass --help`, 32.8 ms for
+`wclass-advisory --help`, 52.7 ms for `ask --help`, and 31.2 ms for `campaign --help`; these local
+observations are not product guarantees. All implementation and release PRs passed Python
+3.10-3.14 plus macOS Python 3.10/3.14 CI.
+
+Post-publication readback found that the 0.27.0 historical Skill ledger omitted the exact bundle
+shipped through 0.26.0. The safety control correctly returned `skill_conflict` instead of
+overwriting it. PR #164 added the exact four reviewed hashes and passed all eight CI checks; release
+PR #165 and tag `v0.27.1` point to `d937039`. Release run `33406442973` passed the immutable build,
+Python 3.10/3.14 candidate validation, macOS boundaries, protected PyPI publication, and final
+GitHub Release creation.
+
+Release and installation evidence:
+
+- PyPI exposes one wheel and one non-yanked canonical sdist at
+  `https://files.pythonhosted.org/packages/85/f2/5c78a71e5c7b44a78123ff76b7cc56bc4f21d879beeebed08070ce7a82f5/weightclass-0.27.1.tar.gz`
+  with SHA-256 `1b4ba400ca00a7a70f5bf716851a1062a67e69889b226a57f29395caff44031f`.
+- GitHub Release `v0.27.1` is final, non-prerelease, and Latest. `v0.27.0` remains immutable and is
+  superseded by the patch.
+- Source-formula PR #166 and smoke-fix PR #167 merged at `a3ff801` and `b479645`; tap PRs
+  `ictechgy/homebrew-tap#35` and `#36` merged at `100f677` and `5a64481`. Targeted style, strict
+  audit, source upgrade, corrected `brew test`, and exact Homebrew binary smoke pass.
+- The user-level uv tool and Homebrew binary both report `0.27.1`. Exact 0.26.0 Codex and Claude
+  Skill bundles were recognized by the patched ledger, upgraded to generation 15, and both now
+  report `already_installed` with no pending upgrade.
+
+No real project task or campaign was dispatched, no real advisory answer was requested, no
+credential or vendor configuration was read, and no campaign/usage record was changed. The next
+safe action is ordinary use of `$advisory` or `wclass-advisory ask`; initialize a campaign and write
+a project verifier only when implementation or explicit measurement is requested.
+
 ## Advisory runtime cleanup follow-up (released in 0.26.0)
 
 Implementation PR #155 merged at `7db1aff`. Release PR #157 and tag `v0.26.0` point to exact
