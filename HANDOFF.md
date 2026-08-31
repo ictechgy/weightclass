@@ -45,6 +45,8 @@ Release evidence:
   `7367f41b259f2cfc141403a3b7edb0aceb382176`; tag `v0.25.0` points to that exact commit;
 - Release run `33356402517` passed the immutable Python 3.13 build, Python 3.10/3.14 candidate
   validation, macOS 3.10/3.14 routing boundaries, protected PyPI approval, and exact publication;
+- the final `v0.25.0` GitHub Release is published and marked Latest. The release workflow now
+  creates future final GitHub Releases only after the protected PyPI publish job succeeds;
 - PyPI exposes one wheel and one non-yanked canonical sdist at
   `https://files.pythonhosted.org/packages/fa/ba/4419948743082f00a1d80498df8869c006c5ae4c1e952b6587a2105e60e9/weightclass-0.25.0.tar.gz`
   with SHA-256 `0621c94d57fd45621a376364a6b8d65ab4f0a359d700733137d74147c6f56522`;

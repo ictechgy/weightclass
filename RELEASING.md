@@ -47,7 +47,9 @@ publisher once, on PyPI:
 
 ## Cutting a release
 
-1. Update `__version__` in `src/weightclass/__init__.py` and merge that change.
+1. Update `__version__` in `src/weightclass/__init__.py`, add the reviewed
+   `.github/release-notes/v<version>.md` file, and merge both changes. Release
+   notes must include every breaking change.
 2. Confirm `main` is green and reproduce the gates locally:
 
    ```sh
@@ -88,13 +90,19 @@ publisher once, on PyPI:
    job boundary to a fresh runner, which installs no project tooling and executes
    only the standard-library isolation verifier. Publication is gated on that
    check and consumes the same immutable artifact instead of re-uploading mutable
-   filesystem paths. Watch the workflow finish before continuing.
+   filesystem paths. After exact PyPI publication succeeds, a final job creates
+   the non-draft, non-prerelease GitHub Release for that verified tag, using the
+   version-specific reviewed notes from the tag commit, and marks it latest. A
+   workflow retry accepts an existing exact final Release but never overwrites a
+   draft or prerelease. Watch the workflow finish before continuing.
 
-5. Verify the published artifact from a clean environment:
+5. Verify the PyPI artifact and GitHub Release from a clean environment:
 
    ```sh
    uv tool install weightclass    # or: pipx install weightclass
    printf '%s' 'Fix a typo.' | wclass classify
+   gh release view "v$(wclass --version | awk '{print $2}')" \
+     --repo ictechgy/weightclass
    ```
 
 ## Updating the Homebrew formula
