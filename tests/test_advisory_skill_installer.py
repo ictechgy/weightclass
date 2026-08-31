@@ -52,8 +52,12 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         self.assertIn("managed_setup_busy", skill)
 
     def test_install_skill_is_the_documented_vendor_path_exception(self) -> None:
-        agent_guide = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-        skill_guide = (ROOT / "docs" / "advisory-skill.md").read_text(encoding="utf-8")
+        agent_guide_path = ROOT / "AGENTS.md"
+        skill_guide_path = ROOT / "docs" / "advisory-skill.md"
+        if not agent_guide_path.is_file() or not skill_guide_path.is_file():
+            self.skipTest("repository policy documents are intentionally absent from the sdist")
+        agent_guide = agent_guide_path.read_text(encoding="utf-8")
+        skill_guide = skill_guide_path.read_text(encoding="utf-8")
 
         self.assertIn("sole vendor-recognized-path exception", agent_guide)
         self.assertIn("sole vendor-recognized-path exception", skill_guide)
