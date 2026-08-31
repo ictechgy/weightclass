@@ -69,5 +69,42 @@ class OwnedChildWaitTests(unittest.TestCase):
         self.assertEqual(waitpid.call_args_list, [call(123, os.WNOHANG)] * 3)
 
 
+class ProcessGroupAnchorTests(unittest.TestCase):
+    def test_exited_leader_remains_a_valid_group_signal_anchor(self) -> None:
+        process = Mock(spec=subprocess.Popen)
+        process.pid = 123
+        process.returncode = None
+        exit_queue = Mock()
+        with (
+            patch.object(process_context, "open_leader_exit_queue", return_value=exit_queue),
+            patch.object(process_context, "observe_leader_exit", return_value=True) as observe,
+            patch.object(process_context, "signal_process_group") as signal_group,
+        ):
+            anchor = process_context.ProcessGroupAnchor.open(process)
+            anchor.signal(signal.SIGKILL)
+            anchor.close()
+
+        self.assertEqual(observe.call_count, 2)
+        signal_group.assert_called_once_with(123, signal.SIGKILL)
+        exit_queue.close.assert_called_once_with()
+
+    def test_immediate_echild_releases_the_group_without_signaling(self) -> None:
+        process = Mock(spec=subprocess.Popen)
+        process.pid = 123
+        process.returncode = None
+        with (
+            patch.object(
+                process_context,
+                "open_leader_exit_queue",
+                side_effect=ChildProcessError(),
+            ),
+            patch.object(process_context, "signal_process_group") as signal_group,
+            self.assertRaises(process_context.ChildStatusLostError),
+        ):
+            process_context.ProcessGroupAnchor.open(process)
+
+        signal_group.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

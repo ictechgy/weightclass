@@ -15,10 +15,10 @@ from typing import Any, Final
 from .delegation_types import DirectChildCleanup
 from .executable_observation import ExecutableObservation, observe_executable
 from .process_context import (
-    ChildStatusLostError,
     has_safe_sigchld_disposition,
     wait_owned_child,
 )
+from .process_errors import ChildStatusLostError
 
 RUNTIME_ARGUMENTS: Final = ("--weightclass-delegation-protocol", "1")
 _SIGINT_POLL_SECONDS: Final = 0.05

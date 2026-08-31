@@ -11,7 +11,6 @@ import sys
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
-from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
@@ -27,7 +26,7 @@ from .classification import (
     validate_task,
 )
 from .json_input import JsonInputError, load_json_object
-from .process_context import ChildStatusLostError
+from .process_errors import ChildStatusLostError
 from .router import (
     DEFAULT_ROUTES,
     TASK_PLACEHOLDER,
@@ -519,6 +518,8 @@ def _render_example_policy(
     model: str | None,
     overrides: PresetOverrides | None = None,
 ) -> str:
+    from importlib.resources import files
+
     overrides = overrides or PresetOverrides()
     try:
         policy_text = (

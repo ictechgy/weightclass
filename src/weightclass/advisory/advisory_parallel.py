@@ -12,12 +12,26 @@ import re
 import selectors
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from pathlib import Path
 from typing import BinaryIO, cast
+
+if not __package__:
+    source_root = str(Path(__file__).resolve().parents[2])
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+
+from weightclass.process_context import (
+    ProcessGroupAnchor,
+    has_safe_child_status_context,
+    wait_owned_child,
+)
+from weightclass.process_errors import ChildStatusLostError
 
 MAX_JOBS = 16
 MAX_COMMAND_ARGUMENTS = 256
@@ -98,38 +112,53 @@ def _validate_jobs(jobs: tuple[AdvisoryJob, ...]) -> None:
             raise ValueError
 
 
-def _signal_process_group(process: subprocess.Popen[bytes], signum: int) -> None:
-    """Signal the isolated session, without exposing process details in errors."""
-
+def _wait_owned(
+    process: subprocess.Popen[bytes],
+    anchor: ProcessGroupAnchor,
+    timeout: float | None = None,
+) -> int:
     try:
-        os.killpg(process.pid, signum)
-    except (OSError, ProcessLookupError):
-        pass
+        return wait_owned_child(process, timeout=timeout)
+    except ChildStatusLostError:
+        anchor.release_after_status_loss()
+        raise
 
 
-def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+def _terminate_process_group(
+    process: subprocess.Popen[bytes], anchor: ProcessGroupAnchor | None = None
+) -> None:
     """Terminate and then kill every process in one timed-out job's session."""
 
-    _signal_process_group(process, signal.SIGTERM)
-    # Do not reap the session leader before SIGKILL. While the unreaped PID
-    # remains allocated, its process-group id cannot be recycled for an
-    # unrelated process between the graceful and forced signals.
-    time.sleep(0.1)
-    _signal_process_group(process, signal.SIGKILL)
+    owned_anchor = anchor or ProcessGroupAnchor.open(process)
+    close_anchor = anchor is None
     try:
-        process.wait(timeout=1.0)
-    except subprocess.TimeoutExpired:
-        _signal_process_group(process, signal.SIGKILL)
+        owned_anchor.signal(signal.SIGTERM)
+        # Do not reap the session leader before SIGKILL. While the unreaped PID
+        # remains allocated, its process-group id cannot be recycled for an
+        # unrelated process between the graceful and forced signals.
+        time.sleep(0.1)
+        # An exited leader is still the anchor, so resistant descendants must
+        # receive the forced signal before the leader's final wait.
+        owned_anchor.signal(signal.SIGKILL)
+        try:
+            _wait_owned(process, owned_anchor, timeout=1.0)
+        except subprocess.TimeoutExpired:
+            owned_anchor.signal(signal.SIGKILL)
 
-        # An uninterruptible session leader may outlive the bounded timeout.
-        # Keep one owner for its eventual status without blocking dispatch.
-        def reap() -> None:
-            try:
-                process.wait()
-            except (ChildProcessError, OSError):
-                pass
+            # An uninterruptible session leader may outlive the bounded timeout.
+            # Keep one owner for its eventual status without blocking dispatch.
+            def reap() -> None:
+                try:
+                    _wait_owned(process, owned_anchor)
+                except OSError:
+                    pass
+                finally:
+                    owned_anchor.close()
 
-        threading.Thread(target=reap, name="wclass-advisory-reaper", daemon=True).start()
+            threading.Thread(target=reap, name="wclass-advisory-reaper", daemon=True).start()
+    finally:
+        if close_anchor:
+            owned_anchor.close()
 
 
 def _capture_job(
@@ -138,6 +167,7 @@ def _capture_job(
     """Drain both pipes to EOF while retaining only the combined output bound."""
 
     assert process.stdout is not None and process.stderr is not None
+    anchor = ProcessGroupAnchor.open(process)
     selector = selectors.DefaultSelector()
     stdout_descriptor = process.stdout.fileno()
     stderr_descriptor = process.stderr.fileno()
@@ -151,7 +181,7 @@ def _capture_job(
             selector.register(stream, selectors.EVENT_READ)
         while selector.get_map():
             if cancel_requested.is_set():
-                _terminate_process_group(process)
+                _terminate_process_group(process, anchor)
                 for key in list(selector.get_map().values()):
                     selector.unregister(key.fileobj)
                     cast(BinaryIO, key.fileobj).close()
@@ -159,7 +189,7 @@ def _capture_job(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True
-                _terminate_process_group(process)
+                _terminate_process_group(process, anchor)
                 break
             for key, _ in selector.select(min(remaining, CANCEL_POLL_SECONDS)):
                 descriptor = key.fd
@@ -193,7 +223,7 @@ def _capture_job(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             timed_out = True
-            _terminate_process_group(process)
+            _terminate_process_group(process, anchor)
             return AdvisoryResult(
                 job.label,
                 124,
@@ -205,11 +235,11 @@ def _capture_job(
             )
         while True:
             if cancel_requested.is_set():
-                _terminate_process_group(process)
+                _terminate_process_group(process, anchor)
                 return AdvisoryResult(job.label, 130, b"", _INTERRUPTED_ERROR, True)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                _terminate_process_group(process)
+                _terminate_process_group(process, anchor)
                 return AdvisoryResult(
                     job.label,
                     124,
@@ -220,7 +250,11 @@ def _capture_job(
                     truncated,
                 )
             try:
-                returncode = process.wait(timeout=min(remaining, CANCEL_POLL_SECONDS))
+                returncode = _wait_owned(
+                    process,
+                    anchor,
+                    timeout=min(remaining, CANCEL_POLL_SECONDS),
+                )
                 break
             except subprocess.TimeoutExpired:
                 continue
@@ -234,6 +268,7 @@ def _capture_job(
             truncated,
         )
     finally:
+        anchor.close()
         selector.close()
 
 
@@ -287,6 +322,8 @@ def run_parallel(
 
     selected = tuple(jobs)
     _validate_jobs(selected)
+    if not has_safe_child_status_context():
+        raise ValueError
     if (
         isinstance(heartbeat_seconds, bool)
         or not isinstance(heartbeat_seconds, (int, float))

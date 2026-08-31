@@ -51,6 +51,23 @@ def custom_profile(vendor: str) -> dict[str, object]:
 
 
 class ManagedAdvisoryInitializationTests(unittest.TestCase):
+    def test_state_root_admission_rejects_shared_write_and_accepts_sticky_1777(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            unsafe = base / "unsafe"
+            unsafe.mkdir(mode=0o770)
+            unsafe.chmod(0o770)
+            with self.assertRaises(managed_advisory.ManagedAdvisoryError):
+                managed_advisory._root(unsafe / "advisory-v1")
+
+            sticky = base / "sticky"
+            sticky.mkdir(mode=0o1777)
+            sticky.chmod(0o1777)
+            self.assertEqual(
+                managed_advisory._root(sticky / "advisory-v1"),
+                sticky / "advisory-v1",
+            )
+
     def test_setup_lock_has_a_bounded_task_free_busy_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state_root = Path(directory) / "advisory-v1"
@@ -552,8 +569,8 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
     ) -> None:
         captured: list[str] = []
 
-        def portfolio() -> int:
-            captured.extend(sys.argv)
+        def portfolio(arguments: list[str]) -> int:
+            captured.extend(arguments)
             return 0
 
         with (

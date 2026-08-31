@@ -639,8 +639,10 @@ def _entry(value: Sequence[str]) -> PortfolioEntry:
     return entry
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="wclass-advisory portfolio", description=__doc__, allow_abbrev=False
+    )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
         "--campaign",
@@ -654,7 +656,7 @@ def main() -> int:
         metavar="DIRECTORY",
         help="discover complete named campaigns below one owner-only directory",
     )
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
     try:
         if arguments.campaign_directory is not None:
             entries = discover_campaigns(Path(arguments.campaign_directory))

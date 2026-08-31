@@ -9,7 +9,10 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any, Final
+
+from .process_errors import ChildStatusLostError as ChildStatusLostError
 
 _DARWIN_SA_NOCLDWAIT: Final = 0x20
 _LINUX_SA_NOCLDWAIT: Final = 0x02
@@ -27,10 +30,6 @@ LEADER_ALREADY_EXITED: Final = object()
 
 class LeaderObserverError(ValueError):
     """Raised without pid detail when a leader-exit observer cannot be registered."""
-
-
-class ChildStatusLostError(OSError):
-    """Raised when an owned direct child's real wait status is unavailable."""
 
 
 def has_safe_child_status_context() -> bool:
@@ -292,6 +291,80 @@ def close_leader_exit_queue(exit_queue: Any | None) -> None:
         exit_queue.close()
     except OSError:
         pass
+
+
+def _is_child_status_lost(error: OSError) -> bool:
+    return isinstance(error, ChildProcessError) or error.errno == errno.ECHILD
+
+
+@dataclass(slots=True)
+class ProcessGroupAnchor:
+    """Retain one owned leader's PID/PGID until its final wait.
+
+    Exit observation is deliberately non-reaping. An exited leader therefore
+    remains a stable process-group anchor while cleanup signals descendants.
+    Only a proven child-status loss releases the numeric signal target early.
+    """
+
+    process_group_id: int | None
+    exit_queue: Any | None
+    _observer_open: bool = True
+
+    @classmethod
+    def open(cls, process: subprocess.Popen[Any]) -> "ProcessGroupAnchor":
+        """Open and immediately validate a non-reaping leader observer."""
+
+        exit_queue: Any | None = None
+        try:
+            exit_queue = open_leader_exit_queue(process.pid)
+            anchor = cls(process.pid, exit_queue)
+            anchor.observe_leader_exit()
+            return anchor
+        except OSError as error:
+            close_leader_exit_queue(exit_queue)
+            if _is_child_status_lost(error):
+                process.returncode = _CHILD_STATUS_LOST
+                raise ChildStatusLostError() from None
+            raise
+        except BaseException:
+            close_leader_exit_queue(exit_queue)
+            raise
+
+    def observe_leader_exit(self) -> bool:
+        """Observe exit without treating an owned zombie as group completion."""
+
+        if self.process_group_id is None:
+            raise ChildStatusLostError()
+        if not self._observer_open:
+            raise ValueError
+        try:
+            return observe_leader_exit(self.process_group_id, self.exit_queue)
+        except OSError as error:
+            if _is_child_status_lost(error):
+                self.release_after_status_loss()
+                raise ChildStatusLostError() from None
+            raise
+
+    def signal(self, signal_number: int) -> None:
+        """Validate ownership, then signal the group even if its leader exited."""
+
+        self.observe_leader_exit()
+        assert self.process_group_id is not None
+        signal_process_group(self.process_group_id, signal_number)
+
+    def release_after_status_loss(self) -> None:
+        """Suppress future numeric signals after the child identity is lost."""
+
+        self.process_group_id = None
+        self.close()
+
+    def close(self) -> None:
+        """Close only the observer; final reaping remains the caller's duty."""
+
+        if not self._observer_open:
+            return
+        self._observer_open = False
+        close_leader_exit_queue(self.exit_queue)
 
 
 def signal_process_group(process_group_id: int, signal_number: int) -> None:

@@ -109,17 +109,6 @@ def _run_parser(command: str = "run") -> argparse.ArgumentParser:
     return parser
 
 
-def _invoke(module_main: object, arguments: Sequence[str], program: str) -> int:
-    if not callable(module_main):
-        raise ValueError()
-    original_argv = sys.argv
-    try:
-        sys.argv = [program, *arguments]
-        return int(module_main())
-    finally:
-        sys.argv = original_argv
-
-
 def _call(module_main: object, arguments: Sequence[str]) -> int:
     """Call one lazily loaded argv entry point and validate its exit status."""
 
@@ -168,6 +157,8 @@ def _run(arguments: Sequence[str], *, prune: bool) -> int:
     parsed, forwarded = parser.parse_known_args(arguments)
     if any(argument == "--out-dir" or argument.startswith("--out-dir=") for argument in forwarded):
         parser.error("--out-dir is controlled by --campaign-root")
+    if not prune and "--confirm-task-egress" not in forwarded:
+        parser.error("advisory execution requires --confirm-task-egress")
     campaign_root = parsed.campaign_root.expanduser().resolve()
     runner_arguments = [*forwarded, "--workflow", parsed.workflow, "--vendor", parsed.vendor]
     if prune:
@@ -179,14 +170,15 @@ def _run(arguments: Sequence[str], *, prune: bool) -> int:
         )
     except (OSError, ValueError):
         parser.error("invalid campaign option")
+    import json
+
     advisory_campaign = _load_module("advisory_campaign")
     advisory_orchestration = _load_module("advisory_orchestration")
     speculative_run = _load_module("speculative_run")
     if prune:
-        return _invoke(
+        return _call(
             speculative_run.main,
             [*runner_arguments, "--out-dir", str(campaign_root)],
-            "wclass-advisory run",
         )
     request = advisory_orchestration.LaneRequest(
         parsed.vendor,
@@ -194,21 +186,32 @@ def _run(arguments: Sequence[str], *, prune: bool) -> int:
         workflow=parsed.workflow,
         campaign_path=campaign_path,
     )
-    with advisory_orchestration.acquire_campaign_lanes((request,)) as leases:
-        if campaign_path is not None:
-            manifest = advisory_campaign.load_manifest(campaign_path)
-            records = advisory_campaign.load_bound_records(leases[0].results_dir / "runs.jsonl")
-            ordinals = advisory_campaign.validate_record_bindings(manifest, records)
-            runner_arguments = _set_option(
-                runner_arguments,
-                "--sample-ordinal",
-                str(len(ordinals) + 1),
+    try:
+        with advisory_orchestration.acquire_campaign_lanes((request,)) as leases:
+            if campaign_path is not None:
+                try:
+                    manifest = advisory_campaign.load_manifest(campaign_path)
+                    records = advisory_campaign.load_bound_records(
+                        leases[0].results_dir / "runs.jsonl"
+                    )
+                    ordinals = advisory_campaign.validate_record_bindings(manifest, records)
+                except advisory_campaign.CampaignError as error:
+                    raise advisory_orchestration.CampaignRecordsInvalidError(error) from None
+                runner_arguments = _set_option(
+                    runner_arguments,
+                    "--sample-ordinal",
+                    str(len(ordinals) + 1),
+                )
+            return _call(
+                speculative_run.main,
+                [*runner_arguments, "--out-dir", str(leases[0].results_dir)],
             )
-        return _invoke(
-            speculative_run.main,
-            [*runner_arguments, "--out-dir", str(leases[0].results_dir)],
-            "wclass-advisory run",
+    except advisory_orchestration.CampaignLaneError as error:
+        print(
+            json.dumps({"error": advisory_orchestration.campaign_lane_error_code(error)}),
+            file=sys.stderr,
         )
+        return 2
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -219,66 +222,66 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     command = arguments[0]
     if command == "init":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.init_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.init_main, arguments[1:])
     if command == "migrate-evidence":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.migrate_evidence_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.migrate_evidence_main, arguments[1:])
     if command == "migrate-routes":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.migrate_routes_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.migrate_routes_main, arguments[1:])
     if command == "migrate-gate":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.migrate_gate_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.migrate_gate_main, arguments[1:])
     if command == "doctor":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.doctor_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.doctor_main, arguments[1:])
     if command == "cli-check":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.cli_check_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.cli_check_main, arguments[1:])
     if command == "provider-check":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.provider_check_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.provider_check_main, arguments[1:])
     if command == "review":
         if not any(
             argument == "--profile" or argument.startswith("--profile=")
             for argument in arguments[1:]
         ):
-            managed_advisory = _load_module("managed_advisory")
+            managed_cli = _load_module("managed_cli")
             return _call(
-                managed_advisory.review_main,
+                managed_cli.review_main,
                 [argument for argument in arguments[1:] if argument != "--managed"],
             )
         advisory_routes = _load_module("advisory_routes")
-        return _invoke(advisory_routes.main, arguments, "wclass-advisory")
+        return _call(advisory_routes.main, arguments)
     if command == "consult":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.consult_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.consult_main, arguments[1:])
     if command == "dispatch":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.dispatch_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.dispatch_main, arguments[1:])
     if command == "status":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.status_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.status_main, arguments[1:])
     if command == "campaign-gate":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.campaign_gate_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.campaign_gate_main, arguments[1:])
     if command == "cleanup":
-        managed_advisory = _load_module("managed_advisory")
-        return _call(managed_advisory.prune_main, arguments[1:])
+        managed_cli = _load_module("managed_cli")
+        return _call(managed_cli.prune_main, arguments[1:])
     if command == "run":
         return _run(arguments[1:], prune=False)
     if command == "prune":
         return _run(arguments[1:], prune=True)
     if command == "seal":
         advisory_campaign = _load_module("advisory_campaign")
-        return _invoke(advisory_campaign.main, arguments[1:], "wclass-advisory seal")
+        return _call(advisory_campaign.main, arguments[1:])
     if command == "report":
         speculative_report = _load_module("speculative_report")
-        return _invoke(speculative_report.main, arguments[1:], "wclass-advisory report")
+        return _call(speculative_report.main, arguments[1:])
     if command == "portfolio":
         advisory_portfolio = _load_module("advisory_portfolio")
-        return _invoke(advisory_portfolio.main, arguments[1:], "wclass-advisory portfolio")
+        return _call(advisory_portfolio.main, arguments[1:])
     if command == "experiment":
         advisory_experiments = _load_module("advisory_experiments")
         return _call(advisory_experiments.main, arguments[1:])

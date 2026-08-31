@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import argparse
 import fcntl
 import importlib
 import json
@@ -19,7 +18,24 @@ from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, BinaryIO, NoReturn, TypedDict
+from typing import TYPE_CHECKING, Any, BinaryIO, NoReturn, TypedDict, cast
+
+
+class _LazyModule:
+    """Resolve an advisory service only when one of its symbols is used."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._module: Any = None
+
+    def __getattr__(self, name: str) -> Any:
+        module = self._module
+        if module is None:
+            module_name = f"{__package__}.{self._name}" if __package__ else self._name
+            module = importlib.import_module(module_name)
+            self._module = module
+        return getattr(module, name)
+
 
 if TYPE_CHECKING:
     from weightclass import __version__ as _PACKAGE_VERSION
@@ -33,7 +49,9 @@ if TYPE_CHECKING:
         advisory_portfolio,
         advisory_preflight,
         advisory_routes,
+        bounded_io,
         managed_verify,
+        safe_namespace,
         speculative_run,
     )
     from .advisory_diagnostics import (
@@ -46,17 +64,6 @@ if TYPE_CHECKING:
 elif __package__:
     from weightclass import __version__ as _PACKAGE_VERSION
 
-    from . import (
-        advisory_campaign,
-        advisory_evidence_contract,
-        advisory_experiments,
-        advisory_orchestration,
-        advisory_parallel,
-        advisory_portfolio,
-        advisory_preflight,
-        advisory_routes,
-        managed_verify,
-    )
     from .advisory_diagnostics import (
         CHILD_FAILURE_CODES,
         CONSULT_FAILURE_CODES,
@@ -65,16 +72,6 @@ elif __package__:
         RESULT_SHAPES,
     )
 else:
-    import advisory_campaign  # type: ignore[import-not-found]
-    import advisory_evidence_contract  # type: ignore[import-not-found]
-    import advisory_experiments  # type: ignore[import-not-found]
-    import advisory_orchestration  # type: ignore[import-not-found]
-    import advisory_parallel  # type: ignore[import-not-found]
-    import advisory_portfolio  # type: ignore[import-not-found]
-    import advisory_preflight  # type: ignore[import-not-found]
-    import advisory_routes  # type: ignore[import-not-found]
-    import managed_verify  # type: ignore[import-not-found]
-    import speculative_run  # type: ignore[import-not-found]
     from advisory_diagnostics import (  # type: ignore[import-not-found]
         CHILD_FAILURE_CODES,
         CONSULT_FAILURE_CODES,
@@ -91,20 +88,21 @@ else:
 PACKAGE_VERSION = _PACKAGE_VERSION
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
-
-class _LazySpeculativeRun:
-    """Load the 5k-line task runner only for commands that actually use it."""
-
-    _module: Any = None
-
-    def __getattr__(self, name: str) -> object:
-        if self._module is None:
-            self._module = importlib.import_module(f"{__package__}.speculative_run")
-        return getattr(self._module, name)
-
-
-if __package__:
-    speculative_run = _LazySpeculativeRun()  # type: ignore[assignment]
+if not TYPE_CHECKING:
+    # Keep these names as compatibility seams for callers and tests that patch
+    # the managed service module, while avoiding their import at startup.
+    advisory_campaign = _LazyModule("advisory_campaign")
+    advisory_evidence_contract = _LazyModule("advisory_evidence_contract")
+    advisory_experiments = _LazyModule("advisory_experiments")
+    advisory_orchestration = _LazyModule("advisory_orchestration")
+    advisory_parallel = _LazyModule("advisory_parallel")
+    advisory_portfolio = _LazyModule("advisory_portfolio")
+    advisory_preflight = _LazyModule("advisory_preflight")
+    advisory_routes = _LazyModule("advisory_routes")
+    bounded_io = _LazyModule("bounded_io")
+    managed_verify = _LazyModule("managed_verify")
+    safe_namespace = _LazyModule("safe_namespace")
+    speculative_run = _LazyModule("speculative_run")
 
 SCHEMA_VERSION = 1
 WORKFLOWS = ("implementation", "review", "research", "diagnosis", "design")
@@ -113,7 +111,6 @@ CLAUDE_EVIDENCE_GENERATION = "structured-v6"
 AGY_ROUTE_GENERATION = "cli-v2"
 GROK_EVIDENCE_GENERATION = "structured-v1"
 PREREGISTERED_CAMPAIGN_GENERATION = "gate-v1"
-_SAFE_GIT_OPTIONS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 PREVIOUS_CLAUDE_EVIDENCE_GENERATIONS = (
     "structured-v5",
     "structured-v4",
@@ -134,7 +131,7 @@ PROVIDER_CHECK_MAX_EXECUTABLE_GROUPS = 4
 LEGACY_GATE_TARGET_RATE_BPS = 7_500
 LEGACY_GATE_ALPHA_BPS = 500
 GATE_ANALYSIS_METHODS = {
-    advisory_campaign.CAMPAIGN_GATE_METHOD: "simultaneous_hoeffding_union_bound"
+    "simultaneous_hoeffding_union_bound_v1": "simultaneous_hoeffding_union_bound"
 }
 _VENDOR = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _PROFILE_SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -442,28 +439,20 @@ def previous_evidence_campaign_paths(
     )
 
 
-def _private_directory(path: Path, *, create: bool) -> None:
-    if not path.is_absolute():
-        _fail()
+def _private_directory(
+    path: Path,
+    *,
+    create: bool,
+    managed_root: Path | None = None,
+) -> None:
     try:
-        metadata = path.lstat()
-    except FileNotFoundError:
-        if not create:
-            _fail()
-        try:
-            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            path.mkdir(mode=0o700)
-            metadata = path.lstat()
-        except OSError as error:
-            raise ManagedAdvisoryError() from error
-    except OSError as error:
+        safe_namespace.ensure_private_directory(
+            path,
+            managed_root=path if managed_root is None else managed_root,
+            create=create,
+        )
+    except safe_namespace.SafeNamespaceError as error:
         raise ManagedAdvisoryError() from error
-    if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.getuid()
-        or stat.S_IMODE(metadata.st_mode) & 0o077
-    ):
-        _fail()
 
 
 def _private_regular(path: Path, *, executable: bool = False) -> None:
@@ -482,33 +471,10 @@ def _private_regular(path: Path, *, executable: bool = False) -> None:
 
 
 def _regular_bytes(path: Path, maximum: int) -> bytes:
-    nofollow = _nofollow()
-    descriptor: int | None = None
     try:
-        descriptor = os.open(
-            path,
-            os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0),
-        )
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            _fail()
-        chunks: list[bytes] = []
-        remaining = maximum + 1
-        while remaining:
-            chunk = os.read(descriptor, min(65_536, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-    except OSError as error:
+        return bounded_io.read_regular_bytes(path, maximum, require_nonempty=True)
+    except bounded_io.BoundedFileError as error:
         raise ManagedAdvisoryError() from error
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-    payload = b"".join(chunks)
-    if not payload or len(payload) > maximum:
-        _fail()
-    return payload
 
 
 def _write_private(path: Path, payload: bytes, *, executable: bool = False) -> None:
@@ -681,7 +647,7 @@ def _existing_matches(
         for workflow in WORKFLOWS:
             selected = campaign_paths(state_root, vendor, workflow)
             _private_regular(selected.campaign)
-            _private_directory(selected.results, create=False)
+            _private_directory(selected.results, create=False, managed_root=state_root)
             actual = advisory_campaign.canonical_manifest_bytes(
                 advisory_campaign.load_manifest(selected.campaign)
             )
@@ -920,7 +886,7 @@ def migrate_vendor_campaigns(
             validated: dict[str, advisory_campaign.CampaignManifest] = {}
             for workflow, selected in source_set.items():
                 _private_regular(selected.campaign)
-                _private_directory(selected.results, create=False)
+                _private_directory(selected.results, create=False, managed_root=state_root)
                 manifest = advisory_campaign.load_manifest(selected.campaign)
                 bound_workflow = manifest.get("workflow")
                 if (
@@ -1011,7 +977,7 @@ def _partial_gate_artifacts(
             _fail()
         files.append(selected.campaign)
     if selected.results.exists() or selected.results.is_symlink():
-        _private_directory(selected.results, create=False)
+        _private_directory(selected.results, create=False, managed_root=state_root)
         try:
             if any(selected.results.iterdir()):
                 _fail()
@@ -1285,7 +1251,7 @@ def _configuration(
     _private_regular(verifier, executable=True)
     _private_regular(selected.profile)
     _private_regular(selected.campaign)
-    _private_directory(selected.results, create=False)
+    _private_directory(selected.results, create=False, managed_root=state_root)
     try:
         manifest = advisory_campaign.load_manifest(selected.campaign)
         routes = advisory_routes.routes_from_profile(
@@ -1470,24 +1436,23 @@ def _baseline_probe(workflow: str) -> bytes | None:
 def _preflight_repo(repo: Path, workflow: str, verifier: Path) -> None:
     if not repo.is_absolute() or not repo.is_dir():
         raise ManagedPreflightError("managed_repo_unavailable")
-    environment = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_TERMINAL_PROMPT": "0",
-    }
+    git_runner = importlib.import_module(f"{__package__}.safe_git" if __package__ else "safe_git")
+    environment = git_runner.hardened_environment(
+        {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": os.environ.get("HOME", ""),
+        }
+    )
     try:
-        status = subprocess.run(
-            ["git", *_SAFE_GIT_OPTIONS, "status", "--porcelain=v1", "-z"],
+        status = git_runner.run(
+            ["status", "--porcelain=v1", "-z"],
             cwd=repo,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=False,
-            timeout=30,
-            env=environment,
+            environment=environment,
+            timeout_seconds=30,
+            max_stdout_bytes=1_048_576,
+            max_stderr_bytes=1_048_576,
         )
-    except (OSError, subprocess.SubprocessError) as error:
+    except ValueError as error:
         raise ManagedPreflightError("managed_repo_unavailable") from error
     if status.returncode != 0:
         raise ManagedPreflightError("managed_repo_unavailable")
@@ -1608,6 +1573,7 @@ def _consult_job(
             PACKAGE_VERSION,
             "--expected-package-version",
             PACKAGE_VERSION,
+            "--confirm-task-egress",
             "--workflow",
             workflow,
             "--vendor",
@@ -2232,7 +2198,8 @@ def provider_check(
     }
 
 
-CAMPAIGN_GATE_METRICS = tuple(sorted(advisory_campaign.CAMPAIGN_GATE_METRICS))
+# Keep parser metadata available without importing the campaign service.
+CAMPAIGN_GATE_METRICS = ("advised_rescue", "cheap_acceptance", "final_acceptance")
 
 
 def _gate_attempt_accepted(value: object, *, optional: bool = False) -> bool:
@@ -2520,506 +2487,95 @@ def _root(value: Path | None) -> Path:
     selected = default_state_root() if value is None else value.expanduser()
     if not selected.is_absolute():
         _fail()
+    try:
+        safe_namespace.admit_existing_ancestors(
+            selected,
+            managed_root=selected,
+            allow_missing=True,
+        )
+    except safe_namespace.SafeNamespaceError as error:
+        raise ManagedAdvisoryError() from error
     return selected
 
 
+def _managed_cli() -> Any:
+    """Load the parser layer lazily for legacy direct callers."""
+    module_name = f"{__package__}.managed_cli" if __package__ else "managed_cli"
+    return importlib.import_module(module_name)
+
+
+def _compatibility_main(name: str, argv: Sequence[str]) -> int:
+    entrypoint = getattr(_managed_cli(), name)
+    return cast(int, entrypoint(argv, _backend=sys.modules[__name__]))
+
+
+# These wrappers retain the public managed_advisory.*_main seams while the
+# parser and receipt formatting live in managed_cli.
 def init_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory init", allow_abbrev=False)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--vendor", choices=BUILTIN_VENDORS)
-    parser.add_argument("--profile", type=Path)
-    parser.add_argument("--model", action="append", default=[])
-    parser.add_argument("--effort", action="append", default=[])
-    parser.add_argument("--prices", type=Path)
-    parser.add_argument("--planned-tasks", type=int, default=60)
-    parser.add_argument("--max-tasks", type=int, default=150)
-    parser.add_argument("--dry-run", action="store_true")
-    arguments = parser.parse_args(argv)
-    try:
-        if arguments.profile is not None:
-            if arguments.vendor is not None or arguments.model or arguments.effort:
-                _fail()
-            profile = _profile_from_path(arguments.profile.expanduser())
-        else:
-            if arguments.vendor is None:
-                _fail()
-            profile = {
-                "schema_version": 1,
-                "vendor": arguments.vendor,
-                "models": _role_values(arguments.model),
-                "efforts": _role_values(arguments.effort),
-            }
-        receipt = initialize_campaign_set(
-            _root(arguments.state_root),
-            profile=profile,
-            prices=arguments.prices.expanduser() if arguments.prices is not None else None,
-            planned_tasks=arguments.planned_tasks,
-            max_tasks=arguments.max_tasks,
-            dry_run=arguments.dry_run,
-        )
-    except SetupUnavailableError:
-        print(json.dumps({"error": "managed_setup_busy"}), file=sys.stderr)
-        return 2
-    except (OSError, ManagedAdvisoryError):
-        print(json.dumps({"error": "managed_configuration_invalid"}), file=sys.stderr)
-        return 2
-    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
-    return 0
+    return _compatibility_main("init_main", argv)
 
 
 def migrate_evidence_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory migrate-evidence", allow_abbrev=False)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--vendor", required=True, choices=("claude", "grok"))
-    parser.add_argument("--dry-run", action="store_true")
-    arguments = parser.parse_args(argv)
-    try:
-        receipt = migrate_evidence_campaigns(
-            _root(arguments.state_root),
-            vendor=arguments.vendor,
-            dry_run=arguments.dry_run,
-        )
-    except SetupUnavailableError:
-        print(json.dumps({"error": "managed_setup_busy"}), file=sys.stderr)
-        return 2
-    except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
-        print(json.dumps({"error": "managed_evidence_migration_rejected"}), file=sys.stderr)
-        return 2
-    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
-    return 0
+    return _compatibility_main("migrate_evidence_main", argv)
 
 
 def migrate_routes_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory migrate-routes", allow_abbrev=False)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--vendor", required=True, choices=("agy",))
-    parser.add_argument("--dry-run", action="store_true")
-    arguments = parser.parse_args(argv)
-    try:
-        receipt = migrate_vendor_campaigns(
-            _root(arguments.state_root),
-            vendor=arguments.vendor,
-            dry_run=arguments.dry_run,
-        )
-    except SetupUnavailableError:
-        print(json.dumps({"error": "managed_setup_busy"}), file=sys.stderr)
-        return 2
-    except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
-        print(json.dumps({"error": "managed_route_migration_rejected"}), file=sys.stderr)
-        return 2
-    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
-    return 0
+    return _compatibility_main("migrate_routes_main", argv)
 
 
 def migrate_gate_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory migrate-gate", allow_abbrev=False)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--vendor", required=True)
-    parser.add_argument("--workflow", required=True, choices=WORKFLOWS)
-    parser.add_argument(
-        "--gate-metric",
-        required=True,
-        choices=tuple(sorted(advisory_campaign.CAMPAIGN_GATE_METRICS)),
-    )
-    parser.add_argument("--gate-target-rate-bps", required=True, type=int)
-    parser.add_argument("--gate-alpha-bps", required=True, type=int)
-    parser.add_argument("--dry-run", action="store_true")
-    arguments = parser.parse_args(argv)
-    try:
-        gate = _gate_arguments(
-            arguments.gate_metric,
-            arguments.gate_target_rate_bps,
-            arguments.gate_alpha_bps,
-        )
-        assert gate is not None
-        receipt = migrate_gate_campaigns(
-            _root(arguments.state_root),
-            vendor=arguments.vendor,
-            workflow=arguments.workflow,
-            gate=gate,
-            dry_run=arguments.dry_run,
-        )
-    except SetupUnavailableError:
-        print(json.dumps({"error": "managed_setup_busy"}), file=sys.stderr)
-        return 2
-    except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
-        print(json.dumps({"error": "managed_gate_migration_rejected"}), file=sys.stderr)
-        return 2
-    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
-    return 0
+    return _compatibility_main("migrate_gate_main", argv)
 
 
 def doctor_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory doctor", allow_abbrev=False)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--vendor", default="all")
-    parser.add_argument("--workflow", choices=("all", *WORKFLOWS), default="all")
-    arguments = parser.parse_args(argv)
-    try:
-        root = _root(arguments.state_root)
-        vendors = _selected_vendors(root, arguments.vendor)
-        receipt = doctor(
-            root,
-            vendors=vendors,
-            workflows=_selected_workflows(arguments.workflow),
-        )
-    except advisory_orchestration.CampaignRecordsInvalidError as error:
-        print(json.dumps({"error": error.code}), file=sys.stderr)
-        return 2
-    except advisory_orchestration.AllocatorUnavailableError:
-        print(json.dumps({"error": "managed_allocator_busy"}), file=sys.stderr)
-        return 2
-    except (OSError, ValueError, ManagedAdvisoryError):
-        print(json.dumps({"error": "managed_configuration_unavailable"}), file=sys.stderr)
-        return 2
-    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
-    return 0
+    return _compatibility_main("doctor_main", argv)
 
 
 def cli_check_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory cli-check", allow_abbrev=False)
-    parser.add_argument("--vendor", choices=("all", *BUILTIN_VENDORS), default="all")
-    arguments = parser.parse_args(argv)
-    vendors = BUILTIN_VENDORS if arguments.vendor == "all" else (arguments.vendor,)
-    results = [advisory_preflight.check_local_capability(vendor, vendor) for vendor in vendors]
-    payload = {
-        "schema_version": 1,
-        "event": "advisory_cli_check",
-        "task_free": True,
-        "task_bytes_sent": False,
-        "provider_request_sent": False,
-        "environment_policy": "minimal",
-        "ready": all(result.ready for result in results),
-        "results": [result.receipt() for result in results],
-    }
-    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
-    return 0 if payload["ready"] is True else 1
-
-
-def _provider_capability_payload(error: ProviderCapabilityError) -> dict[str, object]:
-    return {
-        "error": "managed_provider_preflight_failed",
-        "vendor": error.vendor,
-        "role": error.role,
-        "child_failure_code": error.code,
-        "sample_recorded": False,
-    }
+    return _compatibility_main("cli_check_main", argv)
 
 
 def provider_check_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory provider-check", allow_abbrev=False)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--vendor", default="all")
-    parser.add_argument("--workflow", choices=WORKFLOWS, default="review")
-    parser.add_argument(
-        "--confirm-provider-egress",
-        action="store_true",
-        required=True,
-        help="allow three task-free provider calls that may use quota or incur cost",
-    )
-    arguments = parser.parse_args(argv)
-    try:
-        root = _root(arguments.state_root)
-        receipt = provider_check(
-            root,
-            vendors=_selected_vendors(root, arguments.vendor),
-            workflow=arguments.workflow,
-            confirm_provider_egress=arguments.confirm_provider_egress,
-        )
-    except ProviderCapabilityError as error:
-        print(json.dumps(_provider_capability_payload(error), sort_keys=True), file=sys.stderr)
-        return 2
-    except (OSError, ValueError, ManagedAdvisoryError):
-        print(json.dumps({"error": "managed_provider_check_rejected"}), file=sys.stderr)
-        return 2
-    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
-    return 0 if receipt["ready"] is True else 1
+    return _compatibility_main("provider_check_main", argv)
 
 
 def review_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(
-        prog="wclass-advisory review",
-        epilog=(
-            "Advanced explicit-profile review remains available as: "
-            "wclass-advisory review --profile PROFILE [--read-only-executors]"
-        ),
-        allow_abbrev=False,
-    )
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--vendor", default="all")
-    parser.add_argument("--workflow", choices=WORKFLOWS, default="implementation")
-    parser.add_argument(
-        "--consult",
-        action="store_true",
-        help="review a non-recording evidence route without validating campaign records",
-    )
-    arguments = parser.parse_args(argv)
-    try:
-        if arguments.consult and arguments.workflow not in EVIDENCE_WORKFLOWS:
-            _fail()
-        root = _root(arguments.state_root)
-        payload = review_payload(
-            root,
-            vendors=_selected_vendors(root, arguments.vendor),
-            workflow=arguments.workflow,
-            require_campaign=not arguments.consult,
-        )
-    except (OSError, ValueError, ManagedAdvisoryError):
-        print(json.dumps({"error": "managed_configuration_unavailable"}), file=sys.stderr)
-        return 2
-    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
-    return 0
+    return _compatibility_main("review_main", argv)
 
 
 def consult_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory consult", allow_abbrev=False)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--repo", required=True, type=Path)
-    parser.add_argument("--task-file", required=True, type=Path)
-    parser.add_argument("--vendor", default="all")
-    parser.add_argument("--workflow", required=True, choices=EVIDENCE_WORKFLOWS)
-    parser.add_argument("--role", choices=("cheap", "expensive"), default="cheap")
-    parser.add_argument(
-        "--ack-route-sha256",
-        action="append",
-        required=True,
-        help="repeat VENDOR=sha256:... for every selected reviewed consult route",
-    )
-    parser.add_argument("--confirm-task-egress", action="store_true", required=True)
-    parser.add_argument("--confirm-provider-egress", action="store_true")
-    parser.add_argument(
-        "--timeout-seconds",
-        type=float,
-        default=CONSULT_DEFAULT_TIMEOUT_SECONDS,
-        help="per-vendor outer deadline from 1 through 28800 seconds",
-    )
-    arguments = parser.parse_args(argv)
-    try:
-        root = _root(arguments.state_root)
-        vendors = _selected_vendors(root, arguments.vendor)
-        return consult(
-            root,
-            repo=arguments.repo.expanduser().resolve(),
-            task_file=arguments.task_file.expanduser(),
-            vendors=vendors,
-            workflow=arguments.workflow,
-            role=arguments.role,
-            acknowledged_route_sha256=_consult_route_acknowledgements(
-                arguments.ack_route_sha256, vendors
-            ),
-            confirm_task_egress=arguments.confirm_task_egress,
-            confirm_provider_egress=arguments.confirm_provider_egress,
-            timeout_seconds=arguments.timeout_seconds,
-        )
-    except ProviderConfirmationRequiredError:
-        print(json.dumps({"error": "managed_provider_confirmation_required"}), file=sys.stderr)
-        return 2
-    except ProviderConformanceError:
-        print(json.dumps({"error": "managed_provider_preflight_failed"}), file=sys.stderr)
-        return 2
-    except ProviderCapabilityError as error:
-        print(json.dumps(_provider_capability_payload(error), sort_keys=True), file=sys.stderr)
-        return 2
-    except RunnerVersionChangedError:
-        print(json.dumps({"error": "managed_runner_version_changed"}), file=sys.stderr)
-        return 2
-    except ManagedPreflightError as error:
-        print(
-            json.dumps(
-                {
-                    "error": "managed_consult_rejected",
-                    "reason_code": error.code,
-                },
-                sort_keys=True,
-            ),
-            file=sys.stderr,
-        )
-        return 2
-    except (OSError, ValueError, ManagedAdvisoryError):
-        print(json.dumps({"error": "managed_consult_rejected"}), file=sys.stderr)
-        return 2
+    return _compatibility_main("consult_main", argv)
 
 
 def dispatch_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory dispatch", allow_abbrev=False)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--repo", required=True, type=Path)
-    parser.add_argument("--task-file", required=True, type=Path)
-    parser.add_argument("--vendor", default="all")
-    parser.add_argument("--workflow", choices=WORKFLOWS, default="implementation")
-    parser.add_argument("--confirm-task-egress", action="store_true", required=True)
-    parser.add_argument("--confirm-provider-egress", action="store_true")
-    arguments = parser.parse_args(argv)
-    try:
-        root = _root(arguments.state_root)
-        return dispatch(
-            root,
-            repo=arguments.repo.expanduser().resolve(),
-            task_file=arguments.task_file.expanduser(),
-            vendors=_selected_vendors(root, arguments.vendor),
-            workflow=arguments.workflow,
-            confirm_task_egress=arguments.confirm_task_egress,
-            confirm_provider_egress=arguments.confirm_provider_egress,
-        )
-    except ProviderConfirmationRequiredError:
-        print(json.dumps({"error": "managed_provider_confirmation_required"}), file=sys.stderr)
-        return 2
-    except ProviderConformanceError:
-        print(json.dumps({"error": "managed_provider_preflight_failed"}), file=sys.stderr)
-        return 2
-    except ProviderCapabilityError as error:
-        print(json.dumps(_provider_capability_payload(error), sort_keys=True), file=sys.stderr)
-        return 2
-    except advisory_orchestration.LaneUnavailableError:
-        print(json.dumps({"error": "managed_lane_unavailable"}), file=sys.stderr)
-        return 2
-    except advisory_orchestration.CampaignCapacityError:
-        print(json.dumps({"error": "managed_campaign_capacity_reached"}), file=sys.stderr)
-        return 2
-    except advisory_orchestration.CampaignRecordsInvalidError as error:
-        print(json.dumps({"error": error.code}), file=sys.stderr)
-        return 2
-    except advisory_orchestration.AllocatorUnavailableError:
-        print(json.dumps({"error": "managed_allocator_busy"}), file=sys.stderr)
-        return 2
-    except RunnerVersionChangedError:
-        print(json.dumps({"error": "managed_runner_version_changed"}), file=sys.stderr)
-        return 2
-    except ManagedPreflightError as error:
-        print(
-            json.dumps(
-                {
-                    "error": "managed_dispatch_rejected",
-                    "reason_code": error.code,
-                },
-                sort_keys=True,
-            ),
-            file=sys.stderr,
-        )
-        return 2
-    except (OSError, ManagedAdvisoryError):
-        print(json.dumps({"error": "managed_dispatch_rejected"}), file=sys.stderr)
-        return 2
+    return _compatibility_main("dispatch_main", argv)
 
 
 def campaign_gate_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory campaign-gate", allow_abbrev=False)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--vendor", required=True)
-    parser.add_argument("--workflow", required=True, choices=WORKFLOWS)
-    parser.add_argument("--generation", choices=("active", "source"), default="active")
-    parser.add_argument("--metric", choices=CAMPAIGN_GATE_METRICS)
-    parser.add_argument("--target-rate-bps", type=int)
-    parser.add_argument("--alpha-bps", type=int)
-    arguments = parser.parse_args(argv)
-    try:
-        if arguments.target_rate_bps is not None and not 0 <= arguments.target_rate_bps <= 10_000:
-            _fail()
-        if arguments.alpha_bps is not None and not 1 <= arguments.alpha_bps <= 5_000:
-            _fail()
-        root = _root(arguments.state_root)
-        vendors = _selected_vendors(root, arguments.vendor)
-        if len(vendors) != 1:
-            _fail()
-        receipt = campaign_gate(
-            root,
-            vendor=vendors[0],
-            workflow=arguments.workflow,
-            metric=arguments.metric,
-            target_rate_bps=arguments.target_rate_bps,
-            alpha_bps=arguments.alpha_bps,
-            source_generation=arguments.generation == "source",
-        )
-    except advisory_orchestration.CampaignRecordsInvalidError as error:
-        print(json.dumps({"error": error.code}), file=sys.stderr)
-        return 2
-    except ManagedPreflightError as error:
-        print(json.dumps({"error": error.code}), file=sys.stderr)
-        return 2
-    except (OSError, ValueError, ManagedAdvisoryError):
-        print(json.dumps({"error": "managed_campaign_gate_rejected"}), file=sys.stderr)
-        return 2
-    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
-    return 0
+    return _compatibility_main("campaign_gate_main", argv)
 
 
 def status_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory status", allow_abbrev=False)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--vendor", default="all")
-    parser.add_argument("--workflow", choices=("all", *WORKFLOWS), default="all")
-    arguments = parser.parse_args(argv)
-    try:
-        root = _root(arguments.state_root)
-        vendors = _selected_vendors(root, arguments.vendor)
-        workflows = _selected_workflows(arguments.workflow)
-    except (OSError, ManagedAdvisoryError):
-        print(json.dumps({"error": "managed_configuration_unavailable"}), file=sys.stderr)
-        return 2
-    original = sys.argv
-    try:
-        portfolio_arguments = ["wclass-advisory status"]
-        for vendor in vendors:
-            for workflow in workflows:
-                selected = _active_campaign_paths(root, vendor, workflow)
-                portfolio_arguments.extend(
-                    (
-                        "--campaign",
-                        vendor,
-                        workflow,
-                        str(selected.campaign),
-                        str(selected.results),
-                    )
-                )
-        sys.argv = portfolio_arguments
-        return advisory_portfolio.main()
-    finally:
-        sys.argv = original
+    return _compatibility_main("status_main", argv)
 
 
 def prune_main(argv: Sequence[str]) -> int:
-    parser = argparse.ArgumentParser(prog="wclass-advisory cleanup", allow_abbrev=False)
-    parser.add_argument("--state-root", type=Path)
-    parser.add_argument("--vendor", default="all")
-    parser.add_argument("--workflow", choices=("all", *WORKFLOWS), default="all")
-    arguments = parser.parse_args(argv)
-    try:
-        root = _root(arguments.state_root)
-        vendors = _selected_vendors(root, arguments.vendor)
-        totals = {
-            "populations": 0,
-            "lanes_scanned": 0,
-            "busy_lanes": 0,
-            "registered": 0,
-            "removed": 0,
-            "retained": 0,
-        }
-        for vendor in vendors:
-            for workflow in _selected_workflows(arguments.workflow):
-                selected = _active_campaign_paths(root, vendor, workflow)
-                result = speculative_run.prune_available_lanes(selected.results)
-                totals["populations"] += 1
-                for field in (
-                    "lanes_scanned",
-                    "busy_lanes",
-                    "registered",
-                    "removed",
-                    "retained",
-                ):
-                    totals[field] += result[field]
-        print(
-            json.dumps(
-                {
-                    "schema_version": SCHEMA_VERSION,
-                    "event": "managed_cleanup",
-                    "complete": totals["busy_lanes"] == 0 and totals["retained"] == 0,
-                    **totals,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        )
-        return 0
-    except (OSError, ManagedAdvisoryError, advisory_campaign.CampaignError):
-        print(json.dumps({"error": "managed_cleanup_rejected"}), file=sys.stderr)
-        return 2
+    return _compatibility_main("prune_main", argv)
+
+
+for _entrypoint_name in (
+    "init_main",
+    "migrate_evidence_main",
+    "migrate_routes_main",
+    "migrate_gate_main",
+    "doctor_main",
+    "cli_check_main",
+    "provider_check_main",
+    "review_main",
+    "consult_main",
+    "dispatch_main",
+    "campaign_gate_main",
+    "status_main",
+    "prune_main",
+):
+    globals()[_entrypoint_name]._managed_cli_wrapper = True

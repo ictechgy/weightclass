@@ -13,12 +13,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
-import stat
 import unicodedata
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING or __package__:
+    from . import bounded_io
+else:
+    import bounded_io  # type: ignore[import-not-found]
 
 PROFILE_SCHEMA_VERSION = 1
 CUSTOM_PROFILE_SCHEMA_VERSION = 2
@@ -211,35 +214,10 @@ def _object_without_duplicates(pairs: list[tuple[str, object]]) -> dict[str, obj
 
 
 def _bounded_regular_file(path: Path) -> bytes:
-    nofollow = getattr(os, "O_NOFOLLOW", None)
-    if nofollow is None:
-        raise AdvisoryRouteError()
-    descriptor: int | None = None
     try:
-        descriptor = os.open(
-            path,
-            os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0),
-        )
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise AdvisoryRouteError()
-        chunks: list[bytes] = []
-        remaining = MAX_PROFILE_BYTES + 1
-        while remaining:
-            chunk = os.read(descriptor, min(65_536, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-    except OSError as error:
+        return bounded_io.read_regular_bytes(path, MAX_PROFILE_BYTES)
+    except bounded_io.BoundedFileError as error:
         raise AdvisoryRouteError() from error
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-    payload = b"".join(chunks)
-    if len(payload) > MAX_PROFILE_BYTES:
-        raise AdvisoryRouteError()
-    return payload
 
 
 def _label(value: object) -> str:
@@ -554,8 +532,10 @@ def _review_task_delivery(routes: AdvisoryRoutes) -> str | dict[str, str]:
     return next(iter(values)) if len(values) == 1 else deliveries
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="wclass-advisory", description=__doc__, allow_abbrev=False
+    )
     parser.add_argument("review", choices=("review",))
     parser.add_argument("--profile", required=True, type=Path)
     parser.add_argument(
@@ -563,7 +543,7 @@ def main() -> int:
         action="store_true",
         help="compile cheap and expensive routes without repository write authority",
     )
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
     try:
         profile_path = arguments.profile.expanduser()
         profile = load_profile(profile_path)

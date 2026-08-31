@@ -452,7 +452,7 @@ class AdvisoryRouteProfileTests(unittest.TestCase):
         self.assertIn("cannot be mixed", mixed.stderr)
 
         with tempfile.TemporaryDirectory() as directory:
-            confirm_without_profile = subprocess.run(
+            confirm_without_execution_inputs = subprocess.run(
                 [
                     sys.executable,
                     str(RUNNER),
@@ -464,8 +464,8 @@ class AdvisoryRouteProfileTests(unittest.TestCase):
                 check=False,
                 text=True,
             )
-        self.assertEqual(confirm_without_profile.returncode, 2)
-        self.assertIn("needs --route-profile or --campaign", confirm_without_profile.stderr)
+        self.assertEqual(confirm_without_execution_inputs.returncode, 2)
+        self.assertIn("required unless --prune", confirm_without_execution_inputs.stderr)
 
     def test_codex_price_table_can_name_disjoint_cached_input_components(self) -> None:
         usage: Usage = {

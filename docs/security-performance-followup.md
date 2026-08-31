@@ -190,3 +190,57 @@ converges the affected operations:
 The final path-based observation-to-`Popen` race and custom-path ancestor
 admission remain explicit residuals. This batch does not claim verified-object
 execution, sandbox external runtimes, or change task/campaign persistence.
+
+## Consent, bounded Git, and namespace follow-up (2026-08-31)
+
+A subsequent focused review found that the legacy exact-command advisory path
+was weaker than the public consent contract: it neither required
+`--confirm-task-egress` nor required the task file to be owner-private. All
+task-consuming advisory modes now enforce both properties before task access,
+lane allocation, output-directory creation, or child start. Low-level lane,
+capacity, allocator, record, and unsafe-namespace failures also map to stable
+value-free diagnostics instead of Python tracebacks.
+
+The shared child owner now treats `ECHILD` as status loss in bounded text
+capture, parallel campaign coordination, and task-free CLI preflight. Every
+termination path retains a non-reaping leader observer as its process-group
+anchor through TERM/KILL and verifies ownership before every numeric PID/PGID
+signal. An exited leader therefore cannot orphan resistant descendants, while
+actual status loss cannot become apparent success or a stale signal target.
+Coordinators reject an unsafe inherited child-status context before spawning.
+
+Advisory Git calls now share configuration hardening, disable optional index
+locks, bound both output lanes, terminate on overflow, and cap generated binary
+patches at 64 MiB. The standalone committed-verifier loader checks the Git blob
+size before reading it, resolves the reviewed ref once to an immutable object
+ID, and streams that object under the same bound. Workspace registry reads are
+owner-private, nofollow, byte/entry/line bounded, transaction-locked, and
+atomically replaced, so concurrent registration and prune cannot lose a live
+workspace reference.
+
+The campaign JSONL reader retains its scan cursor across 64 KiB chunks instead
+of scanning an incomplete line again from byte zero. Seven-run local medians
+for single records changed from 5.6/89.7/822.5 ms at 100 KiB/500 KiB/1 MiB to
+0.105/0.433/0.837 ms, while CR, LF, CRLF, trailing-partial, duplicate-key,
+integer, byte, record, and count behavior remains fixed by tests. Core
+`wclass --help` also moved from a 30-process median/p95 of 81.823/97.532 ms to
+48.476/50.768 ms by deferring resource and process-context imports; durable
+import-boundary tests, not timing thresholds, enforce that change. Splitting
+managed CLI parsing from service imports moved `wclass-advisory status --help`
+from 80.447/110.625 ms to 37.635/41.865 ms; task-free status on a fresh sealed
+five-workflow state root measured 55.034/56.236 ms after the split.
+
+Custom managed state roots now admit only root/current-user-owned ancestor
+chains without shared-group or non-sticky world write, while preserving safe
+`0755` ancestors and root/current-owned sticky `1777`. The managed suffix and
+final root reject symlinks. Skill install and upgrade keep an opened `skills`
+parent descriptor across exact bundle verification, staging, publication,
+backup, rollback, cleanup, and fsync. These rules close cross-user namespace
+redirection under ordinary macOS/Linux ownership and mode semantics; ACL grants,
+hostile network filesystems, and a malicious same-UID process remain outside
+the claim.
+
+The internal non-recording consult entry point independently requires explicit
+task-egress confirmation before profile, task, repository, or child access; the
+managed bootstrap supplies that flag rather than relying only on its outer CLI
+check.

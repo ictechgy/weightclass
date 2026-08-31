@@ -93,7 +93,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--route-profile", required=True, type=Path)
     parser.add_argument("--expected-route-sha256", required=True)
     parser.add_argument("--verify", required=True, type=Path)
+    parser.add_argument("--confirm-task-egress", action="store_true")
     arguments = parser.parse_args(argv)
+    if not arguments.confirm_task_egress:
+        print(
+            json.dumps({"error": "advisory_consult_task_egress_confirmation_required"}),
+            file=sys.stderr,
+        )
+        return 2
     if arguments.expected_package_version != __version__:
         return RUNNER_VERSION_CHANGED_EXIT
 
