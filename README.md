@@ -69,7 +69,10 @@ campaign, verifier, copied digest, or task file, and records no sample:
 
 ```sh
 printf '%s' 'Review this change.' | wclass-advisory ask \
-  --vendor codex --workflow review --repo . --confirm-task-egress
+  --vendor codex --workflow review --stage final --context diff \
+  --repo . --confirm-task-egress
+wclass-advisory ask --vendor codex --workflow review --stage final \
+  --context diff --repo . --preview
 wclass-advisory skill status --target both
 ```
 
@@ -81,6 +84,34 @@ The receipt explicitly reports that Git metadata is not checked.
 Capability checking starts two task-free bounded local vendor processes for
 `--help` and `--version`; a successful advisory then starts one task-bearing
 vendor process.
+`--stage` selects `manual`, `plan`, `pivot`, or `final`; optional
+`--auto-skip-trivial` avoids plan/final calls for tasks the local classifier
+conservatively marks low. `--context` selects task-only, a bounded tracked diff,
+explicit UTF-8 files, or the existing read-only repository view. Review mode
+adds local `file:line` validation plus invocation-only semantic grouping without
+changing or persisting the model result.
+Diff context is limited to tracked `HEAD` changes and disables external diff,
+textconv, hooks, fsmonitor, and optional locks; untracked files are not included.
+It observes an absolute non-repository Git executable before task input and
+binds `--git-dir` and `--work-tree` to the selected repository. For this narrow
+selector, `.git` must be a real directory; linked worktrees fail closed.
+Explicit files reject `.git`, symlinks, traversal, binary/non-UTF-8 content,
+files over 32 KiB, and aggregates over 128 KiB. Diff/file content can still
+contain secrets, so the confirmation and preview disclose the selected context.
+The local triage labels prove only that a bounded `file:line` exists and whether
+the model cited it with supporting text; they are not semantic correctness
+verification. File bytes are bound to the pre-execution snapshot, duplicate
+mute requires the same normalized title and full `file:line` set, and all
+original findings remain in JSON.
+
+An explicit `--council codex,claude` runs two to four named built-in vendors in
+fresh independent processes. One output is never fed to another. The receipt
+preserves every result, descriptive consensus and dissent, and partial failures;
+it never ranks a winner or claims quality verification. Preview reads neither
+task stdin nor repository content and starts no vendor process.
+Councils run sequentially in requested vendor order; a partial receipt exits 2,
+while a complete council exits 0. Any detected target-worktree mutation rejects
+the entire invocation.
 This is not host filesystem confinement; use an external container or jail for
 a hostile CLI or repository.
 
@@ -200,7 +231,7 @@ scaffolding, and nested `.git` under explicit entry/size/depth bounds. Extended
 attributes remain outside the existing Git-visible contract, and true host
 filesystem isolation still requires an external sandbox.
 
-The optional packaged advisory skill currently uses managed onboarding 15.
+The optional packaged advisory skill currently uses managed onboarding 16.
 Previewing never overwrites an installed skill; `--upgrade` replaces only an
 exact package-owned older bundle and rejects customized, extra-file, or
 symlinked destinations:

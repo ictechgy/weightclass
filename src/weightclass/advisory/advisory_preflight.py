@@ -34,6 +34,7 @@ from weightclass.v2_validation import V2ValidationError
 
 MAX_PROBE_BYTES = 262_144
 PROBE_TIMEOUT_SECONDS = 10.0
+TASK_FREE_PROBE_CHILDREN = 2
 _VERSION = re.compile(r"[ -~]{1,120}\Z")
 
 

@@ -19,8 +19,33 @@ The labels are opaque caller input, not recommendations:
 
 ```sh
 printf '%s' 'Review this repository.' | wclass-advisory ask \
-  --vendor claude --workflow review --repo . --confirm-task-egress
+  --vendor claude --workflow review --stage final --context repo \
+  --repo . --confirm-task-egress
 ```
+
+One-shot calls can declare `manual`, `plan`, `pivot`, or `final` timing and use
+task-only, tracked-diff, explicit-file, or repository context. `--preview`
+shows the task-free route, delivery exposure, context, and child bound without
+reading stdin or repository content. `--auto-skip-trivial` can avoid plan/final
+vendor calls using the local classifier. Review receipts retain every original
+finding while adding local `file:line` triage and invocation-only semantic
+groups; human output folds rejected and duplicate findings.
+Diff context contains only bounded tracked `HEAD` changes and disables external
+diff and text conversion; it omits untracked files. Git is resolved to an
+observed absolute executable and its Git/worktree directories are explicitly
+bound to the selected standard repository; linked worktrees fail closed.
+Explicit files are
+no-follow UTF-8 reads with 32 KiB per-file and 128 KiB aggregate limits and never
+admit `.git`. These selectors narrow the prompt and working directory, but do
+not confine the vendor from the host filesystem. The target worktree is still
+snapshotted before and after every call.
+
+`--council codex,claude` is an explicit two-to-four-vendor surface. It
+preflights every member before task input, runs fresh independent processes,
+preserves descriptive consensus and dissent, and never selects a winner. It is
+not an automatic cross-vendor route and remains `quality_verified:false`.
+A complete council exits 0. A partial council preserves successful results and
+fixed per-member failure codes in its receipt, then exits 2.
 
 Initialize opaque model/effort profiles only for an explicit campaign.
 

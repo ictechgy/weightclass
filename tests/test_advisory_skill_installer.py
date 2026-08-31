@@ -48,7 +48,7 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         for workflow in ("implementation", "review", "research", "diagnosis", "design"):
             self.assertIn(f"`{workflow}`", modes)
         self.assertIn("Brainstorming is not a production workflow", modes)
-        self.assertEqual(manifest, {"managed_onboarding": 15, "schema_version": 1})
+        self.assertEqual(manifest, {"managed_onboarding": 16, "schema_version": 1})
         self.assertIn("managed_runner_version_changed", skill)
         self.assertIn("managed_setup_busy", skill)
 
@@ -101,6 +101,19 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
                 ),
             },
         )
+        self.assertEqual(
+            installer.RELEASE_0271_BUNDLE_FILE_SHA256,
+            {
+                "SKILL.md": "d13ea9e08f45a94de86b1e605f3ffd92c7efe1609a54c56a5143df5d1dcfce77",
+                "manifest.json": "ddce5171e479240e01eeef036fc9ee4a6c73db31f47dbe3147f7d51550c566c5",
+                "agents/openai.yaml": (
+                    "5aee8388c2735994411240ea01273df1f0dfa8fcf71bf9876c854b1722564e44"
+                ),
+                "references/modes.md": (
+                    "b1a22cda0a5588f5d154831de1e768808f1c2c898d4d7f7c767c8a147672465a"
+                ),
+            },
+        )
         ledger_names = (
             "LEGACY_FILE_SHA256",
             "PREVIOUS_BUNDLE_FILE_SHA256",
@@ -116,6 +129,7 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
             "RELEASE_0180_BUNDLE_FILE_SHA256",
             "RELEASE_0190_BUNDLE_FILE_SHA256",
             "RELEASE_0260_BUNDLE_FILE_SHA256",
+            "RELEASE_0271_BUNDLE_FILE_SHA256",
         )
         for name in ledger_names:
             with self.subTest(name=name):
