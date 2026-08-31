@@ -237,6 +237,38 @@ class NativeV3CliTests(unittest.TestCase):
         observe.assert_called_once_with("/opt/grok")
         spawn.assert_not_called()
 
+    def test_guided_run_confirms_observation_bound_route_without_copied_ack(self) -> None:
+        stream = HostileOneReadStream()
+        first = observation("/opt/grok")
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_policy(directory)
+            with (
+                patch.object(sys, "stdin", stream),
+                patch("weightclass.cli.validate_runtime_process_context"),
+                patch("weightclass.cli.observe_executable", return_value=first),
+                patch(
+                    "weightclass.cli._confirm_native_descriptor_on_console",
+                    return_value=True,
+                ) as confirmation,
+                patch("weightclass.native_v3_runtime.observe_executable", return_value=first),
+                patch(
+                    "weightclass.native_v3_runtime.run_owned_foreground_redacted",
+                    return_value=0,
+                ) as spawn,
+            ):
+                result = cli.main(
+                    self.run_arguments(
+                        path,
+                        "--confirm-endpoint-transition",
+                        "--review",
+                    )
+                )
+
+        self.assertEqual(result, 0)
+        confirmation.assert_called_once()
+        self.assertEqual(stream.read_calls, 1)
+        spawn.assert_called_once()
+
     def test_invalid_task_is_read_once_after_exact_ack_and_never_spawned(self) -> None:
         """Breaks if V2 task validation is bypassed or retried for schema 3."""
         stream = HostileOneReadStream(b"\xffPRIVATE")

@@ -13,7 +13,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         print(f"weightclass {__version__}")
         return 0
-    if arguments[:1] == ["classify"]:
+    if (
+        arguments[:1] == ["classify"]
+        and not any(argument in {"--json", "--human"} for argument in arguments[1:])
+        and not bool(getattr(sys.stdout, "isatty", lambda: False)())
+    ):
         from .classification_cli import main as classify_main
 
         return classify_main(arguments[1:])
