@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
+import io
 import json
 import os
 import subprocess
@@ -260,6 +262,7 @@ def _load_native_schema_family() -> None:
 def _load_native_family() -> None:
     _load_symbols(
         (
+            "delegation_compile",
             "delegation_runtime",
             "executable_observation",
             "native_v2_compile",
@@ -285,6 +288,7 @@ def _load_delegation_family() -> None:
             "delegation_runtime",
             "delegation_schema",
             "delegation_types",
+            "executable_observation",
             "native_v2_types",
             "task_v2",
             "v2_validation",
@@ -645,6 +649,7 @@ def _print_escalation_suggestion(
     tier: Tier,
     source_vendor: str | None,
     bind_executable_identity: bool = False,
+    resolve_default_executable: bool = False,
 ) -> None:
     """Name the route one tier up after a child failed, without running anything.
 
@@ -680,7 +685,16 @@ def _print_escalation_suggestion(
         return
     assert higher is not None
     observed: ExecutableObservation | None = None
-    if bind_executable_identity:
+    if resolve_default_executable:
+        try:
+            route = _resolve_default_route_executable(route)
+        except (AgentDiscoveryError, AgentUnavailableError):
+            print(
+                json.dumps({"escalation": None, "reason": "higher_route_unavailable"}),
+                file=sys.stderr,
+            )
+            return
+    elif bind_executable_identity:
         try:
             route, observed = _observe_bound_legacy_route(route)
         except (OSError, RuntimeError, V2ValidationError, ValueError):
@@ -768,7 +782,14 @@ def _require_exact_keys(value: dict[str, Any], expected_keys: set[str]) -> None:
 
 def _require_nonempty_string(value: object) -> str:
     """Require an identifier-like policy value: no whitespace at all."""
-    if not isinstance(value, str) or not value or any(character.isspace() for character in value):
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(
+            character.isspace() or unicodedata.category(character).startswith("C")
+            for character in value
+        )
+    ):
         raise InvalidInputError()
     return value
 
@@ -1024,16 +1045,18 @@ def build_parser() -> argparse.ArgumentParser:
     # argparse 내장 version 액션은 argv의 나머지를 검증하기 전에 종료해 버려서
     # `wclass --version --bogus` 가 0으로 성공한다. 파싱을 끝낸 뒤 직접 처리한다.
     parser.add_argument("--version", action="store_true")
-    subcommands = parser.add_subparsers(dest="command")
+    subcommands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     discover = subcommands.add_parser(
         "discover",
+        help="List supported agent CLIs detected on this machine.",
         allow_abbrev=False,
         description="List locally detected supported agent CLIs without starting them.",
     )
     discover.add_argument("--agent", choices=AGENT_IDS)
     profile = subcommands.add_parser(
         "profile",
+        help="Generate a routing policy for an installed agent.",
         allow_abbrev=False,
         description="Generate a schema-1 policy from an installed agent selection.",
     )
@@ -1044,6 +1067,7 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument("--allow-cross-vendor", action="store_true")
     subcommands.add_parser(
         "select",
+        help="Interactively create and confirm a routing policy.",
         allow_abbrev=False,
         description=(
             "Interactively select and confirm a schema-3 policy on the controlling console."
@@ -1051,6 +1075,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     usage = subcommands.add_parser(
         "usage",
+        help="Manage opt-in aggregate-only usage accounting.",
         allow_abbrev=False,
         description="Manage opt-in aggregate-only native usage accounting.",
     )
@@ -1080,6 +1105,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     classify = subcommands.add_parser(
         "classify",
+        help="Classify a task from standard input.",
         allow_abbrev=False,
         description="Print the tier of a task read from standard input.",
     )
@@ -1095,6 +1121,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     example_policy = subcommands.add_parser(
         "example-policy",
+        help="Print a packaged policy example.",
         allow_abbrev=False,
         description="Print an installable reviewed policy example.",
     )
@@ -1103,6 +1130,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_preset_override_arguments(example_policy)
     review_preset = subcommands.add_parser(
         "review-preset",
+        help="Review every route in a packaged policy.",
         allow_abbrev=False,
         description="Review every task-free route in one packaged policy.",
     )
@@ -1111,12 +1139,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_preset_override_arguments(review_preset)
     review_cost_profile = subcommands.add_parser(
         "review-cost-profile",
+        help="Validate and fingerprint a cost profile.",
         allow_abbrev=False,
         description="Validate and fingerprint one task-free cost profile.",
     )
     review_cost_profile.add_argument("--cost-profile", required=True, type=Path)
     recommend = subcommands.add_parser(
         "recommend",
+        help="Recommend a route without starting a vendor process.",
         allow_abbrev=False,
         description="Recommend or abstain without starting a vendor process.",
     )
@@ -1130,7 +1160,16 @@ def build_parser() -> argparse.ArgumentParser:
         ("route", "Select and print a command for a task read from standard input."),
         ("run", "Select and start a command for a task read from standard input."),
     ):
-        native = subcommands.add_parser(name, allow_abbrev=False, description=description)
+        native = subcommands.add_parser(
+            name,
+            help=(
+                "Review the selected route for a task."
+                if name == "route"
+                else "Select, optionally review, and run one agent."
+            ),
+            allow_abbrev=False,
+            description=description,
+        )
         native.add_argument("--policy", type=Path)
         native.add_argument("--source-vendor")
         native.add_argument("--source-profile")
@@ -1170,6 +1209,14 @@ def build_parser() -> argparse.ArgumentParser:
                 help="Bind an explicit custom route to its observed executable identity.",
             )
             native.add_argument("--ack-route-fingerprint")
+            native.add_argument(
+                "--review",
+                action="store_true",
+                help=(
+                    "Show the selected task-free route on the controlling terminal and "
+                    "ask before starting it; no copied fingerprint is required."
+                ),
+            )
             native.add_argument("--confirm-endpoint-transition", action="store_true")
             native.add_argument(
                 "--suggest-escalation",
@@ -1183,6 +1230,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     render = subcommands.add_parser(
         "render",
+        help="Render a workflow route from a policy.",
         allow_abbrev=False,
         description="Render the command of a policy route named by a workflow descriptor.",
     )
@@ -1191,6 +1239,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     delegate = subcommands.add_parser(
         "delegate",
+        help="Use advanced reviewed delegation workflows.",
         allow_abbrev=False,
         description="Compile a reviewable role-delegation policy.",
     )
@@ -1245,6 +1294,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     api = subcommands.add_parser(
         "v2",
+        help="Use advanced declarative API-runtime routing.",
         allow_abbrev=False,
         description="Select a declarative API route served by an external runtime.",
     )
@@ -2087,6 +2137,53 @@ def route_from_standard_input(
     return 0
 
 
+def _confirm_legacy_route_on_console(
+    route: Route,
+    tier: Tier,
+    policy: RoutingPolicy,
+    executable_observation: ExecutableObservation | None,
+) -> bool:
+    """Review and confirm one already-selected task-free route on the TTY."""
+
+    fingerprint = _legacy_route_fingerprint(route, policy, executable_observation)
+    delivery = "argv" if uses_argv_task_delivery(route.command) else "stdin"
+    try:
+        with open(os.ctermid(), "r+", encoding="utf-8", buffering=1) as console:
+            print("Selected route", file=console)
+            print(f"  Vendor: {route.vendor}", file=console)
+            print(f"  Tier: {tier}", file=console)
+            print(f"  Route: {route.route_id}", file=console)
+            print(f"  Task delivery: {delivery}", file=console)
+            print(f"  Command: {json.dumps(list(route.command), ensure_ascii=True)}", file=console)
+            print(f"  Fingerprint: {fingerprint}", file=console)
+            if delivery == "argv":
+                print(
+                    "  Notice: the task will be visible in local process arguments.",
+                    file=console,
+                )
+            console.write("Run this route? [y/N] ")
+            answer = console.readline(32)
+    except (OSError, UnicodeError):
+        raise InvalidInputError() from None
+    return answer.strip().lower() in {"y", "yes"}
+
+
+def _confirm_native_descriptor_on_console(rendered: str) -> bool:
+    """Confirm one task-free native descriptor without a second policy read."""
+
+    try:
+        payload = json.loads(rendered)
+        review = json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True)
+        with open(os.ctermid(), "r+", encoding="utf-8", buffering=1) as console:
+            print("Selected native route", file=console)
+            print(review, file=console)
+            console.write("Run this route? [y/N] ")
+            answer = console.readline(32)
+    except (OSError, TypeError, UnicodeError, ValueError):
+        raise InvalidInputError() from None
+    return answer.strip().lower() in {"y", "yes"}
+
+
 def run_from_standard_input(
     policy_path: Path | None,
     source_vendor: str | None,
@@ -2104,6 +2201,7 @@ def run_from_standard_input(
     use_default_usage_store: bool = False,
     suggest_escalation: bool = False,
     bind_executable_identity: bool = False,
+    interactive_review: bool = False,
 ) -> int:
     """Run a selected native command without a shell or output capture."""
     _load_agent_family()
@@ -2122,6 +2220,9 @@ def run_from_standard_input(
             overrides,
         )
     except InvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    if interactive_review and acknowledged_fingerprint is not None:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
     if bind_executable_identity and (policy_path is None or automatic_policy is not None):
@@ -2145,6 +2246,9 @@ def run_from_standard_input(
         ) and version != 3:
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
+        if suggest_escalation and version != 1:
+            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+            return 2
         if version == 2:
             return _native_v2_run(
                 dispatched,
@@ -2152,6 +2256,7 @@ def run_from_standard_input(
                 source_profile,
                 acknowledged_fingerprint,
                 explicit_tier,
+                interactive_review,
             )
         if version == 3:
             _load_native_family()
@@ -2166,6 +2271,7 @@ def run_from_standard_input(
                 usage_rework,
                 usage_escalation,
                 use_default_usage_store,
+                interactive_review,
             )
     else:
         dispatched = None
@@ -2187,7 +2293,7 @@ def run_from_standard_input(
     # route가 검토한 그 경로까지 묶으려면 호출자가 선택적으로 지문을 넘겨야 한다.
     # 사용자 소유 정책이나 패키지 프리셋은 기존처럼 지문을 필수로 요구한다.
     if (policy_path is not None or automatic_policy is not None) and (
-        acknowledged_fingerprint is None
+        acknowledged_fingerprint is None and not interactive_review
     ):
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
@@ -2226,6 +2332,19 @@ def run_from_standard_input(
         ):
             print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
             return 6
+        if interactive_review and not _confirm_legacy_route_on_console(
+            route,
+            selected_tier,
+            policy,
+            executable_observation,
+        ):
+            print(json.dumps({"error": "execution_cancelled"}), file=sys.stderr)
+            return 1
+        if interactive_review and policy_path is None:
+            refreshed_route = _resolve_default_route_executable(route)
+            if refreshed_route.command != route.command:
+                print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+                return 6
         # 치환은 spawn 직전에 한 번만 한다. 검토 출력과 지문은 이미 치환 전
         # 명령으로 계산되었으므로 태스크가 그 둘에 들어가지 않는다.
         argv = route.command
@@ -2284,6 +2403,7 @@ def run_from_standard_input(
             selected_tier,
             effective_source_vendor,
             bind_executable_identity,
+            policy_path is None,
         )
     return status
 
@@ -2337,6 +2457,7 @@ def _native_v2_run(
     source_profile: str | None,
     acknowledged_fingerprint: str | None,
     explicit_tier: Tier | None,
+    interactive_review: bool = False,
 ) -> int:
     _load_native_family()
     if source_vendor is None or source_profile is None or not isinstance(policy, NativePolicyV2):
@@ -2349,7 +2470,7 @@ def _native_v2_run(
     except V2ValidationError:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
-    if acknowledged_fingerprint is None:
+    if acknowledged_fingerprint is None and not interactive_review:
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
     try:
@@ -2372,12 +2493,23 @@ def _native_v2_run(
     except V2ValidationError:
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
-    if acknowledged_fingerprint != compiled.route_fingerprint:
+    if (
+        acknowledged_fingerprint is not None
+        and acknowledged_fingerprint != compiled.route_fingerprint
+    ):
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
     try:
         first_observation = observe_executable(compiled.executable)
+        if interactive_review and not _confirm_native_descriptor_on_console(
+            compiled.canonical_descriptor_bytes.decode("ascii")
+        ):
+            print(json.dumps({"error": "execution_cancelled"}), file=sys.stderr)
+            return 1
         completed = run_native_v2(compiled, task.delivery_bytes(), first_observation)
+    except InvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
     except ChildStatusLostError:
         print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
         return EXECUTOR_FAILED_EXIT_CODE
@@ -2401,6 +2533,7 @@ def _execute_native_v3(
     usage_rework: bool,
     usage_escalation: bool,
     use_default_usage_store: bool,
+    interactive_review: bool = False,
 ) -> int:
     """Apply schema-3 execution gates without reading task input early."""
     _load_native_family()
@@ -2437,7 +2570,7 @@ def _execute_native_v3(
     if "endpoint_transition" in selected.required_confirmations and not confirm_endpoint_transition:
         print(json.dumps({"error": "confirmation_required"}), file=sys.stderr)
         return 5
-    if not acknowledged_fingerprint:
+    if not acknowledged_fingerprint and not interactive_review:
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
     try:
@@ -2461,9 +2594,21 @@ def _execute_native_v3(
     except (OSError, V2ValidationError, ValueError):
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
-    if acknowledged_fingerprint != review["route_fingerprint"]:
+    if (
+        acknowledged_fingerprint is not None
+        and acknowledged_fingerprint != review["route_fingerprint"]
+    ):
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
+    try:
+        if interactive_review and not _confirm_native_descriptor_on_console(
+            json.dumps(review, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        ):
+            print(json.dumps({"error": "execution_cancelled"}), file=sys.stderr)
+            return 1
+    except InvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
     try:
         task = read_validated_task_v2(getattr(sys.stdin, "buffer", sys.stdin))
     except V2ValidationError:
@@ -2519,6 +2664,7 @@ def _native_v3_run(
     usage_rework: bool,
     usage_escalation: bool,
     use_default_usage_store: bool,
+    interactive_review: bool = False,
 ) -> int:
     """Preserve the ordinary schema-3 run contract and purpose binding."""
     return _execute_native_v3(
@@ -2534,6 +2680,7 @@ def _native_v3_run(
         usage_rework=usage_rework,
         usage_escalation=usage_escalation,
         use_default_usage_store=use_default_usage_store,
+        interactive_review=interactive_review,
     )
 
 
@@ -2636,14 +2783,19 @@ def render_workflow_route(policy_path: Path, descriptor_path: Path) -> int:
     return 0
 
 
-def main(
+def _main_json(
     argv: Sequence[str] | None = None,
     *,
     use_default_usage_store: bool = False,
 ) -> int:
     """Classify, route, render, or run a native command from explicit input."""
+    raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    parser = build_parser()
+    if not raw_arguments:
+        parser.print_help()
+        return 0
     try:
-        arguments = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+        arguments = parser.parse_args(raw_arguments)
     except InvalidInputError:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
@@ -2826,6 +2978,7 @@ def main(
             use_default_usage_store,
             arguments.suggest_escalation,
             arguments.bind_executable_identity,
+            arguments.review,
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
@@ -2901,3 +3054,122 @@ def main(
         )
     print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
     return 2
+
+
+_HUMAN_ERROR_ACTIONS = {
+    "invalid_input": "Check the command help and try again.",
+    "invalid_task": "Provide one non-empty task within the documented input limit.",
+    "unsupported_route": "Choose an installed supported vendor or review the policy.",
+    "executor_unavailable": "Install or repair the selected vendor CLI, then retry.",
+    "executor_failed": "Inspect the vendor output above and retry deliberately.",
+    "route_fingerprint_mismatch": "Review the route again before running it.",
+    "execution_cancelled": "No vendor process was started.",
+}
+
+
+def _output_preference(arguments: Sequence[str]) -> tuple[list[str], bool | None]:
+    """Remove global output flags without interpreting caller values."""
+
+    cleaned: list[str] = []
+    selected: bool | None = None
+    after_separator = False
+    for argument in arguments:
+        if argument == "--":
+            after_separator = True
+            cleaned.append(argument)
+            continue
+        if not after_separator and argument in {"--json", "--human"}:
+            wanted = argument == "--human"
+            if selected is not None:
+                raise InvalidInputError()
+            selected = wanted
+            continue
+        cleaned.append(argument)
+    return cleaned, selected
+
+
+def _render_human_json(payload: object, command: str | None) -> None:
+    if not isinstance(payload, dict):
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    if command == "classify" and isinstance(payload.get("tier"), str):
+        print(f"Tier: {payload['tier']}")
+        if isinstance(payload.get("reason_code"), str):
+            print(f"Reason: {payload['reason_code']}")
+        return
+    if command == "route" and isinstance(payload.get("route"), str):
+        print("Selected route")
+        for label, field in (
+            ("Vendor", "vendor"),
+            ("Tier", "tier"),
+            ("Route", "route"),
+            ("Task delivery", "task_delivery"),
+            ("Fingerprint", "route_fingerprint"),
+        ):
+            if field in payload:
+                print(f"  {label}: {payload[field]}")
+        if isinstance(payload.get("command"), list):
+            print(
+                "  Command: "
+                + json.dumps(payload["command"], ensure_ascii=True, separators=(",", ":"))
+            )
+        return
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _render_human_error(rendered: str) -> None:
+    try:
+        payload = json.loads(rendered)
+    except (TypeError, ValueError):
+        print(rendered, file=sys.stderr, end="" if rendered.endswith("\n") else "\n")
+        return
+    code = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(code, str):
+        print(rendered, file=sys.stderr, end="" if rendered.endswith("\n") else "\n")
+        return
+    print(f"weightclass failed: {code}", file=sys.stderr)
+    print(
+        f"Next: {_HUMAN_ERROR_ACTIONS.get(code, 'Check the command help and retry.')}",
+        file=sys.stderr,
+    )
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    use_default_usage_store: bool = False,
+) -> int:
+    """Select JSON for automation and concise human output for a terminal."""
+
+    raw_arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        arguments, explicit_human = _output_preference(raw_arguments)
+    except InvalidInputError:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
+    human = (
+        bool(getattr(sys.stdout, "isatty", lambda: False)())
+        if explicit_human is None
+        else explicit_human
+    )
+    command = arguments[0] if arguments and not arguments[0].startswith("-") else None
+    # Execution surfaces inherit vendor stdout/stderr directly. Capturing those
+    # streams to prettify router receipts would silently change the one-child
+    # foreground contract.
+    if not human or command in {"run", "delegate", "v2", "select"}:
+        return _main_json(arguments, use_default_usage_store=use_default_usage_store)
+
+    output = io.StringIO()
+    errors = io.StringIO()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+        status = _main_json(arguments, use_default_usage_store=use_default_usage_store)
+    rendered_output = output.getvalue()
+    rendered_error = errors.getvalue()
+    if rendered_output:
+        try:
+            _render_human_json(json.loads(rendered_output), command)
+        except (TypeError, ValueError):
+            print(rendered_output, end="" if rendered_output.endswith("\n") else "\n")
+    if rendered_error:
+        _render_human_error(rendered_error)
+    return status

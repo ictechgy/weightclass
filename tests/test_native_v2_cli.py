@@ -271,6 +271,39 @@ class NativeV2CliTests(unittest.TestCase):
             self.assertEqual(delivered, b"task")
             self.assertIs(actual_observation, observed)
 
+    def test_guided_run_confirms_compiled_route_without_copied_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_policy(directory)
+            observed = ExecutableObservation("/owned/fake", 1, 1, 0o100000, 0o100700, 0, 1, 1, True)
+            completed = Mock(returncode=0)
+            with (
+                patch.object(sys, "stdin", io.StringIO("task")),
+                patch("weightclass.cli.observe_executable", return_value=observed),
+                patch(
+                    "weightclass.cli._confirm_native_descriptor_on_console",
+                    return_value=True,
+                ) as confirmation,
+                patch("weightclass.cli.run_native_v2", return_value=completed) as spawn,
+            ):
+                exit_code = cli.main(
+                    [
+                        "run",
+                        "--review",
+                        "--policy",
+                        str(path),
+                        "--source-vendor",
+                        "codex",
+                        "--source-profile",
+                        "p",
+                        "--tier",
+                        "low",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        confirmation.assert_called_once()
+        spawn.assert_called_once()
+
     def test_lost_child_status_is_executor_failed_not_unavailable(self) -> None:
         """Breaks if a post-spawn wait-status loss is reported as a spawn failure."""
         expected = compile_native_v2(

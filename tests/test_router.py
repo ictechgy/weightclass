@@ -564,6 +564,118 @@ class PolicyRunBindingTests(unittest.TestCase):
         reader.assert_not_called()
         spawn.assert_not_called()
 
+    def test_interactive_review_runs_a_policy_without_a_copied_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            policy_path = self._policy(Path(temporary_directory))
+            completed = subprocess.CompletedProcess[bytes]((), 0)
+            with (
+                mock.patch(
+                    "weightclass.cli.read_task_from_standard_input",
+                    return_value="Fix a typo.",
+                ),
+                mock.patch.object(
+                    cli,
+                    "_confirm_legacy_route_on_console",
+                    return_value=True,
+                ) as confirmation,
+                mock.patch.object(
+                    cli,
+                    "run_owned_foreground",
+                    return_value=completed,
+                ) as spawn,
+            ):
+                exit_code = cli.run_from_standard_input(
+                    policy_path,
+                    "codex",
+                    interactive_review=True,
+                )
+
+        self.assertEqual(exit_code, 0)
+        confirmation.assert_called_once()
+        spawn.assert_called_once_with(
+            ("/bin/echo", "ok"),
+            b"Fix a typo.",
+            cleanup_grace_seconds=0,
+            terminate_grace_seconds=0,
+        )
+
+    def test_interactive_review_cancellation_starts_no_vendor(self) -> None:
+        errors = io.StringIO()
+        with (
+            mock.patch(
+                "weightclass.cli.read_task_from_standard_input",
+                return_value="private task",
+            ),
+            mock.patch.object(
+                cli,
+                "_confirm_legacy_route_on_console",
+                return_value=False,
+            ),
+            mock.patch.object(cli, "run_owned_foreground") as spawn,
+            contextlib.redirect_stderr(errors),
+        ):
+            exit_code = cli.run_from_standard_input(
+                None,
+                "codex",
+                interactive_review=True,
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "execution_cancelled"})
+        spawn.assert_not_called()
+
+    def test_interactive_review_and_copied_fingerprint_are_mutually_exclusive(self) -> None:
+        errors = io.StringIO()
+        with (
+            mock.patch("weightclass.cli.read_task_from_standard_input") as reader,
+            contextlib.redirect_stderr(errors),
+        ):
+            exit_code = cli.run_from_standard_input(
+                None,
+                "codex",
+                "sha256:" + "0" * 64,
+                interactive_review=True,
+            )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "invalid_input"})
+        reader.assert_not_called()
+
+    def test_guided_builtin_run_rechecks_the_resolved_path_after_confirmation(self) -> None:
+        errors = io.StringIO()
+        first = Route("codex-low", "codex", "", ("/first/codex", "-"), "low")
+        changed = Route("codex-low", "codex", "", ("/changed/codex", "-"), "low")
+        with (
+            mock.patch(
+                "weightclass.cli.read_task_from_standard_input",
+                return_value="Fix a typo.",
+            ),
+            mock.patch.object(
+                cli,
+                "_resolve_default_route_executable",
+                side_effect=(first, changed),
+            ),
+            mock.patch.object(
+                cli,
+                "_confirm_legacy_route_on_console",
+                return_value=True,
+            ),
+            mock.patch.object(cli, "run_owned_foreground") as spawn,
+            contextlib.redirect_stderr(errors),
+        ):
+            exit_code = cli.run_from_standard_input(
+                None,
+                "codex",
+                interactive_review=True,
+            )
+
+        self.assertEqual(exit_code, 6)
+        self.assertEqual(
+            json.loads(errors.getvalue()),
+            {"error": "route_fingerprint_mismatch"},
+        )
+        spawn.assert_not_called()
+
     def test_built_in_routes_still_run_without_an_acknowledgement(self) -> None:
         """Breaks if the requirement spreads to routes that live in code.
 
@@ -669,6 +781,28 @@ class TaskPlaceholderTests(unittest.TestCase):
                 path = self._policy(Path(directory), ["/bin/echo", argument])
                 with self.assertRaises(cli.InvalidInputError):
                     cli.load_routes(path)
+
+    def test_route_identifiers_reject_terminal_control_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = Path(directory) / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "routes": [
+                            {
+                                "id": "visible\x1b[8mconcealed",
+                                "vendor": "codex",
+                                "tier": "low",
+                                "command": ["/bin/echo"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(cli.InvalidInputError):
+                cli.load_routes(policy_path)
 
     def test_the_token_is_rejected_in_a_workflow_route(self) -> None:
         """Breaks if a workflow route can declare a slot nothing ever fills.
@@ -1758,6 +1892,36 @@ class CommandSurfaceTests(unittest.TestCase):
             with self.subTest(subcommand=subcommand):
                 self.assertIn(subcommand, result.stdout)
 
+    def test_bare_command_prints_help_successfully(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "weightclass"],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage: wclass", result.stdout)
+        self.assertIn("Select, optionally review, and run one agent.", result.stdout)
+
+    def test_global_output_flags_work_before_or_after_the_command(self) -> None:
+        human = _weightclass("--human", "classify", task="Fix a typo.")
+        machine = _weightclass("classify", "--json", task="Fix a typo.")
+
+        self.assertEqual(human.returncode, 0, human.stderr)
+        self.assertEqual(human.stdout, "Tier: low\n")
+        self.assertEqual(machine.returncode, 0, machine.stderr)
+        self.assertEqual(json.loads(machine.stdout), {"tier": "low"})
+
+    def test_conflicting_output_flags_fail_without_reading_task(self) -> None:
+        task = "private output-mode conflict"
+        result = _weightclass("--human", "classify", "--json", task=task)
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+        self.assertNotIn(task, result.stderr)
+
     def test_rejects_a_version_query_carrying_extra_arguments(self) -> None:
         """Breaks if --version exits successfully without validating the rest of argv."""
         accepted = subprocess.run(
@@ -1809,7 +1973,7 @@ class CommandSurfaceTests(unittest.TestCase):
             ),
             contextlib.redirect_stderr(errors),
         ):
-            exit_code = cli.main([])
+            exit_code = cli.main(["future-command"])
 
         self.assertEqual(exit_code, 2)
         self.assertEqual(json.loads(errors.getvalue()), {"error": "invalid_input"})
