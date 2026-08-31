@@ -232,6 +232,52 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
         self.assertIn("packages-dir: publish-staging", block)
         self.assertNotRegex(block, r"(?:\*\.whl|\*\.tar\.gz|dist/\*)")
 
+    def test_github_release_follows_successful_pypi_publication(self) -> None:
+        text = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+        block = text.split("\n  github-release:\n", 1)[1]
+        workflow_header = text.split("\njobs:\n", 1)[0]
+
+        self.assertLess(text.index("\n  publish:\n"), text.index("\n  github-release:\n"))
+        self.assertIn("contents: read", workflow_header)
+        self.assertNotIn("contents: write", workflow_header)
+        self.assertIn("needs: publish", block)
+        self.assertIn("contents: write", block.split("\n    steps:\n", 1)[0])
+        self.assertIn("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8", block)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", block)
+        self.assertIn('test "$GITHUB_REF_TYPE" = "tag"', block)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', block)
+        self.assertIn('release_notes=".github/release-notes/${GITHUB_REF_NAME}.md"', block)
+        self.assertIn('test -f "$release_notes"', block)
+        self.assertIn('test ! -L "$release_notes"', block)
+        self.assertIn('test -s "$release_notes"', block)
+        self.assertIn('test "$(wc -c < "$release_notes")" -le 100000', block)
+        self.assertIn('gh release view "$GITHUB_REF_NAME"', block)
+        self.assertIn('gh release create "$GITHUB_REF_NAME"', block)
+        for option in ("--verify-tag", '--notes-file "$release_notes"', "--latest"):
+            self.assertIn(option, block)
+        self.assertNotIn("--generate-notes", block)
+        self.assertIn("--json name", block)
+        self.assertIn("--json body", block)
+        self.assertIn("--json isDraft", block)
+        self.assertIn("--json isPrerelease", block)
+
+    def test_declared_version_has_reviewed_release_notes(self) -> None:
+        version_source = Path("src/weightclass/__init__.py").read_text(encoding="utf-8")
+        match = re.search(
+            r'^__version__ = "([0-9]+\.[0-9]+\.[0-9]+)"$',
+            version_source,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(match)
+        if match is None:
+            return
+
+        notes_path = Path(f".github/release-notes/v{match.group(1)}.md")
+        self.assertTrue(notes_path.is_file(), f"missing reviewed release notes: {notes_path}")
+        notes = notes_path.read_text(encoding="utf-8")
+        self.assertIn("## Highlights", notes)
+        self.assertIn("## Compatibility and safety", notes)
+
     def test_release_build_proves_the_tag_is_reachable_from_origin_main(self) -> None:
         """Breaks if a detached or unmerged tag can reach trusted publishing."""
         text = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
