@@ -22,7 +22,6 @@ if not __package__:
 from weightclass.process_context import ProcessGroupAnchor, wait_owned_child
 from weightclass.process_errors import ChildStatusLostError
 
-CAPTURE_POLL_SECONDS = 0.1
 CAPTURE_CLEANUP_SECONDS = 1.0
 
 
@@ -35,13 +34,14 @@ class CaptureResult:
     output_limited: bool
 
 
-def _close_stream(selector: selectors.BaseSelector, stream: BinaryIO | None) -> None:
+def _close_stream(selector: selectors.BaseSelector | None, stream: BinaryIO | None) -> None:
     if stream is None or stream.closed:
         return
-    try:
-        selector.unregister(stream)
-    except (KeyError, ValueError):
-        pass
+    if selector is not None:
+        try:
+            selector.unregister(stream)
+        except (KeyError, ValueError):
+            pass
     try:
         stream.close()
     except OSError:
@@ -69,10 +69,7 @@ def _bounded_reap(process: subprocess.Popen[str], anchor: ProcessGroupAnchor) ->
     except OSError:
         return
     except subprocess.TimeoutExpired:
-        try:
-            anchor.signal(signal.SIGKILL)
-        except (PermissionError, ProcessLookupError):
-            pass
+        anchor.signal(signal.SIGKILL)
     try:
         _wait_owned(process, anchor, timeout=CAPTURE_CLEANUP_SECONDS)
         return
@@ -140,7 +137,7 @@ def capture_text_process(
     if process.stdout is None or process.stderr is None:
         raise ValueError
     anchor = ProcessGroupAnchor.open(process)
-    selector = selectors.DefaultSelector()
+    selector: selectors.BaseSelector | None = None
     stdout = bytearray()
     stderr = bytearray()
     outputs = {process.stdout.fileno(): stdout, process.stderr.fileno(): stderr}
@@ -151,6 +148,7 @@ def capture_text_process(
     deadline = time.monotonic() + timeout_seconds
     streams = (process.stdin, process.stdout, process.stderr)
     try:
+        selector = selectors.DefaultSelector()
         for stream in (process.stdout, process.stderr):
             os.set_blocking(stream.fileno(), False)
             selector.register(stream, selectors.EVENT_READ, "output")
@@ -165,7 +163,7 @@ def capture_text_process(
             if remaining <= 0:
                 timed_out = True
                 break
-            events = selector.select(min(remaining, CAPTURE_POLL_SECONDS))
+            events = selector.select(remaining)
             for key, event_mask in events:
                 stream = cast(BinaryIO, key.fileobj)
                 if key.data == "input" and event_mask & selectors.EVENT_WRITE:
@@ -229,4 +227,5 @@ def capture_text_process(
         anchor.close()
         for cleanup_stream in streams:
             _close_stream(selector, cast(BinaryIO | None, cleanup_stream))
-        selector.close()
+        if selector is not None:
+            selector.close()

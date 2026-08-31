@@ -15,15 +15,23 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-SCHEMA_VERSION = 1
-WORKFLOWS = ("implementation", "review", "research", "diagnosis", "design")
-EVIDENCE_WORKFLOWS = WORKFLOWS[1:]
-BUILTIN_VENDORS = ("codex", "claude", "agy", "grok")
-ROLES = ("cheap", "advisor", "expensive")
+if TYPE_CHECKING:
+    from . import managed_contract as _managed_contract
+elif __package__:
+    from . import managed_contract as _managed_contract  # type: ignore[no-redef]
+else:
+    import managed_contract as _managed_contract  # type: ignore[import-not-found,no-redef]
+
+SCHEMA_VERSION = _managed_contract.SCHEMA_VERSION
+WORKFLOWS = _managed_contract.WORKFLOWS
+EVIDENCE_WORKFLOWS = _managed_contract.EVIDENCE_WORKFLOWS
+BUILTIN_VENDORS = _managed_contract.BUILTIN_VENDORS
+ROLES = _managed_contract.ROLES
+CONSULT_DEFAULT_TIMEOUT_SECONDS = _managed_contract.CONSULT_DEFAULT_TIMEOUT_SECONDS
+
 CAMPAIGN_GATE_METRICS = ("advised_rescue", "cheap_acceptance", "final_acceptance")
-CONSULT_DEFAULT_TIMEOUT_SECONDS = 5_400.0
 
 
 def _load_backend(backend: Any | None) -> Any:
@@ -276,7 +284,7 @@ def cli_check_main(argv: Sequence[str], *, _backend: Any | None = None) -> int:
         backend.advisory_preflight.check_local_capability(vendor, vendor) for vendor in vendors
     ]
     payload = {
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "event": "advisory_cli_check",
         "task_free": True,
         "task_bytes_sent": False,

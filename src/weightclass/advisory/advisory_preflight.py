@@ -160,17 +160,12 @@ def _bounded_command(command: Sequence[str]) -> tuple[int, bytes]:
 def _capture_bounded_command(process: subprocess.Popen[bytes]) -> tuple[int, bytes]:
     assert process.stdout is not None and process.stderr is not None
     anchor = ProcessGroupAnchor.open(process)
-    selector = selectors.DefaultSelector()
+    selector: selectors.BaseSelector | None = None
     payload = bytearray()
     deadline = time.monotonic() + PROBE_TIMEOUT_SECONDS
 
     def stop() -> None:
-        try:
-            anchor.signal(signal.SIGKILL)
-        except ChildStatusLostError:
-            raise
-        except OSError:
-            pass
+        anchor.signal(signal.SIGKILL)
         try:
             wait_owned_child(process, timeout=1.0)
         except ChildStatusLostError:
@@ -189,6 +184,7 @@ def _capture_bounded_command(process: subprocess.Popen[bytes]) -> tuple[int, byt
             threading.Thread(target=reap, name="wclass-preflight-reaper", daemon=True).start()
 
     try:
+        selector = selectors.DefaultSelector()
         for stream in (process.stdout, process.stderr):
             os.set_blocking(stream.fileno(), False)
             selector.register(stream, selectors.EVENT_READ)
@@ -225,7 +221,8 @@ def _capture_bounded_command(process: subprocess.Popen[bytes]) -> tuple[int, byt
         raise
     finally:
         anchor.close()
-        selector.close()
+        if selector is not None:
+            selector.close()
         for stream in (process.stdout, process.stderr):
             if not stream.closed:
                 stream.close()

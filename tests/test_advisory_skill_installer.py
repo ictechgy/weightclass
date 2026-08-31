@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import re
 import sys
 import tempfile
 import types
@@ -50,6 +51,15 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         self.assertIn("managed_runner_version_changed", skill)
         self.assertIn("managed_setup_busy", skill)
 
+    def test_install_skill_is_the_documented_vendor_path_exception(self) -> None:
+        agent_guide = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        skill_guide = (ROOT / "docs" / "advisory-skill.md").read_text(encoding="utf-8")
+
+        self.assertIn("sole vendor-recognized-path exception", agent_guide)
+        self.assertIn("sole vendor-recognized-path exception", skill_guide)
+        self.assertIn("historical bundle", skill_guide)
+        self.assertIn("compatibility ledger", skill_guide)
+
     def test_published_0178_bundle_is_a_safe_upgrade_source(self) -> None:
         installer = load_installer()
         self.assertEqual(
@@ -73,6 +83,25 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
             set(installer.RELEASE_0190_BUNDLE_FILE_SHA256),
             set(installer.EXPECTED_FILES),
         )
+        ledger_names = (
+            "LEGACY_FILE_SHA256",
+            "PREVIOUS_BUNDLE_FILE_SHA256",
+            "ADDITIONAL_PREVIOUS_BUNDLE_FILE_SHA256",
+            "LATEST_PREVIOUS_BUNDLE_FILE_SHA256",
+            "CURRENT_PREVIOUS_BUNDLE_FILE_SHA256",
+            "NEXT_PREVIOUS_BUNDLE_FILE_SHA256",
+            "FINAL_PREVIOUS_BUNDLE_FILE_SHA256",
+            "RELEASE_0176_BUNDLE_FILE_SHA256",
+            "RELEASE_0177_BUNDLE_FILE_SHA256",
+            "RELEASE_0178_BUNDLE_FILE_SHA256",
+            "RELEASE_0179_BUNDLE_FILE_SHA256",
+            "RELEASE_0180_BUNDLE_FILE_SHA256",
+            "RELEASE_0190_BUNDLE_FILE_SHA256",
+        )
+        for name in ledger_names:
+            with self.subTest(name=name):
+                for digest in getattr(installer, name).values():
+                    self.assertRegex(digest, re.compile(r"[0-9a-f]{64}\Z"))
 
     def test_install_both_is_private_exact_and_idempotent(self) -> None:
         installer = load_installer()

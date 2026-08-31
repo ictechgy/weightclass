@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -181,6 +182,53 @@ class ManagedVerifierHardeningTests(unittest.TestCase):
 
         self.assertIsNone(payload)
 
+    def test_git_capture_selector_failure_stops_child_and_closes_stdout(self) -> None:
+        process = mock.Mock(spec=subprocess.Popen)
+        process.stdout = mock.Mock()
+        process.stdout.closed = False
+        with (
+            mock.patch(
+                "weightclass.advisory.managed_verify.subprocess.Popen",
+                return_value=process,
+            ),
+            mock.patch(
+                "weightclass.advisory.managed_verify.selectors.DefaultSelector",
+                side_effect=OSError(),
+            ),
+            mock.patch.object(managed_verify, "_stop_process") as stop_process,
+        ):
+            payload = managed_verify._git_bounded_stdout(32, "rev-parse", "HEAD")
+
+        self.assertIsNone(payload)
+        stop_process.assert_called_once_with(process)
+        process.stdout.close.assert_called_once_with()
+
+    def test_git_capture_timeout_stops_unreaped_group_without_polling(self) -> None:
+        process = mock.Mock(spec=subprocess.Popen)
+        process.stdout = mock.Mock()
+        process.stdout.closed = False
+        process.stdout.fileno.return_value = 123
+        selector = mock.Mock()
+        selector.get_map.return_value = {123: object()}
+        selector.select.return_value = []
+        with (
+            mock.patch(
+                "weightclass.advisory.managed_verify.subprocess.Popen",
+                return_value=process,
+            ),
+            mock.patch(
+                "weightclass.advisory.managed_verify.selectors.DefaultSelector",
+                return_value=selector,
+            ),
+            mock.patch("weightclass.advisory.managed_verify.os.set_blocking"),
+            mock.patch.object(managed_verify, "_stop_process") as stop_process,
+        ):
+            payload = managed_verify._git_bounded_stdout(32, "rev-parse", "HEAD")
+
+        self.assertIsNone(payload)
+        stop_process.assert_called_once_with(process)
+        process.poll.assert_not_called()
+
     def test_copied_standalone_verifier_runs_a_legitimate_small_blob(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = self._repository(Path(directory))
@@ -206,6 +254,75 @@ class ManagedVerifierHardeningTests(unittest.TestCase):
             )
 
         self.assertEqual(completed.returncode, 42, completed.stdout + completed.stderr)
+
+    def test_project_verifier_does_not_inherit_unrelated_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = self._repository(Path(directory))
+            verifier = repository / ".weightclass" / "verify"
+            verifier.parent.mkdir()
+            verifier.write_text(
+                "#!/bin/sh\n"
+                'test -z "${WCLASS_SYNTHETIC_CREDENTIAL+x}" || exit 9\n'
+                'test "$WCLASS_ADVISORY_WORKFLOW" = implementation\n',
+                encoding="utf-8",
+            )
+            verifier.chmod(0o700)
+            self._commit(repository, "environment verifier")
+            previous = Path.cwd()
+            try:
+                os.chdir(repository)
+                with mock.patch.dict(
+                    os.environ,
+                    {"WCLASS_SYNTHETIC_CREDENTIAL": "must-not-reach-verifier"},
+                ):
+                    returncode = managed_verify.main()
+            finally:
+                os.chdir(previous)
+
+        self.assertEqual(returncode, 0)
+
+    def test_project_verifier_timeout_kills_same_group_descendant(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = self._repository(Path(directory))
+            sentinel = Path(directory) / "verifier-descendant-survived"
+            verifier = repository / ".weightclass" / "verify"
+            verifier.parent.mkdir()
+            verifier.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "from pathlib import Path\n"
+                "import time\n"
+                "if os.fork() == 0:\n"
+                "    time.sleep(1.2)\n"
+                f"    Path({str(sentinel)!r}).write_text('survived', encoding='utf-8')\n"
+                "    os._exit(0)\n"
+                "time.sleep(60)\n",
+                encoding="utf-8",
+            )
+            verifier.chmod(0o700)
+            self._commit(repository, "timeout verifier")
+            previous = Path.cwd()
+            started = time.monotonic()
+            output = io.StringIO()
+            try:
+                os.chdir(repository)
+                with (
+                    mock.patch.object(managed_verify, "TIMEOUT_SECONDS", 0.8),
+                    contextlib.redirect_stdout(output),
+                ):
+                    returncode = managed_verify.main()
+            finally:
+                os.chdir(previous)
+
+            self.assertLess(time.monotonic() - started, 2.0)
+            time.sleep(1.4)
+            self.assertFalse(sentinel.exists())
+
+        self.assertEqual(returncode, 1)
+        self.assertEqual(
+            output.getvalue().strip(),
+            "verification failed: committed verifier could not run",
+        )
 
 
 if __name__ == "__main__":

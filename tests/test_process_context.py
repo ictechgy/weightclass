@@ -84,8 +84,12 @@ class ProcessGroupAnchorTests(unittest.TestCase):
             anchor.signal(signal.SIGKILL)
             anchor.close()
 
-        self.assertEqual(observe.call_count, 2)
-        signal_group.assert_called_once_with(123, signal.SIGKILL)
+        self.assertEqual(observe.call_count, 1)
+        signal_group.assert_called_once_with(
+            123,
+            signal.SIGKILL,
+            ignore_permission_error=True,
+        )
         exit_queue.close.assert_called_once_with()
 
     def test_immediate_echild_releases_the_group_without_signaling(self) -> None:
@@ -104,6 +108,47 @@ class ProcessGroupAnchorTests(unittest.TestCase):
             process_context.ProcessGroupAnchor.open(process)
 
         signal_group.assert_not_called()
+
+    def test_live_leader_permission_denial_is_not_ignored(self) -> None:
+        anchor = process_context.ProcessGroupAnchor(123, None)
+        with (
+            patch.object(process_context, "observe_leader_exit", return_value=False),
+            patch("weightclass.process_context.os.killpg", side_effect=PermissionError()),
+            self.assertRaises(PermissionError),
+        ):
+            anchor.signal(signal.SIGKILL)
+
+    def test_exited_leader_permission_denial_is_tolerated(self) -> None:
+        anchor = process_context.ProcessGroupAnchor(123, None)
+        with (
+            patch.object(process_context, "observe_leader_exit", return_value=True),
+            patch("weightclass.process_context.os.killpg", side_effect=PermissionError()),
+        ):
+            anchor.signal(signal.SIGKILL)
+
+    def test_permission_denial_after_leader_exit_race_is_tolerated(self) -> None:
+        anchor = process_context.ProcessGroupAnchor(123, None)
+        with (
+            patch.object(
+                process_context,
+                "observe_leader_exit",
+                side_effect=(False, True),
+            ),
+            patch("weightclass.process_context.os.killpg", side_effect=PermissionError()),
+        ):
+            anchor.signal(signal.SIGKILL)
+
+    def test_observed_leader_exit_remains_repeatable_after_one_shot_event(self) -> None:
+        anchor = process_context.ProcessGroupAnchor(123, None)
+        with patch.object(
+            process_context,
+            "observe_leader_exit",
+            side_effect=(True, AssertionError("one-shot event consumed twice")),
+        ) as observe:
+            self.assertTrue(anchor.observe_leader_exit())
+            self.assertTrue(anchor.observe_leader_exit())
+
+        observe.assert_called_once_with(123, None)
 
 
 if __name__ == "__main__":

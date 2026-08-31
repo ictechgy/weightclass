@@ -24,7 +24,6 @@ from weightclass.process_errors import ChildStatusLostError
 
 SAFE_GIT_OPTIONS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 READ_CHUNK_BYTES = 65_536
-POLL_SECONDS = 0.1
 REAP_SECONDS = 1.0
 
 
@@ -77,8 +76,8 @@ def _terminate(process: subprocess.Popen[bytes], anchor: ProcessGroupAnchor) -> 
         anchor.signal(signal.SIGKILL)
     except ChildStatusLostError as error:
         raise SafeGitError("status_lost") from error
-    except OSError:
-        pass
+    except OSError as error:
+        raise SafeGitError("termination_failed") from error
     try:
         wait_owned_child(process, timeout=REAP_SECONDS)
     except ChildStatusLostError as error:
@@ -127,7 +126,7 @@ def run(
     except ChildStatusLostError as error:
         raise SafeGitError("status_lost") from error
     assert process.stdout is not None and process.stderr is not None
-    selector = selectors.DefaultSelector()
+    selector: selectors.BaseSelector | None = None
     stdout = bytearray()
     stderr = bytearray()
     outputs = {
@@ -136,6 +135,7 @@ def run(
     }
     deadline = time.monotonic() + timeout_seconds
     try:
+        selector = selectors.DefaultSelector()
         for stream in (process.stdout, process.stderr):
             os.set_blocking(stream.fileno(), False)
             selector.register(stream, selectors.EVENT_READ)
@@ -144,7 +144,7 @@ def run(
             if remaining <= 0:
                 _terminate(process, anchor)
                 raise SafeGitError("timed_out")
-            for key, _ in selector.select(min(remaining, POLL_SECONDS)):
+            for key, _ in selector.select(remaining):
                 try:
                     chunk = os.read(key.fd, READ_CHUNK_BYTES)
                 except (BlockingIOError, InterruptedError):
@@ -182,7 +182,8 @@ def run(
         raise
     finally:
         anchor.close()
-        selector.close()
+        if selector is not None:
+            selector.close()
         for stream in (process.stdout, process.stderr):
             if not stream.closed:
                 stream.close()

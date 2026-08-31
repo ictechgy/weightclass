@@ -10,6 +10,22 @@ from pathlib import Path
 
 
 class ManagedCliBoundaryTests(unittest.TestCase):
+    def test_parser_and_service_share_one_contract_module(self) -> None:
+        from weightclass.advisory import managed_advisory, managed_cli, managed_contract
+
+        for name in (
+            "SCHEMA_VERSION",
+            "WORKFLOWS",
+            "EVIDENCE_WORKFLOWS",
+            "BUILTIN_VENDORS",
+            "ROLES",
+            "CONSULT_DEFAULT_TIMEOUT_SECONDS",
+        ):
+            with self.subTest(name=name):
+                expected = getattr(managed_contract, name)
+                self.assertEqual(getattr(managed_cli, name), expected)
+                self.assertEqual(getattr(managed_advisory, name), expected)
+
     def test_managed_help_parses_without_loading_service_backend(self) -> None:
         program = """
 import json
