@@ -451,9 +451,9 @@ WORKSPACE_PREFIXES = (
 # 우리는 모른다.
 #
 # 에이전트 CLI 가 동작하는 데 필요한 것과, 그 CLI 자신의 자격증명만 남긴다.
-# Codex 실행이 ANTHROPIC_API_KEY 를 볼 이유는 없지만 둘을 구별할 방법이
-# 없으므로 양쪽 벤더의 접두사를 모두 통과시킨다. AWS, GitHub, 데이터베이스,
-# 사내 시스템의 자격증명은 어느 쪽도 필요로 하지 않으므로 떨군다.
+# 실행 파일 이름으로 아는 벤더 하나의 접두사만 통과시킨다. 모르는 실행 파일은
+# 기본 접두사가 없고, 필요한 정확한 변수 이름을 검토 후 별도로 추가해야 한다.
+# AWS, GitHub, 데이터베이스, 사내 시스템 자격증명은 기본 목록에서 제외한다.
 CHILD_ENV_NAMES = frozenset(
     {
         "PATH",
@@ -4600,6 +4600,26 @@ def attempt(
     return record, verify_output, transient
 
 
+def read_task_from_standard_input() -> str:
+    """Read one bounded UTF-8 task from an inherited anonymous input pipe."""
+
+    stream = getattr(sys.stdin, "buffer", sys.stdin)
+    try:
+        payload = stream.read(MAX_TASK_FILE_BYTES + 1)
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8", errors="strict")
+        if not isinstance(payload, bytes) or not payload or len(payload) > MAX_TASK_FILE_BYTES:
+            raise TaskInputError()
+        task = payload.decode("utf-8", errors="strict")
+    except TaskInputError:
+        raise
+    except (OSError, UnicodeError, TypeError, ValueError):
+        raise TaskInputError() from None
+    if not task.strip():
+        raise TaskInputError()
+    return task
+
+
 def _bounded_provider_integer(value: str) -> int:
     """Bound child-controlled JSON integers on every supported Python."""
 
@@ -4628,7 +4648,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--vendor", default="unknown", help="task-free vendor label for receipts")
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--repo", type=Path)
-    parser.add_argument("--task-file", type=Path)
+    task_input = parser.add_mutually_exclusive_group()
+    task_input.add_argument("--task-file", type=Path)
+    task_input.add_argument(
+        "--task-stdin",
+        action="store_true",
+        help="read the task from an inherited anonymous stdin pipe",
+    )
     parser.add_argument("--cheap", help="exact command for the cheap route")
     parser.add_argument("--expensive", help="exact command for the escalation route")
     parser.add_argument(
@@ -4830,7 +4856,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         name
         for name, value in (
             ("--repo", arguments.repo),
-            ("--task-file", arguments.task_file),
+            (
+                "--task-input",
+                arguments.task_file
+                if arguments.task_file is not None
+                else (True if arguments.task_stdin else None),
+            ),
             ("--cheap", arguments.cheap),
             ("--expensive", arguments.expensive),
             ("--verify", arguments.verify),
@@ -4988,11 +5019,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--prefer-prices needs --prices; there is no table to price from")
 
     # 모든 task-free 설정과 campaign 결속이 성공한 뒤에만 task 에 접근한다.
-    task_file = arguments.task_file.expanduser()
     try:
-        task = read_task_file(task_file, require_private=True)
+        task = (
+            read_task_file(arguments.task_file.expanduser(), require_private=True)
+            if arguments.task_file is not None
+            else read_task_from_standard_input()
+        )
     except TaskInputError:
-        parser.error("--task-file is invalid")
+        parser.error(
+            "--task-file is invalid" if arguments.task_file is not None else "task input is invalid"
+        )
     if arguments.workflow != "implementation":
         try:
             task = build_evidence_prompt(task, arguments.workflow)

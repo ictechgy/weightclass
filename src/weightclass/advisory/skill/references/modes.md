@@ -2,6 +2,11 @@
 
 Choose the narrowest mode matching the requested deliverable.
 
+`review`, `research`, `diagnosis`, and `design` use stateless `ask` by default.
+They need a prospective verifier only when the user explicitly requests a
+measured campaign. `implementation` remains campaign-only because it can produce
+a patch and therefore needs prospectively fixed acceptance.
+
 | Mode | Use for | Prospective verifier should establish |
 | --- | --- | --- |
 | `implementation` | Source or documentation changes that produce a patch | Focused behavior fails at baseline and passes after the patch; unrelated checks remain healthy |
@@ -14,8 +19,11 @@ Evidence modes are read-only. Claude executors use `dontAsk` with only Read,
 Glob, and Grep plus a task-free JSON Schema; their advisor remains in plan
 mode. Codex executors use a read-only sandbox. Any tracked, untracked, ignored, or
 known agent-scaffolding write rejects the attempt. The runner supplies the
-complete closed union of the four mode schemas to Claude and then enforces the
-exact selected mode again in its local byte-bounded parser.
+selected workflow schema to the provider and then enforces that exact mode
+again in its local byte-bounded parser.
+
+The Skill manifest's `schema_version` identifies the bundle manifest format;
+it is independent of campaign, evidence, native-routing, and protocol schemas.
 
 Schema validity proves bounded structure only. For design, aesthetic quality
 and human preference remain outside a mechanical verifier. For research, this

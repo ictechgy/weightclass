@@ -533,6 +533,74 @@ def dispatch_main(argv: Sequence[str], *, _backend: Any | None = None) -> int:
         return 2
 
 
+def dispatch_stdin_main(argv: Sequence[str], *, _backend: Any | None = None) -> int:
+    """Dispatch a campaign task from stdin without creating a task pathname."""
+
+    parser = argparse.ArgumentParser(prog="wclass-advisory campaign run", allow_abbrev=False)
+    parser.add_argument("--state-root", type=Path)
+    parser.add_argument("--repo", required=True, type=Path)
+    parser.add_argument("--vendor", required=True)
+    parser.add_argument("--workflow", choices=WORKFLOWS, default="implementation")
+    parser.add_argument("--confirm-task-egress", action="store_true", required=True)
+    parser.add_argument("--confirm-provider-egress", action="store_true")
+    arguments = parser.parse_args(argv)
+    backend = _load_backend(_backend)
+    provider_confirmation = _error_type(backend, "ProviderConfirmationRequiredError")
+    provider_conformance = _error_type(backend, "ProviderConformanceError")
+    provider_capability = _error_type(backend, "ProviderCapabilityError")
+    campaign_lane = _error_type(backend.advisory_orchestration, "CampaignLaneError")
+    runner_changed = _error_type(backend, "RunnerVersionChangedError")
+    managed_preflight = _error_type(backend, "ManagedPreflightError")
+    managed_error = _error_type(backend, "ManagedAdvisoryError")
+    try:
+        root = backend._root(arguments.state_root)
+        return _exit_code(
+            backend.dispatch(
+                root,
+                repo=arguments.repo.expanduser().resolve(),
+                task_file=None,
+                task_stream=getattr(sys.stdin, "buffer", sys.stdin),
+                vendors=backend._selected_vendors(root, arguments.vendor),
+                workflow=arguments.workflow,
+                confirm_task_egress=arguments.confirm_task_egress,
+                confirm_provider_egress=arguments.confirm_provider_egress,
+            )
+        )
+    except provider_confirmation:
+        print(json.dumps({"error": "managed_provider_confirmation_required"}), file=sys.stderr)
+        return 2
+    except provider_conformance:
+        print(json.dumps({"error": "managed_provider_preflight_failed"}), file=sys.stderr)
+        return 2
+    except provider_capability as error:
+        print(json.dumps(_provider_capability_payload(error), sort_keys=True), file=sys.stderr)
+        return 2
+    except campaign_lane as error:
+        print(
+            json.dumps({"error": backend.advisory_orchestration.campaign_lane_error_code(error)}),
+            file=sys.stderr,
+        )
+        return 2
+    except runner_changed:
+        print(json.dumps({"error": "managed_runner_version_changed"}), file=sys.stderr)
+        return 2
+    except managed_preflight as error:
+        print(
+            json.dumps(
+                {
+                    "error": "managed_dispatch_rejected",
+                    "reason_code": _error_code(error),
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+    except (OSError, managed_error):
+        print(json.dumps({"error": "managed_dispatch_rejected"}), file=sys.stderr)
+        return 2
+
+
 def campaign_gate_main(argv: Sequence[str], *, _backend: Any | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wclass-advisory campaign-gate", allow_abbrev=False)
     parser.add_argument("--state-root", type=Path)
@@ -680,6 +748,7 @@ for _entrypoint_name in (
     "review_main",
     "consult_main",
     "dispatch_main",
+    "dispatch_stdin_main",
     "campaign_gate_main",
     "status_main",
     "prune_main",

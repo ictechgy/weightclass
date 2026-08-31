@@ -303,15 +303,12 @@ def _regular_bytes_at(root_fd: int, relative: str) -> bytes:
         os.close(parent_fd)
 
 
-def _exact_bundle_at(
-    parent_fd: int,
-    destination_name: str,
+def _exact_bundle_fd(
+    root_fd: int,
     expected_files: tuple[str, ...],
     expected_sha256: dict[str, str],
 ) -> bool:
-    root_fd = -1
     try:
-        root_fd = _open_directory(destination_name, dir_fd=parent_fd)
         expected_entries = {Path(relative).parts[0] for relative in expected_files}
         if set(os.listdir(root_fd)) != expected_entries:
             return False
@@ -334,12 +331,38 @@ def _exact_bundle_at(
         )
     except OSError:
         return False
+
+
+def _exact_bundle_at(
+    parent_fd: int,
+    destination_name: str,
+    expected_files: tuple[str, ...],
+    expected_sha256: dict[str, str],
+) -> bool:
+    root_fd = -1
+    try:
+        root_fd = _open_directory(destination_name, dir_fd=parent_fd)
+        return _exact_bundle_fd(root_fd, expected_files, expected_sha256)
+    except OSError:
+        return False
     finally:
         if root_fd >= 0:
             os.close(root_fd)
 
 
 def _recognized_previous_files_at(parent_fd: int, destination_name: str) -> tuple[str, ...] | None:
+    root_fd = -1
+    try:
+        root_fd = _open_directory(destination_name, dir_fd=parent_fd)
+        return _recognized_previous_files_fd(root_fd)
+    except OSError:
+        return None
+    finally:
+        if root_fd >= 0:
+            os.close(root_fd)
+
+
+def _recognized_previous_files_fd(root_fd: int) -> tuple[str, ...] | None:
     for files, expected_sha256 in (
         (LEGACY_FILES, LEGACY_FILE_SHA256),
         (EXPECTED_FILES, PREVIOUS_BUNDLE_FILE_SHA256),
@@ -355,34 +378,78 @@ def _recognized_previous_files_at(parent_fd: int, destination_name: str) -> tupl
         (EXPECTED_FILES, RELEASE_0180_BUNDLE_FILE_SHA256),
         (EXPECTED_FILES, RELEASE_0190_BUNDLE_FILE_SHA256),
     ):
-        if _exact_bundle_at(parent_fd, destination_name, files, expected_sha256):
+        if _exact_bundle_fd(root_fd, files, expected_sha256):
             return files
     return None
+
+
+def _remove_bundle_contents_fd(root_fd: int, files: tuple[str, ...]) -> None:
+    for relative in files:
+        try:
+            relative_parent_fd, leaf = _open_relative_parent(root_fd, relative)
+        except FileNotFoundError:
+            continue
+        try:
+            os.unlink(leaf, dir_fd=relative_parent_fd)
+        except FileNotFoundError:
+            pass
+        finally:
+            os.close(relative_parent_fd)
+    for relative in EXPECTED_DIRECTORIES:
+        try:
+            os.rmdir(relative, dir_fd=root_fd)
+        except FileNotFoundError:
+            pass
 
 
 def _remove_bundle_at(parent_fd: int, name: str, files: tuple[str, ...]) -> None:
     root_fd = _open_directory(name, dir_fd=parent_fd)
     try:
-        for relative in files:
-            try:
-                relative_parent_fd, leaf = _open_relative_parent(root_fd, relative)
-            except FileNotFoundError:
-                continue
-            try:
-                os.unlink(leaf, dir_fd=relative_parent_fd)
-            except FileNotFoundError:
-                pass
-            finally:
-                os.close(relative_parent_fd)
-        for relative in EXPECTED_DIRECTORIES:
-            try:
-                os.rmdir(relative, dir_fd=root_fd)
-            except FileNotFoundError:
-                pass
+        _remove_bundle_contents_fd(root_fd, files)
     finally:
         os.close(root_fd)
     try:
         os.rmdir(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        pass
+
+
+def _remove_verified_bundle_at(
+    parent_fd: int,
+    name: str,
+    files: tuple[str, ...],
+    current_hashes: dict[str, str],
+) -> None:
+    """Rename, revalidate, and delete through the verified directory descriptor."""
+
+    tombstone = f".advisory-skill-remove-{secrets.token_hex(8)}"
+    os.rename(name, tombstone, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    root_fd = -1
+    valid = False
+    try:
+        root_fd = _open_directory(tombstone, dir_fd=parent_fd)
+        valid = _exact_bundle_fd(
+            root_fd,
+            EXPECTED_FILES,
+            current_hashes,
+        ) or (_recognized_previous_files_fd(root_fd) == files)
+        if not valid:
+            raise SkillInstallError("skill_conflict")
+        _remove_bundle_contents_fd(root_fd, files)
+    except BaseException:
+        if root_fd >= 0:
+            os.close(root_fd)
+            root_fd = -1
+        try:
+            os.rename(tombstone, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except OSError:
+            pass
+        raise
+    finally:
+        if root_fd >= 0:
+            os.close(root_fd)
+    try:
+        os.rmdir(tombstone, dir_fd=parent_fd)
     except FileNotFoundError:
         pass
 
@@ -653,9 +720,105 @@ def install_skill(
     }
 
 
-def main(argv: list[str] | None = None) -> int:
+def uninstall_skill(
+    bundle: Path,
+    *,
+    home: Path,
+    target: str,
+    dry_run: bool,
+) -> dict[str, object]:
+    """Remove only an exact package-owned advisory Skill bundle."""
+
+    payloads = _bundle_payloads(bundle)
+    current_hashes = {
+        relative: hashlib.sha256(payload).hexdigest() for relative, payload in payloads.items()
+    }
+    removed: list[str] = []
+    planned: list[str] = []
+    missing: list[str] = []
+    for selected in _selected_targets(target):
+        destination = _destination(home, selected)
+        try:
+            parent_fd = _open_skill_parent(home, destination.parent, create=False)
+        except SkillInstallError:
+            if not destination.parent.exists() and not destination.parent.is_symlink():
+                missing.append(selected)
+                continue
+            raise
+        try:
+            try:
+                os.stat(destination.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                missing.append(selected)
+                continue
+            files: tuple[str, ...] | None = None
+            if _exact_bundle_at(parent_fd, destination.name, EXPECTED_FILES, current_hashes):
+                files = EXPECTED_FILES
+            else:
+                files = _recognized_previous_files_at(parent_fd, destination.name)
+            if files is None:
+                _fail("skill_conflict")
+            planned.append(selected)
+            if not dry_run:
+                _remove_verified_bundle_at(
+                    parent_fd,
+                    destination.name,
+                    files,
+                    current_hashes,
+                )
+                removed.append(selected)
+                os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "skill": SKILL_NAME,
+        "target": target,
+        "removed": removed,
+        "removal_planned": planned,
+        "missing": missing,
+        "dry_run": dry_run,
+    }
+
+
+def uninstall_main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="wclass-advisory install-skill",
+        prog="wclass-advisory skill uninstall",
+        description="Remove only an exact package-owned advisory Skill bundle.",
+        allow_abbrev=False,
+    )
+    parser.add_argument("--target", choices=("codex", "claude", "both"), default="both")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="confirm removal of exact package-owned bundle files",
+    )
+    arguments = parser.parse_args(argv)
+    if not arguments.dry_run and not arguments.confirm:
+        print(json.dumps({"error": "uninstall_confirmation_required"}), file=sys.stderr)
+        return 2
+    bundle = Path(__file__).resolve().parent / "skill"
+    try:
+        receipt = uninstall_skill(
+            bundle,
+            home=Path.home(),
+            target=arguments.target,
+            dry_run=arguments.dry_run,
+        )
+    except SkillInstallError as error:
+        print(json.dumps({"error": str(error)}), file=sys.stderr)
+        return 2
+    except (OSError, UnicodeError):
+        print(json.dumps({"error": "uninstall_failed"}), file=sys.stderr)
+        return 2
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+def _install_main(argv: list[str] | None, *, prog: str) -> int:
+    parser = argparse.ArgumentParser(
+        prog=prog,
         description=__doc__,
         allow_abbrev=False,
     )
@@ -681,6 +844,22 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    return _install_main(argv, prog="wclass-advisory install-skill")
+
+
+def skill_install_main(argv: list[str] | None = None) -> int:
+    return _install_main(argv, prog="wclass-advisory skill install")
+
+
+def skill_status_main(argv: list[str] | None = None) -> int:
+    arguments = list(argv or ())
+    return _install_main(
+        [*arguments, "--upgrade", "--dry-run"],
+        prog="wclass-advisory skill status",
+    )
 
 
 if __name__ == "__main__":

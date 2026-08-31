@@ -8,7 +8,15 @@ import importlib
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    """Keep caller-provided values out of syntax diagnostics."""
+
+    def error(self, message: str) -> NoReturn:
+        del message
+        super().error("invalid arguments")
 
 
 def _load_module(name: str) -> Any:
@@ -70,7 +78,7 @@ def _set_option(arguments: Sequence[str], name: str, value: str) -> list[str]:
 def _run_parser(command: str = "run") -> argparse.ArgumentParser:
     if command not in {"run", "prune"}:
         raise ValueError()
-    managed_command = "dispatch" if command == "run" else "cleanup"
+    managed_command = "campaign run" if command == "run" else "campaign cleanup"
     parser = argparse.ArgumentParser(
         prog=f"wclass-advisory {command}",
         description=(
@@ -121,35 +129,155 @@ def _call(module_main: object, arguments: Sequence[str]) -> int:
 
 
 def _top_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="wclass-advisory", description=__doc__, allow_abbrev=False
+    parser = _ArgumentParser(
+        prog="wclass-advisory",
+        description=(
+            "Get a one-shot read-only advisory, or explicitly manage a measured campaign."
+        ),
+        epilog=(
+            "Primary commands:\n"
+            "  ask       Run one stateless read-only advisory (recommended).\n"
+            "  campaign  Manage an explicit measured campaign.\n"
+            "  skill     Install, inspect, or remove the optional Agent Skill.\n\n"
+            "Advanced commands:\n"
+            "  review    Inspect managed or explicit-profile routes.\n"
+            "  consult   Run the legacy stateful evidence workflow.\n"
+            "  advanced  Access low-level experiment and reporting commands.\n\n"
+            "Existing flat commands remain accepted for automation compatibility."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        metavar="COMMAND",
+    )
+    return parser
+
+
+def _campaign(arguments: Sequence[str]) -> int:
+    parser = _ArgumentParser(
+        prog="wclass-advisory campaign",
+        description="Manage an explicit, stateful advisory measurement campaign.",
+        epilog=(
+            "  init      Create task-free profiles and sealed populations.\n"
+            "  check     Validate campaign state and local CLI readiness.\n"
+            "  inspect   Review exact task-free routes.\n"
+            "  run       Dispatch one measured task through the sealed campaign.\n"
+            "  status    Report aggregate campaign evidence.\n"
+            "  gate      Evaluate the sealed human-review gate.\n"
+            "  cleanup   Prune registered disposable workspaces.\n"
+            "  migrate   Start a preserving route, evidence, or gate generation.\n"
+            "  verifier  Scaffold or check a project verifier."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
     )
     parser.add_argument(
         "command",
         choices=(
             "init",
-            "migrate-evidence",
-            "migrate-routes",
-            "migrate-gate",
-            "doctor",
-            "cli-check",
-            "provider-check",
-            "review",
-            "consult",
-            "dispatch",
-            "status",
-            "campaign-gate",
-            "cleanup",
+            "check",
+            "inspect",
             "run",
-            "prune",
-            "seal",
-            "report",
-            "portfolio",
-            "experiment",
-            "install-skill",
+            "status",
+            "gate",
+            "cleanup",
+            "migrate",
+            "verifier",
         ),
     )
-    return parser
+    if not arguments:
+        parser.print_help()
+        return 0
+    if arguments[0] in {"-h", "--help"}:
+        parser.parse_args(arguments)
+        return 0
+    parsed = parser.parse_args(arguments[:1])
+    remaining = list(arguments[1:])
+    managed_cli = _load_module("managed_cli")
+    if parsed.command == "init":
+        return _call(managed_cli.init_main, remaining)
+    if parsed.command == "check":
+        return _call(managed_cli.doctor_main, remaining)
+    if parsed.command == "inspect":
+        return _call(managed_cli.review_main, remaining)
+    if parsed.command == "run":
+        return _call(managed_cli.dispatch_stdin_main, remaining)
+    if parsed.command == "status":
+        return _call(managed_cli.status_main, remaining)
+    if parsed.command == "gate":
+        return _call(managed_cli.campaign_gate_main, remaining)
+    if parsed.command == "cleanup":
+        return _call(managed_cli.prune_main, remaining)
+    if parsed.command == "verifier":
+        verifier_cli = _load_module("verifier_cli")
+        return _call(verifier_cli.main, remaining)
+    migration = _ArgumentParser(prog="wclass-advisory campaign migrate", allow_abbrev=False)
+    migration.add_argument("kind", choices=("evidence", "routes", "gate"))
+    selected, forwarded = migration.parse_known_args(remaining)
+    entrypoint = {
+        "evidence": managed_cli.migrate_evidence_main,
+        "routes": managed_cli.migrate_routes_main,
+        "gate": managed_cli.migrate_gate_main,
+    }[selected.kind]
+    return _call(entrypoint, forwarded)
+
+
+def _skill(arguments: Sequence[str]) -> int:
+    parser = _ArgumentParser(
+        prog="wclass-advisory skill",
+        description="Manage the optional advisory Agent Skill.",
+        epilog=(
+            "  install    Install or explicitly upgrade the package bundle.\n"
+            "  status     Preview current installation state.\n"
+            "  uninstall  Remove only an exact package-owned bundle."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,
+    )
+    parser.add_argument("command", choices=("install", "status", "uninstall"))
+    if not arguments:
+        parser.print_help()
+        return 0
+    if arguments[0] in {"-h", "--help"}:
+        parser.parse_args(arguments)
+        return 0
+    parsed = parser.parse_args(arguments[:1])
+    remaining = list(arguments[1:])
+    install_advisory_skill = _load_module("install_advisory_skill")
+    if parsed.command == "install":
+        return _call(install_advisory_skill.skill_install_main, remaining)
+    if parsed.command == "status":
+        return _call(install_advisory_skill.skill_status_main, remaining)
+    return _call(install_advisory_skill.uninstall_main, remaining)
+
+
+def _advanced(arguments: Sequence[str]) -> int:
+    parser = _ArgumentParser(prog="wclass-advisory advanced", allow_abbrev=False)
+    parser.add_argument(
+        "command", choices=("run", "prune", "seal", "report", "portfolio", "experiment")
+    )
+    if not arguments:
+        parser.print_help()
+        return 0
+    if arguments[0] in {"-h", "--help"}:
+        parser.parse_args(arguments)
+        return 0
+    parsed = parser.parse_args(arguments[:1])
+    remaining = list(arguments[1:])
+    if parsed.command == "run":
+        return _run(remaining, prune=False)
+    if parsed.command == "prune":
+        return _run(remaining, prune=True)
+    module_name = {
+        "seal": "advisory_campaign",
+        "report": "speculative_report",
+        "portfolio": "advisory_portfolio",
+        "experiment": "advisory_experiments",
+    }[parsed.command]
+    return _call(_load_module(module_name).main, remaining)
 
 
 def _run(arguments: Sequence[str], *, prune: bool) -> int:
@@ -217,10 +345,22 @@ def _run(arguments: Sequence[str], *, prune: bool) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     parser = _top_parser()
-    if not arguments or arguments == ["--help"] or arguments == ["-h"]:
+    if not arguments:
+        parser.print_help()
+        return 0
+    if arguments == ["--help"] or arguments == ["-h"]:
         parser.parse_args(arguments)
         return 0
     command = arguments[0]
+    if command == "ask":
+        advisory_quick = _load_module("advisory_quick")
+        return _call(advisory_quick.main, arguments[1:])
+    if command == "campaign":
+        return _campaign(arguments[1:])
+    if command == "skill":
+        return _skill(arguments[1:])
+    if command == "advanced":
+        return _advanced(arguments[1:])
     if command == "init":
         managed_cli = _load_module("managed_cli")
         return _call(managed_cli.init_main, arguments[1:])

@@ -1485,6 +1485,12 @@ def _preflight_repo(repo: Path, workflow: str, verifier: Path) -> None:
         raise ManagedPreflightError("managed_verifier_baseline_rejected")
 
 
+def preflight_project_verifier(repo: Path, workflow: str, verifier: Path) -> None:
+    """Public task-free campaign verifier preflight shared by CLI surfaces."""
+
+    _preflight_repo(repo, workflow, verifier)
+
+
 def _preflight_task_file(task_file: Path) -> None:
     if not task_file.is_absolute():
         raise ManagedPreflightError("managed_task_input_rejected")
@@ -1500,6 +1506,27 @@ def _preflight_task_file(task_file: Path) -> None:
         raise ManagedPreflightError("managed_task_input_rejected")
 
 
+def _read_task_stream(task_stream: BinaryIO) -> bytes:
+    """Read one transient bounded task only after task-free campaign preflight."""
+
+    try:
+        payload = task_stream.read(speculative_run.MAX_TASK_FILE_BYTES + 1)
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8", errors="strict")
+        if (
+            not isinstance(payload, bytes)
+            or not payload
+            or len(payload) > speculative_run.MAX_TASK_FILE_BYTES
+            or not payload.decode("utf-8", errors="strict").strip()
+        ):
+            raise ManagedPreflightError("managed_task_input_rejected")
+        return payload
+    except ManagedPreflightError:
+        raise
+    except (OSError, UnicodeError, TypeError, ValueError):
+        raise ManagedPreflightError("managed_task_input_rejected") from None
+
+
 def _next_ordinal(manifest: advisory_campaign.CampaignManifest, results: Path) -> int:
     try:
         return advisory_campaign.count_bound_records(manifest, results / "runs.jsonl") + 1
@@ -1511,7 +1538,8 @@ def _job(
     vendor: str,
     workflow: str,
     repo: Path,
-    task_file: Path,
+    task_file: Path | None,
+    task_bytes: bytes | None,
     results: Path,
     selected: CampaignPaths,
     manifest: advisory_campaign.CampaignManifest,
@@ -1525,8 +1553,6 @@ def _job(
         vendor,
         "--repo",
         str(repo),
-        "--task-file",
-        str(task_file),
         "--route-profile",
         str(selected.profile),
         "--confirm-task-egress",
@@ -1542,6 +1568,12 @@ def _job(
         "--out-dir",
         str(results),
     ]
+    if task_file is not None:
+        runner_arguments[6:6] = ["--task-file", str(task_file)]
+    else:
+        if task_bytes is None:
+            raise ValueError
+        runner_arguments.insert(6, "--task-stdin")
     if manifest["arm"] == "shape_a_b":
         runner_arguments.insert(runner_arguments.index("--advise-on-failure"), "--advise-first")
     if manifest["cost_basis"] == "price_table":
@@ -1556,7 +1588,7 @@ def _job(
         PACKAGE_VERSION,
         *runner_arguments,
     ]
-    return advisory_parallel.AdvisoryJob(vendor, tuple(command))
+    return advisory_parallel.AdvisoryJob(vendor, tuple(command), stdin_bytes=task_bytes)
 
 
 def _consult_job(
@@ -1863,13 +1895,14 @@ def dispatch(
     state_root: Path,
     *,
     repo: Path,
-    task_file: Path,
+    task_file: Path | None,
+    task_stream: BinaryIO | None = None,
     vendors: Sequence[str],
     workflow: str,
     confirm_task_egress: bool,
     confirm_provider_egress: bool = False,
 ) -> int:
-    if not confirm_task_egress:
+    if not confirm_task_egress or (task_file is None) == (task_stream is None):
         _fail()
     if not vendors or workflow not in WORKFLOWS:
         _fail()
@@ -1892,10 +1925,14 @@ def dispatch(
         )
         if readiness.get("ready") is not True:
             raise ProviderConformanceError
-    _preflight_task_file(task_file)
+    if task_file is not None:
+        _preflight_task_file(task_file)
     verifier = state_root / "verify-project.py"
     _private_regular(verifier, executable=True)
-    _preflight_repo(repo, workflow, verifier)
+    if task_file is not None:
+        preflight_project_verifier(repo, workflow, verifier)
+    else:
+        preflight_project_verifier(repo, workflow, verifier)
     requests = tuple(
         advisory_orchestration.LaneRequest(
             vendor,
@@ -1905,6 +1942,7 @@ def dispatch(
         )
         for vendor in vendors
     )
+    task_bytes = _read_task_stream(task_stream) if task_stream is not None else None
     try:
         with advisory_orchestration.acquire_campaign_lanes(requests) as leases:
             ordinals = {
@@ -1917,6 +1955,7 @@ def dispatch(
                     workflow,
                     repo,
                     task_file,
+                    task_bytes,
                     lease.results_dir,
                     configurations[vendor][0],
                     configurations[vendor][1],

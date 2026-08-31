@@ -5,6 +5,17 @@ always explicit and never becomes a core route. Managed onboarding removes the
 need to hand-wire profile, campaign, verifier-wrapper, price-table, and result
 paths for every project.
 
+Most users do not need managed onboarding. For a one-shot read-only review,
+research, diagnosis, or design answer, send the task on stdin to `ask`:
+
+```sh
+printf '%s' 'Review this repository.' | wclass-advisory ask \
+  --vendor codex --workflow review --repo . --confirm-task-egress
+```
+
+This uses the vendor's configured default model, reads no campaign state, and
+reports `quality_verified:false`. Continue below only for explicit campaigns.
+
 ## Initialize a vendor
 
 Supply exact model and effort labels selected for the three roles. weightclass
@@ -83,18 +94,24 @@ infrastructure failure. Managed state contains a package verifier that loads
 the workflow verifier from the clean repository's committed `HEAD`, so a model
 cannot weaken acceptance by editing the working copy.
 
+Start with `wclass-advisory campaign verifier scaffold --workflow WORKFLOW`.
+The generated verifier rejects every candidate and lists workflow-specific
+criteria; implement the project-specific checks, commit it, then run
+`wclass-advisory campaign verifier check --workflow WORKFLOW`.
+
 ## Check, review, and dispatch
 
 ```sh
-wclass-advisory doctor --vendor all --workflow review
-wclass-advisory cli-check --vendor all
-wclass-advisory review --vendor all --workflow review
-wclass-advisory dispatch \
-  --vendor all --workflow review \
+wclass-advisory campaign run \
+  --vendor codex --workflow review \
   --repo /absolute/clean/repository \
-  --task-file /absolute/owner-only/task-file \
   --confirm-task-egress
 ```
+
+Run `campaign check` and `campaign inspect` before the first dispatch on a
+machine. The grouped command forwards stdin through anonymous pipes and creates
+no task pathname. Flat `doctor`, `review`, and `dispatch --task-file` remain
+available for automation compatibility.
 
 For a schema-2 custom vendor, add `--confirm-provider-egress` only after
 approving three task-free provider calls that may use quota or incur cost. The

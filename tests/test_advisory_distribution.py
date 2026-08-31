@@ -33,24 +33,12 @@ class AdvisoryDistributionTests(unittest.TestCase):
 
         self.assertEqual(advisory.returncode, 0, advisory.stderr)
         for command in (
-            "init",
-            "migrate-evidence",
-            "migrate-routes",
-            "doctor",
-            "cli-check",
-            "provider-check",
+            "ask",
+            "campaign",
+            "skill",
             "review",
             "consult",
-            "dispatch",
-            "status",
-            "campaign-gate",
-            "cleanup",
-            "run",
-            "prune",
-            "seal",
-            "report",
-            "portfolio",
-            "install-skill",
+            "advanced",
         ):
             self.assertIn(command, advisory.stdout)
         self.assertNotIn("advisory", core.stdout)
@@ -88,13 +76,15 @@ class AdvisoryDistributionTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.assertTrue(package.joinpath(relative).is_file())
         self.assertTrue(package.joinpath("managed_verify.py").is_file())
+        self.assertTrue(package.joinpath("advisory_quick.py").is_file())
+        self.assertTrue(package.joinpath("verifier_cli.py").is_file())
 
-    def test_packaged_skill_uses_managed_onboarding_instead_of_opaque_paths(self) -> None:
+    def test_packaged_skill_defaults_to_stateless_ask(self) -> None:
         skill = files("weightclass.advisory").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("wclass-advisory init", skill)
-        self.assertIn("wclass-advisory doctor", skill)
-        self.assertIn("wclass-advisory dispatch", skill)
+        self.assertIn("wclass-advisory ask", skill)
+        self.assertIn("quality_verified:false", skill)
+        self.assertIn("wclass-advisory campaign init", skill)
         self.assertNotIn("--campaign-root <", skill)
         self.assertNotIn("--route-profile <", skill)
 
@@ -114,8 +104,18 @@ class AdvisoryDistributionTests(unittest.TestCase):
             "--confirm-task-egress",
         ):
             self.assertIn(forwarded, result.stdout)
-        self.assertIn("wclass-advisory dispatch", result.stdout)
+        self.assertIn("wclass-advisory campaign run", result.stdout)
         self.assertNotIn("--router-root", result.stdout)
+
+    def test_grouped_campaign_run_reads_task_from_stdin(self) -> None:
+        result = self._run("campaign", "run", "--help")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage: wclass-advisory campaign run", result.stdout)
+        self.assertIn("--repo", result.stdout)
+        self.assertIn("--vendor", result.stdout)
+        self.assertIn("--confirm-task-egress", result.stdout)
+        self.assertNotIn("--task-file", result.stdout)
 
     def test_subcommand_help_uses_the_public_command_name(self) -> None:
         expected = {
@@ -136,9 +136,9 @@ class AdvisoryDistributionTests(unittest.TestCase):
     def test_skill_rejects_stale_run_instructions_instead_of_bypassing_advisory(self) -> None:
         skill = files("weightclass.advisory").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("stale", skill.casefold())
-        self.assertIn("wclass-advisory dispatch", skill)
-        self.assertIn("Do not fall back", skill)
+        self.assertIn("wclass-advisory ask", skill)
+        self.assertIn("stateful campaign", skill)
+        self.assertIn("Do not silently fall back", skill)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import re
 import sys
 import tempfile
@@ -47,7 +48,7 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         for workflow in ("implementation", "review", "research", "diagnosis", "design"):
             self.assertIn(f"`{workflow}`", modes)
         self.assertIn("Brainstorming is not a production workflow", modes)
-        self.assertEqual(manifest, {"managed_onboarding": 14, "schema_version": 1})
+        self.assertEqual(manifest, {"managed_onboarding": 15, "schema_version": 1})
         self.assertIn("managed_runner_version_changed", skill)
         self.assertIn("managed_setup_busy", skill)
 
@@ -140,6 +141,101 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
 
         self.assertEqual(first["installed"], ["codex", "claude"])
         self.assertEqual(second["already_installed"], ["codex", "claude"])
+
+    def test_uninstall_removes_only_an_exact_package_bundle(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            installer.install_skill(
+                BUNDLE,
+                home=home,
+                target="codex",
+                dry_run=False,
+                advisory_command_available=True,
+            )
+            destination = home / ".agents" / "skills" / "advisory"
+
+            preview = installer.uninstall_skill(
+                BUNDLE,
+                home=home,
+                target="codex",
+                dry_run=True,
+            )
+            self.assertEqual(preview["removal_planned"], ["codex"])
+            self.assertTrue(destination.is_dir())
+
+            receipt = installer.uninstall_skill(
+                BUNDLE,
+                home=home,
+                target="codex",
+                dry_run=False,
+            )
+
+        self.assertEqual(receipt["removed"], ["codex"])
+        self.assertFalse(destination.exists())
+
+    def test_uninstall_revalidates_a_name_swap_before_deleting(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            installer.install_skill(
+                BUNDLE,
+                home=home,
+                target="codex",
+                dry_run=False,
+                advisory_command_available=True,
+            )
+            parent = home / ".agents" / "skills"
+            destination = parent / "advisory"
+            replacement = parent / "replacement"
+            backup = parent / "package-backup"
+            (replacement / "agents").mkdir(parents=True, mode=0o700)
+            (replacement / "references").mkdir(mode=0o700)
+            for relative in installer.EXPECTED_FILES:
+                target = replacement / relative
+                payload = (
+                    b"custom\n" if relative == "SKILL.md" else (BUNDLE / relative).read_bytes()
+                )
+                target.write_bytes(payload)
+                target.chmod(0o600)
+            replacement.chmod(0o700)
+            real_rename = os.rename
+            swapped = False
+
+            def swap_before_tombstone(
+                source: str,
+                target: str,
+                *,
+                src_dir_fd: int | None = None,
+                dst_dir_fd: int | None = None,
+            ) -> None:
+                nonlocal swapped
+                if source == "advisory" and target.startswith(".advisory-skill-remove-"):
+                    self.assertFalse(swapped)
+                    swapped = True
+                    real_rename(destination, backup)
+                    real_rename(replacement, destination)
+                real_rename(
+                    source,
+                    target,
+                    src_dir_fd=src_dir_fd,
+                    dst_dir_fd=dst_dir_fd,
+                )
+
+            with (
+                mock.patch.object(installer.os, "rename", side_effect=swap_before_tombstone),
+                self.assertRaisesRegex(installer.SkillInstallError, "^skill_conflict$"),
+            ):
+                installer.uninstall_skill(
+                    BUNDLE,
+                    home=home,
+                    target="codex",
+                    dry_run=False,
+                )
+
+            self.assertTrue(swapped)
+            self.assertEqual((destination / "SKILL.md").read_bytes(), b"custom\n")
+            self.assertTrue((backup / "SKILL.md").is_file())
 
     def test_conflict_fails_before_any_target_is_written(self) -> None:
         installer = load_installer()
