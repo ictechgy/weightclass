@@ -161,3 +161,32 @@ Custom vendors receive the same executable metadata admission before their CLI
 contract is reported as unverified. Managed setup locks now use a bounded wait,
 and advisory timeout cleanup transfers an unusually slow final reap to a daemon
 thread after the second group kill.
+
+## Shared bounded-operations follow-up (2026-08-31)
+
+A new Standard scan found that newer safe primitives had not reached every
+legacy and advisory path. The follow-up keeps all product boundaries intact and
+converges the affected operations:
+
+- every advisory-owned Git invocation disables repository-local
+  `core.fsmonitor` as well as global/system configuration and hooks;
+- protocol-1 delegation retains one admitted `ExecutableObservation` before
+  task access and compares a second observation immediately before `Popen`;
+- vendor and verifier stdout/stderr use a combined 16 MiB retained-output cap,
+  with group termination and bounded reap on overflow, timeout, or interruption;
+- parallel advisory interruption wakes workers at 100 ms intervals, terminates
+  their owned sessions, and no longer waits for the configured eight-hour job
+  ceiling;
+- triage records `ECHILD` separately and performs descriptor-only cleanup after
+  status ownership is lost, never signaling the stale numeric PID/group ID;
+- campaign and legacy logs stream under the 500-record campaign ceiling,
+  direct price files use the existing 64 KiB no-follow reader, token counters
+  are digit-bounded, and shared JSON inputs cap integer digits on Python 3.10;
+- task-free managed status no longer imports the 5,000-line speculative runner.
+  Thirty cold processes moved median/p95 from 59.205/61.397 ms to
+  52.358/54.198 ms. This timing is observational; import-boundary tests are the
+  durable regression.
+
+The final path-based observation-to-`Popen` race and custom-path ancestor
+admission remain explicit residuals. This batch does not claim verified-object
+execution, sandbox external runtimes, or change task/campaign persistence.

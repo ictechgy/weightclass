@@ -33,6 +33,8 @@ DEFAULT_HEARTBEAT_SECONDS = 60.0
 _LABEL = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _START_ERROR = b"advisory child start failed\n"
 _TIMEOUT_ERROR = b"advisory child timed out\n"
+_INTERRUPTED_ERROR = b"advisory child interrupted\n"
+CANCEL_POLL_SECONDS = 0.1
 
 
 @dataclass(frozen=True)
@@ -130,7 +132,9 @@ def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
         threading.Thread(target=reap, name="wclass-advisory-reaper", daemon=True).start()
 
 
-def _capture_job(process: subprocess.Popen[bytes], job: AdvisoryJob) -> AdvisoryResult:
+def _capture_job(
+    process: subprocess.Popen[bytes], job: AdvisoryJob, cancel_requested: threading.Event
+) -> AdvisoryResult:
     """Drain both pipes to EOF while retaining only the combined output bound."""
 
     assert process.stdout is not None and process.stderr is not None
@@ -146,12 +150,18 @@ def _capture_job(process: subprocess.Popen[bytes], job: AdvisoryJob) -> Advisory
             os.set_blocking(stream.fileno(), False)
             selector.register(stream, selectors.EVENT_READ)
         while selector.get_map():
+            if cancel_requested.is_set():
+                _terminate_process_group(process)
+                for key in list(selector.get_map().values()):
+                    selector.unregister(key.fileobj)
+                    cast(BinaryIO, key.fileobj).close()
+                return AdvisoryResult(job.label, 130, b"", _INTERRUPTED_ERROR, True)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True
                 _terminate_process_group(process)
                 break
-            for key, _ in selector.select(remaining):
+            for key, _ in selector.select(min(remaining, CANCEL_POLL_SECONDS)):
                 descriptor = key.fd
                 try:
                     chunk = os.read(descriptor, 65_536)
@@ -193,19 +203,27 @@ def _capture_job(process: subprocess.Popen[bytes], job: AdvisoryJob) -> Advisory
                 True,
                 truncated,
             )
-        try:
-            returncode = process.wait(timeout=remaining)
-        except subprocess.TimeoutExpired:
-            _terminate_process_group(process)
-            return AdvisoryResult(
-                job.label,
-                124,
-                b"",
-                _TIMEOUT_ERROR,
-                True,
-                True,
-                truncated,
-            )
+        while True:
+            if cancel_requested.is_set():
+                _terminate_process_group(process)
+                return AdvisoryResult(job.label, 130, b"", _INTERRUPTED_ERROR, True)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_group(process)
+                return AdvisoryResult(
+                    job.label,
+                    124,
+                    b"",
+                    _TIMEOUT_ERROR,
+                    True,
+                    True,
+                    truncated,
+                )
+            try:
+                returncode = process.wait(timeout=min(remaining, CANCEL_POLL_SECONDS))
+                break
+            except subprocess.TimeoutExpired:
+                continue
         return AdvisoryResult(
             job.label,
             returncode,
@@ -219,7 +237,7 @@ def _capture_job(process: subprocess.Popen[bytes], job: AdvisoryJob) -> Advisory
         selector.close()
 
 
-def _run_job(job: AdvisoryJob) -> AdvisoryResult:
+def _run_job(job: AdvisoryJob, cancel_requested: threading.Event) -> AdvisoryResult:
     try:
         process = subprocess.Popen(
             job.command,
@@ -231,7 +249,7 @@ def _run_job(job: AdvisoryJob) -> AdvisoryResult:
         )
     except OSError:
         return AdvisoryResult(job.label, 2, b"", _START_ERROR, False)
-    return _capture_job(process, job)
+    return _capture_job(process, job, cancel_requested)
 
 
 ProgressCallback = Callable[[str, str, int], None]
@@ -276,10 +294,11 @@ def run_parallel(
     ):
         raise ValueError
     started = time.monotonic()
-    with ThreadPoolExecutor(
-        max_workers=len(selected), thread_name_prefix="wclass-advisory"
-    ) as executor:
-        futures: list[Future[AdvisoryResult]] = [executor.submit(_run_job, job) for job in selected]
+    cancel_requested = threading.Event()
+    executor = ThreadPoolExecutor(max_workers=len(selected), thread_name_prefix="wclass-advisory")
+    futures: list[Future[AdvisoryResult]] = []
+    try:
+        futures = [executor.submit(_run_job, job, cancel_requested) for job in selected]
         indexes = {future: index for index, future in enumerate(futures)}
         pending = set(futures)
         results: list[AdvisoryResult | None] = [None] * len(selected)
@@ -307,4 +326,13 @@ def run_parallel(
                 _notify_result(result_callback, result)
         if any(result is None for result in results):
             raise ValueError
-        return tuple(cast(AdvisoryResult, result) for result in results)
+        final = tuple(cast(AdvisoryResult, result) for result in results)
+    except BaseException:
+        cancel_requested.set()
+        for future in futures:
+            future.cancel()
+        executor.shutdown(wait=True, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
+        return final

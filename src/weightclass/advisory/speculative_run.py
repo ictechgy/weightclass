@@ -73,7 +73,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, TypedDict
 
 if TYPE_CHECKING or __package__:
-    from . import readonly_snapshot
+    from . import bounded_capture, readonly_snapshot
     from .advisory_campaign import (
         ANONYMOUS_LANE_COUNT,
         MAX_CAMPAIGN_RECORD_BYTES,
@@ -84,6 +84,7 @@ if TYPE_CHECKING or __package__:
         canonical_manifest_bytes,
         existing_lane_result_directories,
         load_bound_records,
+        load_bounded_json_file,
         load_manifest,
         record_binding,
         stage_bound_file,
@@ -105,6 +106,7 @@ if TYPE_CHECKING or __package__:
         routes_from_profile,
     )
 else:
+    import bounded_capture  # type: ignore[import-not-found]
     import readonly_snapshot  # type: ignore[import-not-found]
     from advisory_campaign import (  # type: ignore[import-not-found]
         ANONYMOUS_LANE_COUNT,
@@ -116,6 +118,7 @@ else:
         canonical_manifest_bytes,
         existing_lane_result_directories,
         load_bound_records,
+        load_bounded_json_file,
         load_manifest,
         record_binding,
         stage_bound_file,
@@ -546,10 +549,12 @@ AGENT_SCAFFOLDING = frozenset(
 CHILD_TIMEOUT = 3600
 VERIFY_TIMEOUT = 1800
 GIT_TIMEOUT = 600
+MAX_CAPTURE_BYTES = 16 * 1024 * 1024
 
 # 토큰 회수는 최선 노력이다. 벤더가 형식을 바꾸면 조용히 None 이 되며, 그것이
 # 이 스크립트가 답하려는 질문(p)을 막지는 않는다.
 _CODEX_TOKENS = re.compile(r"tokens\s+used[^0-9]{0,20}([0-9][0-9,]*)", re.IGNORECASE)
+MAX_TOKEN_COUNTER_DIGITS = 20
 _CLAUDE_USAGE_FIELDS = (
     "input_tokens",
     "output_tokens",
@@ -704,6 +709,7 @@ _GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_TERMINAL_PROMPT": "0",
 }
+_SAFE_GIT_OPTIONS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 
 
 def _safe(text: str, limit: int = 200) -> str:
@@ -743,7 +749,11 @@ def run_git_bytes(arguments: list[str], cwd: Path) -> bytes:
     is told to apply.
     """
     result = subprocess.run(
-        ["git", *arguments], cwd=cwd, capture_output=True, timeout=GIT_TIMEOUT, env=_GIT_ENV
+        ["git", *_SAFE_GIT_OPTIONS, *arguments],
+        cwd=cwd,
+        capture_output=True,
+        timeout=GIT_TIMEOUT,
+        env=_GIT_ENV,
     )
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", "replace").strip()
@@ -769,7 +779,16 @@ def clone_at(repo: Path, commit: str, destination: Path) -> None:
     store separate too, at the cost of a copy.
     """
     subprocess.run(
-        ["git", "clone", "--quiet", "--no-hardlinks", "--no-checkout", str(repo), str(destination)],
+        [
+            "git",
+            *_SAFE_GIT_OPTIONS,
+            "clone",
+            "--quiet",
+            "--no-hardlinks",
+            "--no-checkout",
+            str(repo),
+            str(destination),
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -1172,8 +1191,9 @@ def run_child(
         # 이름만 명시한다.
         for name in HOME_REDIRECTING_ENV:
             environment.pop(name, None)
+    child: subprocess.Popen[str] | None = None
     try:
-        with subprocess.Popen(
+        child = subprocess.Popen(
             prepared_command,
             cwd=workspace,
             env=environment,
@@ -1184,49 +1204,36 @@ def run_child(
             errors="replace",
             start_new_session=True,
             pass_fds=((read_descriptor,) if read_descriptor >= 0 else ()),
-        ) as child:
-            if transient_task_pipe is not None:
-                os.close(read_descriptor)
-                read_descriptor = -1
-                delivery_thread = threading.Thread(
-                    target=deliver_task_file,
-                    name="wclass-task-delivery",
-                    daemon=True,
-                )
-                try:
-                    delivery_thread.start()
-                except RuntimeError as error:
-                    with contextlib.suppress(OSError):
-                        os.close(write_descriptor)
-                    write_descriptor = -1
-                    with contextlib.suppress(ProcessLookupError, PermissionError):
-                        _kill_group(child)
-                    raise RunFailure("could not deliver task file") from error
+        )
+        if transient_task_pipe is not None:
+            os.close(read_descriptor)
+            read_descriptor = -1
+            delivery_thread = threading.Thread(
+                target=deliver_task_file,
+                name="wclass-task-delivery",
+                daemon=True,
+            )
             try:
-                stdout, stderr = child.communicate(delivered_task, timeout=timeout_seconds)
-            except subprocess.TimeoutExpired:
-                # kill 중에 자식이 스스로 끝나면 ProcessLookupError 가 난다.
-                # 정상적인 경합이므로 무시한다 — 그것 때문에 측정을 죽이면,
-                # 거의 끝난 실행이 결과 없이 사라진다.
-                with contextlib.suppress(ProcessLookupError):
-                    _kill_group(child)
-                try:
-                    # 손자가 setsid 로 그룹을 빠져나갔거나 kill 이 막히면
-                    # 파이프를 계속 붙들 수 있다. 무한정 기다리지 않는다.
-                    stdout, stderr = child.communicate(timeout=30)
-                except subprocess.TimeoutExpired:
-                    child.kill()
-                    # 여기까지 오면 파이프에서 읽어낼 방법이 없다. 빈 문자열은
-                    # "출력이 없었다" 가 아니라 "읽지 못했다" 라는 뜻이고,
-                    # 그래서 이 실행의 토큰은 기록되지 않는다.
-                    stdout, stderr = "", ""
-                # 타임아웃 여부만 들고 나가 반환은 블록 밖에서 한다. 반환
-                # 지점을 한 곳에 모으기 위한 것이지 __exit__ 을 피하려는 것이
-                # 아니다 — with 안에서 return 해도 __exit__ 는 똑같이 실행된다.
-                timed_out = True
-            else:
-                timed_out = False
-            code = child.returncode
+                delivery_thread.start()
+            except RuntimeError as error:
+                with contextlib.suppress(OSError):
+                    os.close(write_descriptor)
+                write_descriptor = -1
+                bounded_capture.terminate_text_process(child, _kill_group)
+                raise RunFailure("could not deliver task file") from error
+        captured = bounded_capture.capture_text_process(
+            child,
+            delivered_task,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=MAX_CAPTURE_BYTES,
+            terminate_group=_kill_group,
+        )
+        if captured.output_limited:
+            raise RunFailure("route output exceeded limit")
+        stdout = captured.stdout
+        stderr = captured.stderr
+        timed_out = captured.timed_out
+        code = captured.returncode
     except OSError as error:
         # Popen 은 ENOEXEC(셔뱅이 잘못된 래퍼), E2BIG, ENOMEM 에서 밋밋한
         # OSError 를 낸다. 하위형만 잡으면 그것들이 빠져나가 측정 실행 전체가
@@ -1343,7 +1350,7 @@ def _claude_usage(stdout: str) -> Usage | None:
             continue
         checked.add(text)
         try:
-            parsed = json.loads(text)
+            parsed = json.loads(text, parse_int=_bounded_provider_integer)
         except (ValueError, TypeError):
             continue
         if isinstance(parsed, dict) and (
@@ -1412,7 +1419,7 @@ def _codex_usage(stdout: str) -> Usage | None:
         if not line.startswith("{"):
             continue
         try:
-            event = json.loads(line)
+            event = json.loads(line, parse_int=_bounded_provider_integer)
         except ValueError:
             continue
         if not isinstance(event, dict) or event.get("type") != "turn.completed":
@@ -1460,7 +1467,7 @@ def _json_candidates(stdout: str) -> list[dict[str, object]]:
             continue
         seen.add(text)
         try:
-            value = json.loads(text)
+            value = json.loads(text, parse_int=_bounded_provider_integer)
         except (TypeError, ValueError):
             continue
         if isinstance(value, dict):
@@ -1621,9 +1628,15 @@ def extract_tokens(stdout: str, stderr: str) -> int | None:
     """The old cumulative-token scrape, kept for runs made without `--json`."""
     matches = _CODEX_TOKENS.findall(stderr) or _CODEX_TOKENS.findall(stdout)
     if matches:
-        return int(matches[-1].replace(",", ""))
+        token_text = matches[-1].replace(",", "")
+        if len(token_text) > MAX_TOKEN_COUNTER_DIGITS:
+            return None
+        try:
+            return int(token_text)
+        except (OverflowError, ValueError):
+            return None
     try:
-        payload = json.loads(stdout)
+        payload = json.loads(stdout, parse_int=_bounded_provider_integer)
     except (ValueError, TypeError):
         return None
     usage = payload.get("usage") if isinstance(payload, dict) else None
@@ -3194,15 +3207,6 @@ def untrusted_block(*parts: str) -> str:
     return _tail(redact_text("".join(parts)), COMBINED_EXCERPT_CHARS)
 
 
-def _as_text(captured: object) -> str:
-    """communicate 가 예외에 달아 준 부분 출력을 문자열로."""
-    if isinstance(captured, str):
-        return captured
-    if isinstance(captured, (bytes, bytearray)):
-        return captured.decode("utf-8", errors="replace")
-    return ""
-
-
 def run_verify(verify: Path, workspace: Path, home: Path) -> tuple[VerifyResult, str]:
     """The gate. Exit code is the whole verdict; nothing is parsed from output.
 
@@ -3237,9 +3241,7 @@ def run_verify(verify: Path, workspace: Path, home: Path) -> tuple[VerifyResult,
     # 검증 명령 자체를 컨테이너나 jail 에 넣는 것뿐이다.
     environment["HOME"] = str(home)
     environment["TMPDIR"] = str(home)
-    timed_out = False
-    code: int | None = None
-    with subprocess.Popen(
+    verifier = subprocess.Popen(
         [str(verify)],
         cwd=workspace,
         env=environment,
@@ -3249,32 +3251,25 @@ def run_verify(verify: Path, workspace: Path, home: Path) -> tuple[VerifyResult,
         text=True,
         errors="replace",
         start_new_session=True,
-    ) as verifier:
-        try:
-            out, err = verifier.communicate(timeout=VERIFY_TIMEOUT)
-            code = verifier.returncode
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            # 여기서는 자식이 아직 회수되지 않았으므로 PID 가 유효하고, 그룹을
-            # 죽이는 것이 안전하다. 검증기는 자식이 쓴 코드를 실행하므로 손자
-            # 정리가 특히 중요하다.
-            _kill_group(verifier)
-            try:
-                out, err = verifier.communicate(timeout=30)
-            except subprocess.TimeoutExpired as second:
-                verifier.kill()
-                # **이미 읽은 것을 버리지 않는다.** CPython 은 그때까지 읽은
-                # 바이트를 예외에 달아 준다. 빈 문자열로 덮으면 검증기가 남긴
-                # 실패 이유가 통째로 사라져, 조언자가 진단할 것이 없어진다.
-                out = _as_text(second.output)
-                err = _as_text(second.stderr)
-        # 정상 종료 경로에서는 그룹을 죽이지 **않는다.** communicate() 가
-        # 이미 wait() 로 자식을 회수했으므로 그 PID 는 OS 에 반납된 상태이고,
-        # os.getpgid(반납된 PID) 는 재사용된 다른 프로세스의 그룹을 가리킬 수
-        # 있다. 거기에 SIGKILL 을 보내면 사용자 머신의 무관한 프로세스를
-        # 죽인다. 검증기가 백그라운드 프로세스를 띄우고 정상 종료하면 그것은
-        # 살아남는다 — 남의 프로세스를 죽일 위험보다 그편이 낫다.
+    )
+    captured = bounded_capture.capture_text_process(
+        verifier,
+        None,
+        timeout_seconds=VERIFY_TIMEOUT,
+        max_output_bytes=MAX_CAPTURE_BYTES,
+        terminate_group=_kill_group,
+    )
+    out, err = captured.stdout, captured.stderr
+    timed_out = captured.timed_out
+    code = captured.returncode
     combined = join_streams(out, err)
+    if captured.output_limited:
+        return {
+            "passed": False,
+            "exit_code": None,
+            "timed_out": False,
+            "seconds": round(time.monotonic() - started, 1),
+        }, "verification output exceeded limit"
     if timed_out:
         return {
             "passed": False,
@@ -3309,9 +3304,7 @@ def run_evidence_verify(
     environment["HOME"] = str(home)
     environment["TMPDIR"] = str(home)
     environment["WCLASS_ADVISORY_WORKFLOW"] = workflow
-    timed_out = False
-    code: int | None = None
-    with subprocess.Popen(
+    verifier = subprocess.Popen(
         [str(verify)],
         cwd=workspace,
         env=environment,
@@ -3321,20 +3314,25 @@ def run_evidence_verify(
         text=True,
         errors="replace",
         start_new_session=True,
-    ) as verifier:
-        try:
-            out, err = verifier.communicate(result_text, timeout=VERIFY_TIMEOUT)
-            code = verifier.returncode
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_group(verifier)
-            try:
-                out, err = verifier.communicate(timeout=30)
-            except subprocess.TimeoutExpired as second:
-                verifier.kill()
-                out = _as_text(second.output)
-                err = _as_text(second.stderr)
+    )
+    captured = bounded_capture.capture_text_process(
+        verifier,
+        result_text,
+        timeout_seconds=VERIFY_TIMEOUT,
+        max_output_bytes=MAX_CAPTURE_BYTES,
+        terminate_group=_kill_group,
+    )
+    out, err = captured.stdout, captured.stderr
+    timed_out = captured.timed_out
+    code = captured.returncode
     combined = join_streams(out, err)
+    if captured.output_limited:
+        return {
+            "passed": False,
+            "exit_code": None,
+            "timed_out": False,
+            "seconds": round(time.monotonic() - started, 1),
+        }, "verification output exceeded limit"
     if timed_out:
         return {
             "passed": False,
@@ -3416,7 +3414,7 @@ def build_handover_tree(
 def tracked_files_unchanged(handover: Path) -> bool:
     """Whether every staged path still holds what it held when it was staged."""
     result = subprocess.run(
-        ["git", "diff", "--quiet"],
+        ["git", *_SAFE_GIT_OPTIONS, "diff", "--quiet", "--no-ext-diff", "--no-textconv"],
         cwd=handover,
         capture_output=True,
         text=True,
@@ -3472,7 +3470,16 @@ def make_patch(handover: Path) -> tuple[bytes, list[str]]:
     patch = run_git_bytes(
         # --binary 가 없으면 바이너리 변경이 "Binary files differ" 로만 남고,
         # 우리가 안내하는 git apply 가 그 패치를 거부한다.
-        ["-c", "core.pager=cat", "diff", "--cached", "--binary", "--no-color", "--no-ext-diff"],
+        [
+            "-c",
+            "core.pager=cat",
+            "diff",
+            "--cached",
+            "--binary",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+        ],
         handover,
     )
     return patch, dropped
@@ -4025,7 +4032,7 @@ def advice_text_extracted(stdout: str, command: list[str]) -> tuple[str, bool]:
         if not stripped.startswith(("{", "[")):
             continue
         try:
-            parsed = json.loads(stripped)
+            parsed = json.loads(stripped, parse_int=_bounded_provider_integer)
         except (ValueError, TypeError):
             continue
         found = _first_text(parsed)
@@ -4058,7 +4065,7 @@ def evidence_result_shape(stdout: str, command: list[str]) -> str:
         if not stripped.startswith(("{", "[")):
             continue
         try:
-            parsed = json.loads(stripped)
+            parsed = json.loads(stripped, parse_int=_bounded_provider_integer)
         except (ValueError, TypeError):
             continue
         if isinstance(parsed, dict) and isinstance(parsed.get("structured_output"), (dict, list)):
@@ -4071,7 +4078,7 @@ def evidence_result_shape(stdout: str, command: list[str]) -> str:
         if selected.startswith("```") and selected.endswith("```"):
             return "fenced_json"
         try:
-            nested = json.loads(selected)
+            nested = json.loads(selected, parse_int=_bounded_provider_integer)
         except (ValueError, TypeError):
             return "prose"
         return "json_text" if isinstance(nested, (dict, list)) else "prose"
@@ -4461,6 +4468,15 @@ def attempt(
     return record, verify_output, transient
 
 
+def _bounded_provider_integer(value: str) -> int:
+    """Bound child-controlled JSON integers on every supported Python."""
+
+    digits = value[1:] if value.startswith("-") else value
+    if not digits or len(digits) > 128:
+        raise ValueError
+    return int(value)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -4803,9 +4819,9 @@ def main() -> int:
     rates: dict[str, dict[str, float]] = {}
     if arguments.prices:
         try:
-            loaded = json.loads(arguments.prices.expanduser().read_text(encoding="utf-8"))
-        except (OSError, ValueError) as error:
-            parser.error(f"--prices is not readable JSON: {error}")
+            loaded = load_bounded_json_file(arguments.prices.expanduser(), MAX_PRICES_BYTES)
+        except (CampaignError, OSError):
+            parser.error("--prices is not readable bounded JSON")
         if not isinstance(loaded, dict):
             parser.error("--prices must be a JSON object keyed by 'cheap' and 'expensive'")
         unknown = set(loaded) - {"cheap", "expensive", "advisor"}

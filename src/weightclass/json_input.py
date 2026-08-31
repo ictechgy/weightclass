@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Final
 
 READ_CHUNK_BYTES: Final = 65_536
+MAX_JSON_INTEGER_DIGITS: Final = 128
 
 
 class JsonInputError(ValueError):
@@ -30,6 +31,15 @@ def json_object_pairs_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[s
             raise DuplicateJsonKeyError()
         result[key] = value
     return result
+
+
+def bounded_json_integer(value: str) -> int:
+    """Reject pathological integer tokens before allocating a large integer."""
+
+    digits = value[1:] if value.startswith("-") else value
+    if not digits or len(digits) > MAX_JSON_INTEGER_DIGITS:
+        raise ValueError
+    return int(value)
 
 
 def _read_bounded_bytes(file_descriptor: int, max_bytes: int) -> bytes:
@@ -97,7 +107,11 @@ def _load_json_object_from_open_fd(
             raise JsonInputError()
         contents = _read_bounded_bytes(file_descriptor, max_bytes)
         decoded = contents.decode("utf-8")
-        value = json.loads(decoded, object_pairs_hook=json_object_pairs_without_duplicates)
+        value = json.loads(
+            decoded,
+            object_pairs_hook=json_object_pairs_without_duplicates,
+            parse_int=bounded_json_integer,
+        )
     except (OSError, RecursionError, ValueError):
         raise JsonInputError() from None
     finally:

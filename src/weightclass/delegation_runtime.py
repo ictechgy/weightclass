@@ -9,11 +9,11 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from types import FrameType
 from typing import Any, Final
 
 from .delegation_types import DirectChildCleanup
+from .executable_observation import ExecutableObservation, observe_executable
 from .process_context import (
     ChildStatusLostError,
     has_safe_sigchld_disposition,
@@ -109,11 +109,13 @@ class _SigintDeferredUntilChildOwned:
             previous_handler(signal.SIGINT, received_frame)
 
 
-def validate_delegation_runtime(runtime_path: str) -> None:
-    """Require the exact reviewed path to name a regular executable file."""
-    path = Path(runtime_path)
-    if not path.is_file() or not os.access(path, os.X_OK):
-        raise DelegationRuntimeUnavailableError()
+def validate_delegation_runtime(runtime_path: str) -> ExecutableObservation:
+    """Observe one admitted runtime identity without exposing path details."""
+
+    try:
+        return observe_executable(runtime_path)
+    except (OSError, ValueError):
+        raise DelegationRuntimeUnavailableError() from None
 
 
 def validate_runtime_process_context() -> None:
@@ -252,6 +254,7 @@ def run_delegation_runtime(
     runtime_path: str,
     frame: bytes,
     cleanup: DirectChildCleanup,
+    expected_observation: ExecutableObservation | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     """Spawn once, deliver one frame within the reviewed grace, and wait."""
     arguments = (runtime_path, *RUNTIME_ARGUMENTS)
@@ -264,6 +267,11 @@ def run_delegation_runtime(
     deferred_sigint.arm()
     try:
         validate_runtime_process_context()
+        if (
+            expected_observation is not None
+            and validate_delegation_runtime(runtime_path) != expected_observation
+        ):
+            raise DelegationRuntimeUnavailableError()
         try:
             process = subprocess.Popen(
                 arguments,

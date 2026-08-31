@@ -13,6 +13,7 @@ weightclass 자신은 HTTP 를 하지 않는다. 벤더 CLI 를 전면에서 한
 """
 
 import ctypes
+import errno
 import os
 import selectors
 import signal
@@ -542,6 +543,10 @@ def _remove_unspawned_private_directory(
         return False
 
 
+def _child_status_lost(error: OSError) -> bool:
+    return isinstance(error, ChildProcessError) or error.errno == errno.ECHILD
+
+
 def _cleanup_vendor_process(
     process: subprocess.Popen[bytes],
     selector: Any | None,
@@ -552,6 +557,7 @@ def _cleanup_vendor_process(
     answer: bytearray,
     termination_deadline: float,
     overall_deadline: float,
+    child_status_lost: bool,
 ) -> tuple[bool, int | None, BaseException | None]:
     """Run every owned cleanup stage, retaining the first BaseException."""
     failed = False
@@ -575,12 +581,16 @@ def _cleanup_vendor_process(
         except BaseException as error:
             record(error)
 
-    try:
-        signal_process_group(process.pid, signal.SIGTERM)
-    except BaseException as error:
-        record(error)
+    if child_status_lost:
+        failed = True
+    else:
+        try:
+            signal_process_group(process.pid, signal.SIGTERM)
+        except BaseException as error:
+            record(error)
     while (
-        selector is not None
+        not child_status_lost
+        and selector is not None
         and stdout_descriptor is not None
         and not stdout_eof
         and time.monotonic() < termination_deadline
@@ -601,11 +611,17 @@ def _cleanup_vendor_process(
             record(error)
             break
 
-    try:
-        signal_process_group(process.pid, signal.SIGKILL)
-    except BaseException as error:
-        record(error)
-    while stdout_descriptor is not None and not stdout_eof and time.monotonic() < overall_deadline:
+    if not child_status_lost:
+        try:
+            signal_process_group(process.pid, signal.SIGKILL)
+        except BaseException as error:
+            record(error)
+    while (
+        not child_status_lost
+        and stdout_descriptor is not None
+        and not stdout_eof
+        and time.monotonic() < overall_deadline
+    ):
         try:
             stdout_eof, overflow = _read_available_output(stdout_descriptor, answer)
             failed = failed or overflow
@@ -631,12 +647,13 @@ def _cleanup_vendor_process(
             record(error)
 
     return_code: int | None = None
-    try:
-        # Ownership is stronger than the deadline: never return while a direct
-        # child status remains ours, but reject status obtained after deadline.
-        return_code = wait_owned_child(process)
-    except BaseException as error:
-        record(error)
+    if not child_status_lost:
+        try:
+            # Ownership is stronger than the deadline: never return while a direct
+            # child status remains ours, but reject status obtained after deadline.
+            return_code = wait_owned_child(process)
+        except BaseException as error:
+            record(error)
     if time.monotonic() >= overall_deadline:
         failed = True
     return failed, return_code, pending
@@ -658,6 +675,7 @@ def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
     stdout_descriptor: int | None = None
     stdout_eof = False
     leader_observed = False
+    child_status_lost = False
     root_fd: int | None = None
     parent_fd: int | None = None
     working_directory_fd: int | None = None
@@ -765,7 +783,10 @@ def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
                         break
                 else:
                     failed = True
-            except (ChildProcessError, OSError, TriageUnavailableError, ValueError):
+            except OSError as error:
+                child_status_lost = _child_status_lost(error)
+                failed = True
+            except (TriageUnavailableError, ValueError):
                 failed = True
             except BaseException as error:
                 pending = error
@@ -787,6 +808,7 @@ def _read_bounded_vendor_answer(task: str, command: tuple[str, ...]) -> bytes:
                     answer,
                     termination_deadline,
                     overall_deadline,
+                    child_status_lost,
                 )
                 failed = failed or cleanup_failed
                 if pending is None and cleanup_pending is not None:

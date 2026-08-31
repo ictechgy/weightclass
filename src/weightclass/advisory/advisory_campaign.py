@@ -45,6 +45,7 @@ MAX_PRICES_BYTES = 65_536
 MAX_CAMPAIGN_LOG_BYTES = 67_108_864
 MAX_CAMPAIGN_RECORD_BYTES = 1_048_576
 MAX_TASKS = 500
+MAX_JSON_INTEGER_DIGITS = 128
 ANONYMOUS_LANE_COUNT = 10
 MAX_ANONYMOUS_LANES = 16
 OVERLAPPING_PRICE_FIELDS = (
@@ -203,6 +204,13 @@ def _sha256(payload: bytes) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def bounded_json_integer(value: str) -> int:
+    digits = value[1:] if value.startswith("-") else value
+    if not digits or len(digits) > MAX_JSON_INTEGER_DIGITS:
+        raise CampaignError()
+    return int(value)
+
+
 def _bounded_file_bytes(path: Path, maximum: int) -> bytes:
     nofollow = getattr(os, "O_NOFOLLOW", None)
     if nofollow is None:
@@ -237,6 +245,21 @@ def _bounded_file_bytes(path: Path, maximum: int) -> bytes:
 
 def file_sha256(path: Path, maximum: int) -> str:
     return _sha256(_bounded_file_bytes(path, maximum))
+
+
+def load_bounded_json_file(path: Path, maximum: int) -> object:
+    """Read one no-follow regular JSON file with bounded numeric conversion."""
+
+    payload = _bounded_file_bytes(path, maximum)
+    try:
+        return json.loads(
+            payload.decode("utf-8", errors="strict"),
+            object_pairs_hook=_object_without_duplicates,
+            parse_constant=lambda _value: (_ for _ in ()).throw(CampaignError()),
+            parse_int=bounded_json_integer,
+        )
+    except (UnicodeDecodeError, ValueError, RecursionError, CampaignError) as error:
+        raise CampaignError() from error
 
 
 def stage_bound_file(
@@ -289,6 +312,7 @@ def price_table_sha256(path: Path) -> str:
             payload.decode("utf-8", errors="strict"),
             object_pairs_hook=_object_without_duplicates,
             parse_constant=lambda _value: (_ for _ in ()).throw(CampaignError()),
+            parse_int=bounded_json_integer,
         )
     except (UnicodeDecodeError, ValueError, RecursionError, CampaignError) as error:
         raise CampaignError() from error
@@ -531,6 +555,7 @@ def load_manifest(path: Path) -> CampaignManifest:
             payload.decode("utf-8", errors="strict"),
             object_pairs_hook=_object_without_duplicates,
             parse_constant=lambda _value: (_ for _ in ()).throw(CampaignError()),
+            parse_int=bounded_json_integer,
         )
     except (UnicodeDecodeError, ValueError, RecursionError, CampaignError) as error:
         raise CampaignError() from error
@@ -538,25 +563,12 @@ def load_manifest(path: Path) -> CampaignManifest:
 
 
 def load_bound_records(path: Path) -> list[dict[str, object]]:
-    if not path.exists():
-        return []
-    payload = _bounded_file_bytes(path, MAX_CAMPAIGN_LOG_BYTES)
+    """Stream and retain at most the global sealed campaign capacity."""
+
     records: list[dict[str, object]] = []
-    for raw_line in payload.splitlines():
-        if not raw_line.strip():
-            continue
-        if len(raw_line) > MAX_CAMPAIGN_RECORD_BYTES:
-            raise CampaignError()
-        try:
-            value = json.loads(
-                raw_line.decode("utf-8", errors="strict"),
-                object_pairs_hook=_object_without_duplicates,
-                parse_constant=lambda _value: (_ for _ in ()).throw(CampaignError()),
-            )
-        except (UnicodeDecodeError, ValueError, RecursionError, CampaignError) as error:
-            raise CampaignError() from error
-        if not isinstance(value, dict):
-            raise CampaignError()
+    for value in _iter_bound_records(path):
+        if len(records) >= MAX_TASKS:
+            raise CampaignError("campaign_record_capacity_exceeded")
         records.append(value)
     return records
 
@@ -623,6 +635,7 @@ def _iter_bound_records(
                                 parse_constant=lambda _value: (_ for _ in ()).throw(
                                     CampaignError()
                                 ),
+                                parse_int=bounded_json_integer,
                             )
                         except (
                             UnicodeDecodeError,
@@ -654,6 +667,7 @@ def _iter_bound_records(
                                 parse_constant=lambda _value: (_ for _ in ()).throw(
                                     CampaignError()
                                 ),
+                                parse_int=bounded_json_integer,
                             )
                         except (
                             UnicodeDecodeError,
