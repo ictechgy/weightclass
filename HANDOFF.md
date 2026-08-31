@@ -1,8 +1,67 @@
 # Handoff
 
-_Last updated: 2026-08-31 KST by Codex_
+_Last updated: 2026-09-01 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
+
+## Guided advisory policy, council, and context follow-up (released in 0.28.0)
+
+The prioritized advisor-usability work is implemented, reviewed, published, and installed.
+Implementation PR #169 merged at `834d212`; release PR #170 and tag `v0.28.0` point to exact
+release commit `fa140403`. Source-formula PR #171 and tap PR `ictechgy/homebrew-tap#37` are merged.
+
+The released one-shot behavior:
+
+- `ask --stage manual|plan|pivot|final` declares invocation timing, and
+  `--auto-skip-trivial` can avoid plan/final vendor calls using the existing local classifier.
+- `--preview` is task-free: it reads neither stdin nor repository content, starts no vendor
+  process, and displays vendors, task delivery/process exposure, context, local probe count, and
+  task-bearing child bound.
+- `--council` explicitly names two to four distinct built-in vendors. Members run sequentially in
+  fresh independent processes, one member's output never enters another's prompt, partial results
+  are retained with exit 2, and descriptive consensus/dissent never selects a winner.
+- `--context task|diff|files|repo` narrows input. Explicit files use bounded no-follow UTF-8 reads
+  bound to the pre-execution snapshot. Diff uses a task-free observed absolute Git executable,
+  explicit Git/worktree binding, disabled external diff/textconv/color/hooks/fsmonitor/locks, a
+  128 KiB ceiling, and tracked `HEAD` changes only. Linked-worktree `.git` files fail closed.
+- Review receipts add snapshot-bound local `file:line` validation, boundary-aware supporting
+  citations, and invocation-only semantic grouping. Human output folds locally rejected and exact
+  duplicate findings; machine JSON retains every original result and annotation.
+- Agent Skill onboarding 16 teaches timing, smallest-sufficient context, task-free preview, a
+  per-task target of two/max four calls, and explicit-only cross-vendor council use.
+
+Review and verification evidence:
+
+- Two scrubbed GLM packets contained six public files/81,943 bytes/SHA prefix `e7c87f987906` and
+  seven public files/87,976 bytes/SHA prefix `344e43c60f56`; provider output was treated as
+  untrusted. Confirmed consent, Git/worktree binding, executable-path, snapshot-race,
+  aggregate-I/O, finding-mute, prompt-boundary, citation, partial-receipt, and argv disclosure
+  issues were fixed.
+- Independent architecture plus runtime/triage security discovery found six candidates; focused
+  validation suppressed all six after fixes. The final complete nine-production-file security
+  diff report retained no finding. TAC status was not queried.
+- Full source validation passed 1,563 tests with 35 skips, Ruff check and format-check over 205
+  files, strict mypy over 202 source files, compileall, and `git diff --check`. Extracted-sdist
+  isolation passed 1,556 tests with 79 skips. The implementation and release PRs each passed all
+  eight Python 3.10-3.14 and macOS Python 3.10/3.14 checks.
+- A same-interpreter 20-run cold comparison measured `ask --help` at 53.6 ms on the 0.27.1
+  baseline and 54.4 ms on the implementation; this noisy local observation is not a guarantee.
+
+Release and installation evidence:
+
+- Release run `33450850853` passed immutable Python 3.13 build, macOS boundaries, Python 3.10/3.14
+  candidate validation, protected PyPI publication, and final GitHub Release creation.
+- PyPI exposes one non-yanked wheel and one non-yanked canonical sdist at
+  `https://files.pythonhosted.org/packages/63/85/b82ff2ea487d2ec3be448e84e634731a63e1c610ad1eecaddf3215339a1d/weightclass-0.28.0.tar.gz`
+  with SHA-256 `6498e4f80af1cc1aa67858ceab204ca89496cdac34448069a8d19989c81dd34f`.
+- GitHub Release `v0.28.0` is final, non-prerelease, and Latest. Homebrew targeted style, strict
+  audit, source upgrade, exact binary smoke, and `brew test` pass.
+- The user-level uv tool and exact Homebrew binary both report `0.28.0`. Exact 0.27.1 Codex and
+  Claude Skill bundles upgraded safely to generation 16; both now report `already_installed`.
+
+No real project task or campaign was dispatched, no credential or vendor configuration was read,
+and no campaign/usage record was changed. The next safe action is ordinary explicit use of
+`$advisory` or `wclass-advisory ask`; use `--preview` before unfamiliar context/council egress.
 
 ## One-shot usability and Skill compatibility follow-up (released in 0.27.1)
 
