@@ -17,7 +17,7 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, cast
 
@@ -43,6 +43,7 @@ DEFAULT_TIMEOUT_SECONDS = 28_800.0
 DEFAULT_MAX_OUTPUT_BYTES = 1_048_576
 MAX_TIMEOUT_SECONDS = 28_800.0
 MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+MAX_JOB_STDIN_BYTES = 80_000
 DEFAULT_HEARTBEAT_SECONDS = 60.0
 _LABEL = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 _START_ERROR = b"advisory child start failed\n"
@@ -59,6 +60,7 @@ class AdvisoryJob:
     command: tuple[str, ...]
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES
+    stdin_bytes: bytes | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,10 @@ def _validate_jobs(jobs: tuple[AdvisoryJob, ...]) -> None:
             isinstance(job.timeout_seconds, bool)
             or not isinstance(job.timeout_seconds, (int, float))
             or not 0 < job.timeout_seconds <= MAX_TIMEOUT_SECONDS
+        ):
+            raise ValueError
+        if job.stdin_bytes is not None and (
+            not isinstance(job.stdin_bytes, bytes) or len(job.stdin_bytes) > MAX_JOB_STDIN_BYTES
         ):
             raise ValueError
         if (
@@ -185,7 +191,15 @@ def _capture_job(
                 for key in list(selector.get_map().values()):
                     selector.unregister(key.fileobj)
                     cast(BinaryIO, key.fileobj).close()
-                return AdvisoryResult(job.label, 130, b"", _INTERRUPTED_ERROR, True)
+                return AdvisoryResult(
+                    job.label,
+                    130,
+                    b"",
+                    _INTERRUPTED_ERROR,
+                    True,
+                    False,
+                    truncated,
+                )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True
@@ -236,7 +250,15 @@ def _capture_job(
         while True:
             if cancel_requested.is_set():
                 _terminate_process_group(process, anchor)
-                return AdvisoryResult(job.label, 130, b"", _INTERRUPTED_ERROR, True)
+                return AdvisoryResult(
+                    job.label,
+                    130,
+                    b"",
+                    _INTERRUPTED_ERROR,
+                    True,
+                    False,
+                    truncated,
+                )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _terminate_process_group(process, anchor)
@@ -270,13 +292,16 @@ def _capture_job(
     finally:
         anchor.close()
         selector.close()
+        for stream in (process.stdout, process.stderr):
+            if not stream.closed:
+                stream.close()
 
 
 def _run_job(job: AdvisoryJob, cancel_requested: threading.Event) -> AdvisoryResult:
     try:
         process = subprocess.Popen(
             job.command,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE if job.stdin_bytes is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             close_fds=True,
@@ -284,7 +309,60 @@ def _run_job(job: AdvisoryJob, cancel_requested: threading.Event) -> AdvisoryRes
         )
     except OSError:
         return AdvisoryResult(job.label, 2, b"", _START_ERROR, False)
-    return _capture_job(process, job, cancel_requested)
+    delivered = threading.Event()
+    delivery_stop = threading.Event()
+
+    def deliver() -> None:
+        assert process.stdin is not None and job.stdin_bytes is not None
+        try:
+            descriptor = process.stdin.fileno()
+            os.set_blocking(descriptor, False)
+            remaining = memoryview(job.stdin_bytes)
+            while remaining and not delivery_stop.is_set():
+                try:
+                    written = os.write(descriptor, remaining)
+                except BlockingIOError:
+                    delivery_stop.wait(0.01)
+                    continue
+                if written <= 0:
+                    return
+                remaining = remaining[written:]
+            if not remaining:
+                delivered.set()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+        finally:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+
+    delivery_thread: threading.Thread | None = None
+    if job.stdin_bytes is not None:
+        delivery_thread = threading.Thread(
+            target=deliver,
+            name="wclass-advisory-input",
+            daemon=True,
+        )
+        try:
+            delivery_thread.start()
+        except RuntimeError:
+            assert process.stdin is not None
+            process.stdin.close()
+            _terminate_process_group(process)
+            assert process.stdout is not None and process.stderr is not None
+            process.stdout.close()
+            process.stderr.close()
+            return AdvisoryResult(job.label, 2, b"", _START_ERROR, True)
+    try:
+        result = _capture_job(process, job, cancel_requested)
+    finally:
+        delivery_stop.set()
+        if delivery_thread is not None:
+            delivery_thread.join(timeout=1.0)
+    if delivery_thread is not None and result.returncode == 0 and not delivered.is_set():
+        return AdvisoryResult(job.label, 2, b"", _START_ERROR, True)
+    return result
 
 
 ProgressCallback = Callable[[str, str, int], None]

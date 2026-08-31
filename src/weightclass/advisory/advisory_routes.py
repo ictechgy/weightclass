@@ -504,6 +504,74 @@ def build_routes(
     )
 
 
+def build_default_evidence_route(vendor: str, workflow: str) -> tuple[str, ...]:
+    """Build one read-only route using the selected CLI's default model.
+
+    This is the stateless one-shot surface.  Omitting model and effort is
+    intentional: those labels belong to explicit campaign profiles, while a
+    direct advisory should work with the caller's already configured vendor
+    default.  The result receipt therefore never claims quality verification.
+    """
+
+    if vendor not in {"claude", "codex", "agy", "grok"}:
+        raise AdvisoryRouteError()
+    schema = evidence_json_schema(workflow)
+    if vendor == "claude":
+        return (
+            "claude",
+            "--print",
+            "--no-session-persistence",
+            "--safe-mode",
+            "--permission-mode",
+            "dontAsk",
+            "--tools",
+            "Read,Glob,Grep",
+            "--output-format",
+            "json",
+            "--json-schema",
+            schema,
+        )
+    if vendor == "codex":
+        return (
+            "codex",
+            "exec",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--sandbox",
+            "read-only",
+            "--json",
+            "-",
+        )
+    if vendor == "agy":
+        return (
+            "agy",
+            "--sandbox",
+            "--mode",
+            "plan",
+            "--output-format",
+            "json",
+            "--json-schema",
+            schema,
+            "--print",
+            TASK_PLACEHOLDER,
+        )
+    return (
+        "grok",
+        "--permission-mode",
+        "plan",
+        "--no-subagents",
+        "--disable-web-search",
+        "--output-format",
+        "json",
+        "--json-schema",
+        schema,
+        "--verbatim",
+        "--prompt-file",
+        TASK_FILE_PLACEHOLDER,
+    )
+
+
 def routes_from_profile(
     path: Path,
     *,

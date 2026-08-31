@@ -6,6 +6,8 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -82,6 +84,58 @@ class ParallelAdvisoryTests(unittest.TestCase):
         self.assertEqual(results[0].stdout, b"completed\n")
         self.assertEqual(results[1].stderr, b"failed\n")
 
+    def test_task_bytes_are_delivered_on_stdin_and_hidden_from_job_repr(self) -> None:
+        parallel = load_module(PARALLEL, "prospective_advisory_parallel_stdin")
+        task = b"PRIVATE CAMPAIGN TASK"
+        job = parallel.AdvisoryJob(
+            "codex",
+            (
+                sys.executable,
+                "-c",
+                "import sys; data=sys.stdin.buffer.read(); print(len(data))",
+            ),
+            stdin_bytes=task,
+        )
+
+        (result,) = parallel.run_parallel((job,))
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, f"{len(task)}\n".encode())
+        self.assertNotIn(task.decode(), repr(job))
+
+    def test_blocked_task_delivery_stops_when_the_runner_finishes(self) -> None:
+        parallel = load_module(PARALLEL, "prospective_advisory_parallel_stdin_stop")
+        read_descriptor, write_descriptor = os.pipe()
+        process = mock.Mock()
+        process.stdin = os.fdopen(write_descriptor, "wb", buffering=0)
+        job = parallel.AdvisoryJob(
+            "codex",
+            ("runner",),
+            stdin_bytes=b"x" * parallel.MAX_JOB_STDIN_BYTES,
+        )
+        finished = parallel.AdvisoryResult("codex", 0, b"", b"", True)
+        started = time.monotonic()
+        try:
+            with (
+                mock.patch.object(parallel.subprocess, "Popen", return_value=process),
+                mock.patch.object(
+                    parallel,
+                    "_capture_job",
+                    side_effect=lambda *_args: (
+                        threading.Event().wait(0.02),
+                        finished,
+                    )[1],
+                ),
+            ):
+                result = parallel._run_job(job, threading.Event())
+        finally:
+            os.close(read_descriptor)
+            if not process.stdin.closed:
+                process.stdin.close()
+
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertEqual(result.returncode, 2)
+
     def test_invalid_or_duplicate_jobs_fail_before_start(self) -> None:
         parallel = load_module(PARALLEL, "prospective_advisory_parallel_validation")
         valid = parallel.AdvisoryJob("codex", (sys.executable, "-c", "pass"))
@@ -91,6 +145,13 @@ class ParallelAdvisoryTests(unittest.TestCase):
             (parallel.AdvisoryJob("BAD LABEL", valid.command),),
             (parallel.AdvisoryJob("empty", ()),),
             (parallel.AdvisoryJob("nul", (sys.executable, "bad\x00arg")),),
+            (
+                parallel.AdvisoryJob(
+                    "large-input",
+                    valid.command,
+                    stdin_bytes=b"x" * (parallel.MAX_JOB_STDIN_BYTES + 1),
+                ),
+            ),
         )
         for jobs in invalid_cases:
             with self.subTest(jobs=len(jobs)):

@@ -45,9 +45,13 @@ authentication or subscription state.
 ```sh
 printf '%s' 'Fix a spelling typo.' | wclass classify
 printf '%s' 'Fix a spelling typo.' | wclass route --source-vendor codex
+printf '%s' 'Fix a spelling typo.' | wclass run --source-vendor codex --review
 ```
 
 The first command classifies locally; the second reviews the selected command.
+The third keeps review and execution in one process: it shows the task-free
+route on the controlling terminal, asks for confirmation, and then starts at
+most one vendor child. No copied fingerprint is needed.
 `route` requires the selected vendor executable to be installed and to pass the
 local admission checks described below; otherwise it exits `3` without starting
 the vendor.
@@ -59,29 +63,35 @@ boundary, is documented in [the security follow-up](docs/security-performance-fo
 ### Advisory companion
 
 `wclass-advisory` is installed with weightclass but is never selected by
-`wclass run`. Initialize each vendor once with caller-selected opaque model and
-effort labels; the command creates owner-private task-free profiles, five sealed
-workflow campaigns, and anonymous result lanes in the platform state directory.
-It never reads vendor authentication or stores task content:
+`wclass run`. The default path is one stateless, read-only answer using the
+selected CLI's configured default model. It needs no initialization, profile,
+campaign, verifier, copied digest, or task file, and records no sample:
 
 ```sh
-wclass-advisory init --vendor codex \
-  --model cheap=CHEAP --model advisor=ADVISOR --model expensive=EXPENSIVE \
-  --effort cheap=low --effort advisor=high --effort expensive=high
-wclass-advisory doctor --vendor codex --workflow all
-wclass-advisory cli-check --vendor all
-wclass-advisory review --vendor codex --workflow implementation
-wclass-advisory consult --vendor codex --workflow review \
-  --repo /absolute/clean/repository --task-file /absolute/private/task \
-  --ack-route-sha256 codex=sha256:REVIEWED --confirm-task-egress
-wclass-advisory install-skill --target both --dry-run
+printf '%s' 'Review this change.' | wclass-advisory ask \
+  --vendor codex --workflow review --repo . --confirm-task-egress
+wclass-advisory skill status --target both
 ```
 
-The labels above are placeholders, not recommendations. Use only labels and
-entitlements you have reviewed. Add `--prices` when you have a single-origin
-price table; without it the campaign may abstain from a cost verdict. A project
-must commit the workflow's prospective `.weightclass/verify*` before
-`wclass-advisory dispatch` can send a private task file to a vendor. See the
+The one-shot result is closed-schema validated but explicitly
+`quality_verified:false` and model-authored content remains untrusted. The
+runner checks local CLI capability before reading stdin and rejects any
+non-`.git` worktree mutation detected by its bounded before/after snapshots.
+The receipt explicitly reports that Git metadata is not checked.
+Capability checking starts two task-free bounded local vendor processes for
+`--help` and `--version`; a successful advisory then starts one task-bearing
+vendor process.
+This is not host filesystem confinement; use an external container or jail for
+a hostile CLI or repository.
+
+Campaign setup is required only when the user explicitly wants implementation
+or measurement. `wclass-advisory campaign init` persists caller-supplied opaque
+model and effort labels and creates separate sealed populations. A project must
+commit the workflow's prospective `.weightclass/verify*` before `campaign run`;
+`campaign verifier scaffold` provides a safe reject-all starting point and
+workflow criteria checklist. The grouped `campaign run` reads task bytes from
+stdin and forwards them through anonymous pipes; the flat `dispatch --task-file`
+alias remains for automation compatibility. See the
 [managed onboarding guide](docs/advisory-onboarding.md),
 [Advisory campaign vendor profiles](docs/advisory-vendor-profiles.md), and
 the [campaign contract](docs/advisory-campaign.md). Distribution makes the
@@ -145,9 +155,10 @@ serial; distinct executable groups use separate temporary workspaces under a
 fixed concurrency ceiling of four, and receipts are restored to deterministic
 vendor/role order.
 
-`consult` is the one-shot, non-recording alternative for review, research,
-diagnosis, and design. It runs one selected cheap or expensive evidence route,
-emits one tagged NDJSON receipt whose nested result is explicitly marked
+`ask` is the recommended one-shot, non-recording path for review, research,
+diagnosis, and design. The older `consult` command remains available when a
+caller deliberately wants one selected cheap or expensive managed-profile route.
+It emits one tagged NDJSON receipt whose nested result is explicitly marked
 `untrusted_model_authored`, and never acquires a campaign lane or appends a
 sample. A custom schema-2 vendor profile additionally requires
 `--confirm-provider-egress` and passes its task-free provider conformance check
@@ -189,14 +200,14 @@ scaffolding, and nested `.git` under explicit entry/size/depth bounds. Extended
 attributes remain outside the existing Git-visible contract, and true host
 filesystem isolation still requires an external sandbox.
 
-The optional packaged advisory skill currently uses managed onboarding 14.
+The optional packaged advisory skill currently uses managed onboarding 15.
 Previewing never overwrites an installed skill; `--upgrade` replaces only an
 exact package-owned older bundle and rejects customized, extra-file, or
 symlinked destinations:
 
 ```sh
-wclass-advisory install-skill --target both --upgrade --dry-run
-wclass-advisory install-skill --target both --upgrade
+wclass-advisory skill install --target both --upgrade --dry-run
+wclass-advisory skill install --target both --upgrade
 ```
 
 Native schema 2 and delegation protocol 2 add explicit source/account profiles,
@@ -271,8 +282,8 @@ router, should assert a saving without measuring it on their own workload —
 which is why every savings surface here abstains by default.
 
 Two proposals for what to do with the one lever that did survive — model grade,
-−69.02% cost at equal quality, rejected only for two mechanically detectable
-critical failures in 90 — are written up but **not implemented**:
+−69.02% cost among the 88 runs without a critical failure, but rejected for two
+mechanically detectable critical failures in 90 — are written up but **not implemented**:
 [`docs/speculative-cheap-route-design.md`](docs/speculative-cheap-route-design.md)
 runs the cheap route and escalates when a verify command fails, and
 [`docs/advisor-arm-design.md`](docs/advisor-arm-design.md) measures Anthropic's
@@ -287,7 +298,8 @@ the task-free [next-experiment plan](docs/advisory-next-experiments.md) keeps
 Codex review collection, Shape A+B, and opaque implementation cohorts in
 separate sealed populations;
 the installed, explicit opt-in [`advisory` Agent Skill](docs/advisory-skill.md) can be
-installed for Codex, Claude Code, or both after private campaign inputs are configured;
+installed for Codex, Claude Code, or both without campaign configuration;
+task-free campaign inputs are required only for explicit campaign use;
 legacy unbound logs remain descriptive only.
 
 Raw tokens and estimated provider cost must be evaluated separately. The

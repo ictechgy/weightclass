@@ -1,4 +1,4 @@
 interface:
   display_name: "Advisory"
-  short_description: "Run sealed advisory workflows safely"
-  default_prompt: "Use $advisory to run this task in review mode with a prospective verifier."
+  short_description: "Get a one-shot read-only advisory"
+  default_prompt: "Use $advisory to review this task once with the current host vendor."

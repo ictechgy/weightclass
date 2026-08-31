@@ -3,35 +3,31 @@
 _Status: distributed as an explicit experimental companion command. Installing
 the skill does not change the one-child `wclass` boundary._
 
-The portable [`advisory` skill bundle](../src/weightclass/advisory/skill/SKILL.md) teaches Codex or Claude Code to
-select the existing implementation, review, research, diagnosis, or design campaign; fix a
-prospective verifier before dispatch; keep task content in a private temporary file; and preserve
-separate sealed populations. It supports reviewed schema-1 Claude/Codex/agy/Grok profiles and
-schema-2 arbitrary-vendor command matrices, but it must report whether delivery is stdin, argv, or
-a private file before a run. It deliberately refuses ordinary non-advisory requests and
-brainstorming.
+The portable [`advisory` skill bundle](../src/weightclass/advisory/skill/SKILL.md)
+uses stateless `ask` for ordinary review, research, diagnosis, and design. The
+host vendor's configured default model is called once in read-only mode; no
+profile, campaign, verifier, digest, or task file is required. Implementation
+and explicitly measured work retain the separate sealed campaign workflow.
 
 ## Prerequisite
 
-Install `weightclass`, then initialize each desired vendor once with reviewed model and effort
-labels. Managed onboarding creates owner-private, task-free profiles, five sealed workflow
-campaigns, and result lanes in the platform state directory. It does not read or modify vendor
-authentication. A skill is instructions, not an entitlement claim.
+Install `weightclass` and the desired vendor CLI. No advisory initialization is
+needed for one-shot use. The tool does not read or modify vendor authentication;
+the selected CLI owns its authentication and provider request.
 
 The labels are opaque caller input, not recommendations:
 
 ```sh
-wclass-advisory init --vendor claude \
-  --model cheap=CHEAP --model advisor=ADVISOR --model expensive=EXPENSIVE \
-  --effort cheap=low --effort advisor=high --effort expensive=high
-wclass-advisory doctor --vendor claude --workflow all
-wclass-advisory cli-check --vendor all
-wclass-advisory review --vendor claude --workflow implementation
+printf '%s' 'Review this repository.' | wclass-advisory ask \
+  --vendor claude --workflow review --repo . --confirm-task-egress
 ```
 
-The review is task-free. An agy `{{task}}` route explicitly exposes task text to local process
-inspection; a Grok `{{task_file}}` route uses an owner-only transient file outside the Git
-workspace. Schema-2 profiles must
+Initialize opaque model/effort profiles only for an explicit campaign.
+
+The one-shot preflight is task-free; the selected vendor call receives the task
+only after confirmation. An agy `{{task}}` route explicitly exposes task text to local process
+inspection; a Grok `{{task_file}}` route uses an inherited anonymous `/dev/fd/N`
+pipe with no task pathname. Schema-2 campaign profiles must
 declare exact `implementation` and `evidence` matrices for `cheap`, `advisor`, and `expensive`.
 Do not invent model quality, pricing, entitlement, or subscription availability for agy or Grok;
 their labels are user-selected opaque configuration.
@@ -60,30 +56,31 @@ exploratory only and cannot make a promotion-eligible claim.
 
 ## Preview and install
 
-The installer never reads task stdin, contacts a provider, or discovers vendor configuration. This
-explicit command is the advisory companion's sole vendor-recognized-path exception: it writes only
-the exact reviewed bundle to the selected personal Skill directory and never reads or rewrites
-other Codex or Claude configuration. Ordinary install never overwrites an existing skill. Preview
+The installer never reads task stdin, contacts a provider, or discovers vendor configuration.
+These commands are the sole vendor-recognized-path exception. Explicit `skill install` writes
+only the exact reviewed bundle, while `skill uninstall --confirm`
+removes only an exact package-owned bundle from the selected personal Skill directory. Neither
+reads or rewrites other Codex or Claude configuration. Ordinary install never overwrites an existing skill. Preview
 first:
 
 ```sh
-wclass-advisory install-skill --target both --dry-run
+wclass-advisory skill status --target both
 ```
 
 Then explicitly install for Codex, Claude Code, or both:
 
 ```sh
-wclass-advisory install-skill --target codex
-wclass-advisory install-skill --target claude
-wclass-advisory install-skill --target both
+wclass-advisory skill install --target codex
+wclass-advisory skill install --target claude
+wclass-advisory skill install --target both
 ```
 
 An upgrade replaces only an exact package-owned historical bundle recorded in the reviewed
 compatibility ledger. A modified skill, symlink, or extra file still fails closed:
 
 ```sh
-wclass-advisory install-skill --target both --upgrade --dry-run
-wclass-advisory install-skill --target both --upgrade
+wclass-advisory skill install --target both --upgrade --dry-run
+wclass-advisory skill install --target both --upgrade
 ```
 
 Targets follow the products' documented personal skill locations

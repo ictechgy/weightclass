@@ -31,6 +31,8 @@ REQUIRED_WHEEL_ADVISORY_PATHS = (
     "weightclass/advisory/__init__.py",
     "weightclass/advisory/managed_advisory.py",
     "weightclass/advisory/managed_verify.py",
+    "weightclass/advisory/advisory_quick.py",
+    "weightclass/advisory/verifier_cli.py",
     "weightclass/advisory/wclass_advisory.py",
     "weightclass/advisory/skill/SKILL.md",
     "weightclass/advisory/skill/manifest.json",

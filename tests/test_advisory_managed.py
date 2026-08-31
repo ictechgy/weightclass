@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 from weightclass.advisory import (
@@ -1129,6 +1130,60 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                 "managed_verifier_baseline_rejected",
             )
 
+    def test_campaign_stdin_job_has_no_task_path_or_task_in_argv(self) -> None:
+        task = b"PRIVATE CAMPAIGN TASK"
+        selected = managed_advisory.CampaignPaths(
+            Path("/state/profile"),
+            Path("/state/prices"),
+            Path("/state/campaign"),
+            Path("/state/results"),
+        )
+        manifest = cast(
+            advisory_campaign.CampaignManifest,
+            {
+                "arm": "shape_b",
+                "cost_basis": "vendor",
+                "advisor_context": "prompt",
+            },
+        )
+
+        job = managed_advisory._job(
+            "codex",
+            "review",
+            Path("/repo"),
+            None,
+            task,
+            Path("/state/results"),
+            selected,
+            manifest,
+            1,
+            Path("/state/verify"),
+        )
+
+        self.assertIn("--task-stdin", job.command)
+        self.assertNotIn("--task-file", job.command)
+        self.assertNotIn(task.decode(), "\0".join(job.command))
+        self.assertEqual(job.stdin_bytes, task)
+        self.assertNotIn(task.decode(), repr(job))
+
+    def test_campaign_stdin_is_bounded_utf8_and_nonempty(self) -> None:
+        self.assertEqual(
+            managed_advisory._read_task_stream(io.BytesIO(b"valid task")),
+            b"valid task",
+        )
+        for payload in (
+            b"",
+            b"   ",
+            b"\xff",
+            b"x" * (speculative_run.MAX_TASK_FILE_BYTES + 1),
+        ):
+            with (
+                self.subTest(size=len(payload)),
+                self.assertRaises(managed_advisory.ManagedPreflightError) as raised,
+            ):
+                managed_advisory._read_task_stream(io.BytesIO(payload))
+            self.assertEqual(raised.exception.code, "managed_task_input_rejected")
+
     def test_dispatch_rejects_missing_confirmation_before_touching_task_or_state(self) -> None:
         secret_named_task = Path("/never/read/PRIVATE-TASK-CONTENT")
         with (
@@ -1652,20 +1707,17 @@ class ManagedAdvisoryCliTests(unittest.TestCase):
             text=True,
         )
 
-    def test_public_help_exposes_onboarding_without_removing_explicit_run(self) -> None:
+    def test_public_help_prioritizes_one_shot_and_grouped_campaigns(self) -> None:
         completed = self._run("--help")
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         for command in (
-            "init",
-            "doctor",
-            "cli-check",
-            "provider-check",
+            "ask",
+            "campaign",
+            "skill",
             "consult",
-            "dispatch",
-            "status",
             "review",
-            "run",
+            "advanced",
         ):
             self.assertIn(command, completed.stdout)
 
