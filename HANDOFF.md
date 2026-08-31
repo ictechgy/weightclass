@@ -4,7 +4,7 @@ _Last updated: 2026-08-31 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
-## Security, performance, and structure hardening (0.24.0 release candidate)
+## Security, performance, and structure hardening (released in 0.24.0)
 
 A repository-wide Standard Codex Security scan at `f1c7be3` completed as scan
 `f4db11e6-fc50-4045-bde9-4e6d901cd99c` with three medium and two low findings. Coverage is
@@ -33,8 +33,22 @@ terminal Security diff scan found two cancellation/status-loss gaps, both were f
 independently re-reviewed, and the sealed final report has no surviving finding. The protected
 verifier and a separate full unittest discovery each pass 1,441 tests with 35 skips. Ruff check and
 format-check pass all 217 files, strict mypy passes all 178 source files, and compileall plus
-`git diff --check` pass. Implementation PR #147 is merged at `7521c84`; the `0.24.0` release PR,
-tag, publication, Homebrew promotion, and local upgrade are still pending.
+`git diff --check` pass. The implementation and release are complete:
+
+- implementation PR #147 merged at `7521c84`; release PR #148 and tag `v0.24.0` point to the
+  exact reviewed release commit `729fd8f`;
+- Release run `33344604461` passed the immutable Python 3.13 build, macOS 3.10/3.14 boundaries,
+  Python 3.10/3.14 candidate validation, protected PyPI approval, and exact publication;
+- PyPI exposes one wheel and one non-yanked canonical sdist at
+  `https://files.pythonhosted.org/packages/6c/eb/9e86837523d098265b218b4a0addf7f6d8a12e2b3e3a74d5b04b4336d665/weightclass-0.24.0.tar.gz`
+  with SHA-256 `1bc0b377199c011e1ff6e62fec1c1f48e38b5e48e946e50a65d31d594cf02f2c`;
+- source-formula PR #149 and tap PR `ictechgy/homebrew-tap#32` are merged. Targeted Homebrew
+  style, strict audit, source reinstall, `brew test`, and exact binary smoke pass;
+- the user-level uv tool and Homebrew source installation both report `0.24.0`. Codex and Claude
+  packaged advisory skills are already exact-current with no upgrade planned.
+
+No real task was dispatched, no existing campaign or usage record was rewritten, and no policy
+decision was authorized during the release and packaging work.
 
 ## Usage guidance and advisory operating recommendation (released in 0.23.0)
 
@@ -1581,19 +1595,21 @@ human to read.
 ## Resume Prompt
 
 Open the current repository checkout, read `HANDOFF.md` and the applicable
-`AGENTS.md`, then continue from: `weightclass 0.22.0 is published on PyPI and
-Homebrew. Diagnostics PR #139, release PR #140, source-formula PR #141, and tap
-PR #30 are merged. Release run 33260915491 passed the immutable build, Python
-3.10/3.14 candidate validation, macOS 3.10/3.14 boundaries, protected PyPI
-approval, and exact publication. Both local uv and exact Homebrew entrypoints
-report 0.22.0, and brew test passes. Status exposes task-free arm, advice
-coverage, per-attempt failure stages, and retry transitions without changing
-campaign bytes or gates. The next operating plan prioritizes naturally
-occurring Codex review work and keeps Shape A+B plus opaque implementation
-cohorts separate; none were synthetically populated during this release.
-Current source gates pass 1,422 unittest tests with 35 skips, Ruff/format over
-215 files, strict mypy over 176 source files, and extracted-sdist/clean-wheel
-checks. The separately invoked advisory companion remains explicit and
+`AGENTS.md`, then continue from: `weightclass 0.24.0 is published on PyPI and
+Homebrew. Hardening PR #147, release PR #148, source-formula PR #149, and tap
+PR #32 are merged. Tag v0.24.0 points to reviewed release commit 729fd8f, and
+Release run 33344604461 passed the immutable build, Python 3.10/3.14 candidate
+validation, macOS 3.10/3.14 boundaries, protected PyPI approval, and exact
+publication. Both local uv and exact Homebrew entrypoints report 0.24.0, brew
+test passes, and the Codex/Claude advisory skills are exact-current. The release
+bounds advisory child capture and legacy parsers, improves cancellation and
+status-loss handling, disables repository-local Git fsmonitor execution for
+advisory Git calls, narrows protocol-1 runtime replacement, and lowers task-free
+status median latency by about 11.6%. The final 11-file Security diff report has
+no surviving finding; full source gates pass 1,441 unittest tests with 35 skips,
+Ruff/format over 217 files, and strict mypy over 178 source files. Verified-object
+execution and custom usage-store ancestry remain documented architecture
+residuals. The separately invoked advisory companion remains explicit and
 experimental; no campaign gate may authorize core routing. Never infer prices,
 read vendor credentials/config, backfill task/session data, or reuse a
 published version or tag.`
