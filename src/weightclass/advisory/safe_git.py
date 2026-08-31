@@ -97,6 +97,7 @@ def run(
     timeout_seconds: float,
     max_stdout_bytes: int,
     max_stderr_bytes: int,
+    executable: str = "git",
 ) -> GitResult:
     """Run one shell-free Git command with independent bounded output lanes."""
 
@@ -105,12 +106,15 @@ def run(
         or not 0 < timeout_seconds
         or not 0 < max_stdout_bytes
         or not 0 < max_stderr_bytes
+        or not isinstance(executable, str)
+        or not executable
+        or "\x00" in executable
         or any(not isinstance(argument, str) or "\x00" in argument for argument in arguments)
     ):
         raise SafeGitError("invalid_invocation")
     try:
         process = subprocess.Popen(
-            ("git", *SAFE_GIT_OPTIONS, *arguments),
+            (executable, *SAFE_GIT_OPTIONS, *arguments),
             cwd=cwd,
             env=hardened_environment(environment),
             stdin=subprocess.DEVNULL,

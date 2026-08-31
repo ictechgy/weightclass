@@ -30,6 +30,13 @@ and human preference remain outside a mechanical verifier. For research, this
 mode examines the repository and supplied sources; it does not itself grant
 live-web access.
 
+Choose one invocation stage separately from the workflow: `plan` before
+substantial work, `pivot` for a stuck approach, `final` before acceptance, or
+`manual` for an explicit standalone question. Choose the narrowest sufficient
+context independently: task only, bounded tracked diff, explicit UTF-8 files,
+or the read-only repository. A multi-vendor council is never implicit; it
+requires an explicit request and two to four named vendors.
+
 ## Brainstorming boundary
 
 Brainstorming is not a production workflow. Its desired endpoint is divergent

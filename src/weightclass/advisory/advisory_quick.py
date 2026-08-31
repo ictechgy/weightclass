@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
@@ -23,16 +25,20 @@ from weightclass.v2_validation import V2ValidationError
 
 if TYPE_CHECKING or __package__:
     from . import (
+        advisory_context,
         advisory_evidence_contract,
         advisory_preflight,
         advisory_routes,
+        advisory_triage,
         readonly_snapshot,
         speculative_run,
     )
 else:  # pragma: no cover - retained for the packaged direct-script boundary
+    import advisory_context  # type: ignore[import-not-found,no-redef]
     import advisory_evidence_contract  # type: ignore[import-not-found,no-redef]
     import advisory_preflight  # type: ignore[import-not-found,no-redef]
     import advisory_routes  # type: ignore[import-not-found,no-redef]
+    import advisory_triage  # type: ignore[import-not-found,no-redef]
     import readonly_snapshot  # type: ignore[import-not-found,no-redef]
     import speculative_run  # type: ignore[import-not-found,no-redef]
 
@@ -40,6 +46,8 @@ MAX_STANDARD_INPUT_BYTES = speculative_run.MAX_TASK_FILE_BYTES
 WORKFLOWS = ("review", "research", "diagnosis", "design")
 VENDORS = ("codex", "claude", "agy", "grok")
 ROLES = ("cheap", "expensive")
+STAGES = ("manual", "plan", "pivot", "final")
+MAX_COUNCIL_MEMBERS = 4
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -59,19 +67,22 @@ class QuickAdvisoryError(RuntimeError):
 _NEXT_ACTIONS = {
     "ask_confirmation_required": "Run in a terminal or add --confirm-task-egress.",
     "ask_execution_cancelled": "No vendor process was started.",
-    "ask_cli_unavailable": "Install or update the selected vendor CLI, then run ask again.",
+    "ask_cli_unavailable": "Install or update every selected vendor CLI, then run ask again.",
     "ask_process_context_unsafe": "Run from a process that owns child exit status, then retry.",
     "ask_invalid_input": "Check --help and provide a non-empty UTF-8 task on standard input.",
     "ask_repository_unavailable": "Choose an existing local repository directory.",
     "ask_repository_unsupported": "Use a smaller stable local directory and try again.",
     "ask_repository_changed": "Restore the repository changes before trusting the result.",
+    "ask_context_invalid": "Choose task, diff, files, or repo; --file is only for files context.",
+    "ask_context_unsupported": "Use bounded UTF-8 files or a supported tracked Git diff.",
+    "ask_council_invalid": "Choose two to four distinct supported vendors.",
     "ask_executor_failed": "Check the selected vendor CLI locally and retry.",
     "ask_result_invalid": "Retry once; the vendor did not return the required closed JSON result.",
 }
 
 
 def _emit_error(code: str, *, human: bool) -> int:
-    next_action = _NEXT_ACTIONS[code]
+    next_action = _NEXT_ACTIONS.get(code, _NEXT_ACTIONS["ask_invalid_input"])
     if human:
         print(f"Advisory failed: {code}", file=sys.stderr)
         print(f"Next: {next_action}", file=sys.stderr)
@@ -99,10 +110,9 @@ def _read_task_from_standard_input() -> str:
     stream = getattr(sys.stdin, "buffer", sys.stdin)
     try:
         payload = stream.read(MAX_STANDARD_INPUT_BYTES + 1)
-        if isinstance(payload, str):
-            encoded = payload.encode("utf-8", errors="strict")
-        else:
-            encoded = bytes(payload)
+        encoded = (
+            payload.encode("utf-8", errors="strict") if isinstance(payload, str) else bytes(payload)
+        )
         if not encoded or len(encoded) > MAX_STANDARD_INPUT_BYTES:
             raise QuickAdvisoryError("ask_invalid_input")
         task = encoded.decode("utf-8", errors="strict")
@@ -115,7 +125,19 @@ def _read_task_from_standard_input() -> str:
     return task
 
 
-def _resolve_executable(vendor: str, repo: Path) -> tuple[str, object]:
+def _resolve_repository(repo: Path) -> Path:
+    try:
+        resolved = repo.expanduser().resolve(strict=True)
+        if not resolved.is_dir():
+            raise QuickAdvisoryError("ask_repository_unavailable")
+        return resolved
+    except QuickAdvisoryError:
+        raise
+    except (OSError, ValueError):
+        raise QuickAdvisoryError("ask_repository_unavailable") from None
+
+
+def _observe_route_executable(vendor: str, repo: Path) -> tuple[str, object]:
     selected = shutil.which(vendor)
     if selected is None:
         raise QuickAdvisoryError("ask_cli_unavailable")
@@ -123,34 +145,86 @@ def _resolve_executable(vendor: str, repo: Path) -> tuple[str, object]:
         executable = Path(selected).resolve(strict=True)
         if not executable.is_absolute() or executable.is_relative_to(repo):
             raise QuickAdvisoryError("ask_cli_unavailable")
-        before = observe_executable(os.fspath(executable))
-        capability = advisory_preflight.check_local_capability(
-            vendor,
-            os.fspath(executable),
-        )
-        observation = observe_executable(os.fspath(executable))
+        return os.fspath(executable), observe_executable(os.fspath(executable))
+    except QuickAdvisoryError:
+        raise
+    except (OSError, V2ValidationError):
+        raise QuickAdvisoryError("ask_cli_unavailable") from None
+
+
+def _resolve_executable(vendor: str, repo: Path) -> tuple[str, object]:
+    executable, before = _observe_route_executable(vendor, repo)
+    try:
+        capability = advisory_preflight.check_local_capability(vendor, executable)
+        observation = observe_executable(executable)
         if not capability.ready or observation != before:
             raise QuickAdvisoryError("ask_cli_unavailable")
     except QuickAdvisoryError:
         raise
     except (OSError, V2ValidationError):
         raise QuickAdvisoryError("ask_cli_unavailable") from None
-    return os.fspath(executable), observation
+    return executable, observation
 
 
-def _confirm_task_egress(*, vendor: str, workflow: str, delivery: str, confirmed: bool) -> None:
+def _route(vendor: str, workflow: str) -> tuple[tuple[str, ...], str]:
+    try:
+        command = advisory_routes.build_default_evidence_route(vendor, workflow)
+        return command, advisory_routes.command_task_delivery(command)
+    except advisory_routes.AdvisoryRouteError:
+        raise QuickAdvisoryError("ask_invalid_input") from None
+
+
+def _preflight_member(vendor: str, workflow: str, repo: Path) -> dict[str, object]:
+    command, delivery = _route(vendor, workflow)
+    executable, observation = _resolve_executable(vendor, repo)
+    return {
+        "vendor": vendor,
+        "command": (executable, *command[1:]),
+        "delivery": delivery,
+        "executable": executable,
+        "observation": observation,
+    }
+
+
+def _confirm_task_egress(
+    *,
+    members: Sequence[Mapping[str, object]],
+    workflow: str,
+    stage: str,
+    context_mode: str,
+    context_file_count: int,
+    confirmed: bool,
+) -> None:
     if confirmed:
         return
     try:
-        with open(os.ctermid(), "r+", encoding="utf-8", buffering=1) as console:
+        ctermid = getattr(os, "ctermid", None)
+        if not callable(ctermid):
+            raise QuickAdvisoryError("ask_confirmation_required")
+        with open(ctermid(), "r+", encoding="utf-8", buffering=1) as console:
             print("One-shot advisory", file=console)
-            print(f"  Vendor: {vendor} (configured default model)", file=console)
-            print(f"  Workflow: {workflow}", file=console)
-            print("  Requested repository access: read-only", file=console)
-            print(f"  Task delivery: {delivery}", file=console)
+            print(f"  Workflow/stage: {workflow}/{stage}", file=console)
+            print(f"  Task-bearing calls: {len(members)} (invocation bound)", file=console)
+            for member in members:
+                print(
+                    f"  Vendor: {member['vendor']} (default model; {member['delivery']} delivery)",
+                    file=console,
+                )
+            if any(member["delivery"] == "argv" for member in members):
+                print(
+                    "  argv exposure: task and context are visible in local process arguments",
+                    file=console,
+                )
+            detail = f"; {context_file_count} explicit files" if context_file_count else ""
+            print(f"  Context sent/accessed: {context_mode}{detail}", file=console)
+            if context_mode in {"diff", "files"}:
+                print("  Selected repository content may contain secrets.", file=console)
+            print("  Requested behavior: read-only; host filesystem confinement: no", file=console)
             print("  Quality verification: no", file=console)
-            console.write("Send the task to this vendor? [y/N] ")
+            console.write("Send the task and selected context to these vendors? [y/N] ")
             answer = console.readline(32)
+    except QuickAdvisoryError:
+        raise
     except (OSError, UnicodeError):
         raise QuickAdvisoryError("ask_confirmation_required") from None
     if answer.strip().lower() not in {"y", "yes"}:
@@ -158,11 +232,247 @@ def _confirm_task_egress(*, vendor: str, workflow: str, delivery: str, confirmed
 
 
 def _render_human(receipt: Mapping[str, object]) -> None:
+    event = receipt.get("event")
+    if event == "advisory_preview":
+        print("Advisory egress preview (task-free; no vendor process started)")
+        print(json.dumps(receipt, ensure_ascii=True, indent=2))
+        return
+    if event == "advisory_skipped":
+        print("Advisory skipped by the local trivial-task policy.")
+        print("No task-bearing vendor process was started.")
+        return
+    if event == "advisory_council":
+        print("Advisory council result (untrusted model-authored content)")
+        print(f"Workflow/stage: {receipt['workflow']}/{receipt['stage']}")
+        raw_members = receipt.get("members")
+        for member in raw_members if isinstance(raw_members, list) else []:
+            if isinstance(member, Mapping):
+                print()
+                print(f"Vendor: {member.get('vendor')} — {member.get('status')}")
+                if "result" in member:
+                    print(json.dumps(member["result"], ensure_ascii=True, indent=2))
+        print()
+        print("Descriptive consensus/dissent (not quality verification)")
+        print(json.dumps(receipt["synthesis"], ensure_ascii=True, indent=2))
+        return
     print("Advisory result (untrusted model-authored content)")
     print(f"Vendor: {receipt['vendor']} (default model; quality not verified)")
-    print(f"Workflow: {receipt['workflow']}")
+    print(f"Workflow/stage: {receipt['workflow']}/{receipt['stage']}")
+    print(f"Context: {receipt['context_mode']}")
     print()
-    print(json.dumps(receipt["result"], ensure_ascii=True, indent=2))
+    triage = receipt.get("triage")
+    result = receipt["result"]
+    hidden = 0
+    if isinstance(triage, Mapping) and isinstance(result, Mapping):
+        annotations = triage.get("annotations")
+        findings = result.get("findings")
+        if isinstance(annotations, list) and isinstance(findings, list):
+            visible_indices = {
+                annotation.get("finding_index")
+                for annotation in annotations
+                if isinstance(annotation, Mapping)
+                and annotation.get("triage") in {"confirmed", "debatable"}
+                and not annotation.get("duplicate_muted")
+            }
+            visible = [
+                finding for index, finding in enumerate(findings) if index in visible_indices
+            ]
+            hidden = len(findings) - len(visible)
+            result = {**result, "findings": visible}
+    print(json.dumps(result, ensure_ascii=True, indent=2))
+    if isinstance(triage, Mapping):
+        annotations = triage.get("annotations")
+        supported = (
+            sum(
+                1
+                for annotation in annotations
+                if isinstance(annotation, Mapping)
+                and annotation.get("triage") in {"confirmed", "debatable"}
+                and not annotation.get("duplicate_muted")
+            )
+            if isinstance(annotations, list)
+            else 0
+        )
+        print()
+        print(f"Locally supported distinct findings: {supported}")
+        if hidden:
+            print(f"Locally rejected or duplicate findings hidden: {hidden} (use --json for all)")
+
+
+def _validate_common(
+    *,
+    workflow: str,
+    role: str,
+    stage: str,
+    context_mode: str,
+    context_files: Sequence[str],
+    timeout_seconds: float,
+) -> tuple[str, ...]:
+    if (
+        workflow not in WORKFLOWS
+        or role not in ROLES
+        or stage not in STAGES
+        or not math.isfinite(timeout_seconds)
+        or not 1 <= timeout_seconds <= 28_800
+    ):
+        raise QuickAdvisoryError("ask_invalid_input")
+    try:
+        return advisory_context.validate_context_request(context_mode, context_files)
+    except advisory_context.AdvisoryContextError as error:
+        raise QuickAdvisoryError(error.code) from None
+
+
+def _preflight_context_git(context_mode: str, repo: Path) -> tuple[str, object] | None:
+    if context_mode != "diff":
+        return None
+    try:
+        return advisory_context.preflight_git(repo)
+    except advisory_context.AdvisoryContextError as error:
+        raise QuickAdvisoryError(error.code) from None
+
+
+def _preflight_trivial_classifier(enabled: bool) -> None:
+    if not enabled:
+        return
+    try:
+        from weightclass.classification import classify_task
+    except (ImportError, AttributeError):
+        raise QuickAdvisoryError("ask_invalid_input") from None
+    if not callable(classify_task):
+        raise QuickAdvisoryError("ask_invalid_input")
+
+
+def _snapshot(repo: Path) -> readonly_snapshot.TreeSnapshot:
+    try:
+        return readonly_snapshot.snapshot_tree(repo)
+    except (OSError, ValueError, readonly_snapshot.SnapshotError):
+        raise QuickAdvisoryError("ask_repository_unsupported") from None
+
+
+def _require_unchanged(repo: Path, baseline: readonly_snapshot.TreeSnapshot) -> None:
+    try:
+        comparison = readonly_snapshot.compare_tree(
+            repo, baseline, speculative_run.AGENT_SCAFFOLDING
+        )
+    except (OSError, ValueError, readonly_snapshot.SnapshotError):
+        raise QuickAdvisoryError("ask_repository_changed") from None
+    if comparison.changed:
+        raise QuickAdvisoryError("ask_repository_changed")
+
+
+def _should_skip(task: str, *, stage: str, enabled: bool) -> bool:
+    if not enabled or stage not in {"plan", "final"}:
+        return False
+    try:
+        from weightclass.classification import InvalidTaskError, classify_task
+
+        return classify_task(task) == "low"
+    except InvalidTaskError:
+        return False
+
+
+def _run_member(
+    member: Mapping[str, object],
+    *,
+    repo: Path,
+    workflow: str,
+    stage: str,
+    context_mode: str,
+    context_payload: str,
+    task: str,
+    timeout_seconds: float,
+) -> tuple[str, dict[str, object]]:
+    executable = member["executable"]
+    observation = member["observation"]
+    command = member["command"]
+    if not isinstance(executable, str) or not isinstance(command, tuple):
+        raise QuickAdvisoryError("ask_invalid_input")
+    try:
+        if observe_executable(executable) != observation:
+            raise QuickAdvisoryError("ask_cli_unavailable")
+        prompt = advisory_evidence_contract.build_evidence_prompt(
+            task,
+            workflow,
+            stage=stage,
+            context_mode=context_mode,
+            context_payload=context_payload,
+        )
+        if context_mode == "repo":
+            child, stdout = speculative_run.run_child(
+                list(command),
+                repo,
+                prompt,
+                allowed_env=speculative_run.default_child_env(executable),
+                timeout_seconds=timeout_seconds,
+            )
+        else:
+            with tempfile.TemporaryDirectory(prefix="wclass-advisory-") as directory:
+                child, stdout = speculative_run.run_child(
+                    list(command),
+                    Path(directory),
+                    prompt,
+                    allowed_env=speculative_run.default_child_env(executable),
+                    timeout_seconds=timeout_seconds,
+                )
+    except QuickAdvisoryError:
+        raise
+    except (OSError, ValueError, speculative_run.RunFailure):
+        return "ask_executor_failed", {}
+    if child["timed_out"] or child["exit_code"] != 0:
+        return "ask_executor_failed", {}
+    try:
+        _raw_result, result = speculative_run.extract_evidence_result(
+            stdout, list(command), workflow
+        )
+    except advisory_evidence_contract.EvidenceResultError:
+        return "ask_result_invalid", {}
+    return "ok", result
+
+
+def _single_receipt(
+    *,
+    vendor: str,
+    workflow: str,
+    role: str,
+    stage: str,
+    context_mode: str,
+    context_file_count: int,
+    delivery: str,
+    result: Mapping[str, object],
+    repo: Path,
+    snapshot: readonly_snapshot.TreeSnapshot,
+    triage: bool,
+) -> dict[str, object]:
+    receipt: dict[str, object] = {
+        "schema_version": 1,
+        "event": "advisory_ask",
+        "vendor": vendor,
+        "workflow": workflow,
+        "role": role,
+        "stage": stage,
+        "model_selection": "vendor_default",
+        "task_egress_confirmed": True,
+        "task_egressed": True,
+        "task_delivery": delivery,
+        "context_mode": context_mode,
+        "context_file_count": context_file_count,
+        "repository_access": "read_only" if context_mode == "repo" else "prompt_context_only",
+        "host_filesystem_confined": False,
+        "worktree_unchanged": True,
+        "git_metadata_checked": False,
+        "sample_recorded": False,
+        "persistent_state_written": False,
+        "campaign_state_read": False,
+        "project_verifier_used": False,
+        "quality_verified": False,
+        "content_trust": "untrusted_model_authored",
+        "fresh_process": True,
+        "call_budget": {"scope": "invocation", "maximum_task_bearing_children": 1, "used": 1},
+        "result": dict(result),
+    }
+    if workflow == "review" and triage:
+        receipt["triage"] = advisory_triage.triage_review(result, repo, snapshot)
+    return receipt
 
 
 def ask(
@@ -173,119 +483,353 @@ def ask(
     repo: Path,
     timeout_seconds: float,
     confirm_task_egress: bool,
+    stage: str = "manual",
+    context_mode: str = "repo",
+    context_files: Sequence[str] = (),
+    auto_skip_trivial: bool = False,
+    triage: bool = True,
 ) -> dict[str, object]:
     """Run exactly one read-only vendor child without managed state."""
-
-    if (
-        vendor not in VENDORS
-        or workflow not in WORKFLOWS
-        or role not in ROLES
-        or not 1 <= timeout_seconds <= 28_800
-    ):
+    selected_files = _validate_common(
+        workflow=workflow,
+        role=role,
+        stage=stage,
+        context_mode=context_mode,
+        context_files=context_files,
+        timeout_seconds=timeout_seconds,
+    )
+    if vendor not in VENDORS:
         raise QuickAdvisoryError("ask_invalid_input")
+    _preflight_trivial_classifier(auto_skip_trivial)
     if not has_safe_child_status_context():
         raise QuickAdvisoryError("ask_process_context_unsafe")
-    try:
-        resolved_repo = repo.expanduser().resolve(strict=True)
-        if not resolved_repo.is_dir():
-            raise QuickAdvisoryError("ask_repository_unavailable")
-    except QuickAdvisoryError:
-        raise
-    except (OSError, ValueError):
-        raise QuickAdvisoryError("ask_repository_unavailable") from None
-    try:
-        command = advisory_routes.build_default_evidence_route(vendor, workflow)
-    except advisory_routes.AdvisoryRouteError:
-        raise QuickAdvisoryError("ask_invalid_input") from None
-    try:
-        delivery = advisory_routes.command_task_delivery(command)
-        executable, observation = _resolve_executable(vendor, resolved_repo)
-        command = (executable, *command[1:])
-        _confirm_task_egress(
-            vendor=vendor,
-            workflow=workflow,
-            delivery=delivery,
-            confirmed=confirm_task_egress,
-        )
-        baseline = readonly_snapshot.snapshot_tree(resolved_repo)
-    except QuickAdvisoryError:
-        raise
-    except (OSError, ValueError, readonly_snapshot.SnapshotError):
-        raise QuickAdvisoryError("ask_repository_unsupported") from None
-
+    resolved_repo = _resolve_repository(repo)
+    git_preflight = _preflight_context_git(context_mode, resolved_repo)
+    member = _preflight_member(vendor, workflow, resolved_repo)
+    _confirm_task_egress(
+        members=(member,),
+        workflow=workflow,
+        stage=stage,
+        context_mode=context_mode,
+        context_file_count=len(selected_files),
+        confirmed=confirm_task_egress,
+    )
+    baseline = _snapshot(resolved_repo)
     task = _read_task_from_standard_input()
-    execution_failed = False
-    child: speculative_run.ChildResult | None = None
-    stdout = ""
+    if _should_skip(task, stage=stage, enabled=auto_skip_trivial):
+        _require_unchanged(resolved_repo, baseline)
+        return {
+            "schema_version": 1,
+            "event": "advisory_skipped",
+            "vendor": vendor,
+            "workflow": workflow,
+            "stage": stage,
+            "reason": "local_trivial_task",
+            "classification_policy": "weightclass_local",
+            "task_egress_confirmed": True,
+            "task_egressed": False,
+            "sample_recorded": False,
+            "persistent_state_written": False,
+            "worktree_unchanged": True,
+            "call_budget": {"scope": "invocation", "maximum_task_bearing_children": 1, "used": 0},
+        }
     try:
-        if observe_executable(executable) != observation:
-            raise QuickAdvisoryError("ask_cli_unavailable")
-        prompt = advisory_evidence_contract.build_evidence_prompt(task, workflow)
-        child, stdout = speculative_run.run_child(
-            list(command),
-            resolved_repo,
-            prompt,
-            allowed_env=speculative_run.default_child_env(executable),
-            timeout_seconds=timeout_seconds,
+        context_payload = advisory_context.build_context(
+            context_mode,
+            repo=resolved_repo,
+            files=selected_files,
+            environment=os.environ,
+            snapshot=baseline,
+            git_preflight=git_preflight,
         )
-    except QuickAdvisoryError:
-        raise
-    except (OSError, ValueError, speculative_run.RunFailure):
-        execution_failed = True
+    except advisory_context.AdvisoryContextError as error:
+        raise QuickAdvisoryError(error.code) from None
+    _require_unchanged(resolved_repo, baseline)
+    status, result = _run_member(
+        member,
+        repo=resolved_repo,
+        workflow=workflow,
+        stage=stage,
+        context_mode=context_mode,
+        context_payload=context_payload,
+        task=task,
+        timeout_seconds=timeout_seconds,
+    )
+    _require_unchanged(resolved_repo, baseline)
+    if status != "ok":
+        raise QuickAdvisoryError(status)
+    receipt = _single_receipt(
+        vendor=vendor,
+        workflow=workflow,
+        role=role,
+        stage=stage,
+        context_mode=context_mode,
+        context_file_count=len(selected_files),
+        delivery=str(member["delivery"]),
+        result=result,
+        repo=resolved_repo,
+        snapshot=baseline,
+        triage=triage,
+    )
+    _require_unchanged(resolved_repo, baseline)
+    return receipt
 
+
+def ask_council(
+    *,
+    vendors: Sequence[str],
+    workflow: str,
+    role: str,
+    repo: Path,
+    timeout_seconds: float,
+    confirm_task_egress: bool,
+    stage: str = "manual",
+    context_mode: str = "repo",
+    context_files: Sequence[str] = (),
+    auto_skip_trivial: bool = False,
+    triage: bool = True,
+) -> dict[str, object]:
+    """Run an explicit bounded council with independent fresh vendor processes."""
+    selected_vendors = tuple(vendors)
+    if (
+        not 2 <= len(selected_vendors) <= MAX_COUNCIL_MEMBERS
+        or len(set(selected_vendors)) != len(selected_vendors)
+        or any(vendor not in VENDORS for vendor in selected_vendors)
+    ):
+        raise QuickAdvisoryError("ask_council_invalid")
+    selected_files = _validate_common(
+        workflow=workflow,
+        role=role,
+        stage=stage,
+        context_mode=context_mode,
+        context_files=context_files,
+        timeout_seconds=timeout_seconds,
+    )
+    _preflight_trivial_classifier(auto_skip_trivial)
+    if not has_safe_child_status_context():
+        raise QuickAdvisoryError("ask_process_context_unsafe")
+    resolved_repo = _resolve_repository(repo)
+    git_preflight = _preflight_context_git(context_mode, resolved_repo)
+    members = tuple(
+        _preflight_member(vendor, workflow, resolved_repo) for vendor in selected_vendors
+    )
+    _confirm_task_egress(
+        members=members,
+        workflow=workflow,
+        stage=stage,
+        context_mode=context_mode,
+        context_file_count=len(selected_files),
+        confirmed=confirm_task_egress,
+    )
+    baseline = _snapshot(resolved_repo)
+    task = _read_task_from_standard_input()
+    if _should_skip(task, stage=stage, enabled=auto_skip_trivial):
+        _require_unchanged(resolved_repo, baseline)
+        return {
+            "schema_version": 2,
+            "event": "advisory_skipped",
+            "vendors": list(selected_vendors),
+            "workflow": workflow,
+            "stage": stage,
+            "reason": "local_trivial_task",
+            "task_egressed": False,
+            "persistent_state_written": False,
+            "worktree_unchanged": True,
+            "call_budget": {
+                "scope": "invocation",
+                "maximum_task_bearing_children": len(members),
+                "used": 0,
+            },
+        }
     try:
-        comparison = readonly_snapshot.compare_tree(
-            resolved_repo,
-            baseline,
-            speculative_run.AGENT_SCAFFOLDING,
+        context_payload = advisory_context.build_context(
+            context_mode,
+            repo=resolved_repo,
+            files=selected_files,
+            environment=os.environ,
+            snapshot=baseline,
+            git_preflight=git_preflight,
         )
-    except (OSError, ValueError, readonly_snapshot.SnapshotError):
-        raise QuickAdvisoryError("ask_repository_changed") from None
-    if comparison.changed:
-        raise QuickAdvisoryError("ask_repository_changed")
-    if execution_failed or child is None or child["timed_out"] or child["exit_code"] != 0:
-        raise QuickAdvisoryError("ask_executor_failed")
-    try:
-        _raw_result, result = speculative_run.extract_evidence_result(
-            stdout,
-            list(command),
-            workflow,
-        )
-    except advisory_evidence_contract.EvidenceResultError:
-        raise QuickAdvisoryError("ask_result_invalid") from None
+    except advisory_context.AdvisoryContextError as error:
+        raise QuickAdvisoryError(error.code) from None
+    _require_unchanged(resolved_repo, baseline)
+    rendered_members: list[dict[str, object]] = []
+    for member in members:
+        try:
+            status, result = _run_member(
+                member,
+                repo=resolved_repo,
+                workflow=workflow,
+                stage=stage,
+                context_mode=context_mode,
+                context_payload=context_payload,
+                task=task,
+                timeout_seconds=timeout_seconds,
+            )
+        except QuickAdvisoryError as error:
+            if error.code != "ask_cli_unavailable":
+                raise
+            status, result = error.code, {}
+        _require_unchanged(resolved_repo, baseline)
+        rendered: dict[str, object] = {
+            "vendor": member["vendor"],
+            "status": status,
+            "task_delivery": member["delivery"],
+            "fresh_process": True,
+            "quality_verified": False,
+        }
+        if status == "ok":
+            rendered["result"] = result
+            if workflow == "review" and triage:
+                rendered["triage"] = advisory_triage.triage_review(result, resolved_repo, baseline)
+                _require_unchanged(resolved_repo, baseline)
+        rendered_members.append(rendered)
+    successful = sum(member["status"] == "ok" for member in rendered_members)
+    task_bearing_children = sum(
+        member["status"] != "ask_cli_unavailable" for member in rendered_members
+    )
     return {
-        "schema_version": 1,
-        "event": "advisory_ask",
-        "vendor": vendor,
+        "schema_version": 2,
+        "event": "advisory_council",
         "workflow": workflow,
         "role": role,
+        "stage": stage,
+        "vendors": list(selected_vendors),
         "model_selection": "vendor_default",
         "task_egress_confirmed": True,
-        "task_delivery": delivery,
-        "repository_access": "read_only",
+        "task_egressed": task_bearing_children > 0,
+        "context_mode": context_mode,
+        "context_file_count": len(selected_files),
+        "repository_access": "read_only" if context_mode == "repo" else "prompt_context_only",
         "host_filesystem_confined": False,
         "worktree_unchanged": True,
         "git_metadata_checked": False,
         "sample_recorded": False,
-        "campaign_state_read": False,
-        "project_verifier_used": False,
+        "persistent_state_written": False,
         "quality_verified": False,
         "content_trust": "untrusted_model_authored",
-        "result": result,
+        "complete": successful == len(rendered_members),
+        "successful_members": successful,
+        "call_budget": {
+            "scope": "invocation",
+            "maximum_task_bearing_children": len(members),
+            "used": task_bearing_children,
+        },
+        "members": rendered_members,
+        "synthesis": advisory_triage.council_synthesis(workflow, rendered_members),
     }
+
+
+def preview(
+    *,
+    vendors: Sequence[str],
+    workflow: str,
+    role: str,
+    repo: Path,
+    timeout_seconds: float,
+    stage: str,
+    context_mode: str,
+    context_files: Sequence[str],
+) -> dict[str, object]:
+    """Return a task-free egress plan without starting any vendor process."""
+    selected_vendors = tuple(vendors)
+    if (
+        not 1 <= len(selected_vendors) <= MAX_COUNCIL_MEMBERS
+        or len(set(selected_vendors)) != len(selected_vendors)
+        or any(vendor not in VENDORS for vendor in selected_vendors)
+    ):
+        raise QuickAdvisoryError(
+            "ask_council_invalid" if len(selected_vendors) != 1 else "ask_invalid_input"
+        )
+    selected_files = _validate_common(
+        workflow=workflow,
+        role=role,
+        stage=stage,
+        context_mode=context_mode,
+        context_files=context_files,
+        timeout_seconds=timeout_seconds,
+    )
+    resolved_repo = _resolve_repository(repo)
+    git_preflight = _preflight_context_git(context_mode, resolved_repo)
+    routes: list[dict[str, object]] = []
+    for vendor in selected_vendors:
+        command, delivery = _route(vendor, workflow)
+        _executable, _observation = _observe_route_executable(vendor, resolved_repo)
+        routes.append(
+            {
+                "vendor": vendor,
+                "model_selection": "vendor_default",
+                "task_delivery": delivery,
+                "task_process_exposure": delivery == "argv",
+                "command": list(command),
+                "executable_observed": True,
+            }
+        )
+    return {
+        "schema_version": 2,
+        "event": "advisory_preview",
+        "preview_only": True,
+        "vendor_process_started": False,
+        "task_read": False,
+        "repository_content_read": False,
+        "workflow": workflow,
+        "role": role,
+        "stage": stage,
+        "context_mode": context_mode,
+        "context_file_count": len(selected_files),
+        "task_egress_required": True,
+        "task_free_probe_children_on_run": (
+            advisory_preflight.TASK_FREE_PROBE_CHILDREN * len(routes)
+        ),
+        "task_bearing_child_bound": len(routes),
+        "timeout_seconds_per_child": timeout_seconds,
+        "requested_repository_behavior": "read_only",
+        "host_filesystem_confined": False,
+        "worktree_snapshot_on_run": True,
+        "git_metadata_checked": False,
+        "git_executable_observed": git_preflight is not None,
+        "repository_path_disclosed": False,
+        "quality_verified": False,
+        "routes": routes,
+    }
+
+
+def _parse_council(value: str) -> tuple[str, ...]:
+    selected = tuple(value.split(","))
+    if (
+        not 2 <= len(selected) <= MAX_COUNCIL_MEMBERS
+        or len(set(selected)) != len(selected)
+        or any(vendor not in VENDORS for vendor in selected)
+    ):
+        raise argparse.ArgumentTypeError("invalid council")
+    return selected
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _ArgumentParser(
         prog="wclass-advisory ask",
-        description=(
-            "Run one stateless, read-only advisory with the selected CLI's default model."
-        ),
+        description="Run one stateless read-only advisory, or an explicit bounded vendor council.",
         allow_abbrev=False,
     )
-    parser.add_argument("--vendor", required=True, choices=VENDORS)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--vendor", choices=VENDORS)
+    target.add_argument(
+        "--council",
+        type=_parse_council,
+        help="comma-separated list of two to four distinct supported vendors",
+    )
     parser.add_argument("--workflow", choices=WORKFLOWS, default="review")
     parser.add_argument("--role", choices=ROLES, default="cheap")
+    parser.add_argument("--stage", choices=STAGES, default="manual")
+    parser.add_argument("--context", choices=advisory_context.CONTEXT_MODES, default="repo")
+    parser.add_argument(
+        "--file",
+        dest="context_files",
+        action="append",
+        default=[],
+        metavar="RELATIVE_PATH",
+        help="explicit UTF-8 repository file for --context files; repeatable",
+    )
     parser.add_argument("--repo", type=Path, default=Path("."))
     parser.add_argument(
         "--timeout",
@@ -294,27 +838,64 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         default=speculative_run.CHILD_TIMEOUT,
     )
+    parser.add_argument("--preview", action="store_true")
+    parser.add_argument("--auto-skip-trivial", action="store_true")
+    parser.add_argument("--no-triage", action="store_false", dest="triage")
     parser.add_argument("--confirm-task-egress", action="store_true")
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--json", action="store_true")
     output.add_argument("--human", action="store_true")
     arguments = parser.parse_args(argv)
     human = _human_output_requested(arguments)
+    vendors = arguments.council or (arguments.vendor,)
     try:
-        receipt = ask(
-            vendor=arguments.vendor,
-            workflow=arguments.workflow,
-            role=arguments.role,
-            repo=arguments.repo,
-            timeout_seconds=arguments.timeout_seconds,
-            confirm_task_egress=arguments.confirm_task_egress,
-        )
+        if arguments.preview:
+            receipt = preview(
+                vendors=vendors,
+                workflow=arguments.workflow,
+                role=arguments.role,
+                repo=arguments.repo,
+                timeout_seconds=arguments.timeout_seconds,
+                stage=arguments.stage,
+                context_mode=arguments.context,
+                context_files=arguments.context_files,
+            )
+        elif arguments.council:
+            receipt = ask_council(
+                vendors=arguments.council,
+                workflow=arguments.workflow,
+                role=arguments.role,
+                repo=arguments.repo,
+                timeout_seconds=arguments.timeout_seconds,
+                confirm_task_egress=arguments.confirm_task_egress,
+                stage=arguments.stage,
+                context_mode=arguments.context,
+                context_files=arguments.context_files,
+                auto_skip_trivial=arguments.auto_skip_trivial,
+                triage=arguments.triage,
+            )
+        else:
+            receipt = ask(
+                vendor=arguments.vendor,
+                workflow=arguments.workflow,
+                role=arguments.role,
+                repo=arguments.repo,
+                timeout_seconds=arguments.timeout_seconds,
+                confirm_task_egress=arguments.confirm_task_egress,
+                stage=arguments.stage,
+                context_mode=arguments.context,
+                context_files=arguments.context_files,
+                auto_skip_trivial=arguments.auto_skip_trivial,
+                triage=arguments.triage,
+            )
     except QuickAdvisoryError as error:
         return _emit_error(error.code, human=human)
     if human:
         _render_human(receipt)
     else:
         print(json.dumps(receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
+    if receipt.get("event") == "advisory_council" and not receipt.get("complete"):
+        return 2
     return 0
 
 
