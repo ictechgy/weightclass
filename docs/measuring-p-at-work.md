@@ -214,6 +214,7 @@ python3 -m weightclass.advisory.speculative_run \
   --repo ~/work/service --task-file task.txt \
   --cheap    'codex exec --sandbox workspace-write --json -c model=<cheap> -' \
   --expensive 'codex exec --sandbox workspace-write --json -c model=<expensive> -' \
+  --confirm-task-egress \
   --verify ./verify.sh --prices prices.json --out-dir ~/spec-runs
 
 # Claude, reports its own cost
@@ -221,8 +222,13 @@ python3 -m weightclass.advisory.speculative_run \
   --repo ~/work/service --task-file task.txt \
   --cheap    'claude --print --output-format json --model sonnet --permission-mode acceptEdits' \
   --expensive 'claude --print --output-format json --model opus   --permission-mode acceptEdits' \
+  --confirm-task-egress \
   --verify ./verify.sh --out-dir ~/spec-runs
 ```
+
+The task file must be a current-user-owned regular file with mode `0600` (or
+stricter). Exact-command mode has the same explicit egress and file-privacy
+boundary as profile and sealed-campaign mode.
 
 One task per invocation. Around twenty real tasks gives a usable interval.
 

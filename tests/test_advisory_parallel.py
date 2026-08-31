@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -109,23 +111,79 @@ class ParallelAdvisoryTests(unittest.TestCase):
         parallel = load_module(PARALLEL, "prospective_advisory_parallel_reaper")
         process = cast(subprocess.Popen[bytes], mock.Mock())
         process.pid = 12345
+        anchor = mock.Mock()
         thread = mock.Mock()
         with (
             mock.patch.object(parallel.time, "sleep"),
-            mock.patch.object(parallel.os, "killpg"),
             mock.patch.object(
-                process,
-                "wait",
-                side_effect=(subprocess.TimeoutExpired(("child",), 1.0), 0),
-            ) as wait,
+                parallel,
+                "wait_owned_child",
+                side_effect=(
+                    subprocess.TimeoutExpired(("child",), 1.0),
+                    0,
+                ),
+            ) as wait_owned,
             mock.patch.object(parallel.threading, "Thread", return_value=thread) as factory,
         ):
-            parallel._terminate_process_group(process)
+            parallel._terminate_process_group(process, anchor)
             target = factory.call_args.kwargs["target"]
             target()
-            self.assertEqual(wait.call_count, 2)
+            self.assertEqual(wait_owned.call_count, 2)
 
+        self.assertEqual(
+            anchor.signal.call_args_list,
+            [
+                mock.call(signal.SIGTERM),
+                mock.call(signal.SIGKILL),
+                mock.call(signal.SIGKILL),
+            ],
+        )
         thread.start.assert_called_once_with()
+
+    def test_resistant_descendant_gets_kill_after_leader_exits_on_term(self) -> None:
+        parallel = load_module(PARALLEL, "prospective_advisory_parallel_group_anchor")
+        program = (
+            "import os, signal, sys, time\n"
+            "child = os.fork()\n"
+            "if child == 0:\n"
+            "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "    print('ready', flush=True)\n"
+            "    time.sleep(30)\n"
+            "else:\n"
+            "    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+            "    time.sleep(30)\n"
+        )
+        process = subprocess.Popen(
+            (sys.executable, "-c", program),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        assert process.stdout is not None
+        self.assertEqual(process.stdout.readline(), b"ready\n")
+        real_killpg = os.killpg
+        signals: list[int] = []
+
+        def record_signal(process_group_id: int, signal_number: int) -> None:
+            signals.append(signal_number)
+            real_killpg(process_group_id, signal_number)
+
+        try:
+            with mock.patch(
+                "weightclass.process_context.os.killpg",
+                side_effect=record_signal,
+            ):
+                parallel._terminate_process_group(process)
+        finally:
+            if process.returncode is None:
+                real_killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+
+        self.assertEqual(signals[:2], [signal.SIGTERM, signal.SIGKILL])
 
     def test_heartbeat_and_completion_callbacks_are_task_free_and_ordered(self) -> None:
         parallel = load_module(PARALLEL, "prospective_advisory_parallel_progress")

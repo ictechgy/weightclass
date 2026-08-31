@@ -149,6 +149,7 @@ class AdvisoryConsultTests(unittest.TestCase):
             shadow_imported = marker.exists()
 
         self.assertEqual(job.command[1], "-I")
+        self.assertIn("--confirm-task-egress", job.command)
         self.assertEqual(job.timeout_seconds, managed_advisory.CONSULT_DEFAULT_TIMEOUT_SECONDS)
         self.assertEqual(completed.returncode, 2, completed.stderr)
         self.assertFalse(shadow_imported)
@@ -192,6 +193,7 @@ class AdvisoryConsultTests(unittest.TestCase):
                     "weightclass.advisory.advisory_consult",
                     "--expected-package-version",
                     __version__,
+                    "--confirm-task-egress",
                     "--workflow",
                     "research",
                     "--vendor",
@@ -278,6 +280,7 @@ class AdvisoryConsultTests(unittest.TestCase):
                     "weightclass.advisory.advisory_consult",
                     "--expected-package-version",
                     __version__,
+                    "--confirm-task-egress",
                     "--workflow",
                     "research",
                     "--vendor",

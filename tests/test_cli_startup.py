@@ -110,6 +110,8 @@ loaded = sorted(
         "weightclass.native_v3_runtime",
         "weightclass.native_v3_schema",
         "weightclass.native_v3_selector",
+        "weightclass.process_context",
+        "importlib.resources",
         "weightclass.task_v2",
         "weightclass.triage",
         "weightclass.v2",

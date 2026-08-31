@@ -39,11 +39,14 @@ Usage:
       --repo ~/work/service --task-file task.txt \\
       --cheap  'codex exec --sandbox workspace-write -c model=cheap-model -' \\
       --expensive 'codex exec --sandbox workspace-write -c model=strong-model -' \\
+      --confirm-task-egress \\
       --verify ./verify.sh
 
 `--verify` is a path to an executable, not a shell string. Put your pipeline in
 that file. A string would need a shell, and a shell turns an auditable command
 into a quoting exercise; the whole point of this project is exact commands.
+Every execution mode requires `--confirm-task-egress` and an owner-private task
+file; exact commands do not bypass that boundary.
 """
 
 from __future__ import annotations
@@ -68,12 +71,19 @@ import tempfile
 import threading
 import time
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, TypedDict
 
+if not __package__:
+    source_root = str(Path(__file__).resolve().parents[2])
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+
+from weightclass.process_context import has_safe_child_status_context
+
 if TYPE_CHECKING or __package__:
-    from . import bounded_capture, readonly_snapshot
+    from . import bounded_capture, readonly_snapshot, safe_git
     from .advisory_campaign import (
         ANONYMOUS_LANE_COUNT,
         MAX_CAMPAIGN_RECORD_BYTES,
@@ -108,6 +118,7 @@ if TYPE_CHECKING or __package__:
 else:
     import bounded_capture  # type: ignore[import-not-found]
     import readonly_snapshot  # type: ignore[import-not-found]
+    import safe_git  # type: ignore[import-not-found]
     from advisory_campaign import (  # type: ignore[import-not-found]
         ANONYMOUS_LANE_COUNT,
         MAX_CAMPAIGN_RECORD_BYTES,
@@ -295,6 +306,7 @@ def _receipt_seconds(value: object) -> float:
     return round(max(0.0, min(MAX_RECEIPT_SECONDS, float(value))), 1)
 
 
+# Review anchor: failure_receipt below owns the closed persisted schema.
 def _receipt_count(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         return 0
@@ -343,6 +355,7 @@ def failure_receipt(
         "child_stdout_present": child_record.get("stdout_present") is True,
         "child_stderr_present": child_record.get("stderr_present") is True,
         "candidate_made_changes": attempt.get("made_changes") is True,
+        # emit_failure_receipt consumes these bounded values without mutating the attempt.
         "candidate_patch_lines": _receipt_count(attempt.get("patch_lines")),
         "candidate_dropped_ignored": _receipt_count(attempt.get("dropped_ignored")),
         "candidate_excluded_scaffolding": min(MAX_RECEIPT_COUNT, max(0, excluded_count)),
@@ -577,6 +590,11 @@ class RunLogError(ValueError):
 
 MAX_TASK_FILE_BYTES = 80_000
 _TASK_READ_CHUNK_BYTES = 65_536
+MAX_WORKSPACE_REGISTRY_BYTES = 1_048_576
+MAX_WORKSPACE_REGISTRY_ENTRIES = 4_096
+MAX_WORKSPACE_REGISTRY_LINE_BYTES = 16_384
+WORKSPACE_REGISTRY_LOCK_TIMEOUT = 2.0
+WORKSPACE_REGISTRY_LOCK_POLL_SECONDS = 0.02
 
 
 def read_task_file(path: Path, *, require_private: bool) -> str:
@@ -695,21 +713,12 @@ def _kill_group(child: subprocess.Popen[str]) -> None:
 # config 도 읽는다. 거기 filter.<name>.clean 이 있으면 자식이 심어 온
 # .gitattributes 가 그것을 불러낼 수 있다. 이 스크립트가 돌리는 git 은
 # 저장소 config 만 보게 한다.
-_GIT_ENV = {
-    **{
-        name: value
-        for name, value in os.environ.items()
-        # GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_ALTERNATE_OBJECT_DIRECTORIES
-        # 같은 변수는 우리가 cwd 로 지정한 트리가 아니라 다른 곳을 대상으로
-        # 삼게 만든다. 호출자의 셸에 그런 것이 설정돼 있으면 인계 트리가 아닌
-        # 저장소를 스테이징하게 된다.
-        if not name.startswith("GIT_")
-    },
-    "GIT_CONFIG_NOSYSTEM": "1",
-    "GIT_CONFIG_GLOBAL": os.devnull,
-    "GIT_TERMINAL_PROMPT": "0",
-}
-_SAFE_GIT_OPTIONS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+_GIT_ENV = safe_git.hardened_environment(os.environ)
+_SAFE_GIT_OPTIONS = safe_git.SAFE_GIT_OPTIONS
+MAX_GIT_OUTPUT_BYTES = 1_048_576
+MAX_GIT_PATH_LIST_BYTES = 16 * 1024 * 1024
+MAX_PATCH_BYTES = 64 * 1024 * 1024
+MAX_GIT_ERROR_BYTES = 1_048_576
 
 
 def _safe(text: str, limit: int = 200) -> str:
@@ -740,7 +749,7 @@ def _route_identity(argv: list[str]) -> dict[str, str]:
     }
 
 
-def run_git_bytes(arguments: list[str], cwd: Path) -> bytes:
+def run_git_bytes(arguments: list[str], cwd: Path, *, maximum: int = MAX_GIT_OUTPUT_BYTES) -> bytes:
     """Run git and keep its output as bytes.
 
     `git diff --binary` emits raw bytes, and a tracked file whose contents are
@@ -748,21 +757,31 @@ def run_git_bytes(arguments: list[str], cwd: Path) -> bytes:
     would be worse than raising: it would silently corrupt the patch the user
     is told to apply.
     """
-    result = subprocess.run(
-        ["git", *_SAFE_GIT_OPTIONS, *arguments],
-        cwd=cwd,
-        capture_output=True,
-        timeout=GIT_TIMEOUT,
-        env=_GIT_ENV,
-    )
+    try:
+        result = safe_git.run(
+            arguments,
+            cwd=cwd,
+            environment=_GIT_ENV,
+            timeout_seconds=GIT_TIMEOUT,
+            max_stdout_bytes=maximum,
+            max_stderr_bytes=MAX_GIT_ERROR_BYTES,
+        )
+    except safe_git.SafeGitError as error:
+        message = (
+            "git output exceeded limit"
+            if error.code == "output_limited"
+            else "git command timed out"
+            if error.code == "timed_out"
+            else "git command unavailable"
+        )
+        raise RunFailure(message) from None
     if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", "replace").strip()
-        raise RunFailure(f"git {' '.join(arguments)}: {detail}")
+        raise RunFailure("git command failed")
     return result.stdout
 
 
-def run_git(arguments: list[str], cwd: Path) -> str:
-    return run_git_bytes(arguments, cwd).decode("utf-8", "replace")
+def run_git(arguments: list[str], cwd: Path, *, maximum: int = MAX_GIT_OUTPUT_BYTES) -> str:
+    return run_git_bytes(arguments, cwd, maximum=maximum).decode("utf-8", "replace")
 
 
 def head_commit(repo: Path) -> str:
@@ -778,25 +797,28 @@ def clone_at(repo: Path, commit: str, destination: Path) -> None:
     thing we are protecting would defeat it. `--no-hardlinks` keeps the object
     store separate too, at the cost of a copy.
     """
-    subprocess.run(
-        [
-            "git",
-            *_SAFE_GIT_OPTIONS,
-            "clone",
-            "--quiet",
-            "--no-hardlinks",
-            "--no-checkout",
-            str(repo),
-            str(destination),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=GIT_TIMEOUT,
-        # 여기에도 같은 환경을 쓴다. 전역 config 의 init.templateDir 은 클론이
-        # 만들어질 때 훅을 심을 수 있고, 그 훅은 이후 git 명령에서 실행된다.
-        env=_GIT_ENV,
-    )
+    try:
+        cloned = safe_git.run(
+            [
+                "clone",
+                "--quiet",
+                "--no-hardlinks",
+                "--no-checkout",
+                str(repo),
+                str(destination),
+            ],
+            cwd=destination.parent,
+            timeout_seconds=GIT_TIMEOUT,
+            max_stdout_bytes=MAX_GIT_OUTPUT_BYTES,
+            max_stderr_bytes=MAX_GIT_ERROR_BYTES,
+            # 여기에도 같은 환경을 쓴다. 전역 config 의 init.templateDir 은 클론이
+            # 만들어질 때 훅을 심을 수 있고, 그 훅은 이후 git 명령에서 실행된다.
+            environment=_GIT_ENV,
+        )
+    except safe_git.SafeGitError as error:
+        raise RunFailure("git clone unavailable") from error
+    if cloned.returncode != 0:
+        raise RunFailure("git clone failed")
     run_git(["checkout", "--quiet", "--detach", commit], destination)
     # origin 이 사용자의 실제 저장소를 가리킨 채 남으면, 자식이 그리로 push
     # 하거나 fetch 로 상태를 흔들 수 있다. 클론이 끝난 뒤 원격을 끊는다.
@@ -3413,17 +3435,17 @@ def build_handover_tree(
 
 def tracked_files_unchanged(handover: Path) -> bool:
     """Whether every staged path still holds what it held when it was staged."""
-    result = subprocess.run(
-        ["git", *_SAFE_GIT_OPTIONS, "diff", "--quiet", "--no-ext-diff", "--no-textconv"],
-        cwd=handover,
-        capture_output=True,
-        text=True,
-        timeout=GIT_TIMEOUT,
-        # 다른 git 호출과 같은 환경을 쓴다. 이 트리에는 자식이 심어 온
-        # .gitattributes 가 있고, 전역 config 의 filter 와 짝을 이루면
-        # 여기서도 실행된다.
-        env=_GIT_ENV,
-    )
+    try:
+        result = safe_git.run(
+            ["diff", "--quiet", "--no-ext-diff", "--no-textconv"],
+            cwd=handover,
+            environment=_GIT_ENV,
+            timeout_seconds=GIT_TIMEOUT,
+            max_stdout_bytes=MAX_GIT_OUTPUT_BYTES,
+            max_stderr_bytes=MAX_GIT_ERROR_BYTES,
+        )
+    except safe_git.SafeGitError:
+        return False
     return result.returncode == 0
 
 
@@ -3461,7 +3483,9 @@ def make_patch(handover: Path) -> tuple[bytes, list[str]]:
     dropped = [
         name
         for name in run_git(
-            ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], handover
+            ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"],
+            handover,
+            maximum=MAX_GIT_PATH_LIST_BYTES,
         ).split("\0")
         if name
     ]
@@ -3481,35 +3505,128 @@ def make_patch(handover: Path) -> tuple[bytes, list[str]]:
             "--no-textconv",
         ],
         handover,
+        maximum=MAX_PATCH_BYTES,
     )
     return patch, dropped
 
 
-def write_registry(registry: Path, entries: list[str]) -> None:
-    """Replace the registry atomically.
+def _workspace_registry_lock(registry: Path) -> BinaryIO:
+    """Open and boundedly acquire the owner-private registry transaction lock."""
 
-    This file exists to survive a crash. Rewriting it in place would let a
-    crash mid-write leave a truncated list, which defeats the one job it has.
-
-    It is not safe against two runs sharing an `--out-dir` concurrently: the
-    read-modify-write can lose an entry, and that workspace then survives
-    `--prune`. Give concurrent measurements separate `--out-dir` values.
-    """
-    body = "".join(f"{path}\n" for path in entries)
-    temporary = registry.with_suffix(f".{os.getpid()}.tmp")
-    # 내용과 디렉터리 엔트리를 모두 내려쓴다. replace 는 원자적이지만, 그
-    # 원자성은 캐시에 대한 것이라 전원이 끊기면 이름만 바뀌고 내용은 비어
-    # 있을 수 있다. 크래시를 견디는 것이 이 파일의 유일한 목적이다.
-    with temporary.open("w", encoding="utf-8") as handle:
-        handle.write(body)
-        handle.flush()
-        os.fsync(handle.fileno())
-    temporary.replace(registry)
-    directory = os.open(registry.parent, os.O_RDONLY)
+    lock_path = registry.with_name(f".{registry.name}.lock")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
     try:
-        os.fsync(directory)
+        descriptor = os.open(lock_path, flags, 0o600)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise OSError
+        deadline = time.monotonic() + WORKSPACE_REGISTRY_LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return os.fdopen(descriptor, "r+b", closefd=True)
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise OSError from None
+                time.sleep(WORKSPACE_REGISTRY_LOCK_POLL_SECONDS)
+    except (OSError, ValueError):
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+
+
+def _read_registry_locked(registry: Path) -> list[str]:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
+    try:
+        descriptor = os.open(registry, flags)
+    except FileNotFoundError:
+        return []
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+            or metadata.st_size > MAX_WORKSPACE_REGISTRY_BYTES
+        ):
+            raise OSError
+        payload = bytearray()
+        while len(payload) <= MAX_WORKSPACE_REGISTRY_BYTES:
+            chunk = os.read(
+                descriptor,
+                min(65_536, MAX_WORKSPACE_REGISTRY_BYTES + 1 - len(payload)),
+            )
+            if not chunk:
+                break
+            payload.extend(chunk)
+        if len(payload) > MAX_WORKSPACE_REGISTRY_BYTES:
+            raise OSError
+        lines = [line for line in payload.decode("utf-8", errors="strict").splitlines() if line]
+        if len(lines) > MAX_WORKSPACE_REGISTRY_ENTRIES or any(
+            len(line.encode("utf-8")) > MAX_WORKSPACE_REGISTRY_LINE_BYTES for line in lines
+        ):
+            raise OSError
+        return lines
+    except (OSError, UnicodeError, ValueError):
+        raise OSError from None
     finally:
-        os.close(directory)
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _write_registry_locked(registry: Path, entries: list[str]) -> None:
+    if len(entries) > MAX_WORKSPACE_REGISTRY_ENTRIES or any(
+        not entry
+        or "\n" in entry
+        or "\r" in entry
+        or len(entry.encode("utf-8")) > MAX_WORKSPACE_REGISTRY_LINE_BYTES
+        for entry in entries
+    ):
+        raise OSError
+    body = "".join(f"{path}\n" for path in entries).encode("utf-8")
+    if len(body) > MAX_WORKSPACE_REGISTRY_BYTES:
+        raise OSError
+    # Validate any existing target before replacing its directory entry.
+    _read_registry_locked(registry)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".workspaces-", dir=registry.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        view = memoryview(body)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.replace(temporary, registry)
+        directory = os.open(registry.parent, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        with contextlib.suppress(FileNotFoundError):
+            temporary.unlink()
+
+
+def write_registry(registry: Path, entries: list[str]) -> None:
+    """Replace the bounded registry atomically under its transaction lock."""
+
+    with _workspace_registry_lock(registry):
+        _write_registry_locked(registry, entries)
 
 
 def register(registry: Path, workspace: Path, add: bool) -> None:
@@ -3519,14 +3636,13 @@ def register(registry: Path, workspace: Path, add: bool) -> None:
     workspace left behind holds a half-finished agent run. The registry is the
     crash-safe half; `--prune` is the other half.
     """
-    live = set()
-    if registry.exists():
-        live = {line for line in registry.read_text(encoding="utf-8").splitlines() if line.strip()}
-    if add:
-        live.add(str(workspace))
-    else:
-        live.discard(str(workspace))
-    write_registry(registry, sorted(live))
+    with _workspace_registry_lock(registry):
+        live = set(_read_registry_locked(registry))
+        if add:
+            live.add(str(workspace))
+        else:
+            live.discard(str(workspace))
+        _write_registry_locked(registry, sorted(live))
 
 
 def discard(registry: Path, workspace: Path, out_dir: Path) -> None:
@@ -3681,11 +3797,27 @@ def create_registered_workspace(
 def prune_registered_workspaces(
     registry: Path, out_dir: Path, *, report_paths: bool
 ) -> WorkspacePruneResult:
-    if not registry.exists():
+    with _workspace_registry_lock(registry):
+        live = _read_registry_locked(registry)
+        return _prune_registered_workspaces_locked(
+            registry,
+            out_dir,
+            live=live,
+            report_paths=report_paths,
+        )
+
+
+def _prune_registered_workspaces_locked(
+    registry: Path,
+    out_dir: Path,
+    *,
+    live: list[str],
+    report_paths: bool,
+) -> WorkspacePruneResult:
+    if not live:
         if report_paths:
             print("등록된 작업공간 없음")
         return {"registered": 0, "removed": 0, "retained": 0}
-    live = [line for line in registry.read_text(encoding="utf-8").splitlines() if line.strip()]
     removed = 0
     kept: list[str] = []
     for line in live:
@@ -3712,7 +3844,7 @@ def prune_registered_workspaces(
             print(f"삭제: {target}")
     # 지운 것만 등록에서 뺀다. 통째로 비우면 아직 디스크에 남아 있는 신뢰할 수
     # 없는 트리를 가리키는 유일한 참조가 사라진다.
-    write_registry(registry, kept)
+    _write_registry_locked(registry, kept)
     if report_paths:
         print(f"{removed}개 정리 완료 (등록 {len(live)}개, 남김 {len(kept)}개)")
     return {"registered": len(live), "removed": removed, "retained": len(kept)}
@@ -4219,7 +4351,7 @@ def attempt(
         # Read-only routes can compare the parent-owned snapshot directly.
         # The comparison includes every non-.git path, including ignored and
         # known agent-scaffolding names.  No Git command or child-owned .git
-        # metadata is consulted after the child exits.
+        # No Git metadata is consulted; failure_kind is fixed before cleanup below.
         failure_stage = "handover"
         roots_replaced = (
             workspace_root_identity is None
@@ -4309,7 +4441,7 @@ def attempt(
             if record["made_changes"]:
                 record["error"] = "read-only route changed the repository"
                 record["failure_kind"] = "route"
-                record["failure_stage"] = "handover"
+                record["failure_stage"] = "handover"  # emit_failure_receipt reads this later
             elif record["dropped_ignored"] or record["excluded_scaffolding"]:
                 record["error"] = "read-only route created excluded repository content"
                 record["failure_kind"] = "route"
@@ -4477,8 +4609,9 @@ def _bounded_provider_integer(value: str) -> int:
     return int(value)
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
+        prog="wclass-advisory run",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
@@ -4511,7 +4644,7 @@ def main() -> int:
         action="store_true",
         help=(
             "confirm that task, diff, and verification context may be sent to the "
-            "vendor selected by --route-profile or a sealed --campaign"
+            "vendor selected by exact commands, --route-profile, or a sealed --campaign"
         ),
     )
     parser.add_argument("--verify", type=Path, help="executable; exit code is the verdict")
@@ -4638,9 +4771,21 @@ def main() -> int:
         default=[],
         help="extra agent-scaffolding directory to keep out of the patch (repeatable)",
     )
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
 
     arguments.out_dir = arguments.out_dir.expanduser().resolve()
+    if arguments.prune:
+        arguments.out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        arguments.out_dir.chmod(0o700)
+        try:
+            return prune_all_lanes(arguments.out_dir)
+        except CampaignError:
+            parser.error("invalid anonymous lane layout")
+
+    if not arguments.confirm_task_egress:
+        parser.error("advisory execution requires --confirm-task-egress")
+    if not has_safe_child_status_context():
+        parser.error("advisory child-status context is unsafe")
     arguments.out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     # mkdir(mode=...) 는 디렉터리가 이미 있으면 아무것도 하지 않고, parents=True
     # 로 만들어진 상위 디렉터리는 기본 umask 를 받는다. 작업공간에는 에이전트가
@@ -4648,12 +4793,6 @@ def main() -> int:
     arguments.out_dir.chmod(0o700)
     registry = arguments.out_dir / "workspaces.txt"
     log = arguments.out_dir / "runs.jsonl"
-
-    if arguments.prune:
-        try:
-            return prune_all_lanes(arguments.out_dir)
-        except CampaignError:
-            parser.error("invalid anonymous lane layout")
 
     exact_commands = (arguments.cheap, arguments.advisor, arguments.expensive)
     if arguments.route_profile is not None:
@@ -4679,13 +4818,6 @@ def main() -> int:
 
     if (arguments.campaign is None) != (arguments.sample_ordinal is None):
         parser.error("--campaign and --sample-ordinal must be supplied together")
-    needs_egress_confirmation = (
-        arguments.route_profile is not None or arguments.campaign is not None
-    )
-    if needs_egress_confirmation and not arguments.confirm_task_egress:
-        parser.error("profile or sealed-campaign execution requires --confirm-task-egress")
-    if arguments.confirm_task_egress and not needs_egress_confirmation:
-        parser.error("--confirm-task-egress needs --route-profile or --campaign")
     if arguments.campaign is not None and arguments.label:
         parser.error("--label is not allowed in campaign mode; use only the opaque ordinal")
     if arguments.workflow != "implementation" and arguments.label:
@@ -4858,7 +4990,7 @@ def main() -> int:
     # 모든 task-free 설정과 campaign 결속이 성공한 뒤에만 task 에 접근한다.
     task_file = arguments.task_file.expanduser()
     try:
-        task = read_task_file(task_file, require_private=needs_egress_confirmation)
+        task = read_task_file(task_file, require_private=True)
     except TaskInputError:
         parser.error("--task-file is invalid")
     if arguments.workflow != "implementation":

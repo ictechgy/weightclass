@@ -8,10 +8,10 @@ from types import FrameType
 from typing import Any, NoReturn, SupportsIndex, TypeVar
 
 from .process_context import (
-    ChildStatusLostError,
     has_safe_child_status_context,
     wait_owned_child,
 )
+from .process_errors import ChildStatusLostError
 
 
 class ForegroundProcessError(OSError):

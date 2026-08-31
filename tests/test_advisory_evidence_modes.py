@@ -438,6 +438,7 @@ class EvidenceRunnerTests(unittest.TestCase):
             expensive or cheap,
             "--verify",
             str(self.evaluator(root, accepted_summary, workflow)),
+            "--confirm-task-egress",
             "--out-dir",
             str(out),
         ]

@@ -91,12 +91,16 @@ Offline stopping, Context Guard, brainstorming, and confidence study inputs are
 specified in [Advisory experiment records](docs/advisory-experiments.md).
 
 Advisory-owned Git inspection disables executable repository-local fsmonitor
-configuration. Vendor and verifier streams are captured under one combined
-byte ceiling with process-group cleanup on timeout, overflow, or interruption;
-legacy report, price, campaign-record, token, and JSON integer paths also fail
-closed under explicit byte/count/digit limits. These are local availability and
-integrity controls, not a host sandbox. The selected vendor and verifier still
-run with the invoking user's granted filesystem authority.
+configuration and optional index locking, captures stdout/stderr under explicit
+limits, and refuses a generated patch larger than 64 MiB. Vendor and verifier
+streams are captured under one combined byte ceiling with process-group cleanup
+on timeout, overflow, interruption, or child-status loss; legacy report, price,
+campaign-record, token, and JSON integer paths also fail closed under explicit
+byte/count/digit limits. Workspace registration is owner-private, bounded,
+nofollow, atomically replaced, and locked against concurrent run/prune updates.
+These are local availability and integrity controls, not a host sandbox. The
+selected vendor and verifier still run with the invoking user's granted
+filesystem authority.
 
 For a formal statistical claim, preregister one primary vendor/workflow in the
 managed state root before its first dispatch. `migrate-gate` validates the
@@ -1576,13 +1580,21 @@ credential management, background execution, or a bundled provider runtime.
   a shell, retry, backgrounding, recovery, or process supervision.
 - The separately selected `wclass-advisory` companion may start the bounded
   cheap/advisor/retry/expensive sequence described by a sealed campaign. It
-  requires `--confirm-task-egress`, never applies a patch automatically, and
-  writes only owner-private aggregate campaign records without task content,
-  task hashes, repository paths, timestamps, profiles, or fingerprints derived
-  from the task. Explicit `init` stores only caller-selected task-free profiles,
-  optional price tables, sealed contracts, and owner-private aggregate result
-  lanes under the platform advisory state root. The caller owns the task file;
-  `wclass run` never reads this advisory state.
+  requires `--confirm-task-egress` for exact-command, profile, and sealed-campaign
+  execution, requires an owner-private task file, never applies a patch
+  automatically, and writes only owner-private aggregate campaign records
+  without task content, task hashes, repository paths, timestamps, profiles, or
+  fingerprints derived from the task. Explicit `init` stores only caller-selected
+  task-free profiles, optional price tables, sealed contracts, and owner-private
+  aggregate result lanes under the platform advisory state root. The caller owns
+  the task file; `wclass run` never reads this advisory state.
+- Custom advisory state roots reject symlinks at the managed boundary and any
+  ancestor owned or writable by an unrelated local user. User/root-owned `0755`
+  ancestors and user/root-owned sticky `1777` directories remain compatible;
+  shared-group-writable ancestors do not. Advisory skill publication and upgrade
+  retain one opened `skills` parent descriptor through staging, verification,
+  rename, rollback, cleanup, and fsync, so a pathname swap cannot redirect those
+  mutations.
 - Advisory `{{task_file}}` routes stream task bytes through an inherited pipe
   and pass only `/dev/fd/N` to the child. No task pathname or task file is
   created. If anonymous descriptor delivery cannot be established, no vendor

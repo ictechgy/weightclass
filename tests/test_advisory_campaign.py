@@ -775,6 +775,7 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
                     "--prices",
                     str(prices),
                     "--prefer-prices",
+                    "--confirm-task-egress",
                     "--out-dir",
                     str(root / "out"),
                 ],
@@ -858,7 +859,6 @@ class CampaignRunnerBoundaryTests(unittest.TestCase):
             for flag in ("--campaign", "--sample-ordinal"):
                 index = legacy.index(flag)
                 del legacy[index : index + 2]
-            legacy.remove("--confirm-task-egress")
             unbound = subprocess.run(legacy, capture_output=True, check=False, text=True)
             records = load_bound_records(out / "runs.jsonl")
             pinned = load_manifest(out / "campaign.json")

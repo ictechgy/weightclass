@@ -7,11 +7,20 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import stat
 import sys
-import tempfile
 from pathlib import Path
-from typing import NoReturn, TypedDict
+from typing import TYPE_CHECKING, NoReturn, TypedDict
+
+if TYPE_CHECKING or __package__:
+    from . import bounded_io, safe_namespace
+else:
+    try:
+        from weightclass.advisory import bounded_io, safe_namespace
+    except ImportError:
+        import bounded_io  # type: ignore[no-redef,import-not-found]
+        import safe_namespace  # type: ignore[no-redef,import-not-found]
 
 SKILL_NAME = "advisory"
 SCHEMA_VERSION = 1
@@ -152,35 +161,14 @@ def _selected_targets(target: str) -> tuple[str, ...]:
 
 
 def _regular_bytes(path: Path) -> bytes:
-    nofollow = getattr(os, "O_NOFOLLOW", None)
-    if not isinstance(nofollow, int):
-        _fail("invalid_bundle")
-    flags = os.O_RDONLY | nofollow
-    flags |= getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NONBLOCK", 0)
-    descriptor: int | None = None
     try:
-        descriptor = os.open(path, flags)
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            _fail("invalid_bundle")
-        chunks: list[bytes] = []
-        remaining = MAX_BUNDLE_FILE_BYTES + 1
-        while remaining:
-            chunk = os.read(descriptor, min(65_536, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-    except OSError as error:
+        return bounded_io.read_regular_bytes(
+            path,
+            MAX_BUNDLE_FILE_BYTES,
+            require_nonempty=True,
+        )
+    except bounded_io.BoundedFileError as error:
         raise SkillInstallError("invalid_bundle") from error
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-    payload = b"".join(chunks)
-    if not payload or len(payload) > MAX_BUNDLE_FILE_BYTES:
-        _fail("invalid_bundle")
-    return payload
 
 
 def _bundle_payloads(bundle: Path) -> dict[str, bytes]:
@@ -323,11 +311,41 @@ def _recognized_previous_files(destination: Path) -> tuple[str, ...] | None:
     return None
 
 
-def _write_private(path: Path, payload: bytes) -> None:
+def _directory_flags() -> int:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if not isinstance(nofollow, int) or not isinstance(directory, int):
+        _fail("unsafe_skill_root")
+    return os.O_RDONLY | nofollow | directory | getattr(os, "O_CLOEXEC", 0)
+
+
+def _private_directory_metadata(descriptor: int, *, private: bool) -> bool:
+    metadata = os.fstat(descriptor)
+    return (
+        stat.S_ISDIR(metadata.st_mode)
+        and metadata.st_uid == os.getuid()
+        and not stat.S_IMODE(metadata.st_mode) & (0o077 if private else 0o022)
+    )
+
+
+def _open_directory(
+    name: str | Path,
+    *,
+    dir_fd: int | None = None,
+    private: bool = True,
+) -> int:
+    descriptor = os.open(name, _directory_flags(), dir_fd=dir_fd)
+    if not _private_directory_metadata(descriptor, private=private):
+        os.close(descriptor)
+        raise OSError
+    return descriptor
+
+
+def _write_private_at(directory_fd: int, name: str, payload: bytes) -> None:
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     flags |= getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags, 0o600)
+    descriptor = os.open(name, flags, 0o600, dir_fd=directory_fd)
     try:
         view = memoryview(payload)
         while view:
@@ -341,100 +359,281 @@ def _write_private(path: Path, payload: bytes) -> None:
         os.close(descriptor)
 
 
-def _remove_staging(staging: Path) -> None:
-    for relative in EXPECTED_FILES:
-        try:
-            (staging / relative).unlink()
-        except FileNotFoundError:
-            pass
-    for relative in ("agents", "references"):
-        try:
-            (staging / relative).rmdir()
-        except FileNotFoundError:
-            pass
+def _open_relative_parent(root_fd: int, relative: str) -> tuple[int, str]:
+    parts = Path(relative).parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise OSError
+    descriptor = os.dup(root_fd)
     try:
-        staging.rmdir()
+        for part in parts[:-1]:
+            child = _open_directory(part, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor, parts[-1]
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _regular_bytes_at(root_fd: int, relative: str) -> bytes:
+    parent_fd, name = _open_relative_parent(root_fd, relative)
+    descriptor = -1
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise OSError
+        chunks: list[bytes] = []
+        remaining = MAX_BUNDLE_FILE_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if not payload or len(payload) > MAX_BUNDLE_FILE_BYTES:
+            raise OSError
+        return payload
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_fd)
+
+
+def _exact_bundle_at(
+    parent_fd: int,
+    destination_name: str,
+    expected_files: tuple[str, ...],
+    expected_sha256: dict[str, str],
+) -> bool:
+    root_fd = -1
+    try:
+        root_fd = _open_directory(destination_name, dir_fd=parent_fd)
+        expected_entries = {Path(relative).parts[0] for relative in expected_files}
+        if set(os.listdir(root_fd)) != expected_entries:
+            return False
+        for directory in EXPECTED_DIRECTORIES:
+            child_fd = _open_directory(directory, dir_fd=root_fd)
+            try:
+                expected_children = {
+                    Path(relative).name
+                    for relative in expected_files
+                    if Path(relative).parts[0] == directory
+                }
+                if set(os.listdir(child_fd)) != expected_children:
+                    return False
+            finally:
+                os.close(child_fd)
+        return all(
+            hashlib.sha256(_regular_bytes_at(root_fd, relative)).hexdigest()
+            == expected_sha256[relative]
+            for relative in expected_files
+        )
+    except OSError:
+        return False
+    finally:
+        if root_fd >= 0:
+            os.close(root_fd)
+
+
+def _recognized_previous_files_at(parent_fd: int, destination_name: str) -> tuple[str, ...] | None:
+    for files, expected_sha256 in (
+        (LEGACY_FILES, LEGACY_FILE_SHA256),
+        (EXPECTED_FILES, PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, ADDITIONAL_PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, LATEST_PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, CURRENT_PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, NEXT_PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, FINAL_PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0176_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0177_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0178_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0179_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0180_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0190_BUNDLE_FILE_SHA256),
+    ):
+        if _exact_bundle_at(parent_fd, destination_name, files, expected_sha256):
+            return files
+    return None
+
+
+def _remove_bundle_at(parent_fd: int, name: str, files: tuple[str, ...]) -> None:
+    root_fd = _open_directory(name, dir_fd=parent_fd)
+    try:
+        for relative in files:
+            try:
+                relative_parent_fd, leaf = _open_relative_parent(root_fd, relative)
+            except FileNotFoundError:
+                continue
+            try:
+                os.unlink(leaf, dir_fd=relative_parent_fd)
+            except FileNotFoundError:
+                pass
+            finally:
+                os.close(relative_parent_fd)
+        for relative in EXPECTED_DIRECTORIES:
+            try:
+                os.rmdir(relative, dir_fd=root_fd)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(root_fd)
+    try:
+        os.rmdir(name, dir_fd=parent_fd)
     except FileNotFoundError:
         pass
 
 
-def _remove_bundle(directory: Path, files: tuple[str, ...]) -> None:
-    for relative in files:
-        (directory / relative).unlink()
-    for relative in ("agents", "references"):
-        (directory / relative).rmdir()
-    directory.rmdir()
+def _make_temporary_directory(parent_fd: int, prefix: str) -> str:
+    for _ in range(128):
+        name = f"{prefix}{secrets.token_hex(8)}"
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+            return name
+        except FileExistsError:
+            continue
+    raise OSError
 
 
-def _ensure_skill_root(home: Path, parent: Path) -> None:
+def _open_skill_parent(home: Path, parent: Path, *, create: bool = True) -> int:
     if not home.is_absolute():
         _fail("unsafe_skill_root")
-    current = home
     try:
         relative_parts = parent.relative_to(home).parts
-    except ValueError:
-        _fail("unsafe_skill_root")
-    for part in relative_parts:
-        current /= part
+        if not relative_parts:
+            _fail("unsafe_skill_root")
+        safe_namespace.ensure_private_directory(
+            parent,
+            managed_root=home / relative_parts[0],
+            create=create,
+            private_leaf=False,
+        )
+        return _open_directory(parent, private=False)
+    except (OSError, ValueError, safe_namespace.SafeNamespaceError) as error:
+        raise SkillInstallError("unsafe_skill_root") from error
+
+
+def _inspect_destination(
+    home: Path,
+    destination: Path,
+    payloads: dict[str, bytes],
+    *,
+    upgrade: bool,
+) -> tuple[str, tuple[str, ...] | None]:
+    parent = destination.parent
+    try:
+        relative_parts = parent.relative_to(home).parts
+        if not relative_parts:
+            _fail("unsafe_skill_root")
+        safe_namespace.admit_existing_ancestors(
+            parent,
+            managed_root=home / relative_parts[0],
+            allow_missing=True,
+        )
+    except (ValueError, safe_namespace.SafeNamespaceError) as error:
+        raise SkillInstallError("unsafe_skill_root") from error
+    try:
+        parent_fd = _open_skill_parent(home, parent, create=False)
+    except SkillInstallError:
+        if not parent.exists() and not parent.is_symlink():
+            return "planned", None
+        raise
+    try:
         try:
-            current.mkdir(mode=0o700)
-            current.chmod(0o700)
-        except FileExistsError:
-            try:
-                metadata = current.lstat()
-            except OSError as error:
-                raise SkillInstallError("unsafe_skill_root") from error
-            if current.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
-                _fail("unsafe_skill_root")
+            os.stat(destination.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return "planned", None
+        current_hashes = {
+            relative: hashlib.sha256(payload).hexdigest() for relative, payload in payloads.items()
+        }
+        if _exact_bundle_at(parent_fd, destination.name, EXPECTED_FILES, current_hashes):
+            return "already_installed", None
+        if upgrade:
+            previous_files = _recognized_previous_files_at(parent_fd, destination.name)
+            if previous_files is not None:
+                return "upgrade", previous_files
+        _fail("skill_conflict")
+    finally:
+        os.close(parent_fd)
+
+
+def _stage_bundle(parent_fd: int, payloads: dict[str, bytes]) -> str:
+    staging_name = _make_temporary_directory(parent_fd, ".advisory-skill-")
+    staging_fd = -1
+    try:
+        staging_fd = _open_directory(staging_name, dir_fd=parent_fd)
+        directory_fds: dict[str, int] = {}
+        try:
+            for relative in EXPECTED_DIRECTORIES:
+                os.mkdir(relative, mode=0o700, dir_fd=staging_fd)
+                directory_fds[relative] = _open_directory(relative, dir_fd=staging_fd)
+            for relative, payload in payloads.items():
+                parts = Path(relative).parts
+                target_fd = staging_fd if len(parts) == 1 else directory_fds[parts[0]]
+                _write_private_at(target_fd, parts[-1], payload)
+        finally:
+            for descriptor in directory_fds.values():
+                os.close(descriptor)
+        return staging_name
+    except BaseException:
+        try:
+            _remove_bundle_at(parent_fd, staging_name, EXPECTED_FILES)
+        except OSError:
+            pass
+        raise
+    finally:
+        if staging_fd >= 0:
+            os.close(staging_fd)
 
 
 def _publish(home: Path, destination: Path, payloads: dict[str, bytes]) -> None:
     parent = destination.parent
-    _ensure_skill_root(home, parent)
-    if parent.is_symlink() or not stat.S_ISDIR(parent.lstat().st_mode):
-        _fail("unsafe_skill_root")
-
-    staging = Path(tempfile.mkdtemp(prefix=".advisory-skill-", dir=parent))
-    staging.chmod(0o700)
+    parent_fd = _open_skill_parent(home, parent)
+    staging_name = ""
+    destination_created = False
     try:
-        for relative in EXPECTED_DIRECTORIES:
-            (staging / relative).mkdir(mode=0o700)
-        for relative, payload in payloads.items():
-            _write_private(staging / relative, payload)
-
+        staging_name = _stage_bundle(parent_fd, payloads)
         try:
-            destination.mkdir(mode=0o700)
+            os.mkdir(destination.name, mode=0o700, dir_fd=parent_fd)
         except FileExistsError as error:
             raise SkillInstallError("skill_conflict") from error
+        destination_created = True
+        staging_fd = _open_directory(staging_name, dir_fd=parent_fd)
+        destination_fd = _open_directory(destination.name, dir_fd=parent_fd)
         try:
             for relative in EXPECTED_DIRECTORIES:
-                (destination / relative).mkdir(mode=0o700)
+                os.mkdir(relative, mode=0o700, dir_fd=destination_fd)
             for relative in EXPECTED_FILES:
-                os.rename(staging / relative, destination / relative)
-            destination.chmod(0o700)
-            directory_descriptor = os.open(parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_descriptor)
-            finally:
-                os.close(directory_descriptor)
-        except OSError:
-            for relative in EXPECTED_FILES:
-                try:
-                    (destination / relative).unlink()
-                except FileNotFoundError:
-                    pass
-            for relative in EXPECTED_DIRECTORIES:
-                try:
-                    (destination / relative).rmdir()
-                except FileNotFoundError:
-                    pass
-            try:
-                destination.rmdir()
-            except FileNotFoundError:
-                pass
-            raise
+                os.rename(
+                    relative,
+                    relative,
+                    src_dir_fd=staging_fd,
+                    dst_dir_fd=destination_fd,
+                )
+            os.fsync(parent_fd)
+        finally:
+            os.close(destination_fd)
+            os.close(staging_fd)
+        destination_created = False
     finally:
-        _remove_staging(staging)
+        if destination_created:
+            try:
+                _remove_bundle_at(parent_fd, destination.name, EXPECTED_FILES)
+            except OSError:
+                pass
+        if staging_name:
+            try:
+                _remove_bundle_at(parent_fd, staging_name, EXPECTED_FILES)
+            except OSError:
+                pass
+        os.close(parent_fd)
 
 
 def _upgrade(
@@ -444,53 +643,59 @@ def _upgrade(
     previous_files: tuple[str, ...],
 ) -> None:
     parent = destination.parent
-    _ensure_skill_root(home, parent)
-    if parent.is_symlink() or not stat.S_ISDIR(parent.lstat().st_mode):
-        _fail("unsafe_skill_root")
-    staging = Path(tempfile.mkdtemp(prefix=".advisory-skill-", dir=parent))
-    staging.chmod(0o700)
-    backup = Path(tempfile.mkdtemp(prefix=".advisory-skill-backup-", dir=parent))
-    backup.rmdir()
+    parent_fd = _open_skill_parent(home, parent)
+    staging_name = ""
+    backup_name = f".advisory-skill-backup-{secrets.token_hex(8)}"
     moved_existing = False
     published = False
     try:
-        for relative in EXPECTED_DIRECTORIES:
-            (staging / relative).mkdir(mode=0o700)
-        for relative, payload in payloads.items():
-            _write_private(staging / relative, payload)
-        if _recognized_previous_files(destination) != previous_files:
+        staging_name = _stage_bundle(parent_fd, payloads)
+        if _recognized_previous_files_at(parent_fd, destination.name) != previous_files:
             _fail("skill_conflict")
-        os.rename(destination, backup)
+        os.rename(destination.name, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         moved_existing = True
-        os.rename(staging, destination)
+        os.rename(staging_name, destination.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         published = True
-        destination.chmod(0o700)
-        directory_descriptor = os.open(parent, os.O_RDONLY)
+        staging_name = ""
+        os.fsync(parent_fd)
         try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
-        try:
-            _remove_bundle(backup, previous_files)
+            _remove_bundle_at(parent_fd, backup_name, previous_files)
         except OSError:
             pass
         moved_existing = False
     except OSError:
         if published:
             try:
-                os.rename(destination, staging)
+                staging_name = _make_temporary_directory(parent_fd, ".advisory-skill-failed-")
+                os.rmdir(staging_name, dir_fd=parent_fd)
+                os.rename(
+                    destination.name,
+                    staging_name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
                 published = False
             except OSError:
                 pass
         if moved_existing:
             try:
-                os.rename(backup, destination)
+                os.rename(
+                    backup_name,
+                    destination.name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
                 moved_existing = False
             except OSError:
                 pass
         raise
     finally:
-        _remove_staging(staging)
+        if staging_name:
+            try:
+                _remove_bundle_at(parent_fd, staging_name, EXPECTED_FILES)
+            except OSError:
+                pass
+        os.close(parent_fd)
 
 
 def install_skill(
@@ -516,17 +721,19 @@ def install_skill(
     for selected in targets:
         destination = _destination(home, selected)
         destinations[selected] = destination
-        if destination.exists() or destination.is_symlink():
-            if _installed_matches(destination, payloads):
-                already_installed.append(selected)
-            elif upgrade:
-                previous_files = _recognized_previous_files(destination)
-                if previous_files is None:
-                    _fail("skill_conflict")
-                upgrade_targets[selected] = previous_files
-            else:
-                _fail("skill_conflict")
+        state, previous_files = _inspect_destination(
+            home,
+            destination,
+            payloads,
+            upgrade=upgrade,
+        )
+        if state == "already_installed":
+            already_installed.append(selected)
+        elif state == "upgrade":
+            assert previous_files is not None
+            upgrade_targets[selected] = previous_files
         else:
+            assert state == "planned" and previous_files is None
             planned.append(selected)
 
     if not dry_run:

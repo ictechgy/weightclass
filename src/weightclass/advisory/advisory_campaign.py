@@ -24,8 +24,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, TypedDict, cast
 
 if TYPE_CHECKING or __package__:
+    from . import bounded_io
     from .advisory_routes import AdvisoryRouteError, routes_from_profile
 else:
+    import bounded_io  # type: ignore[import-not-found]
     from advisory_routes import (  # type: ignore[import-not-found]
         AdvisoryRouteError,
         routes_from_profile,
@@ -212,35 +214,10 @@ def bounded_json_integer(value: str) -> int:
 
 
 def _bounded_file_bytes(path: Path, maximum: int) -> bytes:
-    nofollow = getattr(os, "O_NOFOLLOW", None)
-    if nofollow is None:
-        raise CampaignError()
-    flags = os.O_RDONLY | nofollow
-    flags |= getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NONBLOCK", 0)
-    descriptor: int | None = None
     try:
-        descriptor = os.open(path, flags)
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise CampaignError()
-        chunks: list[bytes] = []
-        remaining = maximum + 1
-        while remaining:
-            chunk = os.read(descriptor, min(65_536, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-    except OSError as error:
+        return bounded_io.read_regular_bytes(path, maximum)
+    except bounded_io.BoundedFileError as error:
         raise CampaignError() from error
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-    payload = b"".join(chunks)
-    if len(payload) > maximum:
-        raise CampaignError()
-    return payload
 
 
 def file_sha256(path: Path, maximum: int) -> str:
@@ -573,6 +550,18 @@ def load_bound_records(path: Path) -> list[dict[str, object]]:
     return records
 
 
+def _next_line_boundary(buffer: bytearray, start: int) -> int:
+    """Return the next CR/LF boundary at or after ``start``."""
+
+    line_feed = buffer.find(b"\n", start)
+    carriage_return = buffer.find(b"\r", start)
+    if line_feed < 0:
+        return carriage_return
+    if carriage_return < 0:
+        return line_feed
+    return min(line_feed, carriage_return)
+
+
 def _iter_bound_records(
     path: Path, *, allow_trailing_partial: bool = False
 ) -> Iterator[dict[str, object]]:
@@ -596,7 +585,8 @@ def _iter_bound_records(
         with os.fdopen(descriptor, "rb", closefd=True) as handle:
             descriptor = None
             buffer = bytearray()
-            line_boundaries = b"\n\r"
+            record_start = 0
+            scan_start = 0
             while True:
                 chunk = handle.read(65_536)
                 at_end = not chunk
@@ -606,27 +596,30 @@ def _iter_bound_records(
                         raise CampaignError()
                     buffer.extend(chunk)
 
-                start = 0
-                index = 0
-                while index < len(buffer):
-                    boundary = buffer[index]
-                    if boundary not in line_boundaries:
-                        index += 1
-                        continue
-                    if boundary == 0x0D and index + 1 == len(buffer) and not at_end:
+                while True:
+                    boundary = (
+                        -1
+                        if at_end and scan_start == len(buffer)
+                        else _next_line_boundary(buffer, scan_start)
+                    )
+                    if boundary < 0:
+                        scan_start = len(buffer)
                         break
-                    raw_line = bytes(buffer[start:index])
+                    if boundary == 0x0D and boundary + 1 == len(buffer) and not at_end:
+                        scan_start = boundary
+                        break
+                    raw_line = bytes(buffer[record_start:boundary])
                     if len(raw_line) > MAX_CAMPAIGN_RECORD_BYTES:
                         raise CampaignError()
                     consumed_boundary = (
                         2
                         if boundary == 0x0D
-                        and index + 1 < len(buffer)
-                        and buffer[index + 1] == 0x0A
+                        and boundary + 1 < len(buffer)
+                        and buffer[boundary + 1] == 0x0A
                         else 1
                     )
-                    start = index + consumed_boundary
-                    index = start
+                    record_start = boundary + consumed_boundary
+                    scan_start = record_start
                     if raw_line.strip():
                         try:
                             value = json.loads(
@@ -648,8 +641,10 @@ def _iter_bound_records(
                             raise CampaignError()
                         yield value
 
-                if start:
-                    del buffer[:start]
+                if record_start:
+                    del buffer[:record_start]
+                    scan_start -= record_start
+                    record_start = 0
                 if not at_end:
                     pending_carriage_return = buffer.endswith(b"\r")
                     record_size = len(buffer) - (1 if pending_carriage_return else 0)
@@ -1038,8 +1033,10 @@ def _command(value: str) -> list[str]:
     return argv
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="wclass-advisory seal", description=__doc__, allow_abbrev=False
+    )
     parser.add_argument("--arm", required=True, choices=("shape_b", "shape_a_b"))
     parser.add_argument(
         "--workflow",
@@ -1067,7 +1064,7 @@ def main() -> int:
     parser.add_argument("--verify", required=True, type=Path)
     parser.add_argument("--prices", type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
     if (arguments.cost_basis == "price_table") != (arguments.prices is not None):
         parser.error("price_table cost basis requires exactly one --prices file")
     exact_commands = (arguments.cheap, arguments.advisor, arguments.expensive)

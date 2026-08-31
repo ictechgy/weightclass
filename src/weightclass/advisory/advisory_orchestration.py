@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING or __package__:
+    from . import safe_namespace
     from .advisory_campaign import (
         ANONYMOUS_LANE_COUNT,
         MAX_ANONYMOUS_LANES,
@@ -25,6 +26,7 @@ if TYPE_CHECKING or __package__:
     )
     from .advisory_parallel import AdvisoryJob, AdvisoryResult, run_parallel
 else:
+    import safe_namespace  # type: ignore[import-not-found]
     from advisory_campaign import (  # type: ignore[import-not-found]
         ANONYMOUS_LANE_COUNT,
         MAX_ANONYMOUS_LANES,
@@ -41,15 +43,19 @@ else:
     )
 
 
-class LaneUnavailableError(ValueError):
+class CampaignLaneError(ValueError):
+    """Base class for value-free campaign lane failures."""
+
+
+class LaneUnavailableError(CampaignLaneError):
     """Every bounded anonymous lane is currently leased."""
 
 
-class CampaignCapacityError(ValueError):
+class CampaignCapacityError(CampaignLaneError):
     """The sealed campaign cannot admit another in-flight sample."""
 
 
-class CampaignRecordsInvalidError(ValueError):
+class CampaignRecordsInvalidError(CampaignLaneError):
     """Existing records do not bind to the selected sealed campaign."""
 
     code: str
@@ -59,8 +65,28 @@ class CampaignRecordsInvalidError(ValueError):
         super().__init__(self.code)
 
 
-class AllocatorUnavailableError(ValueError):
+class AllocatorUnavailableError(CampaignLaneError):
     """The short cross-lane allocator lock exceeded its bounded wait."""
+
+
+class CampaignLaneStateError(CampaignLaneError):
+    """The lane namespace or one of its private locks is unsafe."""
+
+
+def campaign_lane_error_code(error: CampaignLaneError) -> str:
+    """Map every public lane failure to one stable value-free diagnostic."""
+
+    if isinstance(error, LaneUnavailableError):
+        return "managed_lane_unavailable"
+    if isinstance(error, CampaignCapacityError):
+        return "managed_campaign_capacity_reached"
+    if isinstance(error, CampaignRecordsInvalidError):
+        return error.code
+    if isinstance(error, AllocatorUnavailableError):
+        return "managed_allocator_busy"
+    if isinstance(error, CampaignLaneStateError):
+        return "invalid_campaign_lane_state"
+    raise ValueError from None
 
 
 class _LockUnavailableError(ValueError):
@@ -137,30 +163,15 @@ def _open_allocator_lock(path: Path) -> int:
             time.sleep(ALLOCATOR_LOCK_POLL_SECONDS)
 
 
-def _private_directory(path: Path, *, create: bool) -> None:
+def _private_directory(path: Path, *, create: bool, managed_root: Path) -> None:
     try:
-        metadata = path.lstat()
-    except FileNotFoundError:
-        if not create:
-            raise ValueError from None
-        try:
-            path.mkdir(mode=0o700)
-        except FileExistsError:
-            pass
-        except OSError:
-            raise ValueError from None
-        try:
-            metadata = path.lstat()
-        except OSError:
-            raise ValueError from None
-    except OSError:
+        safe_namespace.ensure_private_directory(
+            path,
+            managed_root=managed_root,
+            create=create,
+        )
+    except safe_namespace.SafeNamespaceError:
         raise ValueError from None
-    if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.getuid()
-        or stat.S_IMODE(metadata.st_mode) & 0o077
-    ):
-        raise ValueError
 
 
 def _prepare_lane_directories(request: LaneRequest) -> tuple[Path, ...]:
@@ -179,13 +190,14 @@ def _prepare_lane_directories(request: LaneRequest) -> tuple[Path, ...]:
     ):
         raise ValueError
     root = request.results_dir
-    _private_directory(root.parent, create=False)
-    _private_directory(root, create=True)
+    managed_root = root.parent
+    _private_directory(root.parent, create=False, managed_root=managed_root)
+    _private_directory(root, create=True, managed_root=managed_root)
     lanes = lane_result_directories(root, request.lane_count)
     if len(lanes) > 1:
-        _private_directory(lanes[1].parent, create=True)
+        _private_directory(lanes[1].parent, create=True, managed_root=managed_root)
         for lane in lanes[1:]:
-            _private_directory(lane, create=True)
+            _private_directory(lane, create=True, managed_root=managed_root)
     return lanes
 
 
@@ -207,13 +219,13 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
     """
     selected = tuple(requests)
     if not selected or len(selected) > MAX_ANONYMOUS_LANES:
-        raise ValueError
+        raise CampaignLaneStateError
     keys = [(request.vendor, request.workflow) for request in selected]
     if len(set(keys)) != len(keys):
-        raise ValueError
+        raise CampaignLaneStateError
     roots = [request.results_dir for request in selected]
     if len(set(roots)) != len(roots):
-        raise ValueError
+        raise CampaignLaneStateError
     allocator_descriptors: list[int] = []
     lane_descriptors: list[int] = []
     leases: list[LaneLease] = []
@@ -279,7 +291,7 @@ def acquire_campaign_lanes(requests: Sequence[LaneRequest]) -> Iterator[tuple[La
     except (OSError, ValueError):
         _release_descriptors(lane_descriptors)
         _release_descriptors(allocator_descriptors)
-        raise ValueError from None
+        raise CampaignLaneStateError from None
     else:
         _release_descriptors(allocator_descriptors)
         try:

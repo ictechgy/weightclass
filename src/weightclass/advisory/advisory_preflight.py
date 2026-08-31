@@ -9,14 +9,27 @@ import selectors
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, cast
 
+if not __package__:
+    source_root = str(Path(__file__).resolve().parents[2])
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+
 from weightclass.executable_observation import observe_executable
+from weightclass.process_context import (
+    ProcessGroupAnchor,
+    has_safe_child_status_context,
+    wait_owned_child,
+)
+from weightclass.process_errors import ChildStatusLostError
 from weightclass.v2_validation import V2ValidationError
 
 MAX_PROBE_BYTES = 262_144
@@ -111,6 +124,8 @@ _SPECS: Mapping[str, CapabilitySpec] = {
 
 
 def _bounded_command(command: Sequence[str]) -> tuple[int, bytes]:
+    if not has_safe_child_status_context():
+        raise OSError
     with tempfile.TemporaryDirectory(prefix="wclass-cli-check-") as directory:
         environment = {
             name: value
@@ -144,19 +159,34 @@ def _bounded_command(command: Sequence[str]) -> tuple[int, bytes]:
 
 def _capture_bounded_command(process: subprocess.Popen[bytes]) -> tuple[int, bytes]:
     assert process.stdout is not None and process.stderr is not None
+    anchor = ProcessGroupAnchor.open(process)
     selector = selectors.DefaultSelector()
     payload = bytearray()
     deadline = time.monotonic() + PROBE_TIMEOUT_SECONDS
 
     def stop() -> None:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            anchor.signal(signal.SIGKILL)
+        except ChildStatusLostError:
+            raise
         except OSError:
             pass
         try:
-            process.wait(timeout=1.0)
+            wait_owned_child(process, timeout=1.0)
+        except ChildStatusLostError:
+            anchor.release_after_status_loss()
+            raise
         except subprocess.TimeoutExpired:
-            pass
+
+            def reap() -> None:
+                try:
+                    wait_owned_child(process)
+                except OSError:
+                    pass
+                finally:
+                    anchor.close()
+
+            threading.Thread(target=reap, name="wclass-preflight-reaper", daemon=True).start()
 
     try:
         for stream in (process.stdout, process.stderr):
@@ -182,11 +212,19 @@ def _capture_bounded_command(process: subprocess.Popen[bytes]) -> tuple[int, byt
         if remaining <= 0:
             stop()
             return 124, b""
-        return process.wait(timeout=remaining), bytes(payload)
+        try:
+            return wait_owned_child(process, timeout=remaining), bytes(payload)
+        except ChildStatusLostError:
+            anchor.release_after_status_loss()
+            raise
+    except ChildStatusLostError:
+        # Status loss releases the numeric PID/PGID; never signal it again.
+        raise
     except BaseException:
         stop()
         raise
     finally:
+        anchor.close()
         selector.close()
         for stream in (process.stdout, process.stderr):
             if not stream.closed:

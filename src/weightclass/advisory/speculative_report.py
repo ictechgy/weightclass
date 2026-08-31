@@ -21,6 +21,7 @@ import os
 import re
 import stat
 import statistics
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
@@ -148,8 +149,10 @@ def _legacy_log_lines(path: Path) -> list[bytes]:
     return lines
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="wclass-advisory report", description=__doc__, allow_abbrev=False
+    )
     parser.add_argument("--log", required=True, type=Path)
     parser.add_argument(
         "--campaign",
@@ -165,7 +168,7 @@ def main() -> int:
             "one (default 0.31, from the 90-pair model-grade study)"
         ),
     )
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
 
     # 기본값을 쓴 사람에게 "네가 준 값과 다르다" 고 경고하면 무슨 말인지 알 수
     # 없다. 명시했는지 여부를 구분한다.

@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import os
 import selectors
+import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import BinaryIO, cast
+
+if not __package__:
+    source_root = str(Path(__file__).resolve().parents[2])
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+
+from weightclass.process_context import ProcessGroupAnchor, wait_owned_child
+from weightclass.process_errors import ChildStatusLostError
 
 CAPTURE_POLL_SECONDS = 0.1
 CAPTURE_CLEANUP_SECONDS = 1.0
@@ -37,32 +48,62 @@ def _close_stream(selector: selectors.BaseSelector, stream: BinaryIO | None) -> 
         pass
 
 
-def _bounded_reap(process: subprocess.Popen[str]) -> None:
+def _wait_owned(
+    process: subprocess.Popen[str],
+    anchor: ProcessGroupAnchor,
+    timeout: float | None = None,
+) -> int:
     try:
-        process.wait(timeout=CAPTURE_CLEANUP_SECONDS)
+        return wait_owned_child(process, timeout=timeout)
+    except ChildStatusLostError:
+        anchor.release_after_status_loss()
+        raise
+
+
+def _bounded_reap(process: subprocess.Popen[str], anchor: ProcessGroupAnchor) -> None:
+    try:
+        _wait_owned(process, anchor, timeout=CAPTURE_CLEANUP_SECONDS)
         return
-    except (ChildProcessError, OSError):
+    except ChildStatusLostError:
+        raise
+    except OSError:
         return
     except subprocess.TimeoutExpired:
         try:
-            process.kill()
-        except (OSError, ProcessLookupError):
+            anchor.signal(signal.SIGKILL)
+        except (PermissionError, ProcessLookupError):
             pass
     try:
-        process.wait(timeout=CAPTURE_CLEANUP_SECONDS)
+        _wait_owned(process, anchor, timeout=CAPTURE_CLEANUP_SECONDS)
         return
-    except (ChildProcessError, OSError):
+    except ChildStatusLostError:
+        raise
+    except OSError:
         return
     except subprocess.TimeoutExpired:
         pass
 
     def reap() -> None:
         try:
-            process.wait()
-        except (ChildProcessError, OSError):
+            _wait_owned(process, anchor)
+        except OSError:
             pass
+        finally:
+            anchor.close()
 
     threading.Thread(target=reap, name="wclass-capture-reaper", daemon=True).start()
+
+
+def _terminate_owned_process(
+    process: subprocess.Popen[str],
+    anchor: ProcessGroupAnchor,
+    terminate_group: Callable[[subprocess.Popen[str]], None],
+) -> None:
+    # An observed exited leader remains the unreaped group anchor. Its status
+    # never means that same-group descendants are already gone.
+    anchor.observe_leader_exit()
+    terminate_group(process)
+    _bounded_reap(process, anchor)
 
 
 def terminate_text_process(
@@ -71,14 +112,17 @@ def terminate_text_process(
 ) -> None:
     """Terminate one owned session and close every inherited pipe."""
 
-    terminate_group(process)
-    _bounded_reap(process)
-    for stream in (process.stdin, process.stdout, process.stderr):
-        if stream is not None and not stream.closed:
-            try:
-                stream.close()
-            except OSError:
-                pass
+    anchor = ProcessGroupAnchor.open(process)
+    try:
+        _terminate_owned_process(process, anchor, terminate_group)
+    finally:
+        anchor.close()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
 
 
 def capture_text_process(
@@ -95,6 +139,7 @@ def capture_text_process(
         raise ValueError
     if process.stdout is None or process.stderr is None:
         raise ValueError
+    anchor = ProcessGroupAnchor.open(process)
     selector = selectors.DefaultSelector()
     stdout = bytearray()
     stderr = bytearray()
@@ -162,12 +207,11 @@ def capture_text_process(
                 timed_out = True
             else:
                 try:
-                    process.wait(timeout=remaining)
+                    _wait_owned(process, anchor, timeout=remaining)
                 except subprocess.TimeoutExpired:
                     timed_out = True
         if timed_out or output_limited:
-            terminate_group(process)
-            _bounded_reap(process)
+            _terminate_owned_process(process, anchor, terminate_group)
         return CaptureResult(
             stdout.decode("utf-8", errors="replace"),
             stderr.decode("utf-8", errors="replace"),
@@ -175,11 +219,14 @@ def capture_text_process(
             timed_out,
             output_limited,
         )
+    except ChildStatusLostError:
+        # The numeric PID/PGID is released once status ownership is lost.
+        raise
     except BaseException:
-        terminate_group(process)
-        _bounded_reap(process)
+        _terminate_owned_process(process, anchor, terminate_group)
         raise
     finally:
+        anchor.close()
         for cleanup_stream in streams:
             _close_stream(selector, cast(BinaryIO | None, cleanup_stream))
         selector.close()

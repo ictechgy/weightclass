@@ -9,6 +9,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -239,6 +240,41 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
                 )
             self.assertEqual(list(external.iterdir()), [])
 
+    def test_exact_bundle_behind_a_managed_parent_symlink_is_never_accepted(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            home.mkdir(mode=0o700)
+            external = root / "external" / "skills" / "advisory"
+            (external / "agents").mkdir(parents=True, mode=0o700)
+            (external / "references").mkdir(mode=0o700)
+            for relative in installer.EXPECTED_FILES:
+                destination = external / relative
+                destination.write_bytes((BUNDLE / relative).read_bytes())
+                destination.chmod(0o600)
+            external.chmod(0o700)
+            agents = home / ".agents"
+            agents.symlink_to(external.parent.parent, target_is_directory=True)
+
+            for dry_run in (False, True):
+                with (
+                    self.subTest(dry_run=dry_run),
+                    self.assertRaisesRegex(installer.SkillInstallError, "unsafe_skill_root"),
+                ):
+                    installer.install_skill(
+                        BUNDLE,
+                        home=home,
+                        target="codex",
+                        dry_run=dry_run,
+                        advisory_command_available=True,
+                    )
+
+            self.assertEqual(
+                (external / "SKILL.md").read_bytes(),
+                (BUNDLE / "SKILL.md").read_bytes(),
+            )
+
     def test_dry_run_and_missing_command_never_create_skill_directories(self) -> None:
         installer = load_installer()
         with tempfile.TemporaryDirectory() as directory:
@@ -301,6 +337,158 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
                     dry_run=False,
                     advisory_command_available=True,
                 )
+
+    def test_fresh_publish_remains_bound_to_the_open_skills_parent(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            home.mkdir(mode=0o755)
+            moved_parent = root / "opened-skills"
+            real_stage = installer._stage_bundle
+
+            def stage_then_swap(parent_fd: int, payloads: dict[str, bytes]) -> str:
+                staging_name = cast(str, real_stage(parent_fd, payloads))
+                skills = home / ".agents" / "skills"
+                skills.rename(moved_parent)
+                skills.mkdir(mode=0o700)
+                return staging_name
+
+            with mock.patch.object(installer, "_stage_bundle", side_effect=stage_then_swap):
+                receipt = installer.install_skill(
+                    BUNDLE,
+                    home=home,
+                    target="codex",
+                    dry_run=False,
+                    advisory_command_available=True,
+                )
+
+            self.assertEqual(receipt["installed"], ["codex"])
+            self.assertFalse((home / ".agents" / "skills" / "advisory").exists())
+            self.assertEqual(
+                (moved_parent / "advisory" / "SKILL.md").read_bytes(),
+                (BUNDLE / "SKILL.md").read_bytes(),
+            )
+
+    def test_upgrade_revalidates_through_parent_fd_and_rolls_back_failed_publish(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            installed = home / ".agents" / "skills" / "advisory"
+            (installed / "agents").mkdir(parents=True, mode=0o700)
+            (installed / "references").mkdir(mode=0o700)
+            previous_hashes: dict[str, str] = {}
+            previous_payloads: dict[str, bytes] = {}
+            for relative in installer.EXPECTED_FILES:
+                payload = (BUNDLE / relative).read_bytes() + b"\nprevious\n"
+                target = installed / relative
+                target.write_bytes(payload)
+                target.chmod(0o600)
+                previous_hashes[relative] = hashlib.sha256(payload).hexdigest()
+                previous_payloads[relative] = payload
+            installed.chmod(0o700)
+
+            real_rename = installer.os.rename
+
+            def reject_staging_publish(
+                source: str,
+                destination: str,
+                *,
+                src_dir_fd: int | None = None,
+                dst_dir_fd: int | None = None,
+            ) -> None:
+                if (
+                    source.startswith(".advisory-skill-")
+                    and not source.startswith(".advisory-skill-backup-")
+                    and destination == "advisory"
+                ):
+                    raise OSError("injected publish failure")
+                real_rename(
+                    source,
+                    destination,
+                    src_dir_fd=src_dir_fd,
+                    dst_dir_fd=dst_dir_fd,
+                )
+
+            with (
+                mock.patch.object(
+                    installer,
+                    "PREVIOUS_BUNDLE_FILE_SHA256",
+                    previous_hashes,
+                ),
+                mock.patch.object(installer.os, "rename", side_effect=reject_staging_publish),
+                self.assertRaises(OSError),
+            ):
+                installer.install_skill(
+                    BUNDLE,
+                    home=home,
+                    target="codex",
+                    dry_run=False,
+                    advisory_command_available=True,
+                    upgrade=True,
+                )
+
+            for relative, payload in previous_payloads.items():
+                self.assertEqual((installed / relative).read_bytes(), payload)
+            self.assertFalse(
+                any(path.name.startswith(".advisory-skill-") for path in installed.parent.iterdir())
+            )
+
+    def test_upgrade_verification_and_publish_ignore_a_skills_parent_swap(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            installed = home / ".agents" / "skills" / "advisory"
+            (installed / "agents").mkdir(parents=True, mode=0o700)
+            (installed / "references").mkdir(mode=0o700)
+            previous_hashes: dict[str, str] = {}
+            for relative in installer.EXPECTED_FILES:
+                payload = (BUNDLE / relative).read_bytes() + b"\nprevious\n"
+                target = installed / relative
+                target.write_bytes(payload)
+                target.chmod(0o600)
+                previous_hashes[relative] = hashlib.sha256(payload).hexdigest()
+            installed.chmod(0o700)
+            moved_parent = root / "opened-skills"
+            real_stage = installer._stage_bundle
+
+            def stage_then_swap(parent_fd: int, payloads: dict[str, bytes]) -> str:
+                staging_name = cast(str, real_stage(parent_fd, payloads))
+                skills = installed.parent
+                skills.rename(moved_parent)
+                skills.mkdir(mode=0o700)
+                replacement = skills / "advisory"
+                replacement.mkdir(mode=0o700)
+                (replacement / "marker").write_text("replacement\n", encoding="utf-8")
+                return staging_name
+
+            with (
+                mock.patch.object(
+                    installer,
+                    "PREVIOUS_BUNDLE_FILE_SHA256",
+                    previous_hashes,
+                ),
+                mock.patch.object(installer, "_stage_bundle", side_effect=stage_then_swap),
+            ):
+                receipt = installer.install_skill(
+                    BUNDLE,
+                    home=home,
+                    target="codex",
+                    dry_run=False,
+                    advisory_command_available=True,
+                    upgrade=True,
+                )
+
+            self.assertEqual(receipt["upgraded"], ["codex"])
+            self.assertEqual(
+                (moved_parent / "advisory" / "SKILL.md").read_bytes(),
+                (BUNDLE / "SKILL.md").read_bytes(),
+            )
+            self.assertEqual(
+                (home / ".agents" / "skills" / "advisory" / "marker").read_text(encoding="utf-8"),
+                "replacement\n",
+            )
 
     def test_cli_failure_is_redacted_and_success_receipt_has_no_paths(self) -> None:
         installer = load_installer()
