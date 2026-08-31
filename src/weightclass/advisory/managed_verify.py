@@ -20,6 +20,7 @@ VERIFIER_PATHS = {
     "diagnosis": ".weightclass/verify-diagnosis",
     "design": ".weightclass/verify-design",
 }
+_SAFE_GIT_OPTIONS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 
 
 def _git_environment() -> dict[str, str]:
@@ -34,7 +35,7 @@ def _git_environment() -> dict[str, str]:
 
 def _git(*arguments: str) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
-        ["git", "-c", "core.hooksPath=/dev/null", *arguments],
+        ["git", *_SAFE_GIT_OPTIONS, *arguments],
         stdin=subprocess.DEVNULL,
         capture_output=True,
         check=False,
@@ -50,8 +51,12 @@ def main() -> int:
     if verifier_path is None:
         print("verification failed: invalid advisory workflow")
         return 1
-    cached_unchanged = _git("diff", "--cached", "--quiet", "--", verifier_path)
-    worktree_unchanged = _git("diff", "--quiet", "--", verifier_path)
+    cached_unchanged = _git(
+        "diff", "--cached", "--quiet", "--no-ext-diff", "--no-textconv", "--", verifier_path
+    )
+    worktree_unchanged = _git(
+        "diff", "--quiet", "--no-ext-diff", "--no-textconv", "--", verifier_path
+    )
     if cached_unchanged.returncode != 0 or worktree_unchanged.returncode != 0:
         print("verification failed: candidate changed the protected verifier")
         return 1

@@ -90,6 +90,14 @@ entitlement, or subscription availability.
 Offline stopping, Context Guard, brainstorming, and confidence study inputs are
 specified in [Advisory experiment records](docs/advisory-experiments.md).
 
+Advisory-owned Git inspection disables executable repository-local fsmonitor
+configuration. Vendor and verifier streams are captured under one combined
+byte ceiling with process-group cleanup on timeout, overflow, or interruption;
+legacy report, price, campaign-record, token, and JSON integer paths also fail
+closed under explicit byte/count/digit limits. These are local availability and
+integrity controls, not a host sandbox. The selected vendor and verifier still
+run with the invoking user's granted filesystem authority.
+
 For a formal statistical claim, preregister one primary vendor/workflow in the
 managed state root before its first dispatch. `migrate-gate` validates the
 current schema-1/2 source population, preserves all of its bytes, and starts a

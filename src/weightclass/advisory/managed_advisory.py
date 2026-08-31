@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import importlib
 import json
 import os
 import re
@@ -18,9 +19,9 @@ from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, NoReturn, TypedDict
+from typing import TYPE_CHECKING, Any, BinaryIO, NoReturn, TypedDict
 
-if TYPE_CHECKING or __package__:
+if TYPE_CHECKING:
     from weightclass import __version__ as _PACKAGE_VERSION
 
     from . import (
@@ -34,6 +35,27 @@ if TYPE_CHECKING or __package__:
         advisory_routes,
         managed_verify,
         speculative_run,
+    )
+    from .advisory_diagnostics import (
+        CHILD_FAILURE_CODES,
+        CONSULT_FAILURE_CODES,
+        CONSULT_FAILURE_STAGES,
+        PROVIDER_CHECK_FAILURE_CODES,
+        RESULT_SHAPES,
+    )
+elif __package__:
+    from weightclass import __version__ as _PACKAGE_VERSION
+
+    from . import (
+        advisory_campaign,
+        advisory_evidence_contract,
+        advisory_experiments,
+        advisory_orchestration,
+        advisory_parallel,
+        advisory_portfolio,
+        advisory_preflight,
+        advisory_routes,
+        managed_verify,
     )
     from .advisory_diagnostics import (
         CHILD_FAILURE_CODES,
@@ -69,6 +91,21 @@ else:
 PACKAGE_VERSION = _PACKAGE_VERSION
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
+
+class _LazySpeculativeRun:
+    """Load the 5k-line task runner only for commands that actually use it."""
+
+    _module: Any = None
+
+    def __getattr__(self, name: str) -> object:
+        if self._module is None:
+            self._module = importlib.import_module(f"{__package__}.speculative_run")
+        return getattr(self._module, name)
+
+
+if __package__:
+    speculative_run = _LazySpeculativeRun()  # type: ignore[assignment]
+
 SCHEMA_VERSION = 1
 WORKFLOWS = ("implementation", "review", "research", "diagnosis", "design")
 EVIDENCE_WORKFLOWS = WORKFLOWS[1:]
@@ -76,6 +113,7 @@ CLAUDE_EVIDENCE_GENERATION = "structured-v6"
 AGY_ROUTE_GENERATION = "cli-v2"
 GROK_EVIDENCE_GENERATION = "structured-v1"
 PREREGISTERED_CAMPAIGN_GENERATION = "gate-v1"
+_SAFE_GIT_OPTIONS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 PREVIOUS_CLAUDE_EVIDENCE_GENERATIONS = (
     "structured-v5",
     "structured-v4",
@@ -1441,7 +1479,7 @@ def _preflight_repo(repo: Path, workflow: str, verifier: Path) -> None:
     }
     try:
         status = subprocess.run(
-            ["git", "-c", "core.hooksPath=/dev/null", "status", "--porcelain=v1", "-z"],
+            ["git", *_SAFE_GIT_OPTIONS, "status", "--porcelain=v1", "-z"],
             cwd=repo,
             stdin=subprocess.DEVNULL,
             capture_output=True,

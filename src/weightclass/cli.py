@@ -1464,11 +1464,13 @@ def delegation_run_from_standard_input(
     if acknowledged_fingerprint != descriptor["route_fingerprint"]:
         print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
         return 6
+    runtime_observation: ExecutableObservation
     try:
         if qualification is None:
-            validate_delegation_runtime(runtime_path)
+            runtime_observation = validate_delegation_runtime(runtime_path)
         else:
             verify_qualified_runtime(Path(runtime_path), qualification)
+            runtime_observation = validate_delegation_runtime(runtime_path)
         validate_runtime_process_context()
     except (DelegationRuntimeUnavailableError, QualifiedRuntimeUnavailableError):
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
@@ -1491,7 +1493,12 @@ def delegation_run_from_standard_input(
         terminate_grace_seconds=workflow_cleanup["terminate_grace_seconds"],
     )
     try:
-        completed_process = run_delegation_runtime(runtime_path, frame, cleanup)
+        completed_process = run_delegation_runtime(
+            runtime_path,
+            frame,
+            cleanup,
+            runtime_observation,
+        )
     except DelegationRuntimeUnavailableError:
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4

@@ -17,27 +17,37 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
+import stat
 import statistics
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 if TYPE_CHECKING or __package__:
     from .advisory_campaign import (
+        MAX_CAMPAIGN_LOG_BYTES,
+        MAX_CAMPAIGN_RECORD_BYTES,
+        MAX_TASKS,
         MINIMUM_ADVISED_FAILURES,
         CampaignError,
         CampaignManifest,
         CampaignProgress,
+        bounded_json_integer,
         campaign_progress,
         load_manifest,
         load_merged_lane_records,
     )
 else:
     from advisory_campaign import (  # type: ignore[import-not-found]
+        MAX_CAMPAIGN_LOG_BYTES,
+        MAX_CAMPAIGN_RECORD_BYTES,
+        MAX_TASKS,
         MINIMUM_ADVISED_FAILURES,
         CampaignError,
         CampaignManifest,
         CampaignProgress,
+        bounded_json_integer,
         campaign_progress,
         load_manifest,
         load_merged_lane_records,
@@ -98,6 +108,44 @@ def _campaign_root(log_path: Path) -> Path:
     if parent.parent.name == ".lanes" and parent.name.startswith("lane-"):
         return parent.parent.parent
     return parent
+
+
+def _legacy_log_lines(path: Path) -> list[bytes]:
+    """Read legacy rows without following links or retaining excess records."""
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise CampaignError()
+    descriptor: int | None = None
+    lines: list[bytes] = []
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0),
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_CAMPAIGN_LOG_BYTES:
+            raise CampaignError()
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = None
+            consumed = 0
+            while True:
+                raw = handle.readline(MAX_CAMPAIGN_RECORD_BYTES + 1)
+                if not raw:
+                    break
+                consumed += len(raw)
+                if consumed > MAX_CAMPAIGN_LOG_BYTES or len(raw) > MAX_CAMPAIGN_RECORD_BYTES:
+                    raise CampaignError()
+                if raw.strip():
+                    if len(lines) >= MAX_TASKS:
+                        raise CampaignError("campaign_record_capacity_exceeded")
+                    lines.append(raw.rstrip(b"\r\n"))
+    except OSError as error:
+        raise CampaignError() from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    return lines
 
 
 def main() -> int:
@@ -168,12 +216,16 @@ def main() -> int:
     else:
         # 레거시 연구 로그는 손상 줄을 건너뛴다. campaign 로그는 표본 ordinal을
         # 잃으면 stopping rule을 증명할 수 없으므로 위에서 전체를 거부한다.
-        for raw in log_path.read_bytes().splitlines():
+        try:
+            legacy_lines = _legacy_log_lines(log_path)
+        except CampaignError:
+            parser.error("invalid or oversized legacy log")
+        for raw in legacy_lines:
             line = raw.decode("utf-8", "replace")
             if not line.strip():
                 continue
             try:
-                record = json.loads(line)
+                record = json.loads(line, parse_int=bounded_json_integer)
                 record["cheap"]["accepted"]
                 if record["expensive"] is not None:
                     record["expensive"]["accepted"]
@@ -296,7 +348,7 @@ def main() -> int:
     if len(identities) > 1:
         print(f"경고: 서로 다른 라우트 조합 {len(identities)}종이 한 로그에 섞여 있다")
     elif identities:
-        routes = json.loads(identities.pop())
+        routes = json.loads(identities.pop(), parse_int=bounded_json_integer)
         if routes:
             cheap_id = routes.get("cheap", {})
             expensive_id = routes.get("expensive", {})
@@ -1039,7 +1091,7 @@ def main() -> int:
             f"\n경고: 조언 설정 {len(advisor_configs)}종이 한 로그에 섞여 있다. s 를 내지 않는다."
         )
     elif advised:
-        config = json.loads(advisor_configs.pop())
+        config = json.loads(advisor_configs.pop(), parse_int=bounded_json_integer)
         # **계획이 실제로 붙었는지** 가 설정과 갈리면 프라임 라벨을 못 쓴다.
         # 계획을 받은 실행과 못 받은 실행이 한 수에 섞이기 때문이다.
         if mixed_application:

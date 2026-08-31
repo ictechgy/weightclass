@@ -4,6 +4,37 @@ _Last updated: 2026-08-31 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
+## Security, performance, and structure hardening (in progress)
+
+A repository-wide Standard Codex Security scan at `f1c7be3` completed as scan
+`f4db11e6-fc50-4045-bde9-4e6d901cd99c` with three medium and two low findings. Coverage is
+intentionally partial at 65/248 fully audited files, focused on production execution, advisory,
+parser/state, and release surfaces. The derived hardening portfolio selects shared bounded
+primitives over either scattered guards or the compatibility-blocked verified-object redesign.
+
+The implementation candidate:
+
+- disables executable repository-local Git fsmonitor configuration for advisory-owned Git calls;
+- observes protocol-1 delegation runtimes before task access and compares identity immediately
+  before spawn;
+- bounds vendor/verifier capture, handles interruption through owned group cleanup, and cancels
+  parallel jobs without waiting for their full eight-hour ceiling;
+- releases triage numeric signal targets after child-status loss;
+- streams campaign/legacy logs with record limits, bounds price and integer parsing, and rejects
+  final symlink inputs through no-follow readers;
+- defers the 5k-line speculative runner on task-free status. A 30-process cold measurement moved
+  status median/p95 from 59.205/61.397 ms to 52.358/54.198 ms (about 11.6% lower).
+
+Three packet-ask GLM reviews were attempted with 103 KiB, 47 KiB, and 15.5 KiB scrubbed public
+packets; all reached the provider's 600-second limit without returning review text. No repository,
+task, local state, or credential content was sent. Focused hardening plus existing regression suites
+pass 435 tests with 10 skips; the new direct hardening suite passes 12 tests. A complete 11-file
+terminal Security diff scan found two cancellation/status-loss gaps, both were fixed and
+independently re-reviewed, and the sealed final report has no surviving finding. The protected
+verifier and a separate full unittest discovery each pass 1,441 tests with 35 skips. Ruff check and
+format-check pass all 217 files, strict mypy passes all 178 source files, and compileall plus
+`git diff --check` pass. PR, merge, and release are still pending.
+
 ## Usage guidance and advisory operating recommendation (released in 0.23.0)
 
 The released implementation adds only task-free, additive guidance. It does not rewrite the usage
