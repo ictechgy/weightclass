@@ -4,7 +4,7 @@ _Last updated: 2026-08-31 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
-## Security, performance, and structure hardening (in progress)
+## Security, performance, and structure hardening (0.24.0 release candidate)
 
 A repository-wide Standard Codex Security scan at `f1c7be3` completed as scan
 `f4db11e6-fc50-4045-bde9-4e6d901cd99c` with three medium and two low findings. Coverage is
@@ -33,7 +33,8 @@ terminal Security diff scan found two cancellation/status-loss gaps, both were f
 independently re-reviewed, and the sealed final report has no surviving finding. The protected
 verifier and a separate full unittest discovery each pass 1,441 tests with 35 skips. Ruff check and
 format-check pass all 217 files, strict mypy passes all 178 source files, and compileall plus
-`git diff --check` pass. PR, merge, and release are still pending.
+`git diff --check` pass. Implementation PR #147 is merged at `7521c84`; the `0.24.0` release PR,
+tag, publication, Homebrew promotion, and local upgrade are still pending.
 
 ## Usage guidance and advisory operating recommendation (released in 0.23.0)
 
