@@ -59,8 +59,8 @@ class Weightclass < Formula
                  shell_output("#{bin}/wclass-advisory consult --help")
     assert_match "context-2x2",
                  shell_output("#{bin}/wclass-advisory experiment --help")
-    assert_match "campaign-gate",
-                 shell_output("#{bin}/wclass-advisory --help")
+    assert_match "ask", shell_output("#{bin}/wclass-advisory --help")
+    assert_match "campaign", shell_output("#{bin}/wclass-advisory --help")
     assert_match "--workflow",
                  shell_output("#{bin}/wclass-advisory status --help")
     assert_match "--timeout-seconds",
