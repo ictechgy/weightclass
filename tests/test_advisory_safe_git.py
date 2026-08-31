@@ -3,11 +3,13 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import selectors
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, cast
 from unittest import mock
 
 from weightclass.advisory import managed_verify, safe_git, speculative_run
@@ -71,6 +73,85 @@ class AdvisorySafeGitTests(unittest.TestCase):
                 )
 
         self.assertEqual(raised.exception.code, "output_limited")
+
+    def test_git_capture_waits_on_events_until_the_actual_deadline(self) -> None:
+        selector_timeouts: list[float | None] = []
+        selector_type = selectors.DefaultSelector
+
+        class RecordingSelector:
+            def __init__(self) -> None:
+                self._selector = selector_type()
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._selector, name)
+
+            def select(self, timeout: float | None = None) -> list[tuple[object, int]]:
+                selector_timeouts.append(timeout)
+                return self._selector.select(timeout)  # type: ignore[return-value]
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch(
+                "weightclass.advisory.safe_git.selectors.DefaultSelector",
+                RecordingSelector,
+            ),
+        ):
+            result = safe_git.run(
+                ["--version"],
+                cwd=Path(directory),
+                environment=os.environ,
+                timeout_seconds=2.0,
+                max_stdout_bytes=1024,
+                max_stderr_bytes=1024,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(selector_timeouts)
+        self.assertGreater(selector_timeouts[0] or 0.0, 1.0)
+
+    def test_live_group_permission_denial_is_a_redacted_termination_failure(self) -> None:
+        process = mock.Mock(spec=subprocess.Popen)
+        anchor = mock.Mock()
+        anchor.signal.side_effect = PermissionError("private operating-system detail")
+
+        with self.assertRaisesRegex(safe_git.SafeGitError, "^$") as raised:
+            safe_git._terminate(process, anchor)
+
+        self.assertEqual(raised.exception.code, "termination_failed")
+        process.wait.assert_not_called()
+
+    def test_selector_construction_failure_still_kills_and_reaps_git(self) -> None:
+        started: list[subprocess.Popen[bytes]] = []
+        real_popen = subprocess.Popen
+
+        def record_start(*arguments: Any, **keywords: Any) -> subprocess.Popen[bytes]:
+            process = cast(subprocess.Popen[bytes], real_popen(*arguments, **keywords))
+            started.append(process)
+            return process
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch(
+                "weightclass.advisory.safe_git.subprocess.Popen",
+                side_effect=record_start,
+            ),
+            mock.patch(
+                "weightclass.advisory.safe_git.selectors.DefaultSelector",
+                side_effect=OSError(),
+            ),
+            self.assertRaises(OSError),
+        ):
+            safe_git.run(
+                ["--version"],
+                cwd=Path(directory),
+                environment=os.environ,
+                timeout_seconds=2.0,
+                max_stdout_bytes=1024,
+                max_stderr_bytes=1024,
+            )
+
+        self.assertEqual(len(started), 1)
+        self.assertIsNotNone(started[0].returncode)
 
     def test_patch_builder_fails_closed_when_the_verified_patch_exceeds_its_cap(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

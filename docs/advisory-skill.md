@@ -60,8 +60,11 @@ exploratory only and cannot make a promotion-eligible claim.
 
 ## Preview and install
 
-The installer never reads task stdin or contacts a provider. Ordinary install never overwrites an
-existing skill. Preview first:
+The installer never reads task stdin, contacts a provider, or discovers vendor configuration. This
+explicit command is the advisory companion's sole vendor-recognized-path exception: it writes only
+the exact reviewed bundle to the selected personal Skill directory and never reads or rewrites
+other Codex or Claude configuration. Ordinary install never overwrites an existing skill. Preview
+first:
 
 ```sh
 wclass-advisory install-skill --target both --dry-run
@@ -75,8 +78,8 @@ wclass-advisory install-skill --target claude
 wclass-advisory install-skill --target both
 ```
 
-An upgrade replaces only an exact package-owned 0.16.2, 0.17.0, or 0.17.1 bundle. A modified skill,
-symlink, or extra file still fails closed:
+An upgrade replaces only an exact package-owned historical bundle recorded in the reviewed
+compatibility ledger. A modified skill, symlink, or extra file still fails closed:
 
 ```sh
 wclass-advisory install-skill --target both --upgrade --dry-run

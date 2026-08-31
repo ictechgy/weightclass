@@ -22,6 +22,8 @@ _DARWIN_WEXITED: Final = 0x04
 _DARWIN_WNOWAIT: Final = 0x20
 _CHILD_STATUS_LOST: Final = -sys.maxsize
 _WAIT_POLL_SECONDS: Final = 0.05
+_PERMISSION_EXIT_RACE_SECONDS: Final = 0.05
+_PERMISSION_EXIT_RACE_POLL_SECONDS: Final = 0.001
 
 # `open_leader_exit_queue` 가 "관찰 대상이 이미 종료했다"를 돌려줄 때 쓰는 표식.
 # None(=waitid 를 쓰므로 큐가 필요 없음)과 반드시 구분되어야 하므로 별도 객체다.
@@ -309,6 +311,7 @@ class ProcessGroupAnchor:
     process_group_id: int | None
     exit_queue: Any | None
     _observer_open: bool = True
+    _leader_exited: bool = False
 
     @classmethod
     def open(cls, process: subprocess.Popen[Any]) -> "ProcessGroupAnchor":
@@ -337,8 +340,11 @@ class ProcessGroupAnchor:
             raise ChildStatusLostError()
         if not self._observer_open:
             raise ValueError
+        if self._leader_exited:
+            return True
         try:
-            return observe_leader_exit(self.process_group_id, self.exit_queue)
+            self._leader_exited = observe_leader_exit(self.process_group_id, self.exit_queue)
+            return self._leader_exited
         except OSError as error:
             if _is_child_status_lost(error):
                 self.release_after_status_loss()
@@ -348,9 +354,28 @@ class ProcessGroupAnchor:
     def signal(self, signal_number: int) -> None:
         """Validate ownership, then signal the group even if its leader exited."""
 
-        self.observe_leader_exit()
+        leader_exited = self.observe_leader_exit()
         assert self.process_group_id is not None
-        signal_process_group(self.process_group_id, signal_number)
+        try:
+            signal_process_group(
+                self.process_group_id,
+                signal_number,
+                ignore_permission_error=leader_exited,
+            )
+        except PermissionError:
+            # The leader can exit between the non-reaping observation and
+            # killpg. Darwin may report the benign zombie-only EPERM before
+            # the non-reaping exit event becomes observable, so give only that
+            # event a small bounded delivery window.
+            deadline = time.monotonic() + _PERMISSION_EXIT_RACE_SECONDS
+            while True:
+                if self.observe_leader_exit():
+                    return
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(_PERMISSION_EXIT_RACE_POLL_SECONDS, remaining))
+            raise
 
     def release_after_status_loss(self) -> None:
         """Suppress future numeric signals after the child identity is lost."""
@@ -367,7 +392,12 @@ class ProcessGroupAnchor:
         close_leader_exit_queue(self.exit_queue)
 
 
-def signal_process_group(process_group_id: int, signal_number: int) -> None:
+def signal_process_group(
+    process_group_id: int,
+    signal_number: int,
+    *,
+    ignore_permission_error: bool = True,
+) -> None:
     """Signal only the captured process group.
 
     macOS can report EPERM when only an unreaped zombie leader remains in the
@@ -375,5 +405,8 @@ def signal_process_group(process_group_id: int, signal_number: int) -> None:
     """
     try:
         os.killpg(process_group_id, signal_number)
-    except (PermissionError, ProcessLookupError):
+    except PermissionError:
+        if not ignore_permission_error:
+            raise
+    except ProcessLookupError:
         pass

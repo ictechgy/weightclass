@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Run the workflow verifier committed at HEAD, never a candidate-edited copy."""
+"""Run the workflow verifier committed at HEAD, never a candidate-edited copy.
+
+The scrubbed environment and process-group cleanup are local integrity and
+availability controls, not host confinement.  Candidate code executed by the
+project verifier still needs an external container or jail when it is hostile.
+"""
 
 from __future__ import annotations
 
 import os
 import selectors
+import signal
 import stat
 import subprocess
 import sys
@@ -36,24 +42,43 @@ def _git_environment() -> dict[str, str]:
     }
 
 
+def _verifier_environment(workflow: str) -> dict[str, str]:
+    allowed = {"PATH", "LANG", "LC_ALL", "TZ", "SHELL", "USER", "HOME", "TMPDIR"}
+    environment = {name: value for name, value in os.environ.items() if name in allowed}
+    environment["WCLASS_ADVISORY_WORKFLOW"] = workflow
+    return environment
+
+
 def _git_quiet(*arguments: str) -> int:
-    completed = subprocess.run(
-        ["git", *_SAFE_GIT_OPTIONS, *arguments],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        timeout=30,
-        env=_git_environment(),
-    )
-    return completed.returncode
+    try:
+        process = subprocess.Popen(
+            ["git", *_SAFE_GIT_OPTIONS, *arguments],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=_git_environment(),
+            close_fds=True,
+            start_new_session=True,
+        )
+    except OSError:
+        return 1
+    try:
+        return process.wait(timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        _stop_process(process)
+        return 1
 
 
 def _stop_process(process: subprocess.Popen[bytes]) -> None:
     try:
-        process.kill()
-    except OSError:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
         pass
+    except OSError:
+        try:
+            process.kill()
+        except OSError:
+            pass
     try:
         process.wait(timeout=1)
     except (OSError, subprocess.SubprocessError):
@@ -69,14 +94,17 @@ def _git_bounded_stdout(max_stdout_bytes: int, *arguments: str) -> bytes | None:
             stderr=subprocess.DEVNULL,
             env=_git_environment(),
             close_fds=True,
+            start_new_session=True,
         )
     except OSError:
         return None
     assert process.stdout is not None
-    selector = selectors.DefaultSelector()
+    selector: selectors.BaseSelector | None = None
     output = bytearray()
     deadline = time.monotonic() + 30
+    reaped = False
     try:
+        selector = selectors.DefaultSelector()
         os.set_blocking(process.stdout.fileno(), False)
         selector.register(process.stdout, selectors.EVENT_READ)
         while selector.get_map():
@@ -102,16 +130,19 @@ def _git_bounded_stdout(max_stdout_bytes: int, *arguments: str) -> bytes | None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return None
-        if process.wait(timeout=remaining) != 0:
+        returncode = process.wait(timeout=remaining)
+        reaped = True
+        if returncode != 0:
             return None
         return bytes(output)
     except (OSError, subprocess.SubprocessError):
         return None
     finally:
-        selector.close()
+        if selector is not None:
+            selector.close()
         if not process.stdout.closed:
             process.stdout.close()
-        if process.poll() is None:
+        if not reaped:
             _stop_process(process)
 
 
@@ -180,14 +211,24 @@ def main() -> int:
             if len(verifier_input) > MAX_RESULT_BYTES:
                 print("verification failed: evidence result is too large")
                 return 1
-        completed = subprocess.run(
+        verifier = subprocess.Popen(
             [str(temporary)],
             cwd=root,
-            input=verifier_input if verifier_input is not None else b"",
-            check=False,
-            timeout=TIMEOUT_SECONDS,
+            stdin=subprocess.PIPE,
+            env=_verifier_environment(workflow),
+            close_fds=True,
+            start_new_session=True,
         )
-        return completed.returncode
+        try:
+            verifier.communicate(
+                input=verifier_input if verifier_input is not None else b"",
+                timeout=TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            _stop_process(verifier)
+            raise
+        assert verifier.returncode is not None
+        return verifier.returncode
     except (OSError, subprocess.SubprocessError):
         print("verification failed: committed verifier could not run")
         return 1

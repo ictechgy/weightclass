@@ -98,6 +98,12 @@ on timeout, overflow, interruption, or child-status loss; legacy report, price,
 campaign-record, token, and JSON integer paths also fail closed under explicit
 byte/count/digit limits. Workspace registration is owner-private, bounded,
 nofollow, atomically replaced, and locked against concurrent run/prune updates.
+Quiet bounded-capture and Git waits block on kernel events until their actual
+deadline instead of waking every 100 ms. The managed project verifier passes
+only a fixed environment allowlist plus its workflow, starts an isolated process
+group, and kills that group on timeout. A live-leader group-signal denial is an
+error; only the bounded Darwin race in which the leader becomes an owned zombie
+is tolerated.
 These are local availability and integrity controls, not a host sandbox. The
 selected vendor and verifier still run with the invoking user's granted
 filesystem authority.

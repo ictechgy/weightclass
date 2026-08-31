@@ -20,6 +20,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, NoReturn, TypedDict, cast
 
+if TYPE_CHECKING:
+    from . import managed_contract as _managed_contract
+elif __package__:
+    from . import managed_contract as _managed_contract  # type: ignore[no-redef]
+else:
+    import managed_contract as _managed_contract  # type: ignore[import-not-found,no-redef]
+
+SCHEMA_VERSION = _managed_contract.SCHEMA_VERSION
+WORKFLOWS = _managed_contract.WORKFLOWS
+EVIDENCE_WORKFLOWS = _managed_contract.EVIDENCE_WORKFLOWS
+BUILTIN_VENDORS = _managed_contract.BUILTIN_VENDORS
+ROLES = _managed_contract.ROLES
+CONSULT_DEFAULT_TIMEOUT_SECONDS = _managed_contract.CONSULT_DEFAULT_TIMEOUT_SECONDS
+
 
 class _LazyModule:
     """Resolve an advisory service only when one of its symbols is used."""
@@ -104,9 +118,6 @@ if not TYPE_CHECKING:
     safe_namespace = _LazyModule("safe_namespace")
     speculative_run = _LazyModule("speculative_run")
 
-SCHEMA_VERSION = 1
-WORKFLOWS = ("implementation", "review", "research", "diagnosis", "design")
-EVIDENCE_WORKFLOWS = WORKFLOWS[1:]
 CLAUDE_EVIDENCE_GENERATION = "structured-v6"
 AGY_ROUTE_GENERATION = "cli-v2"
 GROK_EVIDENCE_GENERATION = "structured-v1"
@@ -118,15 +129,12 @@ PREVIOUS_CLAUDE_EVIDENCE_GENERATIONS = (
     "structured-v2",
     "structured-v1",
 )
-ROLES = ("cheap", "advisor", "expensive")
-BUILTIN_VENDORS = ("codex", "claude", "agy", "grok")
 EXPECTED_BASELINE_FAILURE = 42
 MAX_CONFIGURED_VENDORS = 16
 MAX_PROFILE_BYTES = 131_072
 SETUP_LOCK_TIMEOUT = 2.0
 SETUP_LOCK_POLL_SECONDS = 0.02
 RUNNER_VERSION_CHANGED_EXIT = 78
-CONSULT_DEFAULT_TIMEOUT_SECONDS = 5_400.0
 PROVIDER_CHECK_MAX_EXECUTABLE_GROUPS = 4
 LEGACY_GATE_TARGET_RATE_BPS = 7_500
 LEGACY_GATE_ALPHA_BPS = 500

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import selectors
 import signal
 import subprocess
 import sys
@@ -8,7 +9,7 @@ import threading
 import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import cast
+from typing import Any, cast
 from unittest import mock
 
 from weightclass.advisory import advisory_parallel, advisory_preflight, bounded_capture
@@ -121,6 +122,65 @@ class AdvisoryChildStatusTests(unittest.TestCase):
         self.assertFalse(result.timed_out)
         self.assertFalse(result.output_limited)
 
+    def test_capture_waits_on_events_until_the_actual_deadline(self) -> None:
+        selector_timeouts: list[float | None] = []
+        selector_type = selectors.DefaultSelector
+
+        class RecordingSelector:
+            def __init__(self) -> None:
+                self._selector = selector_type()
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._selector, name)
+
+            def select(self, timeout: float | None = None) -> list[tuple[object, int]]:
+                selector_timeouts.append(timeout)
+                return self._selector.select(timeout)  # type: ignore[return-value]
+
+        process = subprocess.Popen(
+            (sys.executable, "-c", "import time; time.sleep(0.05)"),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        with mock.patch(
+            "weightclass.advisory.bounded_capture.selectors.DefaultSelector",
+            RecordingSelector,
+        ):
+            result = bounded_capture.capture_text_process(
+                process,
+                None,
+                timeout_seconds=2.0,
+                max_output_bytes=1024,
+                terminate_group=lambda child: os.killpg(child.pid, signal.SIGKILL),
+            )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(selector_timeouts)
+        self.assertGreater(selector_timeouts[0] or 0.0, 1.0)
+
+    def test_capture_selector_construction_failure_kills_and_reaps_child(self) -> None:
+        with _sleeping_child(text=True) as untyped_process:
+            process = cast(subprocess.Popen[str], untyped_process)
+            with (
+                mock.patch(
+                    "weightclass.advisory.bounded_capture.selectors.DefaultSelector",
+                    side_effect=OSError(),
+                ),
+                self.assertRaises(OSError),
+            ):
+                bounded_capture.capture_text_process(
+                    process,
+                    None,
+                    timeout_seconds=2.0,
+                    max_output_bytes=1024,
+                    terminate_group=lambda child: os.killpg(child.pid, signal.SIGKILL),
+                )
+
+            self.assertIsNotNone(process.returncode)
+
     def test_capture_preserves_timeout_result(self) -> None:
         with _sleeping_child(text=True) as untyped_process:
             process = cast(subprocess.Popen[str], untyped_process)
@@ -219,6 +279,33 @@ class AdvisoryChildStatusTests(unittest.TestCase):
 
         self.assertEqual(code, 124)
         self.assertEqual(payload, b"")
+
+    def test_preflight_selector_construction_failure_kills_and_reaps_child(self) -> None:
+        started: list[subprocess.Popen[bytes]] = []
+        real_popen = subprocess.Popen
+
+        def record_start(*arguments: Any, **keywords: Any) -> subprocess.Popen[bytes]:
+            process = cast(subprocess.Popen[bytes], real_popen(*arguments, **keywords))
+            started.append(process)
+            return process
+
+        with (
+            mock.patch(
+                "weightclass.advisory.advisory_preflight.subprocess.Popen",
+                side_effect=record_start,
+            ),
+            mock.patch(
+                "weightclass.advisory.advisory_preflight.selectors.DefaultSelector",
+                side_effect=OSError(),
+            ),
+            self.assertRaises(OSError),
+        ):
+            advisory_preflight._bounded_command(
+                (sys.executable, "-c", "import time; time.sleep(30)")
+            )
+
+        self.assertEqual(len(started), 1)
+        self.assertIsNotNone(started[0].returncode)
 
     def test_exited_leader_does_not_orphan_a_same_group_descendant(self) -> None:
         program = (
