@@ -4,10 +4,11 @@ _Last updated: 2026-08-31 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
-## Advisory runtime cleanup follow-up (merged, unreleased)
+## Advisory runtime cleanup follow-up (released in 0.26.0)
 
-Implementation PR #155 merged at `7db1aff`. The package version remains `0.25.0`; this source
-follow-up has not been tagged or published as a new PyPI/Homebrew release.
+Implementation PR #155 merged at `7db1aff`. Release PR #157 and tag `v0.26.0` point to exact
+reviewed release commit `3278c98`; PyPI, GitHub Releases, Homebrew, and local installations are
+complete.
 
 The merged change:
 
@@ -48,6 +49,22 @@ Final verification:
   production source files with complete coverage and retained no finding. It used 2,455,815 total
   tokens, including 2,442,752 cached input tokens. TAC status was unavailable because the connector
   was not connected.
+
+Release evidence:
+
+- Release run `33379582303` passed the immutable Python 3.13 build, Python 3.10/3.14 candidate
+  validation, macOS Python 3.10/3.14 boundaries, protected PyPI approval, exact publication, and
+  automatic final GitHub Release creation;
+- PyPI exposes one wheel and one non-yanked canonical sdist at
+  `https://files.pythonhosted.org/packages/c6/5e/b0ca0380e151f6df83b1a40fc7b6e47bb979c31202e0d37a80dd49f46298/weightclass-0.26.0.tar.gz`
+  with SHA-256 `590b0d63f1ec9c0dc946c126a2feb98fe0eb98a841404a8adc9e28961621e6c1`;
+- source-formula PR #158 merged at `cacea74`; tap PR `ictechgy/homebrew-tap#34` merged at
+  `beb36b6`. Homebrew style, strict audit, source reinstall, `brew test`, and exact binary smokes
+  pass;
+- the user-level uv tool and exact Homebrew binary both report `0.26.0`. Codex and Claude packaged
+  advisory skills are exact-current and a dry run plans no upgrade;
+- GitHub Release `v0.26.0` is final, non-prerelease, and marked Latest with the reviewed
+  `.github/release-notes/v0.26.0.md` body.
 
 Twenty-run cold import observations moved `managed_cli` from 28.2 ms to 27.2 ms and
 `managed_advisory` from 58.8 ms to 52.9 ms; these noisy local measurements are not product
@@ -1706,25 +1723,25 @@ human to read.
 ## Resume Prompt
 
 Open the current repository checkout, read `HANDOFF.md` and the applicable
-`AGENTS.md`, then continue from: `weightclass 0.25.0 is published on PyPI and
-Homebrew. Implementation PR #151, source-formula PR #152, and tap PR #33 are
-merged. Tag v0.25.0 points to reviewed release commit 7367f41, and Release run
-33356402517 passed the immutable build, Python 3.10/3.14 candidate
-validation, macOS 3.10/3.14 boundaries, protected PyPI approval, and exact
-publication. Both local uv and exact Homebrew entrypoints report 0.25.0, brew
-test passes, and the Codex/Claude advisory skills are exact-current. Advisory
-execution now requires explicit task-egress confirmation across exact-command,
-profile, campaign, and internal-consult paths; bounded process-group and Git
-execution, immutable-object verification, linear campaign scanning, safe state
-roots, directory-descriptor Skill installation, and lazy managed CLI entrypoints
-are implemented. The final complete 24-file Security diff scan has no surviving
-finding; full source gates pass 1,496 unittest tests with 35 skips, Ruff/format
-over 232 files, and strict mypy over 193 source files. Verified-object execution
-for broader router paths and custom usage-store ancestry remain documented
-architecture residuals. The separately invoked advisory companion remains
-explicit and experimental; no campaign gate may authorize core routing. Never
-infer prices, read vendor credentials/config, backfill task/session data, or
-reuse a published version or tag.`
+`AGENTS.md`, then continue from: `weightclass 0.26.0 is published on PyPI,
+GitHub Releases, and Homebrew. Runtime PR #155, release PR #157, source-formula
+PR #158, and tap PR #34 are merged. Tag v0.26.0 points to reviewed release
+commit 3278c98, and Release run 33379582303 passed the immutable build, Python
+3.10/3.14 candidate validation, macOS 3.10/3.14 boundaries, protected PyPI
+approval, exact publication, and automatic GitHub Release creation. Both local
+uv and exact Homebrew entrypoints report 0.26.0; brew test passes and the
+Codex/Claude advisory skills are exact-current. Managed verifier environments,
+process groups, selector failures, kqueue one-shot exit state, EPERM races,
+deadline-driven waits, managed contract constants, and descriptor-based Skill
+upgrade compatibility are hardened without claiming host sandboxing. The final
+complete nine-file Security diff scan has no surviving finding; full source
+gates pass 1,514 unittest tests with 35 skips, extracted-sdist isolation passes
+1,507 with 79 skips, Ruff/format covers 234 files, and strict mypy covers 194
+source files. Verified-object execution, external hostile-code sandboxing, and
+custom usage-store ancestry remain documented residuals. The separately invoked
+advisory companion remains explicit and experimental; no campaign gate may
+authorize core routing. Never infer prices, read vendor credentials/config,
+backfill task/session data, or reuse a published version or tag.`
 
 ## Historical Resume Prompt (obsolete; retained for audit history)
 
