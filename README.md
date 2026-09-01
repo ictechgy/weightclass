@@ -101,11 +101,22 @@ Explicit files reject `.git`, symlinks, traversal, binary/non-UTF-8 content,
 files over 32 KiB, and aggregates over 128 KiB.
 Every task-bearing run needs explicit egress consent. Without
 `--confirm-task-egress` the runner asks on the controlling terminal. Exporting
-`WCLASS_ADVISORY_EGRESS=session` grants the same approval once for the current
-shell instead of once per invocation; nothing is written to disk, the grant dies
-with the shell, and the receipt records which of `flag`, `session_environment`,
-or `terminal` approved the run. `--preview` reports whether such a grant is
-already active. Diff/file content can still
+`WCLASS_ADVISORY_EGRESS=session` authorizes the same action without asking, but
+it is a standing grant, not a per-invocation one: it covers every later call in
+that shell and every descendant process, so a wrapper script or agent harness
+inherits it, and exporting it from a shell rc file makes the prompt permanently
+unreachable. Nothing is written to disk and the grant dies with the shell.
+Skipping the question does not skip the disclosure — the vendor list, delivery
+mode, and context warning still print on the terminal — and the receipt records
+which of `flag`, `session_environment`, or `terminal` approved the run.
+`--preview` reports whether such a grant is already active. The variable is not
+in the vendor child environment allowlist, so no vendor CLI sees it.
+
+Route review also reports `task_stdin_encoding`. A route that declares NDJSON
+standard input has its task wrapped as one `stream-json` user message, so the
+reviewed argv alone would not tell you what bytes the child receives. A route
+that both declares that input and carries a `{{task}}`/`{{task_file}}` slot is
+rejected rather than resolved in one direction. Diff/file content can still
 contain secrets, so the confirmation and preview disclose the selected context.
 The local triage labels prove only that a bounded `file:line` exists and whether
 the model cited it with supporting text; they are not semantic correctness

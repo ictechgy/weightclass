@@ -71,6 +71,19 @@ class PreparedTaskDeliveryTests(unittest.TestCase):
         self.assertEqual(delivered, "review this")
 
 
+class ContradictoryDeliveryTests(unittest.TestCase):
+    def test_a_task_slot_plus_declared_ndjson_stdin_fails_closed(self) -> None:
+        # 두 곳으로 보내겠다는 라우트에서 한쪽을 골라 주면, 검토한 사람이 본 것과
+        # 다른 전달이 조용히 일어난다.
+        for command in (
+            ["agy", "--input-format", "stream-json", "--print", "{{task}}"],
+            ["agy", "--input-format", "stream-json", "--prompt-file", "{{task_file}}"],
+        ):
+            with self.subTest(command=command):
+                with self.assertRaises(speculative_run.RunFailure):
+                    speculative_run._prepare_task_command(command, "review this")
+
+
 class AgyRouteShapeTests(unittest.TestCase):
     def test_default_evidence_route_carries_no_task_in_argv(self) -> None:
         for workflow in ("review", "research", "diagnosis", "design"):

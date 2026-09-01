@@ -211,8 +211,19 @@ def session_egress_granted(environment: Mapping[str, str] | None = None) -> bool
     시각을 담게 되는데, `AGENTS.md` 가 그 둘을 금지한다. 그래서 동의를
     **셸 세션의 수명**에만 둔다 — 아무것도 쓰지 않고, 셸이 닫히면 사라진다.
 
-    권한의 크기는 `--confirm-task-egress` 와 정확히 같다. 넓히는 것이 아니라
-    같은 승인을 한 번만 말하게 하는 것이다.
+    한 번의 승인이 허용하는 **행위** 는 `--confirm-task-egress` 와 같지만, 범위와
+    수명은 같지 않다. 플래그는 사용자가 친 한 호출을 승인하고, 이 변수는 셸이
+    사는 동안의 모든 호출과 **모든 자손 프로세스** 를 승인한다. 래퍼 스크립트나
+    에이전트 하네스가 상속받으면 그쪽도 프롬프트를 보지 않는다. rc 파일에
+    export 하면 확인은 영구히 도달 불가능해진다. 이것은 행위별 게이트를 설정
+    상태로 바꾸는 계약 변경이며, 그 대가로 자동화가 가능해진다.
+
+    그래서 두 가지를 지킨다. 영수증이 승인 출처를 남기고(`session_environment`),
+    터미널이 있으면 승인 여부와 무관하게 **매번 같은 공개를 찍는다**. 확인을
+    건너뛰는 것과 무엇이 나가는지 숨기는 것은 다른 일이다.
+
+    이 변수는 벤더 자식에게 전달되지 않는다. `default_child_env` 의 허용 목록에
+    없으므로 서드파티 CLI 가 이 이름을 보지 못한다.
 
     값을 정확히 요구하는 이유: 이 이름이 존재하기만 하면 통과하게 두면,
     비어 있는 값이나 `0` 을 넣어 **끄려던** 사용자가 오히려 켜게 된다.
@@ -238,11 +249,12 @@ def _confirm_task_egress(
     """
     if confirmed:
         return "flag"
-    if session_egress_granted():
-        return "session_environment"
+    granted = session_egress_granted()
     try:
         ctermid = getattr(os, "ctermid", None)
         if not callable(ctermid):
+            if granted:
+                return "session_environment"
             raise QuickAdvisoryError("ask_confirmation_required")
         with open(ctermid(), "r+", encoding="utf-8", buffering=1) as console:
             print("One-shot advisory", file=console)
@@ -264,11 +276,25 @@ def _confirm_task_egress(
                 print("  Selected repository content may contain secrets.", file=console)
             print("  Requested behavior: read-only; host filesystem confinement: no", file=console)
             print("  Quality verification: no", file=console)
+            if granted:
+                # 확인은 건너뛰되 공개는 건너뛰지 않는다. 세션 승인이 이 화면을
+                # 지우면, 승인한 맥락과 다른 벤더·다른 컨텍스트로 나가는 호출을
+                # 사용자가 볼 방법이 사라진다.
+                print(
+                    f"  Consent: already granted for this shell "
+                    f"({_SESSION_EGRESS_ENVIRONMENT}); not asking",
+                    file=console,
+                )
+                return "session_environment"
             console.write("Send the task and selected context to these vendors? [y/N] ")
             answer = console.readline(32)
     except QuickAdvisoryError:
         raise
     except (OSError, UnicodeError):
+        # 공개를 찍지 못하는 것과 승인이 없는 것은 다른 일이다. 세션 승인은 이미
+        # 명시적이므로 터미널이 없어도 유효하다 — 자동화가 이 승인의 용도다.
+        if granted:
+            return "session_environment"
         raise QuickAdvisoryError("ask_confirmation_required") from None
     if answer.strip().lower() not in {"y", "yes"}:
         raise QuickAdvisoryError("ask_execution_cancelled")
@@ -335,6 +361,8 @@ def _render_preview_human(receipt: Mapping[str, object]) -> None:
         print()
         print(f"  {route.get('vendor')} — {delivery} delivery, {exposure}")
         print(f"    model: {route.get('model_selection')}")
+        if route.get("task_stdin_encoding") == "stream_json_message":
+            print("    stdin: task is wrapped as one NDJSON user message")
         command = route.get("command")
         for argument in command if isinstance(command, list) else []:
             if isinstance(argument, str):
@@ -799,7 +827,11 @@ def _run_members_concurrently(
             except QuickAdvisoryError as error:
                 # 첫 구성원의 오류로 즉시 빠져나가면 남은 자식이 부모 없이
                 # 계속 돈다. 전부 거둔 뒤 입력 순서로 가장 앞선 오류를 낸다.
-                outcomes.append(("ask_cli_unavailable", {}))
+                #
+                # 실패한 자리에 가짜 상태를 넣지 않는다. 이 경로는 반드시
+                # 예외로 끝나므로 그 값은 영수증에 닿지 않는데, `ask_cli_
+                # unavailable` 을 채워 두면 "자식이 뜨지 않았다" 는 뜻으로 읽혀
+                # 나중에 이 목록을 쓰게 되는 순간 egress 집계가 틀린다.
                 if failure is None:
                     failure = error
     finally:
@@ -1027,6 +1059,16 @@ def preview(
                 "model_selection": "vendor_default",
                 "task_delivery": delivery,
                 "task_process_exposure": delivery == "argv",
+                # stdin 으로 간다는 말만으로는 검토가 끝나지 않는다. 라우트가
+                # NDJSON 입력을 선언하면 weightclass 가 태스크를 봉투로 감싸서
+                # 보내는데, 그 사실이 검토 화면에 없으면 검토한 명령과 실제로
+                # 자식이 받는 바이트가 다르다.
+                "task_stdin_encoding": (
+                    "stream_json_message"
+                    if delivery == "stdin"
+                    and speculative_run.declares_stream_json_input(list(command))
+                    else "raw"
+                ),
                 "command": list(command),
                 "executable_observed": True,
             }

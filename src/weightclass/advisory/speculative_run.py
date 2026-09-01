@@ -1010,6 +1010,11 @@ def _prepare_task_command(
     )
     if embedded or len(slots) > 1 or (slots and slots[0][0] == 0):
         raise RunFailure("invalid task-delivery route")
+    if slots and declares_stream_json_input(command):
+        # 태스크 자리와 NDJSON stdin 선언이 함께 있으면 이 라우트는 태스크를 두
+        # 곳으로 보내겠다고 말하는 것이다. 한쪽을 골라 주면 검토한 사람이 본
+        # 것과 다른 전달이 조용히 일어난다. 고르지 말고 닫는다.
+        raise RunFailure("invalid task-delivery route")
     if not slots:
         # 슬롯이 없으면 stdin 전달이다. 라우트가 NDJSON 입력을 선언했으면 그
         # 형식으로 감싼다. 감싸는 일은 전달 직전 한 번만 하며, 검토 출력과
