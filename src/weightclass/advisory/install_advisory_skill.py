@@ -149,6 +149,15 @@ RELEASE_0280_BUNDLE_FILE_SHA256 = {
 }
 
 
+# Exact package-owned four-file bundle published through weightclass 0.29.0.
+RELEASE_0290_BUNDLE_FILE_SHA256 = {
+    "SKILL.md": "82fe05c14fce01e9186e1488f796e261fb1ad9d23af4fec23911d61c9c8961b5",
+    "manifest.json": "13c3a9e4bd7f98e7f8f3872cb0591b1476c80cc8cf9bfa517ee0050af691c860",
+    "agents/openai.yaml": "feb47181e1b926d95b14c51b3fd87765a4ff8a5f5d951f6cae1004d87fac44d5",
+    "references/modes.md": "28f429ce4b100ddf1a60fe0bbdfc166afcb007497d6372ccaab11d5fbc44ce55",
+}
+
+
 def historical_bundle_file_sha256() -> tuple[tuple[tuple[str, ...], dict[str, str]], ...]:
     """Return the live compatibility ledger so test/embedding overrides remain observable."""
 
@@ -169,6 +178,7 @@ def historical_bundle_file_sha256() -> tuple[tuple[tuple[str, ...], dict[str, st
         (EXPECTED_FILES, RELEASE_0260_BUNDLE_FILE_SHA256),
         (EXPECTED_FILES, RELEASE_0271_BUNDLE_FILE_SHA256),
         (EXPECTED_FILES, RELEASE_0280_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0290_BUNDLE_FILE_SHA256),
     )
 
 

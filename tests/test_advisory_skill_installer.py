@@ -48,7 +48,7 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         for workflow in ("implementation", "review", "research", "diagnosis", "design"):
             self.assertIn(f"`{workflow}`", modes)
         self.assertIn("Brainstorming is not a production workflow", modes)
-        self.assertEqual(manifest, {"managed_onboarding": 17, "schema_version": 1})
+        self.assertEqual(manifest, {"managed_onboarding": 18, "schema_version": 1})
         self.assertIn("managed_runner_version_changed", skill + modes)
         self.assertIn("managed_setup_busy", skill + modes)
 
