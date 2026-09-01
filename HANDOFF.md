@@ -1,8 +1,58 @@
 # Handoff
 
-_Last updated: 2026-09-02 KST by Claude_
+_Last updated: 2026-09-02 KST by Claude (agent guidance split)_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
+
+## Scoped agent guidance (merged, unreleased)
+
+`AGENTS.md` is no longer one file. PR #181 merged at `57ae7ae` split it into a root
+file plus five scoped children, and `CLAUDE.md` still points at the root.
+
+The split was **not** forced by size: the old root was 37 lines / 5,223 bytes, well under
+the 250-line / 12 KiB threshold. Two things forced it.
+
+- The root file had gone stale. Its argv exception read as if it covered the advisory
+  companion, which stopped being true in 0.30.0, and it said nothing about session-scoped
+  egress consent, `task_stdin_encoding`, parallel councils, or the `migrate-routes`
+  obligation that a route argv change creates.
+- High-stakes rules were invisible at the moment they applied. The `.weightclass/verify-review`
+  seeds are `file:line` anchors checked in a +/-8 line window, so editing the cited source
+  shifts them — and that rule lived only in the root, where a directory-scoped reader
+  editing that file would never see it. That failure mode occurred during the 0.30.0 work.
+
+Current layout, all under threshold with no missing links:
+
+- `AGENTS.md` (101 lines): global rules, product direction, the scoped guidance index, and
+  the documentation map.
+- `src/weightclass/AGENTS.md`: the V1 one-child contract, the V2 boundary, review before
+  execution, the argv exception **narrowed to core native routing**, the aggregate usage
+  store, and the rule against tuning the classifier on a spent corpus.
+- `src/weightclass/advisory/AGENTS.md`: the three consent sources and the standing,
+  inheritable nature of the session grant; the invariant that skipping the question never
+  skips the disclosure; the no-argv delivery contract; sealed-population migrations; and the
+  Skill bundle ledger procedure.
+- `tests/AGENTS.md`: that the gate is `./.weightclass/verify` and not `pytest -q`, what a new
+  test must prove, and how to change an existing assertion without silently flipping it.
+- `.weightclass/AGENTS.md`: never edit a verifier to make a candidate pass, how to re-anchor a
+  shifted seed, and the exit-42 baseline-probe contract.
+- `packaging/AGENTS.md`: the formula is the source of truth, verification only counts inside a
+  tap, the hashed PyPI URL, and testing an exact entrypoint.
+
+Verification: a mechanical sweep of 25 contract phrases from the original file against the new
+set caught two directives the drafting pass had dropped (`patch-only handoff` and the bounded
+`cheap/advisor/retry/expensive` sequence); both were restored before commit. The audit script
+reports six files, all under threshold, zero missing links, no marker blocks.
+`.weightclass/verify` exit 0 with 1,599 tests and 35 skips; Ruff, strict mypy over 206 source
+files, and `git diff --check` pass; CI was 8/8.
+
+One existing test changed. `test_install_skill_is_the_documented_vendor_path_exception`
+required the phrase in the root file. The contract it protected was that the exception is
+documented in agent guidance, so it now asserts the rule in the scoped file that governs the
+installer **and** that the root still links there. That is stricter than before, and the
+change was stated rather than flipped silently.
+
+This is documentation only; no packaged behavior changed and no release is required for it.
 
 ## One-shot advisory usability batch (released in 0.30.0)
 
@@ -1812,7 +1862,10 @@ human to read.
   Goal g12 is leader-verified; retain this audit connection when refreshing
   this file. Both that path and that sentence are asserted verbatim by
   `test_handoff_points_to_current_g12_audit`, so do not let a rewrap split them.
-- `AGENTS.md`: privacy, networking, one-child, and persisted-aggregate boundary.
+- `AGENTS.md`: global rules and the scoped guidance index. Path-specific rules now live in
+  `src/weightclass/AGENTS.md`, `src/weightclass/advisory/AGENTS.md`, `tests/AGENTS.md`,
+  `.weightclass/AGENTS.md`, and `packaging/AGENTS.md`. Read the one that governs the subtree
+  you are about to change; a rule you need is often not visible from the repository root.
 - `docs/paired-token-study.md`: the closed study — design, pre-registered gate,
   and the Phase 1b result that stopped it.
 - `src/weightclass/classification.py`: classification policy 4.
@@ -1892,6 +1945,23 @@ human to read.
   fail. `tests/test_suite_structure.py` was checked against the pre-conversion
   file: all three of its checks failed, then passed on the fixed tree.
 
+- Reading a vendor CLI's own refusal message instead of designing around its documented
+  shape. `agy --print` was documented here for a year as argv-only. Probing
+  `--input-format stream-json` produced the error "a prompt given on the command line would
+  be ignored", which says the CLI *enforces* stdin-only in that mode. The exposure was then
+  closed by the vendor rather than mitigated by us, and the route lost its task slot entirely.
+- Verifying an external reviewer's findings against the code before acting. Of six findings in
+  the 0.30.0 GLM review, four were real and two were wrong: `MAX_COMMAND_TOKEN_BYTES` is 4,096
+  (the reviewer saw a packet scrubber's false positive and called it a ship-stopper), and
+  `bounded_capture` rejects only non-positive timeouts, so a small budget times out normally
+  rather than raising. Both rejections took one grep each. Accepting them would have produced
+  two pointless changes and one false "fixed" claim.
+- A mechanical phrase sweep when moving prose that carries contracts. Diffing 25 contract
+  phrases from the old `AGENTS.md` against the new file set caught two directives that a
+  careful read-through had already missed.
+- Splitting a commit by hunk with `git apply` on a filtered patch, then proving the reassembled
+  tree was byte-identical to the pre-split state before committing any of it.
+
 ## What Did Not Work / Avoid
 
 - Do not claim aggregation already happened: the store is enabled but has zero
@@ -1919,7 +1989,66 @@ human to read.
   `subTest` cases, so it silently lost per-parameter resolution and reported
   leak-direction tests as "passes under identity redaction".
 
+- **Do not trust `gh pr checks` without comparing the head ref.** After pushing a fix commit,
+  `gh pr checks` reported 8/8 green — for the *previous* commit, because GitHub had not yet
+  refreshed the PR head. The mistake was caught only because the merge was refused as "out of
+  date". Compare `gh pr view <n> --json headRefOid` against local `HEAD` before reading any
+  check result, and treat `mergeStateStatus: UNKNOWN` as "not yet computed", not as a failure.
+- Do not assume an existing coordinator is reusable because it is described as parallel.
+  `advisory_parallel.run_parallel` was claimed here as a drop-in for `ask --council`; it is not.
+  It is command-oriented with a `stdin_bytes` field and cannot carry grok's anonymous
+  `{{task_file}}` pipe, so the council needed its own bounded pool over `_run_member`.
+- Do not act on a review finding about a constant without checking the constant. A scrubbed
+  review packet can redact a numeric literal, and the reviewer will then reason about
+  `"[REDACTED]"` as if it were the source.
+- Do not edit a file cited by `.weightclass/verify-review` without re-checking its seeds.
+  Adding lines above a seed shifts the anchor even when the reviewed behavior is untouched.
+  Re-anchor to the same symbol; never widen the window or drop the seed.
+
 ## Next Steps
+
+**Standing strategic finding (2026-09-02).** Four independent reviews of this project —
+Antigravity, Grok, GLM, and the session agent — converged on the same conclusion without
+seeing each other's answers, and it should be read before choosing any next task.
+
+The headline hypothesis is refuted by this project's own pre-registered study, and the
+classifier is still the front door of `wclass run`. Repository adoption is measurably zero:
+0 stars, 0 forks, 0 watchers, and 0 issues at one month old, against 633 commits and 30
+releases. The project has instrumented its release process exhaustively and its demand not at
+all. That also means the cost of deleting surface area is near zero right now, which will not
+stay true if adoption ever arrives.
+
+All four reviews agreed on five items. Four are now done (agy stdin delivery, parallel
+councils, session consent, readable preview). The fifth is not:
+
+- **A. Demote tier classification from the front door.** `wclass run` should require an
+  explicit `--vendor`, with the classifier available as `--suggest-tier` that prints its own
+  measured agreement (24 prompts, 41.7% agreement, 11.1% recall on majority-`high`, 25%
+  over-routing) alongside its suggestion. Do not present tier routing as an established saving.
+- **B. Move the campaign apparatus out of the shipped tool.** `experiment`, `portfolio`,
+  `campaign-gate`, `seal`, and `dispatch` are research machinery whose maximum payoff, by this
+  repository's own contracts, is permission to request human review. `ask` is the product. A
+  concrete first step exists and is cheap: `ask` uses only seven symbols from the
+  5,463-line `speculative_run.py` (`run_child`, `extract_evidence_result`, `default_child_env`,
+  `AGENT_SCAFFOLDING`, `CHILD_TIMEOUT`, `RunFailure`, `MAX_TASK_FILE_BYTES`). Extracting those
+  into a small shared runtime module decouples the shipped path from the research runner and
+  makes the "vacuity anchors cannot move" constraint irrelevant to `ask`.
+- **C. The 60-task / 12-advised-failure gate is indexed to the wrong quantity.** The event it
+  counts is an advised failure, so the cheap route succeeding — good product news — starves the
+  study. That is why the population sits at 14/60 tasks while already at 9/12 advised failures.
+  Separately, the mechanism under test is currently harmful: of eight cheap verification
+  failures, one retry passed, four stayed the same, and three degraded to a worse failure class.
+  Accumulating natural work to n=60 on v1 retry shaping measures a prototype, not a mechanism.
+- **D. The next hypothesis with real support is verification, not routing.** Six of the routed
+  tier's nine blind-instrument wins were real defects that the cheap arm's acceptance tests
+  passed anyway (accepting `True` as schema version 1, silently overwriting malformed state,
+  admitting padded email-like ledger IDs, returning a mutable cache list). The router did not
+  win; the cheap arm's verifiers lost. An injected-defect harness built from those documented
+  classes would be publishable, unlike the current private fixture, and would fix the
+  reproducibility gap in the headline result for any future study.
+
+None of A-D is authorized by this file. They are the reviewed direction, not a plan of record;
+converge with the owner before starting one.
 
 1. **Collect real advisory evidence without mislabeling failures.** Ten lanes
    per vendor/workflow are available, but sample caps remain independent of
@@ -2008,31 +2137,34 @@ human to read.
 
 ## Resume Prompt
 
-Open the current repository checkout, read `HANDOFF.md` and the applicable
-`AGENTS.md`, then continue from: `weightclass 0.30.0 is published on PyPI, GitHub
-Releases, and Homebrew. Implementation PR #177, release PR #178, source-formula
-PR #179, and tap PR #39 are merged. Tag v0.30.0 points to reviewed release commit
-8062cfb, and Release run 33524435074 passed the immutable build, Python 3.10/3.14
-candidate validation, macOS 3.10/3.14 boundaries, protected PyPI approval, exact
-publication, and automatic GitHub Release creation. Both local uv and exact
-Homebrew entrypoints report 0.30.0; brew test passes and the Codex/Claude
+Open the current repository checkout, read `HANDOFF.md`, the root `AGENTS.md`, and
+the scoped `AGENTS.md` for whatever subtree you will touch, then continue from:
+`weightclass 0.30.0 is published on PyPI, GitHub Releases, and Homebrew.
+Implementation PR #177, release PR #178, source-formula PR #179, tap PR #39,
+handoff PR #180, and scoped-guidance PR #181 are merged. Tag v0.30.0 points to
+reviewed release commit 8062cfb and Release run 33524435074 completed every gate
+including the protected PyPI approval. Both the local uv tool and the exact
+Homebrew entrypoint report 0.30.0, brew test passes, and the Codex/Claude
 advisory skills are exact onboarding-18 bundles. No built-in advisory route
-carries a task in argv: agy now reads its prompt from one NDJSON message on
-stdin under --input-format stream-json, and the CLI itself rejects an argv prompt
-there. Councils start their members together under a shared whole-council
-deadline and report results in requested order. Egress consent may be granted for
-one shell with WCLASS_ADVISORY_EGRESS=session, which never touches disk and never
-skips the per-run disclosure. Two breaking changes are recorded in the 0.30.0
-release notes: schema-1 agy route argv (sealed agy populations need
-migrate-routes --vendor agy) and consent becoming expressible as configuration
-state. Core wclass routing, the one-child contract, campaign records, gates, and
-sealed manifests are unchanged, and core native agy/grok routes still deliver the
-task in argv. Verified-object execution, external hostile-code sandboxing, custom
-usage-store ancestry, and agy's own five-minute --print-timeout remain documented
-residuals. The separately invoked advisory companion remains explicit and
-experimental; no campaign gate may authorize core routing. Never infer prices,
-read vendor credentials/config, backfill task/session data, or reuse a published
-version or tag.`
+carries a task in argv: agy reads its prompt from one NDJSON message on stdin
+under --input-format stream-json and the CLI itself rejects an argv prompt there.
+Councils start their members together under a shared deadline and report in
+requested order. Egress consent may be granted for one shell with
+WCLASS_ADVISORY_EGRESS=session, which never touches disk and never skips the
+per-run disclosure. Agent guidance is now a root AGENTS.md plus scoped children
+under src/weightclass, src/weightclass/advisory, tests, .weightclass, and
+packaging; read the one governing your subtree because the rule you need is often
+invisible from the root. Core wclass routing, the one-child contract, campaign
+records, gates, and sealed manifests are unchanged, and core native agy/grok
+routes still deliver the task in argv. Verified-object execution, external
+hostile-code sandboxing, custom usage-store ancestry, and agy's own five-minute
+--print-timeout remain documented residuals. A four-way review recorded under
+Next Steps found the tier-routing hypothesis refuted by this project's own study
+and repository adoption at zero; treat items A-D there as reviewed direction
+needing owner agreement, not as authorized work. The advisory companion remains
+explicit and experimental; no campaign gate may authorize core routing. Never
+infer prices, read vendor credentials/config, backfill task/session data, or
+reuse a published version or tag.`
 
 ## Historical Resume Prompt (obsolete; retained for audit history)
 
