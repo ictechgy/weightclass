@@ -101,6 +101,10 @@ _SPECS: Mapping[str, CapabilitySpec] = {
             "--sandbox",
             "--mode",
             "--disable-slash-commands",
+            # 라우트가 stdin NDJSON 전달에 의존하므로 이 플래그가 없는 구버전
+            # agy 는 태스크를 읽기 **전에** 닫아야 한다. 빼면 버전 하한이 조용해져
+            # 실행 중 실패로만 드러난다.
+            "--input-format",
             "--output-format",
             "--model",
             "--effort",

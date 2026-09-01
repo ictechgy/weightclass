@@ -98,7 +98,25 @@ It observes an absolute non-repository Git executable before task input and
 binds `--git-dir` and `--work-tree` to the selected repository. For this narrow
 selector, `.git` must be a real directory; linked worktrees fail closed.
 Explicit files reject `.git`, symlinks, traversal, binary/non-UTF-8 content,
-files over 32 KiB, and aggregates over 128 KiB. Diff/file content can still
+files over 32 KiB, and aggregates over 128 KiB.
+Every task-bearing run needs explicit egress consent. Without
+`--confirm-task-egress` the runner asks on the controlling terminal. Exporting
+`WCLASS_ADVISORY_EGRESS=session` authorizes the same action without asking, but
+it is a standing grant, not a per-invocation one: it covers every later call in
+that shell and every descendant process, so a wrapper script or agent harness
+inherits it, and exporting it from a shell rc file makes the prompt permanently
+unreachable. Nothing is written to disk and the grant dies with the shell.
+Skipping the question does not skip the disclosure — the vendor list, delivery
+mode, and context warning still print on the terminal — and the receipt records
+which of `flag`, `session_environment`, or `terminal` approved the run.
+`--preview` reports whether such a grant is already active. The variable is not
+in the vendor child environment allowlist, so no vendor CLI sees it.
+
+Route review also reports `task_stdin_encoding`. A route that declares NDJSON
+standard input has its task wrapped as one `stream-json` user message, so the
+reviewed argv alone would not tell you what bytes the child receives. A route
+that both declares that input and carries a `{{task}}`/`{{task_file}}` slot is
+rejected rather than resolved in one direction. Diff/file content can still
 contain secrets, so the confirmation and preview disclose the selected context.
 The local triage labels prove only that a bounded `file:line` exists and whether
 the model cited it with supporting text; they are not semantic correctness
@@ -113,10 +131,16 @@ fresh independent processes. One output is never fed to another. The receipt
 preserves every result, descriptive consensus and dissent, and partial failures;
 it never ranks a winner or claims quality verification. Preview reads neither
 task stdin nor repository content and starts no vendor process.
-Councils run sequentially in requested vendor order under one whole-council
-deadline (`--total-timeout-seconds`, defaulting to one per-child timeout). A
-partial receipt exits 3, while a complete council exits 0. Any detected
-target-worktree mutation rejects the entire invocation.
+Council members start together, each in its own fresh vendor process, under one
+whole-council deadline (`--total-timeout-seconds`, defaulting to one per-child
+timeout). Wall-clock is therefore the slowest member rather than the sum, and
+every member receives the same remaining budget instead of the later ones being
+starved. Results are always reported in the requested vendor order, never in
+completion order. A failed peer is not cancelled: that would discard work the
+vendor has already charged for. A partial receipt exits 3, while a complete
+council exits 0. The target worktree is compared before the members start and
+again after all of them finish; any detected mutation rejects the entire
+invocation.
 Task-only context requests no repository access or snapshot and reports
 `worktree_checked:false`; local file:line triage is unavailable in that mode.
 All one-shot receipts use schema version 2 and distinguish requested repository

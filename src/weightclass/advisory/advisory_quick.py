@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
@@ -50,6 +52,13 @@ ROLES = ("cheap", "expensive")
 STAGES = ("manual", "plan", "pivot", "final")
 MAX_COUNCIL_MEMBERS = 4
 RECEIPT_SCHEMA_VERSION = 2
+# 사람이 읽는 검토 출력에서 한 인자를 그대로 찍는 상한. 넘으면 길이와
+# 지문으로 줄인다. 값은 `--json` 에 그대로 남는다.
+_MAX_RENDERED_ARGUMENT = 120
+_YES_NO = {True: "yes", False: "no"}
+# 셸 세션 하나 동안만 사는 송신 동의. 디스크에는 아무것도 쓰지 않는다.
+_SESSION_EGRESS_ENVIRONMENT = "WCLASS_ADVISORY_EGRESS"
+_SESSION_EGRESS_VALUE = "session"
 PARTIAL_COUNCIL_EXIT_CODE = 3
 
 
@@ -68,7 +77,10 @@ class QuickAdvisoryError(RuntimeError):
 
 
 _NEXT_ACTIONS = {
-    "ask_confirmation_required": "Run in a terminal or add --confirm-task-egress.",
+    "ask_confirmation_required": (
+        "Run in a terminal, add --confirm-task-egress, or export "
+        "WCLASS_ADVISORY_EGRESS=session for this shell."
+    ),
     "ask_execution_cancelled": "No vendor process was started.",
     "ask_cli_unavailable": "Install or update every selected vendor CLI, then run ask again.",
     "ask_process_context_unsafe": "Run from a process that owns child exit status, then retry.",
@@ -191,6 +203,35 @@ def _preflight_member(vendor: str, workflow: str, repo: Path) -> dict[str, objec
     }
 
 
+def session_egress_granted(environment: Mapping[str, str] | None = None) -> bool:
+    """이 셸 세션이 이미 태스크 송신에 동의했는가.
+
+    매 호출마다 터미널 확인을 다시 받는 것은 경계를 지키는 대신 사용을
+    막는다. 그렇다고 동의를 디스크에 남기면 advisory 상태가 저장소 경로나
+    시각을 담게 되는데, `AGENTS.md` 가 그 둘을 금지한다. 그래서 동의를
+    **셸 세션의 수명**에만 둔다 — 아무것도 쓰지 않고, 셸이 닫히면 사라진다.
+
+    한 번의 승인이 허용하는 **행위** 는 `--confirm-task-egress` 와 같지만, 범위와
+    수명은 같지 않다. 플래그는 사용자가 친 한 호출을 승인하고, 이 변수는 셸이
+    사는 동안의 모든 호출과 **모든 자손 프로세스** 를 승인한다. 래퍼 스크립트나
+    에이전트 하네스가 상속받으면 그쪽도 프롬프트를 보지 않는다. rc 파일에
+    export 하면 확인은 영구히 도달 불가능해진다. 이것은 행위별 게이트를 설정
+    상태로 바꾸는 계약 변경이며, 그 대가로 자동화가 가능해진다.
+
+    그래서 두 가지를 지킨다. 영수증이 승인 출처를 남기고(`session_environment`),
+    터미널이 있으면 승인 여부와 무관하게 **매번 같은 공개를 찍는다**. 확인을
+    건너뛰는 것과 무엇이 나가는지 숨기는 것은 다른 일이다.
+
+    이 변수는 벤더 자식에게 전달되지 않는다. `default_child_env` 의 허용 목록에
+    없으므로 서드파티 CLI 가 이 이름을 보지 못한다.
+
+    값을 정확히 요구하는 이유: 이 이름이 존재하기만 하면 통과하게 두면,
+    비어 있는 값이나 `0` 을 넣어 **끄려던** 사용자가 오히려 켜게 된다.
+    """
+    source = os.environ if environment is None else environment
+    return source.get(_SESSION_EGRESS_ENVIRONMENT) == _SESSION_EGRESS_VALUE
+
+
 def _confirm_task_egress(
     *,
     members: Sequence[Mapping[str, object]],
@@ -199,12 +240,21 @@ def _confirm_task_egress(
     context_mode: str,
     context_file_count: int,
     confirmed: bool,
-) -> None:
+) -> str:
+    """동의를 확인하고 **무엇이 동의했는지** 를 돌려준다.
+
+    출처를 영수증에 남기지 않으면, 세션 승인으로 지나간 호출과 사람이 터미널
+    에서 y 를 친 호출이 같은 기록으로 남는다. 둘은 같은 권한이지만 같은
+    사건이 아니다.
+    """
     if confirmed:
-        return
+        return "flag"
+    granted = session_egress_granted()
     try:
         ctermid = getattr(os, "ctermid", None)
         if not callable(ctermid):
+            if granted:
+                return "session_environment"
             raise QuickAdvisoryError("ask_confirmation_required")
         with open(ctermid(), "r+", encoding="utf-8", buffering=1) as console:
             print("One-shot advisory", file=console)
@@ -226,21 +276,106 @@ def _confirm_task_egress(
                 print("  Selected repository content may contain secrets.", file=console)
             print("  Requested behavior: read-only; host filesystem confinement: no", file=console)
             print("  Quality verification: no", file=console)
+            if granted:
+                # 확인은 건너뛰되 공개는 건너뛰지 않는다. 세션 승인이 이 화면을
+                # 지우면, 승인한 맥락과 다른 벤더·다른 컨텍스트로 나가는 호출을
+                # 사용자가 볼 방법이 사라진다.
+                print(
+                    f"  Consent: already granted for this shell "
+                    f"({_SESSION_EGRESS_ENVIRONMENT}); not asking",
+                    file=console,
+                )
+                return "session_environment"
             console.write("Send the task and selected context to these vendors? [y/N] ")
             answer = console.readline(32)
     except QuickAdvisoryError:
         raise
     except (OSError, UnicodeError):
+        # 공개를 찍지 못하는 것과 승인이 없는 것은 다른 일이다. 세션 승인은 이미
+        # 명시적이므로 터미널이 없어도 유효하다 — 자동화가 이 승인의 용도다.
+        if granted:
+            return "session_environment"
         raise QuickAdvisoryError("ask_confirmation_required") from None
     if answer.strip().lower() not in {"y", "yes"}:
         raise QuickAdvisoryError("ask_execution_cancelled")
+    return "terminal"
+
+
+def _summarize_argument(argument: str) -> str:
+    """긴 인자를 길이와 지문으로 줄인다.
+
+    검토용 출력에서 argv 를 보는 이유는 **어떤 플래그가 붙는가** 를 확인하기
+    위해서다. 그런데 `--json-schema` 하나가 수천 바이트의 이스케이프된 JSON
+    이라, 그대로 찍으면 나머지 플래그가 화면 밖으로 밀린다 — 읽으라고 만든
+    출력이 읽을 수 없게 된다.
+
+    값을 지우지는 않는다. 길이와 sha256 앞자리를 남기므로 두 실행의 스키마가
+    같은지 비교할 수 있고, 정확한 바이트는 `--json` 에 그대로 있다.
+    """
+    if len(argument) <= _MAX_RENDERED_ARGUMENT:
+        return argument
+    digest = hashlib.sha256(argument.encode("utf-8", errors="replace")).hexdigest()[:12]
+    return f"<{len(argument)} bytes, sha256:{digest}>"
+
+
+def _render_preview_human(receipt: Mapping[str, object]) -> None:
+    """검토 가능한 사실만 사람이 읽는 형태로 찍는다.
+
+    `--preview` 는 태스크를 읽지 않고 벤더도 띄우지 않는다. 그래서 사람이 이
+    화면에서 결정하는 것은 하나다: **이 라우트로 내 태스크를 내보낼 것인가.**
+    그 결정에 필요한 것은 벤더, 전달 방식, 프로세스 노출, 컨텍스트 범위,
+    자식 수와 상한이다. 기계용 전체 영수증은 `--json` 이 계속 낸다.
+    """
+    print("Advisory egress preview (task-free; no vendor process started)")
+    files = receipt.get("context_file_count")
+    detail = f" ({files} explicit files)" if isinstance(files, int) and files else ""
+    print(f"  Workflow/stage:   {receipt.get('workflow')}/{receipt.get('stage')}")
+    print(f"  Context:          {receipt.get('context_mode')}{detail}")
+    print(
+        f"  Children on run:  {receipt.get('task_bearing_child_bound')} task-bearing, "
+        f"{receipt.get('task_free_probe_children_on_run')} task-free probes"
+    )
+    print(f"  Per-child limit:  {receipt.get('timeout_seconds_per_child')}s")
+    total = receipt.get("total_timeout_seconds")
+    if total is not None:
+        print(f"  Whole-council limit: {total}s")
+    print(
+        f"  Repository:       {receipt.get('requested_repository_behavior')} requested; "
+        f"host confinement {_YES_NO[bool(receipt.get('host_filesystem_confined'))]}"
+    )
+    print(f"  Quality verified: {_YES_NO[bool(receipt.get('quality_verified'))]}")
+    if receipt.get("session_egress_grant_active"):
+        print(f"  Consent:          granted for this shell ({_SESSION_EGRESS_ENVIRONMENT})")
+    else:
+        print("  Consent:          this run will ask on the terminal")
+    raw_routes = receipt.get("routes")
+    for route in raw_routes if isinstance(raw_routes, list) else []:
+        if not isinstance(route, Mapping):
+            continue
+        delivery = route.get("task_delivery")
+        exposure = (
+            "task visible in local process arguments"
+            if route.get("task_process_exposure")
+            else "no argv exposure"
+        )
+        print()
+        print(f"  {route.get('vendor')} — {delivery} delivery, {exposure}")
+        print(f"    model: {route.get('model_selection')}")
+        if route.get("task_stdin_encoding") == "stream_json_message":
+            print("    stdin: task is wrapped as one NDJSON user message")
+        command = route.get("command")
+        for argument in command if isinstance(command, list) else []:
+            if isinstance(argument, str):
+                print(f"    {_summarize_argument(argument)}")
+    print()
+    print("No task was read and no vendor process was started.")
+    print("Use --json for the exact machine receipt, including full argument values.")
 
 
 def _render_human(receipt: Mapping[str, object]) -> None:
     event = receipt.get("event")
     if event == "advisory_preview":
-        print("Advisory egress preview (task-free; no vendor process started)")
-        print(json.dumps(receipt, ensure_ascii=True, indent=2))
+        _render_preview_human(receipt)
         return
     if event == "advisory_skipped":
         print("Advisory skipped by the local trivial-task policy.")
@@ -456,6 +591,7 @@ def _run_member(
 
 def _single_receipt(
     *,
+    egress_source: str,
     vendor: str,
     workflow: str,
     role: str,
@@ -477,6 +613,7 @@ def _single_receipt(
         "stage": stage,
         "model_selection": "vendor_default",
         "task_egress_confirmed": True,
+        "task_egress_confirmation_source": egress_source,
         "task_egressed": True,
         "task_delivery": delivery,
         "context_mode": context_mode,
@@ -565,7 +702,7 @@ def ask(
         raise QuickAdvisoryError("ask_process_context_unsafe")
     git_preflight = _preflight_context_git(context_mode, resolved_repo)
     member = _preflight_member(vendor, workflow, resolved_repo)
-    _confirm_task_egress(
+    egress_source = _confirm_task_egress(
         members=(member,),
         workflow=workflow,
         stage=stage,
@@ -604,6 +741,7 @@ def ask(
     if status != "ok":
         raise QuickAdvisoryError(status)
     receipt = _single_receipt(
+        egress_source=egress_source,
         vendor=vendor,
         workflow=workflow,
         role=role,
@@ -619,6 +757,88 @@ def ask(
     if baseline is not None:
         _require_unchanged(resolved_repo, baseline)
     return receipt
+
+
+def _run_members_concurrently(
+    members: Sequence[Mapping[str, object]],
+    *,
+    repo: Path,
+    workflow: str,
+    stage: str,
+    context_mode: str,
+    context_payload: str,
+    task: str,
+    timeout_seconds: float,
+    deadline: float,
+) -> tuple[tuple[str, dict[str, object]], ...]:
+    """의회 구성원 전부를 동시에, 각자 새 벤더 프로세스에서 돌린다.
+
+    구성원은 서로의 출력을 보지 않고 같은 태스크·컨텍스트만 받는다. 그래서
+    순차 실행이 사는 것은 대기 시간뿐이고, 대가는 두 가지였다: 네 구성원이면
+    벽시계가 합이 되고, 전체 데드라인이 **뒤쪽 구성원만** 굶겼다. 동시에
+    띄우면 둘 다 사라진다 — 합이 최댓값이 되고, 남은 시간을 모두가 같은
+    조건으로 나눠 갖는다.
+
+    각 자식은 `run_child` 가 자기 프로세스 그룹에서 돌리고 자기 상한으로
+    닫는다. 상태 수거는 `os.waitpid(pid)` 로 지목한 자식만 기다리므로,
+    구성원끼리 서로의 종료 상태를 가져가지 않는다.
+
+    실패한 피어는 취소하지 않는다. 이미 시작된 호출은 과금이 끝났고, 중간에
+    끊으면 그 비용만 버린다. 이것은 `advisory_parallel` 이 캠페인에서 내린
+    결정과 같다.
+
+    반환은 언제나 **입력 순서**다. 완료 순서로 돌려주면 같은 의회를 두 번
+    돌렸을 때 영수증의 구성원 순서가 달라진다.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return tuple(("ask_council_deadline", {}) for _ in members)
+    # 상한은 제출 시점에 한 번만 정한다. 스레드 안에서 다시 재면 스케줄링
+    # 지연이 구성원마다 다른 상한이 되어, 같은 입력이 실행마다 다른 결과를
+    # 낸다.
+    member_timeout = min(timeout_seconds, remaining)
+
+    def run_one(member: Mapping[str, object]) -> tuple[str, dict[str, object]]:
+        try:
+            return _run_member(
+                member,
+                repo=repo,
+                workflow=workflow,
+                stage=stage,
+                context_mode=context_mode,
+                context_payload=context_payload,
+                task=task,
+                timeout_seconds=member_timeout,
+            )
+        except QuickAdvisoryError as error:
+            if error.code != "ask_cli_unavailable":
+                raise
+            return error.code, {}
+
+    executor = ThreadPoolExecutor(max_workers=len(members), thread_name_prefix="wclass-council")
+    futures: list[Future[tuple[str, dict[str, object]]]] = []
+    try:
+        futures = [executor.submit(run_one, member) for member in members]
+        outcomes: list[tuple[str, dict[str, object]]] = []
+        failure: QuickAdvisoryError | None = None
+        for future in futures:
+            try:
+                outcomes.append(future.result())
+            except QuickAdvisoryError as error:
+                # 첫 구성원의 오류로 즉시 빠져나가면 남은 자식이 부모 없이
+                # 계속 돈다. 전부 거둔 뒤 입력 순서로 가장 앞선 오류를 낸다.
+                #
+                # 실패한 자리에 가짜 상태를 넣지 않는다. 이 경로는 반드시
+                # 예외로 끝나므로 그 값은 영수증에 닿지 않는데, `ask_cli_
+                # unavailable` 을 채워 두면 "자식이 뜨지 않았다" 는 뜻으로 읽혀
+                # 나중에 이 목록을 쓰게 되는 순간 egress 집계가 틀린다.
+                if failure is None:
+                    failure = error
+    finally:
+        executor.shutdown(wait=True)
+    if failure is not None:
+        raise failure
+    return tuple(outcomes)
 
 
 def ask_council(
@@ -689,7 +909,7 @@ def ask_council(
     members = tuple(
         _preflight_member(vendor, workflow, resolved_repo) for vendor in selected_vendors
     )
-    _confirm_task_egress(
+    egress_source = _confirm_task_egress(
         members=members,
         workflow=workflow,
         stage=stage,
@@ -715,30 +935,22 @@ def ask_council(
     if baseline is not None:
         _require_unchanged(resolved_repo, baseline)
     rendered_members: list[dict[str, object]] = []
-    for member in members:
-        status: str
-        result: dict[str, object]
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            status, result = "ask_council_deadline", {}
-        else:
-            try:
-                status, result = _run_member(
-                    member,
-                    repo=resolved_repo,
-                    workflow=workflow,
-                    stage=stage,
-                    context_mode=context_mode,
-                    context_payload=context_payload,
-                    task=task,
-                    timeout_seconds=min(timeout_seconds, remaining),
-                )
-            except QuickAdvisoryError as error:
-                if error.code != "ask_cli_unavailable":
-                    raise
-                status, result = error.code, {}
-        if baseline is not None:
-            _require_unchanged(resolved_repo, baseline)
+    outcomes = _run_members_concurrently(
+        members,
+        repo=resolved_repo,
+        workflow=workflow,
+        stage=stage,
+        context_mode=context_mode,
+        context_payload=context_payload,
+        task=task,
+        timeout_seconds=timeout_seconds,
+        deadline=deadline,
+    )
+    # 구성원 사이가 아니라 의회 전체의 앞뒤로 확인한다. 동시에 도는 자식들
+    # 중 하나라도 작업 트리를 건드렸으면 여기서 닫힌다.
+    if baseline is not None:
+        _require_unchanged(resolved_repo, baseline)
+    for member, (status, result) in zip(members, outcomes, strict=True):
         rendered: dict[str, object] = {
             "vendor": member["vendor"],
             "status": status,
@@ -768,6 +980,7 @@ def ask_council(
         "vendors": list(selected_vendors),
         "model_selection": "vendor_default",
         "task_egress_confirmed": True,
+        "task_egress_confirmation_source": egress_source,
         "task_egressed": task_bearing_children > 0,
         "context_mode": context_mode,
         "context_file_count": len(selected_files),
@@ -846,6 +1059,16 @@ def preview(
                 "model_selection": "vendor_default",
                 "task_delivery": delivery,
                 "task_process_exposure": delivery == "argv",
+                # stdin 으로 간다는 말만으로는 검토가 끝나지 않는다. 라우트가
+                # NDJSON 입력을 선언하면 weightclass 가 태스크를 봉투로 감싸서
+                # 보내는데, 그 사실이 검토 화면에 없으면 검토한 명령과 실제로
+                # 자식이 받는 바이트가 다르다.
+                "task_stdin_encoding": (
+                    "stream_json_message"
+                    if delivery == "stdin"
+                    and speculative_run.declares_stream_json_input(list(command))
+                    else "raw"
+                ),
                 "command": list(command),
                 "executable_observed": True,
             }
@@ -863,6 +1086,10 @@ def preview(
         "context_mode": context_mode,
         "context_file_count": len(selected_files),
         "task_egress_required": True,
+        # 미리보기는 확인을 받지 않지만, 이 세션에 이미 승인이 있으면 실제
+        # 실행이 프롬프트 없이 지나간다. 그 사실을 여기서 말하지 않으면
+        # 미리보기가 실행과 다른 그림을 보여 준다.
+        "session_egress_grant_active": session_egress_granted(),
         "local_capability_checked": False,
         "process_context_checked": False,
         "task_free_probe_children_on_run": (

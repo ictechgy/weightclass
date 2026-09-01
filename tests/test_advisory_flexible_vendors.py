@@ -72,11 +72,16 @@ class FlexibleVendorRouteTests(unittest.TestCase):
             routes.build_routes(reserved)
 
         agy = routes.build_routes(profile("agy"))
-        self.assertEqual(routes.command_task_delivery(agy.cheap), "argv")
-        self.assertEqual(agy.cheap[-2:], ("--print", "{{task}}"))
+        # agy 는 `--input-format stream-json` 에서 프롬프트를 stdin 에서 읽고,
+        # 같은 호출의 argv 프롬프트를 CLI 자신이 거부한다. 그래서 이 라우트에는
+        # 태스크 자리가 없고 로컬 프로세스 인자 노출도 없다.
+        self.assertEqual(routes.command_task_delivery(agy.cheap), "stdin")
+        self.assertNotIn("{{task}}", agy.cheap)
+        self.assertNotIn("--print", agy.cheap)
         self.assertIn("--sandbox", agy.cheap)
         self.assertIn("--disable-slash-commands", agy.cheap)
-        self.assertEqual(agy.cheap[agy.cheap.index("--output-format") + 1], "json")
+        self.assertEqual(agy.cheap[agy.cheap.index("--input-format") + 1], "stream-json")
+        self.assertEqual(agy.cheap[agy.cheap.index("--output-format") + 1], "stream-json")
         self.assertEqual(agy.cheap[agy.cheap.index("--model") + 1], "c")
         self.assertEqual(agy.cheap[agy.cheap.index("--mode") + 1], "accept-edits")
         self.assertEqual(agy.advisor[agy.advisor.index("--mode") + 1], "plan")
@@ -140,8 +145,8 @@ class FlexibleVendorRouteTests(unittest.TestCase):
                 text=True,
             )
             value = json.loads(reviewed.stdout)
-            self.assertEqual(value["task_delivery"], "argv")
-            self.assertTrue(value["task_process_exposure"])
+            self.assertEqual(value["task_delivery"], "stdin")
+            self.assertFalse(value["task_process_exposure"])
 
             mixed_value = custom_profile(["acme"])
             commands = mixed_value["commands"]
