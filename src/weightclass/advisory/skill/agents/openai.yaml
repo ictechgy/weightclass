@@ -1,4 +1,4 @@
 interface:
   display_name: "Advisory"
-  short_description: "Get a staged read-only advisory or explicit council"
+  short_description: "Get a bounded advisory or explicit council"
   default_prompt: "Use $advisory at the right stage with the smallest sufficient context."

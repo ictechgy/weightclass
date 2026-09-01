@@ -58,7 +58,11 @@ def validate_context_request(mode: str, files: Sequence[str]) -> tuple[str, ...]
     if mode not in CONTEXT_MODES:
         raise AdvisoryContextError("ask_context_invalid")
     selected = tuple(files)
-    if (mode == "files") != bool(selected) or len(selected) > MAX_CONTEXT_FILES:
+    if (
+        (mode == "files") != bool(selected)
+        or len(selected) > MAX_CONTEXT_FILES
+        or len({value.casefold() for value in selected}) != len(selected)
+    ):
         raise AdvisoryContextError("ask_context_invalid")
     for value in selected:
         if not _safe_relative_parts(value):

@@ -67,7 +67,10 @@ not clearly select one workflow.
    automatic human renderer.
 
 `ask` performs a task-free local CLI capability check before reading standard
-input. It starts two task-free bounded local `--help`/`--version` probes, then
+input unless `--auto-skip-trivial` is active for `plan` or `final`. That option
+reads and classifies stdin locally first; a skipped task starts no probe, asks
+for no egress consent, and creates no snapshot. A non-skipped call starts two
+task-free bounded local `--help`/`--version` probes, then
 executes exactly one task-bearing read-only vendor child. It takes bounded no-follow snapshots
 before and after the call, and rejects any non-`.git` worktree mutation. Git
 metadata is not covered by this snapshot. Codex uses its
@@ -79,6 +82,9 @@ the CLI flag because the user's invocation of this Skill supplies that consent.
 These controls request read-only repository behavior and detect repository
 writes; they are not host filesystem confinement. Use an external container or
 jail when the selected CLI or repository content is hostile.
+
+`task` context runs without a repository snapshot or local file:line triage and
+reports `worktree_checked:false`; it is prompt-only, not host confinement.
 
 Use `--preview` before egress when the user asks to inspect the route or when a
 council/context expansion is not already clear. Preview does not read task
@@ -92,17 +98,19 @@ before task input, runs fresh processes without passing one vendor's output to
 another, and preserves both descriptive consensus and dissent. It never ranks
 or selects a winner and remains `quality_verified:false`. Keep advisory calls
 for one user task to a target of two and an absolute maximum of four; this is a
-conversation-local budget and is never persisted.
+conversation-local budget and is never persisted. The whole council shares one
+deadline (`--total-timeout-seconds`, defaulting to one per-child timeout); a
+partial council emits its receipt and exits 3.
 
 If `ask` fails, follow its fixed `next_action`. Do not silently fall back to a
 stateful campaign, a different vendor, a writable agent, or an unbounded retry.
 
 ## Explicit campaign path
 
-Campaigns are experimental measurement workflows. They may run the bounded
-cheap/advisor/retry/expensive sequence, keep aggregate task-free records, and
-return a verified patch or structured result. They are never the default
-one-shot path.
+Campaigns are experimental implementation or measurement workflows and are
+never the default one-shot path. Before using one, read the campaign section in
+[references/modes.md](references/modes.md); it contains the verifier, setup,
+generation, recovery, and evidence rules.
 
 Use the grouped commands:
 
@@ -118,58 +126,9 @@ wclass-advisory campaign gate --vendor <vendor> --workflow <workflow>
 wclass-advisory campaign cleanup --vendor <vendor> --workflow <workflow>
 ```
 
-All existing flat subcommand names remain compatibility aliases. In the grouped
-surface, `campaign check` is managed `doctor`, `campaign inspect` reviews exact
-managed routes without executing, `campaign run` replaces new uses of
-`dispatch`, and status/gate/cleanup map directly. `campaign migrate
-evidence|routes|gate` groups the preserving migrations. `cli-check`,
-`provider-check`, `consult`, and the low-level experiment commands remain
-advanced flat compatibility surfaces. `check` and `inspect` retain the existing
-`--vendor all` and `--workflow all` behavior where their legacy command allows
-it. New instructions should use the grouped surface when a mapping exists.
-
-### Fix acceptance before a campaign
-
-The clean baseline commit must contain a prospective verifier:
-
-- `implementation`: `.weightclass/verify`
-- `review`: `.weightclass/verify-review`
-- `research`: `.weightclass/verify-research`
-- `diagnosis`: `.weightclass/verify-diagnosis`
-- `design`: `.weightclass/verify-design`
-
-`campaign verifier scaffold` creates a safe reject-all template with a
-workflow-specific criteria checklist. It does not invent project truth and is
-not campaign-ready. Implement the project criteria, make it return `42` for the
-task-free baseline probe, `0` only for an acceptable candidate, and another
-nonzero code for infrastructure failure. With the user's approval, commit it,
-then run `campaign verifier check`. Schema validity alone is not an oracle for
-factual, diagnostic, design, review, or implementation quality.
-
-### Initialize and dispatch
-
-If campaign check reports missing managed configuration, ask for the selected
-vendor's exact cheap, advisor, and expensive model and effort labels. These are
-opaque caller values. After the user authorizes persisting task-free campaign
-configuration, run `campaign init`. Do not discover or edit vendor config.
-
-Campaign execution still requires a clean repository, the reviewed sealed
-routes, and `--confirm-task-egress`. Send the task only on `campaign run`'s
-standard input; the managed parent forwards it through anonymous pipes and
-creates no task pathname. Custom schema-2 vendors also require the three
-task-free provider conformance calls described in the vendor-profile
-documentation. The
-managed runner owns its bounded retry and fallback sequence; never wrap it in
-another retry.
-
-If campaign execution reports `managed_runner_version_changed`, wait for the
-package update to finish and start a fresh process; the rejected runner did not
-read the task. `managed_setup_busy` is bounded setup contention, not a provider
-failure. Do not count either as a campaign sample.
-
-Keep every workflow and vendor in its own sealed population. Never rewrite,
-copy, merge, reseal, or repair old campaign records. A campaign can become only
-`eligible_for_human_review`; it never authorizes or changes core routing.
+Use grouped commands for new work. Flat aliases remain compatibility-only and
+must not be taught as the primary workflow. A campaign may become only
+`eligible_for_human_review`; it never authorizes core routing.
 
 ## Skill management
 

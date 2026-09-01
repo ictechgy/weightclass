@@ -27,7 +27,8 @@ One-shot calls can declare `manual`, `plan`, `pivot`, or `final` timing and use
 task-only, tracked-diff, explicit-file, or repository context. `--preview`
 shows the task-free route, delivery exposure, context, and child bound without
 reading stdin or repository content. `--auto-skip-trivial` can avoid plan/final
-vendor calls using the local classifier. Review receipts retain every original
+vendor calls using the local classifier before probes, consent, or snapshot.
+Review receipts retain every original
 finding while adding local `file:line` triage and invocation-only semantic
 groups; human output folds rejected and duplicate findings.
 Diff context contains only bounded tracked `HEAD` changes and disables external
@@ -37,15 +38,18 @@ bound to the selected standard repository; linked worktrees fail closed.
 Explicit files are
 no-follow UTF-8 reads with 32 KiB per-file and 128 KiB aggregate limits and never
 admit `.git`. These selectors narrow the prompt and working directory, but do
-not confine the vendor from the host filesystem. The target worktree is still
-snapshotted before and after every call.
+not confine the vendor from the host filesystem. Diff/files/repo contexts
+snapshot the target worktree. Task-only context does not request repository
+access, snapshot, or local file:line triage and reports that explicitly.
 
 `--council codex,claude` is an explicit two-to-four-vendor surface. It
 preflights every member before task input, runs fresh independent processes,
 preserves descriptive consensus and dissent, and never selects a winner. It is
 not an automatic cross-vendor route and remains `quality_verified:false`.
 A complete council exits 0. A partial council preserves successful results and
-fixed per-member failure codes in its receipt, then exits 2.
+fixed per-member failure codes in its schema-2 receipt, then exits 3. One
+whole-council deadline defaults to the per-child timeout and can be narrowed
+with `--total-timeout-seconds`.
 
 Initialize opaque model/effort profiles only for an explicit campaign.
 
@@ -91,6 +95,9 @@ first:
 ```sh
 wclass-advisory skill status --target both
 ```
+
+Status is non-mutating and exits successfully for customized targets, listing
+them under `conflicts`; install and uninstall still reject those targets.
 
 Then explicitly install for Codex, Claude Code, or both:
 

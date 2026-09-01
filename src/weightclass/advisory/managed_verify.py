@@ -28,6 +28,7 @@ VERIFIER_PATHS = {
     "diagnosis": ".weightclass/verify-diagnosis",
     "design": ".weightclass/verify-design",
 }
+PROTECTED_VERIFIER_ROOT = ".weightclass"
 _SAFE_GIT_OPTIONS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 
 
@@ -183,13 +184,24 @@ def main() -> int:
         print("verification failed: invalid advisory workflow")
         return 1
     cached_unchanged = _git_quiet(
-        "diff", "--cached", "--quiet", "--no-ext-diff", "--no-textconv", "--", verifier_path
+        "diff",
+        "--cached",
+        "--quiet",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--",
+        PROTECTED_VERIFIER_ROOT,
     )
     worktree_unchanged = _git_quiet(
-        "diff", "--quiet", "--no-ext-diff", "--no-textconv", "--", verifier_path
+        "diff",
+        "--quiet",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--",
+        PROTECTED_VERIFIER_ROOT,
     )
     if cached_unchanged != 0 or worktree_unchanged != 0:
-        print("verification failed: candidate changed the protected verifier")
+        print("verification failed: candidate changed the protected verifier zone")
         return 1
 
     baseline = _git_blob(f"HEAD:{verifier_path}")

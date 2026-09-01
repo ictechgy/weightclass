@@ -204,11 +204,12 @@ class NativeV2CliTests(unittest.TestCase):
             reader.assert_not_called()
             inspect.assert_not_called()
 
-    def test_run_mismatch_follows_task_and_selection_but_precedes_inspection(self) -> None:
+    def test_run_mismatch_stops_before_task_access_and_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = self.write_policy(directory)
             with (
                 patch.object(sys, "stdin", io.StringIO("task")),
+                patch("weightclass.cli.read_validated_task_v2") as reader,
                 patch("weightclass.cli.observe_executable") as inspect,
                 patch("weightclass.cli.run_native_v2") as spawn,
             ):
@@ -231,6 +232,7 @@ class NativeV2CliTests(unittest.TestCase):
                     6,
                 )
             inspect.assert_not_called()
+            reader.assert_not_called()
             spawn.assert_not_called()
 
     def test_run_passes_one_compiled_truth_from_ack_through_spawn(self) -> None:

@@ -75,7 +75,7 @@ class DelegationV2CliTests(unittest.TestCase):
                     reader.assert_not_called()
                     inspect.assert_not_called()
 
-    def test_supplied_mismatch_reads_task_and_compiles_before_inspection(self) -> None:
+    def test_supplied_mismatch_stops_before_task_access(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             policy_path, manifest_path = self.write_inputs(directory)
             with (
@@ -96,7 +96,7 @@ class DelegationV2CliTests(unittest.TestCase):
                     ]
                 )
         self.assertEqual(result, 6)
-        reader.assert_called_once()
+        reader.assert_not_called()
         inspect.assert_not_called()
         spawn.assert_not_called()
 

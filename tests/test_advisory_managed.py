@@ -730,7 +730,7 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
         self.assertTrue(receipt["gate_preregistered"])
         self.assertTrue(receipt["promotion_eligible"])
         self.assertEqual(receipt["gate_method"], "simultaneous_hoeffding_union_bound_v1")
-        self.assertEqual(receipt["population_rule"], "metric_eligible_non_infrastructure_v1")
+        self.assertEqual(receipt["population_rule"], "metric_eligible_non_infrastructure_v2")
         self.assertEqual(receipt["multiplicity_scope"], "single_primary_population")
         analyze.assert_called_once_with(
             mock.ANY,
@@ -861,7 +861,31 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
         self.assertEqual(len(outcomes), 1)
         self.assertEqual(usable_tasks, 2)
         self.assertEqual(excluded, 1)
-        self.assertEqual(population_rule, "metric_eligible_non_infrastructure_v1")
+        self.assertEqual(population_rule, "metric_eligible_non_infrastructure_v2")
+
+    def test_gate_population_v2_excludes_later_provider_infrastructure(self) -> None:
+        records = [
+            {
+                "cheap": {"accepted": False},
+                "advice_failure": {"route_failed": True},
+                "retry": None,
+                "expensive": None,
+            }
+        ]
+
+        outcomes, usable_tasks, excluded, population_rule = (
+            managed_advisory._campaign_gate_population(records, "advised_rescue")
+        )
+        legacy = managed_advisory._campaign_gate_population(
+            records,
+            "advised_rescue",
+            "metric_eligible_non_infrastructure_v1",
+        )
+
+        self.assertEqual((outcomes, usable_tasks, excluded), ([], 0, 1))
+        self.assertEqual(population_rule, "metric_eligible_non_infrastructure_v2")
+        self.assertEqual(len(legacy[0]), 1)
+        self.assertEqual(legacy[2], 0)
 
     def test_gate_migration_never_deletes_a_nonempty_partial_generation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -999,8 +1023,14 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             self.assertNotIn('"models"', encoded)
             self.assertEqual(
                 [item["role"] for item in status["cli"]],
-                ["cheap", "advisor", "expensive"],
+                ["cheap", "advisor", "expensive"] * len(WORKFLOWS),
             )
+            self.assertEqual(
+                [item["workflow"] for item in status["cli"]],
+                [workflow for workflow in WORKFLOWS for _role in range(3)],
+            )
+            self.assertTrue(status["managed_verifier_matches_package"])
+            self.assertRegex(status["managed_verifier_sha256"], r"[0-9a-f]{64}\Z")
             self.assertEqual(len(status["availability"]), len(WORKFLOWS))
             self.assertTrue(
                 all(item["free"] == 10 and item["busy"] == 0 for item in status["availability"])
@@ -1042,6 +1072,43 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
                     }
                 ],
             )
+
+    def test_doctor_marks_a_stale_managed_verifier_wrapper_not_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "advisory-v1"
+            managed_advisory.initialize_campaign_set(
+                state_root,
+                profile=codex_profile(),
+                prices=None,
+                planned_tasks=60,
+                max_tasks=150,
+                dry_run=False,
+            )
+            package_verifier = Path(directory) / "new-managed-verify.py"
+            package_verifier.write_text("# newer package wrapper\n", encoding="utf-8")
+            capability = advisory_preflight.CapabilityResult(
+                "codex", "ready", "none", "codex-cli test"
+            )
+            with (
+                mock.patch.object(
+                    advisory_preflight,
+                    "check_local_capability",
+                    return_value=capability,
+                ),
+                mock.patch(
+                    "weightclass.advisory.managed_advisory.managed_verify.__file__",
+                    package_verifier,
+                ),
+            ):
+                status = managed_advisory.doctor(
+                    state_root,
+                    vendors=("codex",),
+                    workflows=("review",),
+                )
+
+        self.assertFalse(status["ready"])
+        self.assertFalse(status["dispatch_ready"])
+        self.assertFalse(status["managed_verifier_matches_package"])
 
     def test_dispatch_started_receipt_contains_no_result_path(self) -> None:
         private_path = Path("/private/PRIVATE-PROJECT-MATERIAL")
@@ -1239,6 +1306,49 @@ class ManagedAdvisoryOperationTests(unittest.TestCase):
             (raised.exception.vendor, raised.exception.role, raised.exception.code),
             ("codex", "cheap", "executable_missing"),
         )
+
+    def test_dispatch_does_not_consume_task_stream_when_lanes_are_unavailable(self) -> None:
+        selected = managed_advisory.CampaignPaths(
+            Path("/state/profile"),
+            Path("/state/prices"),
+            Path("/state/campaign"),
+            Path("/state/results"),
+        )
+        routes = advisory_routes.AdvisoryRoutes(("codex",), ("codex",), ("codex",))
+        task_stream = mock.Mock(spec=io.BytesIO)
+        task_stream.read.side_effect = AssertionError("task stream was consumed")
+        with (
+            mock.patch.object(
+                managed_advisory,
+                "_configuration",
+                return_value=(selected, {}, routes),
+            ),
+            mock.patch.object(managed_advisory, "_require_route_capabilities"),
+            mock.patch.object(
+                managed_advisory,
+                "_profile_from_path",
+                return_value={"schema_version": 1},
+            ),
+            mock.patch.object(managed_advisory, "_private_regular"),
+            mock.patch.object(managed_advisory, "preflight_project_verifier"),
+            mock.patch.object(
+                advisory_orchestration,
+                "acquire_campaign_lanes",
+                side_effect=advisory_orchestration.LaneUnavailableError(),
+            ),
+            self.assertRaises(advisory_orchestration.LaneUnavailableError),
+        ):
+            managed_advisory.dispatch(
+                Path("/state"),
+                repo=Path("/repo"),
+                task_file=None,
+                task_stream=task_stream,
+                vendors=("codex",),
+                workflow="review",
+                confirm_task_egress=True,
+            )
+
+        task_stream.read.assert_not_called()
 
     def test_custom_dispatch_requires_and_runs_provider_conformance_before_task(self) -> None:
         selected = managed_advisory.CampaignPaths(

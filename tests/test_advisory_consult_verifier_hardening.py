@@ -255,6 +255,30 @@ class ManagedVerifierHardeningTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 42, completed.stdout + completed.stderr)
 
+    def test_candidate_cannot_change_a_verifier_zone_helper(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = self._repository(Path(directory))
+            protected = repository / ".weightclass"
+            protected.mkdir()
+            verifier = protected / "verify"
+            verifier.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            verifier.chmod(0o700)
+            helper = protected / "criteria.txt"
+            helper.write_text("strict\n", encoding="utf-8")
+            self._commit(repository, "protected verifier zone")
+            helper.write_text("weakened\n", encoding="utf-8")
+            previous = Path.cwd()
+            output = io.StringIO()
+            try:
+                os.chdir(repository)
+                with mock.patch.object(sys, "stdout", output):
+                    returncode = managed_verify.main()
+            finally:
+                os.chdir(previous)
+
+        self.assertEqual(returncode, 1)
+        self.assertIn("protected verifier zone", output.getvalue())
+
     def test_project_verifier_does_not_inherit_unrelated_environment(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = self._repository(Path(directory))

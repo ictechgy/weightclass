@@ -140,6 +140,38 @@ RELEASE_0271_BUNDLE_FILE_SHA256 = {
     "agents/openai.yaml": "5aee8388c2735994411240ea01273df1f0dfa8fcf71bf9876c854b1722564e44",
     "references/modes.md": "b1a22cda0a5588f5d154831de1e768808f1c2c898d4d7f7c767c8a147672465a",
 }
+# Exact package-owned four-file bundle published through weightclass 0.28.0.
+RELEASE_0280_BUNDLE_FILE_SHA256 = {
+    "SKILL.md": "5addd08391cfa6aeab1d23e1026ccf1e27a2cb53628bd703ee564df6c019f277",
+    "manifest.json": "da1da5dcc1a0dd3419bcb719833904e12b142a78b7cce655e168ace3ef9895d5",
+    "agents/openai.yaml": "810aaf67c1f4dfa324f17691c618d5f4945f50c688d238c14eaa5fddea3f7644",
+    "references/modes.md": "2a9ed2d32048b60cbfb8ccdc25e32c0bf0c3b3358c836d2c871a4370eabfd291",
+}
+
+
+def historical_bundle_file_sha256() -> tuple[tuple[tuple[str, ...], dict[str, str]], ...]:
+    """Return the live compatibility ledger so test/embedding overrides remain observable."""
+
+    return (
+        (LEGACY_FILES, LEGACY_FILE_SHA256),
+        (EXPECTED_FILES, PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, ADDITIONAL_PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, LATEST_PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, CURRENT_PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, NEXT_PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, FINAL_PREVIOUS_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0176_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0177_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0178_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0179_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0180_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0190_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0260_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0271_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0280_BUNDLE_FILE_SHA256),
+    )
+
+
 TARGET_ROOTS = {
     "codex": (".agents", "skills"),
     "claude": (".claude", "skills"),
@@ -377,23 +409,7 @@ def _recognized_previous_files_at(parent_fd: int, destination_name: str) -> tupl
 
 
 def _recognized_previous_files_fd(root_fd: int) -> tuple[str, ...] | None:
-    for files, expected_sha256 in (
-        (LEGACY_FILES, LEGACY_FILE_SHA256),
-        (EXPECTED_FILES, PREVIOUS_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, ADDITIONAL_PREVIOUS_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, LATEST_PREVIOUS_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, CURRENT_PREVIOUS_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, NEXT_PREVIOUS_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, FINAL_PREVIOUS_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, RELEASE_0176_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, RELEASE_0177_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, RELEASE_0178_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, RELEASE_0179_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, RELEASE_0180_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, RELEASE_0190_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, RELEASE_0260_BUNDLE_FILE_SHA256),
-        (EXPECTED_FILES, RELEASE_0271_BUNDLE_FILE_SHA256),
-    ):
+    for files, expected_sha256 in historical_bundle_file_sha256():
         if _exact_bundle_fd(root_fd, files, expected_sha256):
             return files
     return None
@@ -736,6 +752,47 @@ def install_skill(
     }
 
 
+def skill_status(bundle: Path, *, home: Path, target: str) -> dict[str, object]:
+    """Report every selected destination without treating customization as an install error."""
+
+    payloads = _bundle_payloads(bundle)
+    already_installed: list[str] = []
+    upgrade_planned: list[str] = []
+    planned: list[str] = []
+    conflicts: list[str] = []
+    for selected in _selected_targets(target):
+        try:
+            state, _previous_files = _inspect_destination(
+                home,
+                _destination(home, selected),
+                payloads,
+                upgrade=True,
+            )
+        except SkillInstallError as error:
+            if str(error) != "skill_conflict":
+                raise
+            conflicts.append(selected)
+            continue
+        if state == "already_installed":
+            already_installed.append(selected)
+        elif state == "upgrade":
+            upgrade_planned.append(selected)
+        else:
+            planned.append(selected)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "skill": SKILL_NAME,
+        "target": target,
+        "installed": [],
+        "upgraded": [],
+        "upgrade_planned": upgrade_planned,
+        "already_installed": already_installed,
+        "planned": planned,
+        "conflicts": conflicts,
+        "dry_run": True,
+    }
+
+
 def uninstall_skill(
     bundle: Path,
     *,
@@ -871,11 +928,24 @@ def skill_install_main(argv: list[str] | None = None) -> int:
 
 
 def skill_status_main(argv: list[str] | None = None) -> int:
-    arguments = list(argv or ())
-    return _install_main(
-        [*arguments, "--upgrade", "--dry-run"],
+    parser = argparse.ArgumentParser(
         prog="wclass-advisory skill status",
+        description="Report exact, upgradeable, missing, and customized advisory Skill targets.",
+        allow_abbrev=False,
     )
+    parser.add_argument("--target", choices=("codex", "claude", "both"), default="both")
+    arguments = parser.parse_args(argv)
+    bundle = Path(__file__).resolve().parent / "skill"
+    try:
+        receipt = skill_status(bundle, home=Path.home(), target=arguments.target)
+    except SkillInstallError as error:
+        print(json.dumps({"error": str(error)}), file=sys.stderr)
+        return 2
+    except (OSError, UnicodeError):
+        print(json.dumps({"error": "status_failed"}), file=sys.stderr)
+        return 2
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+    return 0
 
 
 if __name__ == "__main__":

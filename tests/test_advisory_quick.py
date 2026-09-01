@@ -340,17 +340,14 @@ class AdvisoryQuickRouteTests(unittest.TestCase):
 
     def test_plan_can_skip_a_locally_trivial_task_without_vendor_child(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            observation = object()
             with (
                 mock.patch(
                     "weightclass.advisory.advisory_quick.sys.stdin",
                     io.TextIOWrapper(io.BytesIO(b"fix typo"), encoding="utf-8"),
                 ),
-                mock.patch.object(
-                    advisory_quick,
-                    "_resolve_executable",
-                    return_value=("/usr/bin/true", observation),
-                ),
+                mock.patch.object(advisory_quick, "_resolve_executable") as resolve,
+                mock.patch.object(advisory_quick, "_snapshot") as snapshot,
+                mock.patch.object(advisory_quick, "_confirm_task_egress") as confirm,
                 mock.patch(
                     "weightclass.advisory.advisory_quick.speculative_run.run_child"
                 ) as run_child,
@@ -366,12 +363,70 @@ class AdvisoryQuickRouteTests(unittest.TestCase):
                     auto_skip_trivial=True,
                 )
         run_child.assert_not_called()
+        resolve.assert_not_called()
+        snapshot.assert_not_called()
+        confirm.assert_not_called()
         self.assertEqual(receipt["event"], "advisory_skipped")
         self.assertFalse(receipt["task_egressed"])
+        self.assertFalse(receipt["task_egress_confirmed"])
+        self.assertFalse(receipt["worktree_checked"])
         budget = receipt["call_budget"]
         self.assertIsInstance(budget, Mapping)
         assert isinstance(budget, Mapping)
         self.assertEqual(budget["used"], 0)
+
+    def test_task_context_skips_repository_snapshot_and_local_triage(self) -> None:
+        child: speculative_run.ChildResult = {
+            "exit_code": 0,
+            "timed_out": False,
+            "seconds": 1.0,
+            "tokens": None,
+            "failure_code": "none",
+            "stdout_present": True,
+            "stderr_present": False,
+            "usage": None,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            observation = object()
+            with (
+                mock.patch(
+                    "weightclass.advisory.advisory_quick.sys.stdin",
+                    io.TextIOWrapper(io.BytesIO(b"private task"), encoding="utf-8"),
+                ),
+                mock.patch.object(
+                    advisory_quick,
+                    "_resolve_executable",
+                    return_value=("/usr/bin/true", observation),
+                ),
+                mock.patch.object(advisory_quick, "observe_executable", return_value=observation),
+                mock.patch.object(advisory_quick, "_snapshot") as snapshot,
+                mock.patch.object(
+                    speculative_run,
+                    "run_child",
+                    return_value=(child, "provider envelope"),
+                ),
+                mock.patch.object(
+                    speculative_run,
+                    "extract_evidence_result",
+                    return_value=(json.dumps(_review_result()), _review_result()),
+                ),
+            ):
+                receipt = advisory_quick.ask(
+                    vendor="codex",
+                    workflow="review",
+                    role="cheap",
+                    repo=Path(directory),
+                    timeout_seconds=30,
+                    confirm_task_egress=True,
+                    context_mode="task",
+                )
+        snapshot.assert_not_called()
+        self.assertFalse(receipt["worktree_checked"])
+        self.assertIsNone(receipt["worktree_unchanged"])
+        self.assertEqual(
+            receipt["triage_skipped_reason"],
+            "task_context_has_no_repository_snapshot",
+        )
 
     def test_council_preflights_every_member_before_task_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -466,6 +521,84 @@ class AdvisoryQuickRouteTests(unittest.TestCase):
         self.assertNotIn("winner", json.dumps(receipt))
         self.assertNotIn("private task", json.dumps(receipt))
 
+    def test_council_total_deadline_prevents_later_member_start(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            members = [
+                {
+                    "vendor": vendor,
+                    "command": ("/usr/bin/true",),
+                    "delivery": "stdin",
+                    "executable": "/usr/bin/true",
+                    "observation": object(),
+                }
+                for vendor in ("codex", "claude")
+            ]
+            with (
+                mock.patch(
+                    "weightclass.advisory.advisory_quick.sys.stdin",
+                    io.TextIOWrapper(io.BytesIO(b"private task"), encoding="utf-8"),
+                ),
+                mock.patch.object(advisory_quick, "_preflight_member", side_effect=members),
+                mock.patch.object(
+                    advisory_quick,
+                    "_run_member",
+                    return_value=("ok", _review_result()),
+                ) as run_member,
+                mock.patch(
+                    "weightclass.advisory.advisory_quick.time.monotonic",
+                    side_effect=(0.0, 0.0, 31.0),
+                ),
+            ):
+                receipt = advisory_quick.ask_council(
+                    vendors=("codex", "claude"),
+                    workflow="review",
+                    role="cheap",
+                    repo=Path(directory),
+                    timeout_seconds=30,
+                    total_timeout_seconds=30,
+                    confirm_task_egress=True,
+                    context_mode="task",
+                )
+        self.assertEqual(run_member.call_count, 1)
+        rendered = receipt["members"]
+        assert isinstance(rendered, list)
+        self.assertEqual(rendered[1]["status"], "ask_council_deadline")
+        self.assertFalse(receipt["complete"])
+
+    def test_human_output_keeps_rejected_high_findings_visible(self) -> None:
+        finding = {
+            "title": "Urgent issue",
+            "severity": "high",
+            "confidence": "high",
+            "disposition": "reportable",
+            "locations": ["missing.py:1"],
+            "evidence": ["supporting text"],
+            "counterevidence": [],
+            "recommendation": "fix",
+        }
+        receipt = {
+            "event": "advisory_ask",
+            "vendor": "codex",
+            "workflow": "review",
+            "stage": "final",
+            "context_mode": "repo",
+            "result": {**_review_result(), "findings": [finding]},
+            "triage": {
+                "annotations": [
+                    {
+                        "finding_index": 0,
+                        "triage": "rejected",
+                        "duplicate_muted": False,
+                    }
+                ]
+            },
+        }
+        output = io.StringIO()
+        with mock.patch("weightclass.advisory.advisory_quick.sys.stdout", output):
+            advisory_quick._render_human(receipt)
+        self.assertIn("Urgent issue", output.getvalue())
+        self.assertIn("Rejected high/critical findings still shown", output.getvalue())
+
     def test_confirmation_discloses_argv_process_exposure(self) -> None:
         console = mock.mock_open(read_data="yes\n")
         member = {"vendor": "agy", "delivery": "argv"}
@@ -498,6 +631,28 @@ class AdvisoryQuickRouteTests(unittest.TestCase):
                 confirmed=False,
             )
         self.assertEqual(raised.exception.code, "ask_confirmation_required")
+
+    def test_partial_council_has_a_distinct_exit_code(self) -> None:
+        receipt = {
+            "schema_version": 2,
+            "event": "advisory_council",
+            "complete": False,
+        }
+        output = io.StringIO()
+        with (
+            mock.patch.object(advisory_quick, "ask_council", return_value=receipt),
+            mock.patch("weightclass.advisory.advisory_quick.sys.stdout", output),
+        ):
+            status = advisory_quick.main(
+                [
+                    "--council",
+                    "codex,claude",
+                    "--confirm-task-egress",
+                    "--json",
+                ]
+            )
+        self.assertEqual(status, advisory_quick.PARTIAL_COUNCIL_EXIT_CODE)
+        self.assertEqual(json.loads(output.getvalue()), receipt)
 
 
 if __name__ == "__main__":
