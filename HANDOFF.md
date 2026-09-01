@@ -1,65 +1,101 @@
 # Handoff
 
-_Last updated: 2026-09-01 KST by Codex_
+_Last updated: 2026-09-02 KST by Claude_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
-## One-shot advisory usability batch (branch `feature/advisory-usability-hardening`, unreleased)
+## One-shot advisory usability batch (released in 0.30.0)
 
-Three reviewed changes to the explicit `wclass-advisory ask` surface. Core `wclass`
-routing, the one-child contract, campaign records, gates, and every sealed manifest are
-unchanged. No campaign was dispatched and no persistent record was written.
+Implemented, externally reviewed, published, and installed. Implementation PR #177 merged at
+`d1a123a`; release PR #178 and tag `v0.30.0` point to exact release commit `8062cfb`.
+Source-formula PR #179 and tap PR `ictechgy/homebrew-tap#39` are merged.
 
-- **agy task delivery moved from argv to stdin.** `agy 1.1.23` reads its prompt from a
-  one-line NDJSON `{"event":"user",...}` message on stdin under
-  `--input-format stream-json`, rejects an argv prompt in the same call, and needs no
-  `--print` at all. Both agy route builders therefore have no task slot: the exposure is
-  closed by the CLI rather than papered over. `_prepare_task_command` wraps the stdin
-  payload only when a route *declares* that input format, judged by token position, not
-  by executable name or substring. Output parsing was already compatible —
-  `advice_text_extracted` reads the last NDJSON line and `_agy_usage` already handled the
-  `{"event":"result","result":{...}}` envelope.
-- **`ask --council` members now start together.** Wall-clock is the slowest member rather
-  than the sum, and the whole-council deadline no longer starves only the later members.
-  Results stay in requested order, a failed peer is never cancelled, and the worktree is
-  compared once before and once after the whole council instead of between members.
-- **Egress consent can be granted for one shell.** `WCLASS_ADVISORY_EGRESS=session` gives
-  exactly the authority `--confirm-task-egress` already gave, once per shell instead of
-  once per invocation. Nothing is written to disk: a repository- or timestamp-scoped grant
-  is forbidden by `AGENTS.md`, and this avoids that boundary entirely. Receipts gained
-  `task_egress_confirmation_source` (`flag`/`session_environment`/`terminal`) and preview
-  gained `session_egress_grant_active`. The `--human` preview is now a real summary
-  instead of `json.dumps(indent=2)`; arguments over 120 characters render as length plus
-  a sha256 prefix, with exact bytes still in `--json`.
+The released behavior:
 
-Evidence:
+- **No built-in advisory route carries a task in argv.** agy reads the prompt from one NDJSON
+  message on standard input under `--input-format stream-json`, and the CLI itself rejects an argv
+  prompt in that mode, so the exposure is closed by the vendor rather than narrowed by us. Verified
+  against agy 1.1.23. The stdin payload is wrapped only when a route *declares* that input format,
+  judged by argv token position rather than executable name. A route that declares it while also
+  carrying a `{{task}}`/`{{task_file}}` slot is rejected instead of resolved in one direction.
+  The agy local capability check now requires `--input-format`, so an older agy fails closed before
+  any task is read. Route review and `--preview` report `task_stdin_encoding`.
+- **Councils start their members together.** Wall clock is the slowest member, not the sum, and the
+  whole-council deadline is shared instead of starving the members requested last. Each member's
+  timeout is fixed at submission, results are always in requested order, a failed peer is not
+  cancelled, and the worktree is compared once before and once after the whole council.
+  `advisory_parallel.run_parallel` was not reused: it is command-oriented and cannot carry grok's
+  anonymous `{{task_file}}` pipe.
+- **Egress consent can be granted for one shell** with `WCLASS_ADVISORY_EGRESS=session`, which must
+  equal exactly that value. Nothing is written to disk, because `AGENTS.md` forbids repository paths
+  and timestamps in advisory state. Skipping the question does not skip the disclosure: the vendor
+  list, delivery mode, and context warning still print. Receipts record
+  `task_egress_confirmation_source`; preview reports `session_egress_grant_active`. The variable is
+  absent from the vendor child environment allowlist.
+- **`--human` preview is a summary**, not a raw receipt dump. Arguments over 120 characters render
+  as a length plus a SHA-256 prefix; `--json` keeps exact bytes.
+- **Skill onboarding generation 18** removes the now-false argv-delivery instruction, states the
+  parallel council contract, and documents the session grant.
 
-- Full source gates pass: `.weightclass/verify` exit 0 with 1,593 tests and 35 skips,
-  Ruff check and format-check over 251 files, strict mypy over 206 source files,
-  compileall, and `git diff --check`.
-- Live end-to-end against the real agy CLI: `ask --vendor agy --workflow review
-  --context task` returned a valid schema-1 result with `task_delivery: "stdin"`. A live
-  `--council agy,codex` finished in 13.9 s, preserved the partial result, and exited 3;
-  the codex member's `ask_executor_failed` reproduces on a single-vendor run and is a
-  local CLI condition, not a regression (the diff touches no codex line).
-- `tests/test_advisory_flexible_vendors.py` had its agy assertions updated from the old
-  argv contract to the new stdin contract. Claude/Codex profile digests and grok's
-  `{{task_file}}` delivery are unchanged.
-- `.weightclass/verify-review` seeds moved 4347 -> 4405 and 4443 -> 4501 because 58 lines
-  were added above them in `speculative_run.py`. Both still anchor the same symbols in the
-  same +/-8 line window, so the verifier accepts and rejects exactly what it did before.
+Review and verification evidence:
 
-Open items this batch does **not** address:
+- One scrubbed GLM packet covered the two changed advisory modules: 74,400 bytes, SHA-256 prefix
+  `48fe159e668c`. Provider output was treated as untrusted. Four retained findings were fixed: the
+  session grant deleted the only per-run disclosure; the member-exception path filled failed slots
+  with a misleading `ask_cli_unavailable`; the reviewable surface hid the stdin envelope; and the
+  agy version floor was silent. Two provider findings were checked and rejected with evidence —
+  `MAX_COMMAND_TOKEN_BYTES` is 4,096 (the reviewer saw a packet-scrubber false positive), and
+  `bounded_capture` rejects only non-positive timeouts, so a small budget times out normally rather
+  than raising. The provider's concurrency analysis independently matched ours.
+- Full local gates pass 1,599 tests with 35 skips, Ruff check and format-check, strict mypy over
+  206 source files, compileall, `git diff --check`, and the Skill ledger against `v0.29.0`.
+  Extracted-sdist isolation passes 1,592 tests with 80 skips. `cli-check --vendor all` reports
+  codex 0.152.0, claude 2.1.252, agy 1.1.23, and grok 1.0.13 all `ready`.
+- Implementation, release, and source-formula PRs each passed all eight Linux Python 3.10-3.14,
+  macOS Python 3.10/3.14, lint, type, and build checks.
+- Live end-to-end against the real agy CLI on the released Homebrew build: `ask --vendor agy
+  --workflow review --context task` returns a valid schema-1 result with `task_delivery: "stdin"`.
+  A live `--council agy,codex` finished in 13.9 s and preserved the partial result with exit 3; the
+  codex member's `ask_executor_failed` reproduces on a single-vendor run and is a local CLI
+  condition unrelated to this batch.
 
-- Core `wclass` native agy and grok routes still deliver the task in argv, so the
-  `AGENTS.md` exception stands for native routing. Moving core agy to stdin would change
-  every built-in agy route fingerprint and needs its own release handling.
-- Any sealed agy campaign population must run the documented
-  `migrate-routes --vendor agy` before its next dispatch, because the schema-1 agy argv
-  changed.
-- The agy route inherits agy's own `--print-timeout` default of five minutes while the
-  advisory per-child ceiling is 3,600 s. This predates the batch; a long agy review can
-  still be cut off by the CLI rather than by the reviewed ceiling.
+Release and installation evidence:
+
+- Release run `33524435074` passed the immutable Python 3.13 build, macOS 3.10/3.14 boundaries,
+  Python 3.10/3.14 candidate validation, the protected PyPI environment approval, exact publication,
+  and final GitHub Release creation.
+- PyPI exposes one non-yanked wheel with SHA-256
+  `3caa9331fcfd719fb69df81f3ed3f05dbda222bb6c3a5bf7cfdbc75afc1ffeb2` and canonical sdist
+  `https://files.pythonhosted.org/packages/1b/8b/77f6c09def78ee43c495be674bcfbcc822c584d972e3c78ba543811cce53/weightclass-0.30.0.tar.gz`
+  with SHA-256 `37fb319cdb9fec9e60bbec1a027921ac9f546d98ff35a3c41d78ffafac2bf5ae`.
+- GitHub Release `v0.30.0` is final, non-prerelease, and latest. The tap formula passed targeted
+  style, strict audit, source upgrade, and `brew test`. Whole-tap style still has one unrelated
+  pre-existing `relay.rb` component-order warning.
+- The user-level uv tool and the exact Homebrew binary both report `0.30.0`. Exact 0.29.0 Codex and
+  Claude Skill bundles upgraded to generation 18 and both now report `already_installed`.
+
+Two breaking changes are recorded in `.github/release-notes/v0.30.0.md`:
+
+1. Schema-1 `agy` advisory route argv changed, so every `agy` profile digest and route fingerprint
+   changed with it. A sealed campaign population bound to an older `agy` route must complete
+   `migrate-routes --vendor agy` before its next dispatch. No existing record is rewritten.
+2. Egress consent became expressible as configuration state. The gate was strictly per action
+   before; a shell variable now authorizes every later call in that shell and every descendant
+   process. This is deliberate and is what makes non-interactive use possible, but it changes the
+   nature of the gate, not only its ergonomics.
+
+No real project task or campaign was dispatched, no credential or vendor configuration was read, and
+no persistent campaign/usage record was changed. The next safe action is ordinary explicit use of
+`$advisory` or `wclass-advisory ask`.
+
+Open items this batch did **not** address:
+
+- Core `wclass` native `agy` and `grok` routes still deliver the task in argv, so the `AGENTS.md`
+  exception stands for native routing. Moving core `agy` to stdin would change every built-in `agy`
+  route fingerprint and needs its own release handling.
+- The `agy` CLI applies its own `--print-timeout`, defaulting to five minutes, while the advisory
+  per-child ceiling is 3,600 seconds. A long agy review can be cut off by the vendor CLI before the
+  reviewed ceiling. This predates the batch.
 
 ## Advisory review follow-ups and operational hardening (released in 0.29.0)
 
@@ -1973,25 +2009,30 @@ human to read.
 ## Resume Prompt
 
 Open the current repository checkout, read `HANDOFF.md` and the applicable
-`AGENTS.md`, then continue from: `weightclass 0.26.0 is published on PyPI,
-GitHub Releases, and Homebrew. Runtime PR #155, release PR #157, source-formula
-PR #158, and tap PR #34 are merged. Tag v0.26.0 points to reviewed release
-commit 3278c98, and Release run 33379582303 passed the immutable build, Python
-3.10/3.14 candidate validation, macOS 3.10/3.14 boundaries, protected PyPI
-approval, exact publication, and automatic GitHub Release creation. Both local
-uv and exact Homebrew entrypoints report 0.26.0; brew test passes and the
-Codex/Claude advisory skills are exact-current. Managed verifier environments,
-process groups, selector failures, kqueue one-shot exit state, EPERM races,
-deadline-driven waits, managed contract constants, and descriptor-based Skill
-upgrade compatibility are hardened without claiming host sandboxing. The final
-complete nine-file Security diff scan has no surviving finding; full source
-gates pass 1,514 unittest tests with 35 skips, extracted-sdist isolation passes
-1,507 with 79 skips, Ruff/format covers 234 files, and strict mypy covers 194
-source files. Verified-object execution, external hostile-code sandboxing, and
-custom usage-store ancestry remain documented residuals. The separately invoked
-advisory companion remains explicit and experimental; no campaign gate may
-authorize core routing. Never infer prices, read vendor credentials/config,
-backfill task/session data, or reuse a published version or tag.`
+`AGENTS.md`, then continue from: `weightclass 0.30.0 is published on PyPI, GitHub
+Releases, and Homebrew. Implementation PR #177, release PR #178, source-formula
+PR #179, and tap PR #39 are merged. Tag v0.30.0 points to reviewed release commit
+8062cfb, and Release run 33524435074 passed the immutable build, Python 3.10/3.14
+candidate validation, macOS 3.10/3.14 boundaries, protected PyPI approval, exact
+publication, and automatic GitHub Release creation. Both local uv and exact
+Homebrew entrypoints report 0.30.0; brew test passes and the Codex/Claude
+advisory skills are exact onboarding-18 bundles. No built-in advisory route
+carries a task in argv: agy now reads its prompt from one NDJSON message on
+stdin under --input-format stream-json, and the CLI itself rejects an argv prompt
+there. Councils start their members together under a shared whole-council
+deadline and report results in requested order. Egress consent may be granted for
+one shell with WCLASS_ADVISORY_EGRESS=session, which never touches disk and never
+skips the per-run disclosure. Two breaking changes are recorded in the 0.30.0
+release notes: schema-1 agy route argv (sealed agy populations need
+migrate-routes --vendor agy) and consent becoming expressible as configuration
+state. Core wclass routing, the one-child contract, campaign records, gates, and
+sealed manifests are unchanged, and core native agy/grok routes still deliver the
+task in argv. Verified-object execution, external hostile-code sandboxing, custom
+usage-store ancestry, and agy's own five-minute --print-timeout remain documented
+residuals. The separately invoked advisory companion remains explicit and
+experimental; no campaign gate may authorize core routing. Never infer prices,
+read vendor credentials/config, backfill task/session data, or reuse a published
+version or tag.`
 
 ## Historical Resume Prompt (obsolete; retained for audit history)
 
