@@ -4,6 +4,63 @@ _Last updated: 2026-09-01 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
+## One-shot advisory usability batch (branch `feature/advisory-usability-hardening`, unreleased)
+
+Three reviewed changes to the explicit `wclass-advisory ask` surface. Core `wclass`
+routing, the one-child contract, campaign records, gates, and every sealed manifest are
+unchanged. No campaign was dispatched and no persistent record was written.
+
+- **agy task delivery moved from argv to stdin.** `agy 1.1.23` reads its prompt from a
+  one-line NDJSON `{"event":"user",...}` message on stdin under
+  `--input-format stream-json`, rejects an argv prompt in the same call, and needs no
+  `--print` at all. Both agy route builders therefore have no task slot: the exposure is
+  closed by the CLI rather than papered over. `_prepare_task_command` wraps the stdin
+  payload only when a route *declares* that input format, judged by token position, not
+  by executable name or substring. Output parsing was already compatible —
+  `advice_text_extracted` reads the last NDJSON line and `_agy_usage` already handled the
+  `{"event":"result","result":{...}}` envelope.
+- **`ask --council` members now start together.** Wall-clock is the slowest member rather
+  than the sum, and the whole-council deadline no longer starves only the later members.
+  Results stay in requested order, a failed peer is never cancelled, and the worktree is
+  compared once before and once after the whole council instead of between members.
+- **Egress consent can be granted for one shell.** `WCLASS_ADVISORY_EGRESS=session` gives
+  exactly the authority `--confirm-task-egress` already gave, once per shell instead of
+  once per invocation. Nothing is written to disk: a repository- or timestamp-scoped grant
+  is forbidden by `AGENTS.md`, and this avoids that boundary entirely. Receipts gained
+  `task_egress_confirmation_source` (`flag`/`session_environment`/`terminal`) and preview
+  gained `session_egress_grant_active`. The `--human` preview is now a real summary
+  instead of `json.dumps(indent=2)`; arguments over 120 characters render as length plus
+  a sha256 prefix, with exact bytes still in `--json`.
+
+Evidence:
+
+- Full source gates pass: `.weightclass/verify` exit 0 with 1,593 tests and 35 skips,
+  Ruff check and format-check over 251 files, strict mypy over 206 source files,
+  compileall, and `git diff --check`.
+- Live end-to-end against the real agy CLI: `ask --vendor agy --workflow review
+  --context task` returned a valid schema-1 result with `task_delivery: "stdin"`. A live
+  `--council agy,codex` finished in 13.9 s, preserved the partial result, and exited 3;
+  the codex member's `ask_executor_failed` reproduces on a single-vendor run and is a
+  local CLI condition, not a regression (the diff touches no codex line).
+- `tests/test_advisory_flexible_vendors.py` had its agy assertions updated from the old
+  argv contract to the new stdin contract. Claude/Codex profile digests and grok's
+  `{{task_file}}` delivery are unchanged.
+- `.weightclass/verify-review` seeds moved 4347 -> 4405 and 4443 -> 4501 because 58 lines
+  were added above them in `speculative_run.py`. Both still anchor the same symbols in the
+  same +/-8 line window, so the verifier accepts and rejects exactly what it did before.
+
+Open items this batch does **not** address:
+
+- Core `wclass` native agy and grok routes still deliver the task in argv, so the
+  `AGENTS.md` exception stands for native routing. Moving core agy to stdin would change
+  every built-in agy route fingerprint and needs its own release handling.
+- Any sealed agy campaign population must run the documented
+  `migrate-routes --vendor agy` before its next dispatch, because the schema-1 agy argv
+  changed.
+- The agy route inherits agy's own `--print-timeout` default of five minutes while the
+  advisory per-child ceiling is 3,600 s. This predates the batch; a long agy review can
+  still be cut off by the CLI rather than by the reviewed ceiling.
+
 ## Advisory review follow-ups and operational hardening (released in 0.29.0)
 
 The complete core, one-shot, managed-campaign, and Skill/release follow-up is implemented,
