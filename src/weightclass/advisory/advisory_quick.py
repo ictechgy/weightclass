@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -51,6 +52,13 @@ ROLES = ("cheap", "expensive")
 STAGES = ("manual", "plan", "pivot", "final")
 MAX_COUNCIL_MEMBERS = 4
 RECEIPT_SCHEMA_VERSION = 2
+# 사람이 읽는 검토 출력에서 한 인자를 그대로 찍는 상한. 넘으면 길이와
+# 지문으로 줄인다. 값은 `--json` 에 그대로 남는다.
+_MAX_RENDERED_ARGUMENT = 120
+_YES_NO = {True: "yes", False: "no"}
+# 셸 세션 하나 동안만 사는 송신 동의. 디스크에는 아무것도 쓰지 않는다.
+_SESSION_EGRESS_ENVIRONMENT = "WCLASS_ADVISORY_EGRESS"
+_SESSION_EGRESS_VALUE = "session"
 PARTIAL_COUNCIL_EXIT_CODE = 3
 
 
@@ -69,7 +77,10 @@ class QuickAdvisoryError(RuntimeError):
 
 
 _NEXT_ACTIONS = {
-    "ask_confirmation_required": "Run in a terminal or add --confirm-task-egress.",
+    "ask_confirmation_required": (
+        "Run in a terminal, add --confirm-task-egress, or export "
+        "WCLASS_ADVISORY_EGRESS=session for this shell."
+    ),
     "ask_execution_cancelled": "No vendor process was started.",
     "ask_cli_unavailable": "Install or update every selected vendor CLI, then run ask again.",
     "ask_process_context_unsafe": "Run from a process that owns child exit status, then retry.",
@@ -192,6 +203,24 @@ def _preflight_member(vendor: str, workflow: str, repo: Path) -> dict[str, objec
     }
 
 
+def session_egress_granted(environment: Mapping[str, str] | None = None) -> bool:
+    """이 셸 세션이 이미 태스크 송신에 동의했는가.
+
+    매 호출마다 터미널 확인을 다시 받는 것은 경계를 지키는 대신 사용을
+    막는다. 그렇다고 동의를 디스크에 남기면 advisory 상태가 저장소 경로나
+    시각을 담게 되는데, `AGENTS.md` 가 그 둘을 금지한다. 그래서 동의를
+    **셸 세션의 수명**에만 둔다 — 아무것도 쓰지 않고, 셸이 닫히면 사라진다.
+
+    권한의 크기는 `--confirm-task-egress` 와 정확히 같다. 넓히는 것이 아니라
+    같은 승인을 한 번만 말하게 하는 것이다.
+
+    값을 정확히 요구하는 이유: 이 이름이 존재하기만 하면 통과하게 두면,
+    비어 있는 값이나 `0` 을 넣어 **끄려던** 사용자가 오히려 켜게 된다.
+    """
+    source = os.environ if environment is None else environment
+    return source.get(_SESSION_EGRESS_ENVIRONMENT) == _SESSION_EGRESS_VALUE
+
+
 def _confirm_task_egress(
     *,
     members: Sequence[Mapping[str, object]],
@@ -200,9 +229,17 @@ def _confirm_task_egress(
     context_mode: str,
     context_file_count: int,
     confirmed: bool,
-) -> None:
+) -> str:
+    """동의를 확인하고 **무엇이 동의했는지** 를 돌려준다.
+
+    출처를 영수증에 남기지 않으면, 세션 승인으로 지나간 호출과 사람이 터미널
+    에서 y 를 친 호출이 같은 기록으로 남는다. 둘은 같은 권한이지만 같은
+    사건이 아니다.
+    """
     if confirmed:
-        return
+        return "flag"
+    if session_egress_granted():
+        return "session_environment"
     try:
         ctermid = getattr(os, "ctermid", None)
         if not callable(ctermid):
@@ -235,13 +272,82 @@ def _confirm_task_egress(
         raise QuickAdvisoryError("ask_confirmation_required") from None
     if answer.strip().lower() not in {"y", "yes"}:
         raise QuickAdvisoryError("ask_execution_cancelled")
+    return "terminal"
+
+
+def _summarize_argument(argument: str) -> str:
+    """긴 인자를 길이와 지문으로 줄인다.
+
+    검토용 출력에서 argv 를 보는 이유는 **어떤 플래그가 붙는가** 를 확인하기
+    위해서다. 그런데 `--json-schema` 하나가 수천 바이트의 이스케이프된 JSON
+    이라, 그대로 찍으면 나머지 플래그가 화면 밖으로 밀린다 — 읽으라고 만든
+    출력이 읽을 수 없게 된다.
+
+    값을 지우지는 않는다. 길이와 sha256 앞자리를 남기므로 두 실행의 스키마가
+    같은지 비교할 수 있고, 정확한 바이트는 `--json` 에 그대로 있다.
+    """
+    if len(argument) <= _MAX_RENDERED_ARGUMENT:
+        return argument
+    digest = hashlib.sha256(argument.encode("utf-8", errors="replace")).hexdigest()[:12]
+    return f"<{len(argument)} bytes, sha256:{digest}>"
+
+
+def _render_preview_human(receipt: Mapping[str, object]) -> None:
+    """검토 가능한 사실만 사람이 읽는 형태로 찍는다.
+
+    `--preview` 는 태스크를 읽지 않고 벤더도 띄우지 않는다. 그래서 사람이 이
+    화면에서 결정하는 것은 하나다: **이 라우트로 내 태스크를 내보낼 것인가.**
+    그 결정에 필요한 것은 벤더, 전달 방식, 프로세스 노출, 컨텍스트 범위,
+    자식 수와 상한이다. 기계용 전체 영수증은 `--json` 이 계속 낸다.
+    """
+    print("Advisory egress preview (task-free; no vendor process started)")
+    files = receipt.get("context_file_count")
+    detail = f" ({files} explicit files)" if isinstance(files, int) and files else ""
+    print(f"  Workflow/stage:   {receipt.get('workflow')}/{receipt.get('stage')}")
+    print(f"  Context:          {receipt.get('context_mode')}{detail}")
+    print(
+        f"  Children on run:  {receipt.get('task_bearing_child_bound')} task-bearing, "
+        f"{receipt.get('task_free_probe_children_on_run')} task-free probes"
+    )
+    print(f"  Per-child limit:  {receipt.get('timeout_seconds_per_child')}s")
+    total = receipt.get("total_timeout_seconds")
+    if total is not None:
+        print(f"  Whole-council limit: {total}s")
+    print(
+        f"  Repository:       {receipt.get('requested_repository_behavior')} requested; "
+        f"host confinement {_YES_NO[bool(receipt.get('host_filesystem_confined'))]}"
+    )
+    print(f"  Quality verified: {_YES_NO[bool(receipt.get('quality_verified'))]}")
+    if receipt.get("session_egress_grant_active"):
+        print(f"  Consent:          granted for this shell ({_SESSION_EGRESS_ENVIRONMENT})")
+    else:
+        print("  Consent:          this run will ask on the terminal")
+    raw_routes = receipt.get("routes")
+    for route in raw_routes if isinstance(raw_routes, list) else []:
+        if not isinstance(route, Mapping):
+            continue
+        delivery = route.get("task_delivery")
+        exposure = (
+            "task visible in local process arguments"
+            if route.get("task_process_exposure")
+            else "no argv exposure"
+        )
+        print()
+        print(f"  {route.get('vendor')} — {delivery} delivery, {exposure}")
+        print(f"    model: {route.get('model_selection')}")
+        command = route.get("command")
+        for argument in command if isinstance(command, list) else []:
+            if isinstance(argument, str):
+                print(f"    {_summarize_argument(argument)}")
+    print()
+    print("No task was read and no vendor process was started.")
+    print("Use --json for the exact machine receipt, including full argument values.")
 
 
 def _render_human(receipt: Mapping[str, object]) -> None:
     event = receipt.get("event")
     if event == "advisory_preview":
-        print("Advisory egress preview (task-free; no vendor process started)")
-        print(json.dumps(receipt, ensure_ascii=True, indent=2))
+        _render_preview_human(receipt)
         return
     if event == "advisory_skipped":
         print("Advisory skipped by the local trivial-task policy.")
@@ -457,6 +563,7 @@ def _run_member(
 
 def _single_receipt(
     *,
+    egress_source: str,
     vendor: str,
     workflow: str,
     role: str,
@@ -478,6 +585,7 @@ def _single_receipt(
         "stage": stage,
         "model_selection": "vendor_default",
         "task_egress_confirmed": True,
+        "task_egress_confirmation_source": egress_source,
         "task_egressed": True,
         "task_delivery": delivery,
         "context_mode": context_mode,
@@ -566,7 +674,7 @@ def ask(
         raise QuickAdvisoryError("ask_process_context_unsafe")
     git_preflight = _preflight_context_git(context_mode, resolved_repo)
     member = _preflight_member(vendor, workflow, resolved_repo)
-    _confirm_task_egress(
+    egress_source = _confirm_task_egress(
         members=(member,),
         workflow=workflow,
         stage=stage,
@@ -605,6 +713,7 @@ def ask(
     if status != "ok":
         raise QuickAdvisoryError(status)
     receipt = _single_receipt(
+        egress_source=egress_source,
         vendor=vendor,
         workflow=workflow,
         role=role,
@@ -768,7 +877,7 @@ def ask_council(
     members = tuple(
         _preflight_member(vendor, workflow, resolved_repo) for vendor in selected_vendors
     )
-    _confirm_task_egress(
+    egress_source = _confirm_task_egress(
         members=members,
         workflow=workflow,
         stage=stage,
@@ -839,6 +948,7 @@ def ask_council(
         "vendors": list(selected_vendors),
         "model_selection": "vendor_default",
         "task_egress_confirmed": True,
+        "task_egress_confirmation_source": egress_source,
         "task_egressed": task_bearing_children > 0,
         "context_mode": context_mode,
         "context_file_count": len(selected_files),
@@ -934,6 +1044,10 @@ def preview(
         "context_mode": context_mode,
         "context_file_count": len(selected_files),
         "task_egress_required": True,
+        # 미리보기는 확인을 받지 않지만, 이 세션에 이미 승인이 있으면 실제
+        # 실행이 프롬프트 없이 지나간다. 그 사실을 여기서 말하지 않으면
+        # 미리보기가 실행과 다른 그림을 보여 준다.
+        "session_egress_grant_active": session_egress_granted(),
         "local_capability_checked": False,
         "process_context_checked": False,
         "task_free_probe_children_on_run": (

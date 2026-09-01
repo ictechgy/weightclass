@@ -98,7 +98,14 @@ It observes an absolute non-repository Git executable before task input and
 binds `--git-dir` and `--work-tree` to the selected repository. For this narrow
 selector, `.git` must be a real directory; linked worktrees fail closed.
 Explicit files reject `.git`, symlinks, traversal, binary/non-UTF-8 content,
-files over 32 KiB, and aggregates over 128 KiB. Diff/file content can still
+files over 32 KiB, and aggregates over 128 KiB.
+Every task-bearing run needs explicit egress consent. Without
+`--confirm-task-egress` the runner asks on the controlling terminal. Exporting
+`WCLASS_ADVISORY_EGRESS=session` grants the same approval once for the current
+shell instead of once per invocation; nothing is written to disk, the grant dies
+with the shell, and the receipt records which of `flag`, `session_environment`,
+or `terminal` approved the run. `--preview` reports whether such a grant is
+already active. Diff/file content can still
 contain secrets, so the confirmation and preview disclose the selected context.
 The local triage labels prove only that a bounded `file:line` exists and whether
 the model cited it with supporting text; they are not semantic correctness
