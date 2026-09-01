@@ -53,14 +53,22 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         self.assertIn("managed_setup_busy", skill + modes)
 
     def test_install_skill_is_the_documented_vendor_path_exception(self) -> None:
-        agent_guide_path = ROOT / "AGENTS.md"
+        # 이 예외는 설치 코드를 편집하는 순간 눈에 들어와야 한다. 그래서 규칙은
+        # 그 디렉터리를 지배하는 가이드에 있어야 하고, 루트는 거기로 갈 수 있게
+        # 가리켜야 한다. 둘 중 하나만으로는 계약이 성립하지 않는다.
+        root_guide_path = ROOT / "AGENTS.md"
+        scoped_guide_path = ROOT / "src" / "weightclass" / "advisory" / "AGENTS.md"
         skill_guide_path = ROOT / "docs" / "advisory-skill.md"
-        if not agent_guide_path.is_file() or not skill_guide_path.is_file():
+        if not all(
+            path.is_file() for path in (root_guide_path, scoped_guide_path, skill_guide_path)
+        ):
             self.skipTest("repository policy documents are intentionally absent from the sdist")
-        agent_guide = agent_guide_path.read_text(encoding="utf-8")
+        root_guide = root_guide_path.read_text(encoding="utf-8")
+        scoped_guide = scoped_guide_path.read_text(encoding="utf-8")
         skill_guide = skill_guide_path.read_text(encoding="utf-8")
 
-        self.assertIn("sole vendor-recognized-path exception", agent_guide)
+        self.assertIn("sole vendor-recognized-path exception", scoped_guide)
+        self.assertIn("src/weightclass/advisory/AGENTS.md", root_guide)
         self.assertIn("sole vendor-recognized-path exception", skill_guide)
         self.assertIn("historical bundle", skill_guide)
         self.assertIn("compatibility ledger", skill_guide)
