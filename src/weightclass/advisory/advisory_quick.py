@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
@@ -621,6 +622,84 @@ def ask(
     return receipt
 
 
+def _run_members_concurrently(
+    members: Sequence[Mapping[str, object]],
+    *,
+    repo: Path,
+    workflow: str,
+    stage: str,
+    context_mode: str,
+    context_payload: str,
+    task: str,
+    timeout_seconds: float,
+    deadline: float,
+) -> tuple[tuple[str, dict[str, object]], ...]:
+    """의회 구성원 전부를 동시에, 각자 새 벤더 프로세스에서 돌린다.
+
+    구성원은 서로의 출력을 보지 않고 같은 태스크·컨텍스트만 받는다. 그래서
+    순차 실행이 사는 것은 대기 시간뿐이고, 대가는 두 가지였다: 네 구성원이면
+    벽시계가 합이 되고, 전체 데드라인이 **뒤쪽 구성원만** 굶겼다. 동시에
+    띄우면 둘 다 사라진다 — 합이 최댓값이 되고, 남은 시간을 모두가 같은
+    조건으로 나눠 갖는다.
+
+    각 자식은 `run_child` 가 자기 프로세스 그룹에서 돌리고 자기 상한으로
+    닫는다. 상태 수거는 `os.waitpid(pid)` 로 지목한 자식만 기다리므로,
+    구성원끼리 서로의 종료 상태를 가져가지 않는다.
+
+    실패한 피어는 취소하지 않는다. 이미 시작된 호출은 과금이 끝났고, 중간에
+    끊으면 그 비용만 버린다. 이것은 `advisory_parallel` 이 캠페인에서 내린
+    결정과 같다.
+
+    반환은 언제나 **입력 순서**다. 완료 순서로 돌려주면 같은 의회를 두 번
+    돌렸을 때 영수증의 구성원 순서가 달라진다.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return tuple(("ask_council_deadline", {}) for _ in members)
+    # 상한은 제출 시점에 한 번만 정한다. 스레드 안에서 다시 재면 스케줄링
+    # 지연이 구성원마다 다른 상한이 되어, 같은 입력이 실행마다 다른 결과를
+    # 낸다.
+    member_timeout = min(timeout_seconds, remaining)
+
+    def run_one(member: Mapping[str, object]) -> tuple[str, dict[str, object]]:
+        try:
+            return _run_member(
+                member,
+                repo=repo,
+                workflow=workflow,
+                stage=stage,
+                context_mode=context_mode,
+                context_payload=context_payload,
+                task=task,
+                timeout_seconds=member_timeout,
+            )
+        except QuickAdvisoryError as error:
+            if error.code != "ask_cli_unavailable":
+                raise
+            return error.code, {}
+
+    executor = ThreadPoolExecutor(max_workers=len(members), thread_name_prefix="wclass-council")
+    futures: list[Future[tuple[str, dict[str, object]]]] = []
+    try:
+        futures = [executor.submit(run_one, member) for member in members]
+        outcomes: list[tuple[str, dict[str, object]]] = []
+        failure: QuickAdvisoryError | None = None
+        for future in futures:
+            try:
+                outcomes.append(future.result())
+            except QuickAdvisoryError as error:
+                # 첫 구성원의 오류로 즉시 빠져나가면 남은 자식이 부모 없이
+                # 계속 돈다. 전부 거둔 뒤 입력 순서로 가장 앞선 오류를 낸다.
+                outcomes.append(("ask_cli_unavailable", {}))
+                if failure is None:
+                    failure = error
+    finally:
+        executor.shutdown(wait=True)
+    if failure is not None:
+        raise failure
+    return tuple(outcomes)
+
+
 def ask_council(
     *,
     vendors: Sequence[str],
@@ -715,30 +794,22 @@ def ask_council(
     if baseline is not None:
         _require_unchanged(resolved_repo, baseline)
     rendered_members: list[dict[str, object]] = []
-    for member in members:
-        status: str
-        result: dict[str, object]
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            status, result = "ask_council_deadline", {}
-        else:
-            try:
-                status, result = _run_member(
-                    member,
-                    repo=resolved_repo,
-                    workflow=workflow,
-                    stage=stage,
-                    context_mode=context_mode,
-                    context_payload=context_payload,
-                    task=task,
-                    timeout_seconds=min(timeout_seconds, remaining),
-                )
-            except QuickAdvisoryError as error:
-                if error.code != "ask_cli_unavailable":
-                    raise
-                status, result = error.code, {}
-        if baseline is not None:
-            _require_unchanged(resolved_repo, baseline)
+    outcomes = _run_members_concurrently(
+        members,
+        repo=resolved_repo,
+        workflow=workflow,
+        stage=stage,
+        context_mode=context_mode,
+        context_payload=context_payload,
+        task=task,
+        timeout_seconds=timeout_seconds,
+        deadline=deadline,
+    )
+    # 구성원 사이가 아니라 의회 전체의 앞뒤로 확인한다. 동시에 도는 자식들
+    # 중 하나라도 작업 트리를 건드렸으면 여기서 닫힌다.
+    if baseline is not None:
+        _require_unchanged(resolved_repo, baseline)
+    for member, (status, result) in zip(members, outcomes, strict=True):
         rendered: dict[str, object] = {
             "vendor": member["vendor"],
             "status": status,

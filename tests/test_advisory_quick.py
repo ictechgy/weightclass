@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import tempfile
+import threading
 import unittest
 from collections.abc import Mapping
 from pathlib import Path
@@ -521,7 +522,14 @@ class AdvisoryQuickRouteTests(unittest.TestCase):
         self.assertNotIn("winner", json.dumps(receipt))
         self.assertNotIn("private task", json.dumps(receipt))
 
-    def test_council_total_deadline_prevents_later_member_start(self) -> None:
+    def test_council_exhausted_total_deadline_starts_no_member(self) -> None:
+        # 구성원을 동시에 띄우므로 전체 데드라인은 더 이상 **뒤쪽** 구성원만
+        # 굶기지 않는다. 남은 시간이 이미 0 이하면 아무도 시작하지 않는다.
+        clock = iter((0.0,))
+
+        def monotonic() -> float:
+            return next(clock, 31.0)
+
         with tempfile.TemporaryDirectory() as directory:
             members = [
                 {
@@ -546,7 +554,7 @@ class AdvisoryQuickRouteTests(unittest.TestCase):
                 ) as run_member,
                 mock.patch(
                     "weightclass.advisory.advisory_quick.time.monotonic",
-                    side_effect=(0.0, 0.0, 31.0),
+                    side_effect=monotonic,
                 ),
             ):
                 receipt = advisory_quick.ask_council(
@@ -559,11 +567,112 @@ class AdvisoryQuickRouteTests(unittest.TestCase):
                     confirm_task_egress=True,
                     context_mode="task",
                 )
-        self.assertEqual(run_member.call_count, 1)
+        self.assertEqual(run_member.call_count, 0)
         rendered = receipt["members"]
         assert isinstance(rendered, list)
-        self.assertEqual(rendered[1]["status"], "ask_council_deadline")
+        self.assertEqual(
+            [member["status"] for member in rendered],
+            ["ask_council_deadline", "ask_council_deadline"],
+        )
         self.assertFalse(receipt["complete"])
+        self.assertFalse(receipt["task_egressed"])
+        budget = receipt["call_budget"]
+        assert isinstance(budget, dict)
+        self.assertEqual(budget["used"], 0)
+
+    def test_council_members_run_concurrently(self) -> None:
+        # 순차 실행이면 첫 구성원이 배리어에서 영원히 기다리므로 이 테스트는
+        # 타임아웃으로 실패한다. 통과한다는 것 자체가 동시 실행의 증거다.
+        started = threading.Barrier(3, timeout=30)
+        vendors = ("codex", "claude", "agy")
+
+        def blocking_member(
+            *_arguments: object, **_keywords: object
+        ) -> tuple[str, dict[str, object]]:
+            started.wait()
+            return "ok", _review_result()
+
+        with tempfile.TemporaryDirectory() as directory:
+            members = [
+                {
+                    "vendor": vendor,
+                    "command": ("/usr/bin/true",),
+                    "delivery": "stdin",
+                    "executable": "/usr/bin/true",
+                    "observation": object(),
+                }
+                for vendor in vendors
+            ]
+            with (
+                mock.patch(
+                    "weightclass.advisory.advisory_quick.sys.stdin",
+                    io.TextIOWrapper(io.BytesIO(b"private task"), encoding="utf-8"),
+                ),
+                mock.patch.object(advisory_quick, "_preflight_member", side_effect=members),
+                mock.patch.object(advisory_quick, "_run_member", side_effect=blocking_member),
+            ):
+                receipt = advisory_quick.ask_council(
+                    vendors=vendors,
+                    workflow="review",
+                    role="cheap",
+                    repo=Path(directory),
+                    timeout_seconds=30,
+                    total_timeout_seconds=30,
+                    confirm_task_egress=True,
+                    context_mode="task",
+                )
+        rendered = receipt["members"]
+        assert isinstance(rendered, list)
+        # 반환은 완료 순서가 아니라 언제나 선택한 입력 순서다.
+        self.assertEqual([member["vendor"] for member in rendered], list(vendors))
+        self.assertTrue(receipt["complete"])
+        self.assertEqual(receipt["successful_members"], 3)
+
+    def test_council_reraises_a_non_cli_member_failure_after_collecting_peers(self) -> None:
+        finished = threading.Event()
+
+        def failing_member(
+            member: Mapping[str, object], **_keywords: object
+        ) -> tuple[str, dict[str, object]]:
+            if member["vendor"] == "codex":
+                raise advisory_quick.QuickAdvisoryError("ask_invalid_input")
+            finished.set()
+            return "ok", _review_result()
+
+        with tempfile.TemporaryDirectory() as directory:
+            members = [
+                {
+                    "vendor": vendor,
+                    "command": ("/usr/bin/true",),
+                    "delivery": "stdin",
+                    "executable": "/usr/bin/true",
+                    "observation": object(),
+                }
+                for vendor in ("codex", "claude")
+            ]
+            with (
+                mock.patch(
+                    "weightclass.advisory.advisory_quick.sys.stdin",
+                    io.TextIOWrapper(io.BytesIO(b"private task"), encoding="utf-8"),
+                ),
+                mock.patch.object(advisory_quick, "_preflight_member", side_effect=members),
+                mock.patch.object(advisory_quick, "_run_member", side_effect=failing_member),
+            ):
+                with self.assertRaises(advisory_quick.QuickAdvisoryError) as raised:
+                    advisory_quick.ask_council(
+                        vendors=("codex", "claude"),
+                        workflow="review",
+                        role="cheap",
+                        repo=Path(directory),
+                        timeout_seconds=30,
+                        total_timeout_seconds=30,
+                        confirm_task_egress=True,
+                        context_mode="task",
+                    )
+        self.assertEqual(raised.exception.code, "ask_invalid_input")
+        # 오류가 나도 이미 시작된 피어는 끝까지 거둔다. 부모가 먼저 빠져나가면
+        # 자식이 부모 없이 남는다.
+        self.assertTrue(finished.is_set())
 
     def test_human_output_keeps_rejected_high_findings_visible(self) -> None:
         finding = {
