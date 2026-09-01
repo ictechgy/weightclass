@@ -4,6 +4,66 @@ _Last updated: 2026-09-01 KST by Codex_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
+## Advisory review follow-ups and operational hardening (released in 0.29.0)
+
+The complete core, one-shot, managed-campaign, and Skill/release follow-up is implemented,
+reviewed, published, and installed. Implementation PR #173 merged at `de2a270`; release PR #174
+and tag `v0.29.0` point to exact release commit `9fdc8ae`. Source-formula PR #175 merged at
+`11c3d0a`, and tap PR `ictechgy/homebrew-tap#38` merged at `9cf3ddd`.
+
+The released behavior:
+
+- Core schema-2 routes reject impossible fingerprint acknowledgements before task input, argv
+  tasks reject NUL before interactive confirmation, missing `os.ctermid` fails closed, legacy
+  escalation stops recommending unsupported rework accounting, and post-child usage failures
+  expose the bounded child return code.
+- One-shot local trivial skips run before vendor probes, consent, or snapshot. Task-only context
+  requests no repository access or snapshot and performs no local file/line triage. All one-shot
+  receipts are schema 2; human review retains rejected high/critical findings.
+- Councils use one bounded whole-council deadline, preserve unstarted deadline statuses, and use
+  exit 3 for a partial receipt. The ineffective public `ask --role` option was removed.
+- Managed verification protects the complete project `.weightclass` verifier zone. `doctor`
+  checks every selected workflow route and reports the copied verifier wrapper SHA/current-package
+  match. Dispatch acquires lanes before reading anonymous task stdin.
+- New campaign gates use population rule v2 and exclude infrastructure failures from every
+  attempted route; sealed v1 gates retain their original rule.
+- Agent Skill onboarding generation 17 moves detailed campaign operations into its reference,
+  reports customized targets under non-mutating `skill status` conflicts, and preserves exact
+  install/uninstall fail-closed behavior. The release workflow now independently derives the
+  prior tag's Skill hashes and rejects an incomplete historical upgrade ledger before build.
+
+Review and verification evidence:
+
+- Four scrubbed GLM packets covered core, one-shot, campaign, and Skill/release changes: 172,667,
+  94,999, 118,240, and 81,920 bytes with SHA-256 prefixes `6bdb523325f7`, `6fd9bf00607c`,
+  `517eda63f090`, and `326d77c9a47c`. Provider output was treated as untrusted; retained findings
+  were reproduced or locally validated before implementation.
+- Full local validation passed 1,573 tests with 35 skips, Ruff check and format-check over 248
+  files, strict mypy over 204 source files, compileall, and `git diff --check`. Extracted-sdist
+  isolation passed 1,566 tests with 80 skips.
+- Implementation, release, and source-formula PRs each passed all eight Linux Python 3.10-3.14,
+  macOS Python 3.10/3.14, lint, type, build, and distribution checks. The tap formula passed
+  targeted style, strict audit, source upgrade, exact binary smoke, and `brew test`. Whole-tap
+  style still has one unrelated pre-existing `relay.rb` component-order warning.
+
+Release and installation evidence:
+
+- Release run `33470349296` passed the new previous-Skill ledger gate, immutable Python 3.13
+  build, macOS boundaries, Python 3.10/3.14 candidate validation, protected PyPI publication, and
+  final GitHub Release creation.
+- PyPI exposes non-yanked wheel SHA-256
+  `e4a02e607677e468eb7fc0c76157f5c3fe7cb6c53a7a88193a480c84f2c86e0e` and canonical sdist
+  `https://files.pythonhosted.org/packages/2b/e1/06442d0e8e5d7b40b9987fc11b4d1ba88fc8b5c34bc7c78e00ba24eb43a4/weightclass-0.29.0.tar.gz`
+  with SHA-256 `954e2fca1e7501fe5e1a266a761544ea72c531a815554ce1a54bc645ef8adc02`.
+- GitHub Release `v0.29.0` is final, non-prerelease, and Latest. The user-level uv tool and exact
+  Homebrew binary both report `0.29.0`. Exact 0.28.0 Codex and Claude Skill bundles upgraded
+  safely to generation 17 and both now report `already_installed` without conflicts.
+
+No real project task or campaign was dispatched, no credential or vendor configuration was read,
+and no persistent campaign/usage record was changed. The next safe action is ordinary explicit
+use of `$advisory` or `wclass-advisory ask`; existing managed campaign roots should rerun their
+explicit `init` parameters after a package upgrade when `doctor` reports a stale wrapper.
+
 ## Guided advisory policy, council, and context follow-up (released in 0.28.0)
 
 The prioritized advisor-usability work is implemented, reviewed, published, and installed.
