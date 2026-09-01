@@ -935,6 +935,55 @@ def price_from_tokens(usage: Usage, rates: dict[str, float]) -> float | None:
 
 _TASK_PLACEHOLDER = "{{task}}"
 _TASK_FILE_PLACEHOLDER = "{{task_file}}"
+_STREAM_JSON_INPUT_FORMAT = "stream-json"
+
+
+def declares_stream_json_input(command: Sequence[str]) -> bool:
+    """이 라우트가 stdin 을 NDJSON 스트림으로 읽겠다고 선언했는가.
+
+    벤더 이름이 아니라 **선언된 형식**으로 판정한다. 실행 파일 이름으로 고르면
+    `agy-nightly` 같은 래퍼에서 봉투가 조용히 빠지고, 태스크가 CLI 가 이해하지
+    못하는 평문으로 나간다. 형식은 라우트가 직접 말하므로 되추정할 필요가 없다.
+
+    부분 문자열로 찾지 않는 이유는 `wants_structured_output` 과 같다: 다른
+    플래그의 값 안에 있는 같은 글자가 걸리면, 봉투가 필요 없는 라우트의 stdin
+    이 JSON 으로 감싸여 나간다.
+    """
+    for index, token in enumerate(command):
+        if token == f"--input-format={_STREAM_JSON_INPUT_FORMAT}":
+            return True
+        if (
+            token == "--input-format"
+            and command[index + 1 : index + 2]
+            and command[index + 1] == _STREAM_JSON_INPUT_FORMAT
+        ):
+            return True
+    return False
+
+
+def encode_stream_json_task(task: str) -> str:
+    """태스크 하나를 NDJSON 사용자 메시지 한 줄로 감싼다.
+
+    agy 는 `--print` 에 인자를 요구하므로 프롬프트를 argv 로만 받는 것으로
+    문서화돼 있었지만, `--input-format stream-json` 은 stdin 에서 한 줄짜리
+    NDJSON 메시지를 읽는다. 이 봉투를 쓰면 태스크가 로컬 프로세스 인자에
+    노출되지 않는다.
+
+    `ensure_ascii=False` 는 바이트만 줄이는 선택이 아니다. 태스크는 사용자가
+    쓴 텍스트이고, 자식은 UTF-8 로 읽는다. 줄바꿈이 `\\n` 으로 이스케이프되는
+    것은 JSON 문자열 규칙이므로 한 줄 보장이 깨지지 않는다.
+    """
+    return (
+        json.dumps(
+            {
+                "event": "user",
+                "message": {"role": "user", "content": [{"type": "text", "text": task}]},
+            },
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    )
 
 
 def _descriptor_above_stdio(descriptor: int) -> int:
@@ -962,6 +1011,15 @@ def _prepare_task_command(
     if embedded or len(slots) > 1 or (slots and slots[0][0] == 0):
         raise RunFailure("invalid task-delivery route")
     if not slots:
+        # 슬롯이 없으면 stdin 전달이다. 라우트가 NDJSON 입력을 선언했으면 그
+        # 형식으로 감싼다. 감싸는 일은 전달 직전 한 번만 하며, 검토 출력과
+        # 지문은 이미 감싸기 전 명령으로 계산되었으므로 태스크가 그 둘에
+        # 들어가지 않는다 — argv 치환과 같은 규칙이다.
+        if declares_stream_json_input(command):
+            try:
+                return list(command), encode_stream_json_task(task), None
+            except (TypeError, ValueError):
+                raise RunFailure("invalid task-delivery input") from None
         return list(command), task, None
 
     index, marker = slots[0]

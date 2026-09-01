@@ -16,7 +16,7 @@ import json
 import unicodedata
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 if TYPE_CHECKING or __package__:
     from . import bounded_io
@@ -34,6 +34,20 @@ ROLES = ("cheap", "advisor", "expensive")
 WORKFLOWS = ("implementation", "evidence")
 TASK_PLACEHOLDER = "{{task}}"
 TASK_FILE_PLACEHOLDER = "{{task_file}}"
+
+# agy 는 `--print` 에 프롬프트를 요구하므로 오랫동안 argv 전달로 문서화돼
+# 있었다. `--input-format stream-json` 은 프롬프트를 stdin 의 NDJSON 한 줄에서
+# 읽고, 같은 호출에서 argv 프롬프트가 함께 오면 CLI 가 스스로 거부한다
+# ("a prompt given on the command line would be ignored"). 그래서 이 조합에는
+# 태스크 자리가 아예 없다 — 노출을 우리가 지우는 것이 아니라 CLI 가 닫는다.
+# agy 1.1.23 에서 확인했다. `--output-format stream-json` 은 이 입력 형식이
+# 요구하는 짝이며, 마지막 `result` 이벤트가 기존 파서가 이미 읽는 봉투다.
+_AGY_STREAM_JSON_IO: Final = (
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+)
 
 
 def _closed_schema(properties: dict[str, object]) -> dict[str, object]:
@@ -457,8 +471,7 @@ def build_routes(
             "--sandbox",
             "--mode",
             "plan" if read_only else "accept-edits",
-            "--output-format",
-            "json",
+            *_AGY_STREAM_JSON_IO,
             "--model",
             models[role],
         )
@@ -469,7 +482,7 @@ def build_routes(
             command += ("--effort", efforts[role], "--disable-slash-commands")
         if evidence_executor:
             command += ("--json-schema", selected_schema)
-        return command + ("--print", TASK_PLACEHOLDER)
+        return command
 
     def grok(role: str, *, advisor: bool) -> tuple[str, ...]:
         evidence_executor = read_only_executors and not advisor
@@ -549,12 +562,9 @@ def build_default_evidence_route(vendor: str, workflow: str) -> tuple[str, ...]:
             "--sandbox",
             "--mode",
             "plan",
-            "--output-format",
-            "json",
+            *_AGY_STREAM_JSON_IO,
             "--json-schema",
             schema,
-            "--print",
-            TASK_PLACEHOLDER,
         )
     return (
         "grok",
