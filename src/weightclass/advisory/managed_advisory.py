@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import importlib
 import json
 import os
@@ -196,6 +197,12 @@ raise SystemExit(advisory_consult.main())
 class ManagedAdvisoryError(ValueError):
     """Value-free rejection of unsafe or inconsistent managed configuration."""
 
+    code: str
+
+    def __init__(self, code: str = "managed_configuration_invalid") -> None:
+        self.code = code
+        super().__init__()
+
 
 class SetupUnavailableError(ValueError):
     """The bounded managed setup lock remained owned by another process."""
@@ -302,6 +309,8 @@ class DoctorReceipt(TypedDict):
     workflows: list[str]
     availability: list[dict[str, object]]
     cli: list[dict[str, object]]
+    managed_verifier_sha256: str
+    managed_verifier_matches_package: bool
 
 
 class EvidenceMigrationReceipt(TypedDict):
@@ -339,8 +348,8 @@ class _ProviderProbe:
     executable_group: tuple[str, int, int] | tuple[str, str]
 
 
-def _fail() -> NoReturn:
-    raise ManagedAdvisoryError()
+def _fail(code: str = "managed_configuration_invalid") -> NoReturn:
+    raise ManagedAdvisoryError(code)
 
 
 def _nofollow() -> int:
@@ -1122,17 +1131,19 @@ def configured_vendors(state_root: Path) -> tuple[str, ...]:
         candidates = tuple(state_root.glob("*-profile.json"))
     except OSError as error:
         raise ManagedAdvisoryError() from error
-    if not candidates or len(candidates) > MAX_CONFIGURED_VENDORS:
-        _fail()
+    if not candidates:
+        _fail("managed_not_initialized")
+    if len(candidates) > MAX_CONFIGURED_VENDORS:
+        _fail("managed_vendor_limit_exceeded")
     vendors: list[str] = []
     for path in candidates:
         name = path.name.removesuffix("-profile.json")
         if not _VENDOR.fullmatch(name):
-            _fail()
+            _fail("managed_vendor_registry_invalid")
         _private_regular(path)
         profile = _profile_from_path(path)
         if profile.get("vendor") != name:
-            _fail()
+            _fail("managed_vendor_registry_invalid")
         vendors.append(name)
     legacy_order = [vendor for vendor in BUILTIN_VENDORS if vendor in vendors]
     legacy_order.extend(sorted(set(vendors) - set(legacy_order)))
@@ -1187,17 +1198,19 @@ def _route_capabilities(
     routes: advisory_routes.AdvisoryRoutes,
     *,
     required_roles: Sequence[str] | None = None,
+    cache: dict[tuple[str, str], advisory_preflight.CapabilityResult] | None = None,
 ) -> tuple[tuple[str, advisory_preflight.CapabilityResult], ...]:
     roles = _validated_required_roles(required_roles)
-    cache: dict[str, advisory_preflight.CapabilityResult] = {}
+    capability_cache = {} if cache is None else cache
     checked: list[tuple[str, advisory_preflight.CapabilityResult]] = []
     for role in roles:
         command = getattr(routes, role)
         executable = command[0]
-        result = cache.get(executable)
+        key = (vendor, executable)
+        result = capability_cache.get(key)
         if result is None:
             result = advisory_preflight.check_local_capability(vendor, executable)
-            cache[executable] = result
+            capability_cache[key] = result
         checked.append((role, result))
     return tuple(checked)
 
@@ -1343,12 +1356,10 @@ def doctor(state_root: Path, *, vendors: Sequence[str], workflows: Sequence[str]
     availability: list[dict[str, object]] = []
     cli: list[dict[str, object]] = []
     dispatch_ready = True
+    capability_cache: dict[tuple[str, str], advisory_preflight.CapabilityResult] = {}
     for vendor in vendors:
-        first_routes: advisory_routes.AdvisoryRoutes | None = None
         for workflow in workflows:
             selected, _, routes = _configuration(state_root, vendor, workflow)
-            if first_routes is None:
-                first_routes = routes
             free, busy = advisory_orchestration.campaign_lane_availability(
                 advisory_orchestration.LaneRequest(
                     vendor,
@@ -1365,12 +1376,21 @@ def doctor(state_root: Path, *, vendors: Sequence[str], workflows: Sequence[str]
                     "busy": busy,
                 }
             )
-        assert first_routes is not None
-        for role, result in _route_capabilities(vendor, first_routes):
-            value = result.receipt()
-            value["role"] = role
-            cli.append(value)
-            dispatch_ready = dispatch_ready and result.ready
+            for role, result in _route_capabilities(
+                vendor,
+                routes,
+                cache=capability_cache,
+            ):
+                value = result.receipt()
+                value["workflow"] = workflow
+                value["role"] = role
+                cli.append(value)
+                dispatch_ready = dispatch_ready and result.ready
+    verifier = state_root / "verify-project.py"
+    verifier_payload = _regular_bytes(verifier, 1_048_576)
+    package_verifier_payload = _regular_bytes(Path(managed_verify.__file__), 1_048_576)
+    verifier_matches_package = verifier_payload == package_verifier_payload
+    dispatch_ready = dispatch_ready and verifier_matches_package
     return {
         "schema_version": SCHEMA_VERSION,
         "ready": dispatch_ready,
@@ -1381,6 +1401,8 @@ def doctor(state_root: Path, *, vendors: Sequence[str], workflows: Sequence[str]
         "workflows": list(workflows),
         "availability": availability,
         "cli": cli,
+        "managed_verifier_sha256": hashlib.sha256(verifier_payload).hexdigest(),
+        "managed_verifier_matches_package": verifier_matches_package,
     }
 
 
@@ -1546,6 +1568,12 @@ def _job(
     ordinal: int,
     verifier: Path,
 ) -> advisory_parallel.AdvisoryJob:
+    if task_file is not None:
+        task_arguments = ["--task-file", str(task_file)]
+    else:
+        if task_bytes is None:
+            raise ValueError
+        task_arguments = ["--task-stdin"]
     runner_arguments = [
         "--workflow",
         workflow,
@@ -1553,6 +1581,7 @@ def _job(
         vendor,
         "--repo",
         str(repo),
+        *task_arguments,
         "--route-profile",
         str(selected.profile),
         "--confirm-task-egress",
@@ -1568,12 +1597,6 @@ def _job(
         "--out-dir",
         str(results),
     ]
-    if task_file is not None:
-        runner_arguments[6:6] = ["--task-file", str(task_file)]
-    else:
-        if task_bytes is None:
-            raise ValueError
-        runner_arguments.insert(6, "--task-stdin")
     if manifest["arm"] == "shape_a_b":
         runner_arguments.insert(runner_arguments.index("--advise-on-failure"), "--advise-first")
     if manifest["cost_basis"] == "price_table":
@@ -1929,10 +1952,7 @@ def dispatch(
         _preflight_task_file(task_file)
     verifier = state_root / "verify-project.py"
     _private_regular(verifier, executable=True)
-    if task_file is not None:
-        preflight_project_verifier(repo, workflow, verifier)
-    else:
-        preflight_project_verifier(repo, workflow, verifier)
+    preflight_project_verifier(repo, workflow, verifier)
     requests = tuple(
         advisory_orchestration.LaneRequest(
             vendor,
@@ -1942,9 +1962,9 @@ def dispatch(
         )
         for vendor in vendors
     )
-    task_bytes = _read_task_stream(task_stream) if task_stream is not None else None
     try:
         with advisory_orchestration.acquire_campaign_lanes(requests) as leases:
+            task_bytes = _read_task_stream(task_stream) if task_stream is not None else None
             ordinals = {
                 vendor: _next_ordinal(configurations[vendor][1], lease.results_dir)
                 for vendor, lease in zip(vendors, leases, strict=True)
@@ -2264,9 +2284,29 @@ def _campaign_gate_outcomes(
 
 
 def _campaign_gate_population(
-    records: Sequence[Mapping[str, object]], metric: str
+    records: Sequence[Mapping[str, object]],
+    metric: str,
+    population_rule: str = advisory_campaign.CAMPAIGN_GATE_POPULATION_RULE,
 ) -> tuple[list[dict[str, object]], int, int, str]:
     """Return outcomes plus usable and infrastructure-excluded denominators."""
+    if population_rule not in advisory_campaign.CAMPAIGN_GATE_POPULATION_RULES:
+        _fail()
+
+    def infrastructure_failure(record: Mapping[str, object]) -> bool:
+        cheap = record.get("cheap")
+        if isinstance(cheap, Mapping) and cheap.get("failure_kind") == "infrastructure":
+            return True
+        if population_rule == advisory_campaign.CAMPAIGN_GATE_POPULATION_RULE_V1:
+            return False
+        advice = record.get("advice_failure")
+        if isinstance(advice, Mapping) and advice.get("route_failed") is True:
+            return True
+        for name in ("retry", "expensive"):
+            attempt = record.get(name)
+            if isinstance(attempt, Mapping) and attempt.get("failure_kind") == "infrastructure":
+                return True
+        return False
+
     outcomes: list[dict[str, object]] = []
     usable_task_records = 0
     excluded_infrastructure = 0
@@ -2274,7 +2314,7 @@ def _campaign_gate_population(
         cheap = record.get("cheap")
         if not isinstance(cheap, Mapping):
             _fail()
-        if cheap.get("failure_kind") == "infrastructure":
+        if infrastructure_failure(record):
             excluded_infrastructure += 1
             continue
         usable_task_records += 1
@@ -2296,7 +2336,7 @@ def _campaign_gate_population(
         outcomes,
         usable_task_records,
         excluded_infrastructure,
-        advisory_campaign.CAMPAIGN_GATE_POPULATION_RULE,
+        population_rule,
     )
 
 
@@ -2369,7 +2409,15 @@ def campaign_gate(
             usable_task_records,
             excluded_infrastructure,
             applied_population_rule,
-        ) = _campaign_gate_population(records, metric)
+        ) = _campaign_gate_population(
+            records,
+            metric,
+            (
+                normalized_gate["population_rule"]
+                if normalized_gate is not None
+                else advisory_campaign.CAMPAIGN_GATE_POPULATION_RULE
+            ),
+        )
         if gate_preregistered and (
             normalized_gate is None or applied_population_rule != normalized_gate["population_rule"]
         ):

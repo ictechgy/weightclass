@@ -147,7 +147,7 @@ class AdvisoryCampaignContractTests(unittest.TestCase):
                 "target_rate_bps": 7_500,
                 "alpha_bps": 500,
                 "method": "simultaneous_hoeffding_union_bound_v1",
-                "population_rule": "metric_eligible_non_infrastructure_v1",
+                "population_rule": "metric_eligible_non_infrastructure_v2",
             },
         )
         self.assertNotEqual(gated["campaign_fingerprint"], changed["campaign_fingerprint"])

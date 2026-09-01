@@ -4099,7 +4099,8 @@ class EscalationSuggestionTests(unittest.TestCase):
         self.assertTrue(escalation["route_fingerprint"].startswith("sha256:"))
         # 승급 실행은 이미 센 태스크의 재시도다. 이 플래그를 빠뜨리면 기준선이
         # 부풀어 실패한 저비용 라우팅이 절감처럼 보인다.
-        self.assertIs(escalation["record_as_rework"], True)
+        self.assertIsNone(escalation["record_as_rework"])
+        self.assertIs(escalation["usage_rework_supported"], False)
         # 티어가 실패의 원인이라고 주장하지 않는다. 라우터는 자식 출력을 읽지
         # 않으므로 원인을 알 방법이 없다.
         self.assertIs(escalation["failure_cause_diagnosed"], False)

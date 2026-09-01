@@ -43,8 +43,10 @@ To preregister the statistical gate for a new population, first initialize the
 ordinary empty campaigns, then migrate them before any dispatch. All three gate
 flags are required together. They are sealed into a separate schema-3
 generation together with the versioned simultaneous-Hoeffding method and the
-metric-eligible, non-infrastructure population rule. They cannot be changed by
-a later analysis command. One managed state root accepts only one primary
+metric-eligible, non-infrastructure population rule. New v2 populations exclude
+infrastructure failures from every attempted route; historical v1 gates retain
+their sealed cheap-stage-only rule. Gate parameters cannot be changed by a
+later analysis command. One managed state root accepts only one primary
 vendor/workflow population, preventing an unadjusted pick among several gates:
 
 ```sh
@@ -92,12 +94,16 @@ It must return `42` for the documented task-free baseline probe, `0` only when
 the candidate meets the fixed acceptance criteria, and another code for an
 infrastructure failure. Managed state contains a package verifier that loads
 the workflow verifier from the clean repository's committed `HEAD`, so a model
-cannot weaken acceptance by editing the working copy.
+cannot weaken acceptance by editing the working copy. The complete
+`.weightclass` directory is protected: place every trusted verifier helper and
+fixture there. Dependencies outside that zone remain candidate-controlled.
 
 Start with `wclass-advisory campaign verifier scaffold --workflow WORKFLOW`.
 The generated verifier rejects every candidate and lists workflow-specific
 criteria; implement the project-specific checks, commit it, then run
 `wclass-advisory campaign verifier check --workflow WORKFLOW`.
+`campaign check` evaluates every requested workflow route and reports the
+managed wrapper SHA plus whether it matches the installed package.
 
 ## Check, review, and dispatch
 

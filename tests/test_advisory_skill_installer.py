@@ -48,9 +48,9 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
         for workflow in ("implementation", "review", "research", "diagnosis", "design"):
             self.assertIn(f"`{workflow}`", modes)
         self.assertIn("Brainstorming is not a production workflow", modes)
-        self.assertEqual(manifest, {"managed_onboarding": 16, "schema_version": 1})
-        self.assertIn("managed_runner_version_changed", skill)
-        self.assertIn("managed_setup_busy", skill)
+        self.assertEqual(manifest, {"managed_onboarding": 17, "schema_version": 1})
+        self.assertIn("managed_runner_version_changed", skill + modes)
+        self.assertIn("managed_setup_busy", skill + modes)
 
     def test_install_skill_is_the_documented_vendor_path_exception(self) -> None:
         agent_guide_path = ROOT / "AGENTS.md"
@@ -114,6 +114,19 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
                 ),
             },
         )
+        self.assertEqual(
+            installer.RELEASE_0280_BUNDLE_FILE_SHA256,
+            {
+                "SKILL.md": "5addd08391cfa6aeab1d23e1026ccf1e27a2cb53628bd703ee564df6c019f277",
+                "manifest.json": "da1da5dcc1a0dd3419bcb719833904e12b142a78b7cce655e168ace3ef9895d5",
+                "agents/openai.yaml": (
+                    "810aaf67c1f4dfa324f17691c618d5f4945f50c688d238c14eaa5fddea3f7644"
+                ),
+                "references/modes.md": (
+                    "2a9ed2d32048b60cbfb8ccdc25e32c0bf0c3b3358c836d2c871a4370eabfd291"
+                ),
+            },
+        )
         ledger_names = (
             "LEGACY_FILE_SHA256",
             "PREVIOUS_BUNDLE_FILE_SHA256",
@@ -130,6 +143,7 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
             "RELEASE_0190_BUNDLE_FILE_SHA256",
             "RELEASE_0260_BUNDLE_FILE_SHA256",
             "RELEASE_0271_BUNDLE_FILE_SHA256",
+            "RELEASE_0280_BUNDLE_FILE_SHA256",
         )
         for name in ledger_names:
             with self.subTest(name=name):
@@ -283,6 +297,20 @@ class AdvisorySkillInstallerTests(unittest.TestCase):
                 )
 
             self.assertFalse((home / ".agents" / "skills" / "advisory").exists())
+
+    def test_status_reports_customized_target_without_failing(self) -> None:
+        installer = load_installer()
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            conflict = home / ".claude" / "skills" / "advisory"
+            conflict.mkdir(parents=True)
+            (conflict / "SKILL.md").write_text("customized\n", encoding="utf-8")
+
+            receipt = installer.skill_status(BUNDLE, home=home, target="both")
+
+        self.assertEqual(receipt["conflicts"], ["claude"])
+        self.assertEqual(receipt["planned"], ["codex"])
+        self.assertTrue(receipt["dry_run"])
 
     def test_explicit_upgrade_replaces_only_a_recognized_legacy_bundle(self) -> None:
         installer = load_installer()

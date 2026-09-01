@@ -964,7 +964,11 @@ class UsageAggregationTests(unittest.TestCase):
                 self.assertEqual(status, 9)
                 self.assertEqual(
                     json.loads(errors.getvalue()),
-                    {"child_completed": True, "error": "usage_unavailable"},
+                    {
+                        "child_completed": True,
+                        "child_returncode": 0,
+                        "error": "usage_unavailable",
+                    },
                 )
                 self.assertNotIn("PRIVATE", errors.getvalue())
                 self.assertEqual(stream.read_calls, 1)

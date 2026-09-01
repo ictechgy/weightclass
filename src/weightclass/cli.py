@@ -718,9 +718,11 @@ def _print_escalation_suggestion(
         "route": route.route_id,
         "vendor": route.vendor,
         "route_fingerprint": _legacy_route_fingerprint(route, policy, observed),
-        # 승급 실행은 이미 센 태스크의 재시도다. 이 플래그를 빠뜨리면 기준선이
-        # 부풀어 실패한 저비용 라우팅이 절감처럼 보인다.
-        "record_as_rework": True,
+        # Legacy/schema-1 runs cannot write the schema-3 aggregate usage store.
+        # Keep this field explicit so callers do not translate the suggestion
+        # into an unsupported --usage-rework flag.
+        "record_as_rework": None,
+        "usage_rework_supported": False,
         "failure_cause_diagnosed": False,
     }
     if uses_argv_task_delivery(route.command):
@@ -1581,14 +1583,14 @@ def _delegation_v2_run(
     except DelegationRuntimeUnavailableError:
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
+    if acknowledged_fingerprint != compiled.route_fingerprint:
+        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+        return 6
     try:
         task = read_validated_task_v2(getattr(sys.stdin, "buffer", sys.stdin))
     except V2ValidationError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
-    if acknowledged_fingerprint != compiled.route_fingerprint:
-        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
-        return 6
     try:
         first_observation = observe_executable(compiled.executable)
     except (V2ValidationError, OSError, ValueError):
@@ -2148,7 +2150,10 @@ def _confirm_legacy_route_on_console(
     fingerprint = _legacy_route_fingerprint(route, policy, executable_observation)
     delivery = "argv" if uses_argv_task_delivery(route.command) else "stdin"
     try:
-        with open(os.ctermid(), "r+", encoding="utf-8", buffering=1) as console:
+        ctermid = getattr(os, "ctermid", None)
+        if not callable(ctermid):
+            raise InvalidInputError()
+        with open(ctermid(), "r+", encoding="utf-8", buffering=1) as console:
             print("Selected route", file=console)
             print(f"  Vendor: {route.vendor}", file=console)
             print(f"  Tier: {tier}", file=console)
@@ -2174,7 +2179,10 @@ def _confirm_native_descriptor_on_console(rendered: str) -> bool:
     try:
         payload = json.loads(rendered)
         review = json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True)
-        with open(os.ctermid(), "r+", encoding="utf-8", buffering=1) as console:
+        ctermid = getattr(os, "ctermid", None)
+        if not callable(ctermid):
+            raise InvalidInputError()
+        with open(ctermid(), "r+", encoding="utf-8", buffering=1) as console:
             print("Selected native route", file=console)
             print(review, file=console)
             console.write("Run this route? [y/N] ")
@@ -2332,6 +2340,8 @@ def run_from_standard_input(
         ):
             print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
             return 6
+        if uses_argv_task_delivery(route.command) and "\x00" in task:
+            raise InvalidTaskError()
         if interactive_review and not _confirm_legacy_route_on_console(
             route,
             selected_tier,
@@ -2352,8 +2362,6 @@ def run_from_standard_input(
         if uses_argv_task_delivery(route.command):
             # execve 는 NUL 을 실을 수 없다. stdin 전달은 실을 수 있으므로 이
             # 거부는 argv 전달에만 적용한다.
-            if "\x00" in task:
-                raise InvalidTaskError()
             argv = substitute_task(route.command, task)
             child_input = b""
         if executable_observation is not None:
@@ -2478,21 +2486,42 @@ def _native_v2_run(
     except DelegationRuntimeUnavailableError:
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
+    precompiled: dict[Tier, CompiledExecutionV2] = {}
+    if acknowledged_fingerprint is not None:
+        for candidate_tier in cast(tuple[Tier, ...], ("low", "standard", "high")):
+            try:
+                candidate = compile_native_v2(
+                    policy,
+                    source_vendor=validated_vendor,
+                    source_profile_id=validated_profile,
+                    tier=candidate_tier,
+                )
+            except V2ValidationError:
+                continue
+            precompiled[candidate_tier] = candidate
+        if not any(
+            candidate.route_fingerprint == acknowledged_fingerprint
+            for candidate in precompiled.values()
+        ):
+            print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
+            return 6
     try:
         task, tier = _v2_task_and_tier(explicit_tier)
     except V2ValidationError:
         print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
         return 2
-    try:
-        compiled = compile_native_v2(
-            policy,
-            source_vendor=validated_vendor,
-            source_profile_id=validated_profile,
-            tier=tier,
-        )
-    except V2ValidationError:
-        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
-        return 3
+    compiled = precompiled.get(tier)
+    if compiled is None:
+        try:
+            compiled = compile_native_v2(
+                policy,
+                source_vendor=validated_vendor,
+                source_profile_id=validated_profile,
+                tier=tier,
+            )
+        except V2ValidationError:
+            print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+            return 3
     if (
         acknowledged_fingerprint is not None
         and acknowledged_fingerprint != compiled.route_fingerprint
@@ -2640,7 +2669,13 @@ def _execute_native_v3(
             )
         except (OSError, UsageAggregationError):
             print(
-                json.dumps({"child_completed": True, "error": "usage_unavailable"}),
+                json.dumps(
+                    {
+                        "child_completed": True,
+                        "child_returncode": return_code,
+                        "error": "usage_unavailable",
+                    }
+                ),
                 file=sys.stderr,
             )
             return USAGE_UNAVAILABLE_EXIT_CODE
@@ -2842,7 +2877,10 @@ def _main_json(
     if arguments.command == "select":
         _load_native_family()
         try:
-            with open(os.ctermid(), "r+", encoding="utf-8", buffering=1) as console:
+            ctermid = getattr(os, "ctermid", None)
+            if not callable(ctermid):
+                raise InteractiveSelectorError()
+            with open(ctermid(), "r+", encoding="utf-8", buffering=1) as console:
                 return run_interactive_selector(
                     console,
                     console,

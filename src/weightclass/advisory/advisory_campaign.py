@@ -39,7 +39,11 @@ PREREGISTERED_CAMPAIGN_SCHEMA_VERSION = 3
 CAMPAIGN_WORKFLOWS = frozenset({"implementation", "review", "research", "diagnosis", "design"})
 CAMPAIGN_GATE_METRICS = frozenset({"cheap_acceptance", "advised_rescue", "final_acceptance"})
 CAMPAIGN_GATE_METHOD = "simultaneous_hoeffding_union_bound_v1"
-CAMPAIGN_GATE_POPULATION_RULE = "metric_eligible_non_infrastructure_v1"
+CAMPAIGN_GATE_POPULATION_RULE_V1 = "metric_eligible_non_infrastructure_v1"
+CAMPAIGN_GATE_POPULATION_RULE = "metric_eligible_non_infrastructure_v2"
+CAMPAIGN_GATE_POPULATION_RULES = frozenset(
+    {CAMPAIGN_GATE_POPULATION_RULE_V1, CAMPAIGN_GATE_POPULATION_RULE}
+)
 MINIMUM_ADVISED_FAILURES = 12
 MAX_CAMPAIGN_BYTES = 16_384
 MAX_VERIFY_BYTES = 1_048_576
@@ -413,14 +417,14 @@ def _gate(value: object, *, allow_contract_defaults: bool = False) -> CampaignGa
     alpha_bps = _integer(value["alpha_bps"], 1, 5_000)
     method = value.get("method", CAMPAIGN_GATE_METHOD)
     population_rule = value.get("population_rule", CAMPAIGN_GATE_POPULATION_RULE)
-    if method != CAMPAIGN_GATE_METHOD or population_rule != CAMPAIGN_GATE_POPULATION_RULE:
+    if method != CAMPAIGN_GATE_METHOD or population_rule not in CAMPAIGN_GATE_POPULATION_RULES:
         raise CampaignError()
     return {
         "metric": metric,
         "target_rate_bps": target_rate_bps,
         "alpha_bps": alpha_bps,
         "method": CAMPAIGN_GATE_METHOD,
-        "population_rule": CAMPAIGN_GATE_POPULATION_RULE,
+        "population_rule": population_rule,
     }
 
 

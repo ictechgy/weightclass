@@ -86,7 +86,9 @@ Capability checking starts two task-free bounded local vendor processes for
 vendor process.
 `--stage` selects `manual`, `plan`, `pivot`, or `final`; optional
 `--auto-skip-trivial` avoids plan/final calls for tasks the local classifier
-conservatively marks low. `--context` selects task-only, a bounded tracked diff,
+conservatively marks low. The skip decision runs locally before vendor probes,
+consent, or snapshot; non-skipped calls retain consent-first egress. `--context`
+selects task-only, a bounded tracked diff,
 explicit UTF-8 files, or the existing read-only repository view. Review mode
 adds local `file:line` validation plus invocation-only semantic grouping without
 changing or persisting the model result.
@@ -102,16 +104,23 @@ The local triage labels prove only that a bounded `file:line` exists and whether
 the model cited it with supporting text; they are not semantic correctness
 verification. File bytes are bound to the pre-execution snapshot, duplicate
 mute requires the same normalized title and full `file:line` set, and all
-original findings remain in JSON.
+original findings remain in JSON. Human output still shows rejected high and
+critical findings for manual review and calls structural results "locally
+checkable," not semantically supported.
 
 An explicit `--council codex,claude` runs two to four named built-in vendors in
 fresh independent processes. One output is never fed to another. The receipt
 preserves every result, descriptive consensus and dissent, and partial failures;
 it never ranks a winner or claims quality verification. Preview reads neither
 task stdin nor repository content and starts no vendor process.
-Councils run sequentially in requested vendor order; a partial receipt exits 2,
-while a complete council exits 0. Any detected target-worktree mutation rejects
-the entire invocation.
+Councils run sequentially in requested vendor order under one whole-council
+deadline (`--total-timeout-seconds`, defaulting to one per-child timeout). A
+partial receipt exits 3, while a complete council exits 0. Any detected
+target-worktree mutation rejects the entire invocation.
+Task-only context requests no repository access or snapshot and reports
+`worktree_checked:false`; local file:line triage is unavailable in that mode.
+All one-shot receipts use schema version 2 and distinguish requested repository
+access from verified enforcement.
 This is not host filesystem confinement; use an external container or jail for
 a hostile CLI or repository.
 
@@ -175,8 +184,9 @@ core routing.
 
 `doctor` locally invokes installed-CLI `--help`/`--version` with a minimal
 environment and temporary working directory, sends no task bytes or provider prompt,
-and reports
-`campaign_ready` separately from `dispatch_ready`. To test authentication and
+checks every requested workflow route, and reports `campaign_ready` separately
+from `dispatch_ready`. It also reports the managed verifier-wrapper SHA and
+whether it matches the installed package. To test authentication and
 all three configured model roles without sending a project task, explicitly run
 `wclass-advisory provider-check --vendor codex --workflow review
 --confirm-provider-egress`. That command may consume quota or incur cost, never
@@ -218,6 +228,10 @@ dispatch after the install completes. `init` and migration setup locks also
 have a bounded wait and report `managed_setup_busy` instead of hanging.
 Upgrades that change sealed provider argv use preserving, explicit migrations:
 `migrate-evidence` for Claude/Grok evidence and `migrate-routes` for agy.
+The complete `.weightclass` directory is protected during candidate
+verification; keep trusted verifier helpers and fixtures there. Gate population
+rule v2 excludes infrastructure failures from every attempted route, while
+historical sealed v1 gates retain their original rule.
 
 Read-only evidence workspaces use a bounded parent-owned, no-follow snapshot
 without trusting the vendor child's `.git`. When execution already failed, the
@@ -231,7 +245,7 @@ scaffolding, and nested `.git` under explicit entry/size/depth bounds. Extended
 attributes remain outside the existing Git-visible contract, and true host
 filesystem isolation still requires an external sandbox.
 
-The optional packaged advisory skill currently uses managed onboarding 16.
+The optional packaged advisory skill currently uses managed onboarding 17.
 Previewing never overwrites an installed skill; `--upgrade` replaces only an
 exact package-owned older bundle and rejects customized, extra-file, or
 symlinked destinations:
@@ -411,7 +425,8 @@ printf '%s' "$task" | wclass run --source-vendor codex --tier low \
 # {"error": "executor_failed", "executor_exit_code": 1}
 # {"escalation": {"from_tier": "low", "to_tier": "standard", "route": "codex-standard",
 #                 "vendor": "codex", "route_fingerprint": "sha256:...",
-#                 "record_as_rework": true, "failure_cause_diagnosed": false}}
+#                 "record_as_rework": null, "usage_rework_supported": false,
+#                 "failure_cause_diagnosed": false}}
 ```
 
 The fingerprint is the one `wclass route --tier standard` renders, so it can be
@@ -434,10 +449,9 @@ Two fields exist to stop the output being read as more than it is:
   child's output and cannot tell a task that needed more effort from one that was
   impossible, misconfigured, or broken for unrelated reasons. A non-zero exit is
   not evidence that the tier was wrong.
-- `record_as_rework` is `true` because the escalated run is a second attempt at a
-  task already counted. Pass `--usage-rework` to it. Omitting that inflates both
-  the run count and the counterfactual baseline, which is exactly how a failed
-  cheap route comes to look like a saving.
+- `record_as_rework` is `null` and `usage_rework_supported` is `false`. Legacy
+  escalation suggestions do not write the schema-3 usage store, so translating
+  this receipt into an unsupported `--usage-rework` flag would be misleading.
 
 Nothing is suggested when the router itself refused — invalid input, an
 unsupported route, a fingerprint mismatch, or an executor that never started.
@@ -555,7 +569,8 @@ identity, so both are explicitly self-reported.
 If validation fails before execution, code `9` emits
 `{"error": "usage_unavailable"}` and starts no child. If the child completed but
 the atomic aggregate update failed, code `9` additionally emits
-`"child_completed": true`; callers must not automatically retry that task.
+`"child_completed": true` and its bounded numeric `child_returncode`; callers
+must not automatically retry that task.
 Store JSON uses the same duplicate-key rejection as policy inputs, and bounded
 integer-conversion or recursion failures are normalized to this value-free
 diagnostic rather than escaping as a traceback.

@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
@@ -48,6 +49,8 @@ VENDORS = ("codex", "claude", "agy", "grok")
 ROLES = ("cheap", "expensive")
 STAGES = ("manual", "plan", "pivot", "final")
 MAX_COUNCIL_MEMBERS = 4
+RECEIPT_SCHEMA_VERSION = 2
+PARTIAL_COUNCIL_EXIT_CODE = 3
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -76,7 +79,9 @@ _NEXT_ACTIONS = {
     "ask_context_invalid": "Choose task, diff, files, or repo; --file is only for files context.",
     "ask_context_unsupported": "Use bounded UTF-8 files or a supported tracked Git diff.",
     "ask_council_invalid": "Choose two to four distinct supported vendors.",
+    "ask_council_deadline": "Increase the council deadline or reduce its members and scope.",
     "ask_executor_failed": "Check the selected vendor CLI locally and retry.",
+    "ask_executor_timeout": "Increase the bounded timeout or reduce the advisory scope.",
     "ask_result_invalid": "Retry once; the vendor did not return the required closed JSON result.",
 }
 
@@ -263,17 +268,31 @@ def _render_human(receipt: Mapping[str, object]) -> None:
     triage = receipt.get("triage")
     result = receipt["result"]
     hidden = 0
+    rejected_urgent = 0
     if isinstance(triage, Mapping) and isinstance(result, Mapping):
         annotations = triage.get("annotations")
         findings = result.get("findings")
         if isinstance(annotations, list) and isinstance(findings, list):
-            visible_indices = {
-                annotation.get("finding_index")
-                for annotation in annotations
-                if isinstance(annotation, Mapping)
-                and annotation.get("triage") in {"confirmed", "debatable"}
-                and not annotation.get("duplicate_muted")
-            }
+            visible_indices: set[int] = set()
+            for annotation in annotations:
+                if not isinstance(annotation, Mapping):
+                    continue
+                index = annotation.get("finding_index")
+                if isinstance(index, bool) or not isinstance(index, int):
+                    continue
+                finding = findings[index] if 0 <= index < len(findings) else None
+                severity = finding.get("severity") if isinstance(finding, Mapping) else None
+                locally_checkable = annotation.get("triage") in {
+                    "confirmed",
+                    "debatable",
+                } and not annotation.get("duplicate_muted")
+                urgent_rejected = annotation.get("triage") == "rejected" and severity in {
+                    "critical",
+                    "high",
+                }
+                if locally_checkable or urgent_rejected:
+                    visible_indices.add(index)
+                rejected_urgent += int(urgent_rejected)
             visible = [
                 finding for index, finding in enumerate(findings) if index in visible_indices
             ]
@@ -294,7 +313,11 @@ def _render_human(receipt: Mapping[str, object]) -> None:
             else 0
         )
         print()
-        print(f"Locally supported distinct findings: {supported}")
+        print(f"Locally checkable distinct findings: {supported}")
+        if rejected_urgent:
+            print(
+                f"Rejected high/critical findings still shown for manual review: {rejected_urgent}"
+            )
         if hidden:
             print(f"Locally rejected or duplicate findings hidden: {hidden} (use --json for all)")
 
@@ -418,7 +441,9 @@ def _run_member(
         raise
     except (OSError, ValueError, speculative_run.RunFailure):
         return "ask_executor_failed", {}
-    if child["timed_out"] or child["exit_code"] != 0:
+    if child["timed_out"]:
+        return "ask_executor_timeout", {}
+    if child["exit_code"] != 0:
         return "ask_executor_failed", {}
     try:
         _raw_result, result = speculative_run.extract_evidence_result(
@@ -440,11 +465,11 @@ def _single_receipt(
     delivery: str,
     result: Mapping[str, object],
     repo: Path,
-    snapshot: readonly_snapshot.TreeSnapshot,
+    snapshot: readonly_snapshot.TreeSnapshot | None,
     triage: bool,
 ) -> dict[str, object]:
     receipt: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": RECEIPT_SCHEMA_VERSION,
         "event": "advisory_ask",
         "vendor": vendor,
         "workflow": workflow,
@@ -456,9 +481,15 @@ def _single_receipt(
         "task_delivery": delivery,
         "context_mode": context_mode,
         "context_file_count": context_file_count,
-        "repository_access": "read_only" if context_mode == "repo" else "prompt_context_only",
+        "requested_repository_access": (
+            "none"
+            if context_mode == "task"
+            else ("read_only" if context_mode == "repo" else "prompt_context_only")
+        ),
+        "repository_access_verified": False,
         "host_filesystem_confined": False,
-        "worktree_unchanged": True,
+        "worktree_checked": snapshot is not None,
+        "worktree_unchanged": True if snapshot is not None else None,
         "git_metadata_checked": False,
         "sample_recorded": False,
         "persistent_state_written": False,
@@ -470,8 +501,10 @@ def _single_receipt(
         "call_budget": {"scope": "invocation", "maximum_task_bearing_children": 1, "used": 1},
         "result": dict(result),
     }
-    if workflow == "review" and triage:
+    if workflow == "review" and triage and snapshot is not None:
         receipt["triage"] = advisory_triage.triage_review(result, repo, snapshot)
+    elif workflow == "review" and triage:
+        receipt["triage_skipped_reason"] = "task_context_has_no_repository_snapshot"
     return receipt
 
 
@@ -500,10 +533,36 @@ def ask(
     )
     if vendor not in VENDORS:
         raise QuickAdvisoryError("ask_invalid_input")
+    if auto_skip_trivial and stage not in {"plan", "final"}:
+        raise QuickAdvisoryError("ask_invalid_input")
     _preflight_trivial_classifier(auto_skip_trivial)
+    resolved_repo = _resolve_repository(repo)
+    task: str | None = None
+    if auto_skip_trivial:
+        task = _read_task_from_standard_input()
+        if _should_skip(task, stage=stage, enabled=True):
+            return {
+                "schema_version": RECEIPT_SCHEMA_VERSION,
+                "event": "advisory_skipped",
+                "vendor": vendor,
+                "workflow": workflow,
+                "stage": stage,
+                "reason": "local_trivial_task",
+                "classification_policy": "weightclass_local",
+                "task_egress_confirmed": False,
+                "task_egressed": False,
+                "sample_recorded": False,
+                "persistent_state_written": False,
+                "worktree_checked": False,
+                "worktree_unchanged": None,
+                "call_budget": {
+                    "scope": "invocation",
+                    "maximum_task_bearing_children": 1,
+                    "used": 0,
+                },
+            }
     if not has_safe_child_status_context():
         raise QuickAdvisoryError("ask_process_context_unsafe")
-    resolved_repo = _resolve_repository(repo)
     git_preflight = _preflight_context_git(context_mode, resolved_repo)
     member = _preflight_member(vendor, workflow, resolved_repo)
     _confirm_task_egress(
@@ -514,25 +573,9 @@ def ask(
         context_file_count=len(selected_files),
         confirmed=confirm_task_egress,
     )
-    baseline = _snapshot(resolved_repo)
-    task = _read_task_from_standard_input()
-    if _should_skip(task, stage=stage, enabled=auto_skip_trivial):
-        _require_unchanged(resolved_repo, baseline)
-        return {
-            "schema_version": 1,
-            "event": "advisory_skipped",
-            "vendor": vendor,
-            "workflow": workflow,
-            "stage": stage,
-            "reason": "local_trivial_task",
-            "classification_policy": "weightclass_local",
-            "task_egress_confirmed": True,
-            "task_egressed": False,
-            "sample_recorded": False,
-            "persistent_state_written": False,
-            "worktree_unchanged": True,
-            "call_budget": {"scope": "invocation", "maximum_task_bearing_children": 1, "used": 0},
-        }
+    baseline = None if context_mode == "task" else _snapshot(resolved_repo)
+    if task is None:
+        task = _read_task_from_standard_input()
     try:
         context_payload = advisory_context.build_context(
             context_mode,
@@ -544,7 +587,8 @@ def ask(
         )
     except advisory_context.AdvisoryContextError as error:
         raise QuickAdvisoryError(error.code) from None
-    _require_unchanged(resolved_repo, baseline)
+    if baseline is not None:
+        _require_unchanged(resolved_repo, baseline)
     status, result = _run_member(
         member,
         repo=resolved_repo,
@@ -555,7 +599,8 @@ def ask(
         task=task,
         timeout_seconds=timeout_seconds,
     )
-    _require_unchanged(resolved_repo, baseline)
+    if baseline is not None:
+        _require_unchanged(resolved_repo, baseline)
     if status != "ok":
         raise QuickAdvisoryError(status)
     receipt = _single_receipt(
@@ -571,7 +616,8 @@ def ask(
         snapshot=baseline,
         triage=triage,
     )
-    _require_unchanged(resolved_repo, baseline)
+    if baseline is not None:
+        _require_unchanged(resolved_repo, baseline)
     return receipt
 
 
@@ -582,6 +628,7 @@ def ask_council(
     role: str,
     repo: Path,
     timeout_seconds: float,
+    total_timeout_seconds: float | None = None,
     confirm_task_egress: bool,
     stage: str = "manual",
     context_mode: str = "repo",
@@ -605,10 +652,39 @@ def ask_council(
         context_files=context_files,
         timeout_seconds=timeout_seconds,
     )
+    if auto_skip_trivial and stage not in {"plan", "final"}:
+        raise QuickAdvisoryError("ask_invalid_input")
+    effective_total_timeout = (
+        timeout_seconds if total_timeout_seconds is None else total_timeout_seconds
+    )
+    if not math.isfinite(effective_total_timeout) or not 1 <= effective_total_timeout <= 28_800:
+        raise QuickAdvisoryError("ask_invalid_input")
     _preflight_trivial_classifier(auto_skip_trivial)
+    resolved_repo = _resolve_repository(repo)
+    task: str | None = None
+    if auto_skip_trivial:
+        task = _read_task_from_standard_input()
+        if _should_skip(task, stage=stage, enabled=True):
+            return {
+                "schema_version": RECEIPT_SCHEMA_VERSION,
+                "event": "advisory_skipped",
+                "vendors": list(selected_vendors),
+                "workflow": workflow,
+                "stage": stage,
+                "reason": "local_trivial_task",
+                "task_egress_confirmed": False,
+                "task_egressed": False,
+                "persistent_state_written": False,
+                "worktree_checked": False,
+                "worktree_unchanged": None,
+                "call_budget": {
+                    "scope": "invocation",
+                    "maximum_task_bearing_children": len(selected_vendors),
+                    "used": 0,
+                },
+            }
     if not has_safe_child_status_context():
         raise QuickAdvisoryError("ask_process_context_unsafe")
-    resolved_repo = _resolve_repository(repo)
     git_preflight = _preflight_context_git(context_mode, resolved_repo)
     members = tuple(
         _preflight_member(vendor, workflow, resolved_repo) for vendor in selected_vendors
@@ -621,26 +697,10 @@ def ask_council(
         context_file_count=len(selected_files),
         confirmed=confirm_task_egress,
     )
-    baseline = _snapshot(resolved_repo)
-    task = _read_task_from_standard_input()
-    if _should_skip(task, stage=stage, enabled=auto_skip_trivial):
-        _require_unchanged(resolved_repo, baseline)
-        return {
-            "schema_version": 2,
-            "event": "advisory_skipped",
-            "vendors": list(selected_vendors),
-            "workflow": workflow,
-            "stage": stage,
-            "reason": "local_trivial_task",
-            "task_egressed": False,
-            "persistent_state_written": False,
-            "worktree_unchanged": True,
-            "call_budget": {
-                "scope": "invocation",
-                "maximum_task_bearing_children": len(members),
-                "used": 0,
-            },
-        }
+    baseline = None if context_mode == "task" else _snapshot(resolved_repo)
+    if task is None:
+        task = _read_task_from_standard_input()
+    deadline = time.monotonic() + effective_total_timeout
     try:
         context_payload = advisory_context.build_context(
             context_mode,
@@ -652,25 +712,33 @@ def ask_council(
         )
     except advisory_context.AdvisoryContextError as error:
         raise QuickAdvisoryError(error.code) from None
-    _require_unchanged(resolved_repo, baseline)
+    if baseline is not None:
+        _require_unchanged(resolved_repo, baseline)
     rendered_members: list[dict[str, object]] = []
     for member in members:
-        try:
-            status, result = _run_member(
-                member,
-                repo=resolved_repo,
-                workflow=workflow,
-                stage=stage,
-                context_mode=context_mode,
-                context_payload=context_payload,
-                task=task,
-                timeout_seconds=timeout_seconds,
-            )
-        except QuickAdvisoryError as error:
-            if error.code != "ask_cli_unavailable":
-                raise
-            status, result = error.code, {}
-        _require_unchanged(resolved_repo, baseline)
+        status: str
+        result: dict[str, object]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            status, result = "ask_council_deadline", {}
+        else:
+            try:
+                status, result = _run_member(
+                    member,
+                    repo=resolved_repo,
+                    workflow=workflow,
+                    stage=stage,
+                    context_mode=context_mode,
+                    context_payload=context_payload,
+                    task=task,
+                    timeout_seconds=min(timeout_seconds, remaining),
+                )
+            except QuickAdvisoryError as error:
+                if error.code != "ask_cli_unavailable":
+                    raise
+                status, result = error.code, {}
+        if baseline is not None:
+            _require_unchanged(resolved_repo, baseline)
         rendered: dict[str, object] = {
             "vendor": member["vendor"],
             "status": status,
@@ -680,16 +748,19 @@ def ask_council(
         }
         if status == "ok":
             rendered["result"] = result
-            if workflow == "review" and triage:
+            if workflow == "review" and triage and baseline is not None:
                 rendered["triage"] = advisory_triage.triage_review(result, resolved_repo, baseline)
                 _require_unchanged(resolved_repo, baseline)
+            elif workflow == "review" and triage:
+                rendered["triage_skipped_reason"] = "task_context_has_no_repository_snapshot"
         rendered_members.append(rendered)
     successful = sum(member["status"] == "ok" for member in rendered_members)
     task_bearing_children = sum(
-        member["status"] != "ask_cli_unavailable" for member in rendered_members
+        member["status"] not in {"ask_cli_unavailable", "ask_council_deadline"}
+        for member in rendered_members
     )
     return {
-        "schema_version": 2,
+        "schema_version": RECEIPT_SCHEMA_VERSION,
         "event": "advisory_council",
         "workflow": workflow,
         "role": role,
@@ -700,9 +771,15 @@ def ask_council(
         "task_egressed": task_bearing_children > 0,
         "context_mode": context_mode,
         "context_file_count": len(selected_files),
-        "repository_access": "read_only" if context_mode == "repo" else "prompt_context_only",
+        "requested_repository_access": (
+            "none"
+            if context_mode == "task"
+            else ("read_only" if context_mode == "repo" else "prompt_context_only")
+        ),
+        "repository_access_verified": False,
         "host_filesystem_confined": False,
-        "worktree_unchanged": True,
+        "worktree_checked": baseline is not None,
+        "worktree_unchanged": True if baseline is not None else None,
         "git_metadata_checked": False,
         "sample_recorded": False,
         "persistent_state_written": False,
@@ -710,6 +787,7 @@ def ask_council(
         "content_trust": "untrusted_model_authored",
         "complete": successful == len(rendered_members),
         "successful_members": successful,
+        "total_timeout_seconds": effective_total_timeout,
         "call_budget": {
             "scope": "invocation",
             "maximum_task_bearing_children": len(members),
@@ -727,6 +805,7 @@ def preview(
     role: str,
     repo: Path,
     timeout_seconds: float,
+    total_timeout_seconds: float | None = None,
     stage: str,
     context_mode: str,
     context_files: Sequence[str],
@@ -749,6 +828,12 @@ def preview(
         context_files=context_files,
         timeout_seconds=timeout_seconds,
     )
+    if total_timeout_seconds is not None and (
+        len(selected_vendors) == 1
+        or not math.isfinite(total_timeout_seconds)
+        or not 1 <= total_timeout_seconds <= 28_800
+    ):
+        raise QuickAdvisoryError("ask_invalid_input")
     resolved_repo = _resolve_repository(repo)
     git_preflight = _preflight_context_git(context_mode, resolved_repo)
     routes: list[dict[str, object]] = []
@@ -766,7 +851,7 @@ def preview(
             }
         )
     return {
-        "schema_version": 2,
+        "schema_version": RECEIPT_SCHEMA_VERSION,
         "event": "advisory_preview",
         "preview_only": True,
         "vendor_process_started": False,
@@ -778,17 +863,25 @@ def preview(
         "context_mode": context_mode,
         "context_file_count": len(selected_files),
         "task_egress_required": True,
+        "local_capability_checked": False,
+        "process_context_checked": False,
         "task_free_probe_children_on_run": (
             advisory_preflight.TASK_FREE_PROBE_CHILDREN * len(routes)
         ),
         "task_bearing_child_bound": len(routes),
         "timeout_seconds_per_child": timeout_seconds,
-        "requested_repository_behavior": "read_only",
+        "total_timeout_seconds": (
+            timeout_seconds
+            if len(routes) > 1 and total_timeout_seconds is None
+            else total_timeout_seconds
+        ),
+        "requested_repository_behavior": ("none" if context_mode == "task" else "read_only"),
         "host_filesystem_confined": False,
-        "worktree_snapshot_on_run": True,
+        "worktree_snapshot_on_run": context_mode != "task",
         "git_metadata_checked": False,
         "git_executable_observed": git_preflight is not None,
         "repository_path_disclosed": False,
+        "untracked_files_included": False if context_mode == "diff" else None,
         "quality_verified": False,
         "routes": routes,
     }
@@ -819,7 +912,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="comma-separated list of two to four distinct supported vendors",
     )
     parser.add_argument("--workflow", choices=WORKFLOWS, default="review")
-    parser.add_argument("--role", choices=ROLES, default="cheap")
     parser.add_argument("--stage", choices=STAGES, default="manual")
     parser.add_argument("--context", choices=advisory_context.CONTEXT_MODES, default="repo")
     parser.add_argument(
@@ -841,6 +933,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--preview", action="store_true")
     parser.add_argument("--auto-skip-trivial", action="store_true")
     parser.add_argument("--no-triage", action="store_false", dest="triage")
+    parser.add_argument(
+        "--total-timeout-seconds",
+        type=float,
+        help="whole-council deadline; defaults to one per-child timeout",
+    )
     parser.add_argument("--confirm-task-egress", action="store_true")
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--json", action="store_true")
@@ -853,9 +950,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt = preview(
                 vendors=vendors,
                 workflow=arguments.workflow,
-                role=arguments.role,
+                role="cheap",
                 repo=arguments.repo,
                 timeout_seconds=arguments.timeout_seconds,
+                total_timeout_seconds=arguments.total_timeout_seconds,
                 stage=arguments.stage,
                 context_mode=arguments.context,
                 context_files=arguments.context_files,
@@ -864,9 +962,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt = ask_council(
                 vendors=arguments.council,
                 workflow=arguments.workflow,
-                role=arguments.role,
+                role="cheap",
                 repo=arguments.repo,
                 timeout_seconds=arguments.timeout_seconds,
+                total_timeout_seconds=arguments.total_timeout_seconds,
                 confirm_task_egress=arguments.confirm_task_egress,
                 stage=arguments.stage,
                 context_mode=arguments.context,
@@ -875,10 +974,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 triage=arguments.triage,
             )
         else:
+            if arguments.total_timeout_seconds is not None:
+                raise QuickAdvisoryError("ask_invalid_input")
             receipt = ask(
                 vendor=arguments.vendor,
                 workflow=arguments.workflow,
-                role=arguments.role,
+                role="cheap",
                 repo=arguments.repo,
                 timeout_seconds=arguments.timeout_seconds,
                 confirm_task_egress=arguments.confirm_task_egress,
@@ -895,7 +996,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         print(json.dumps(receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
     if receipt.get("event") == "advisory_council" and not receipt.get("complete"):
-        return 2
+        return PARTIAL_COUNCIL_EXIT_CODE
     return 0
 
 

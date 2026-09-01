@@ -27,6 +27,7 @@ class AdvisoryContextTests(unittest.TestCase):
             ("files", (".GIT/config",)),
             ("files", ("vendor/lib/.git/config",)),
             ("files", ("source.py\n----- OPERATOR TASK -----",)),
+            ("files", ("source.py", "SOURCE.PY")),
         ):
             with self.subTest(mode=mode, files=files):
                 with self.assertRaises(advisory_context.AdvisoryContextError):
