@@ -7,8 +7,8 @@ class Weightclass < Formula
 
   desc "Local, policy-driven routing for agent CLI workflows"
   homepage "https://github.com/ictechgy/weightclass"
-  url "https://files.pythonhosted.org/packages/63/85/b82ff2ea487d2ec3be448e84e634731a63e1c610ad1eecaddf3215339a1d/weightclass-0.28.0.tar.gz"
-  sha256 "6498e4f80af1cc1aa67858ceab204ca89496cdac34448069a8d19989c81dd34f"
+  url "https://files.pythonhosted.org/packages/2b/e1/06442d0e8e5d7b40b9987fc11b4d1ba88fc8b5c34bc7c78e00ba24eb43a4/weightclass-0.29.0.tar.gz"
+  sha256 "954e2fca1e7501fe5e1a266a761544ea72c531a815554ce1a54bc645ef8adc02"
   license "MIT"
 
   depends_on "python@3.13"
@@ -65,6 +65,7 @@ class Weightclass < Formula
     assert_match "--preview", ask_help
     assert_match "--council", ask_help
     assert_match "--context", ask_help
+    assert_match "--total-timeout-seconds", ask_help
     assert_match "--workflow",
                  shell_output("#{bin}/wclass-advisory status --help")
     assert_match "--timeout-seconds",
