@@ -1,8 +1,134 @@
 # Handoff
 
-_Last updated: 2026-09-02 KST by Claude (agent guidance split)_
+_Last updated: 2026-09-02 KST by Claude (direction research, no code change)_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
+
+## Direction research with an external reviewer (2026-09-02, no code change)
+
+Two scrubbed GLM packets explored where `wclass` and the advisory companion go next. No code,
+document, or configuration outside this file changed; no vendor route ran; no campaign, usage
+record, or credential was touched. This section records what the round produced and, equally,
+which of its claims did not survive checking against the code.
+
+Both packets carried only files that are already public, and the scrubber reported zero
+redactions in each:
+
+- Strategy packet: root, core, and advisory `AGENTS.md`, `README.md`, and
+  `docs/advisory-product-roadmap-v2.md`, plus an inline brief assembled from this file.
+  135,719 bytes, SHA-256 prefix `f4b4be0e2468`, 565 s.
+- Harness-design packet: `AGENTS.md`, `docs/speculative-cheap-route-design.md`,
+  `tools/check_test_vacuity.py`, `docs/policy4-fresh-blind-evaluation.md`,
+  `docs/phase4-go-no-go-template.md`, and `docs/measuring-p-at-work.md`.
+  77,342 bytes, SHA-256 prefix `cbff0490e80f`, 599 s.
+
+Provider output was treated as untrusted throughout and verified against the source before
+being recorded here.
+
+### What survived checking
+
+**A membership rule for the shipped wheel.** A surface stays in the wheel only if a first-time
+user can obtain its entire honest value in a single invocation — no init, no sealed contract,
+no price table, no accumulated population — and every claim it makes is enforced by code inside
+the wheel. This is the advisory `AGENTS.md` definition of `ask` promoted to a project-wide rule.
+It is durable because it is indexed to the user's job rather than to code quality, and the
+campaign apparatus fails it by construction: its maximum payoff is `eligible_for_human_review`.
+
+**Abandon the 60-task/12-advised-failure gate rather than re-index it.** Next Steps item C is
+right that the gate counts the wrong event, but re-indexing means changing a pre-registered
+counting rule to make completion easier. That is the move this project refused at Phase 2, when
+it reported the 9/36 shortfall instead of lowering the floor. The alternative is to close the
+natural-population study as under-powered by design mismatch, publish the descriptive record
+(`s = 0/2`, retry 1 passed / 4 same / 3 degraded, 14/60 tasks, 9/12 advised failures), and
+replace the instrument rather than feed it.
+
+**The verification hypothesis reduces to a three-to-four day pilot, not a project.** The
+strongest form of Next Steps item D is not injection. Running the cheap model on synthetic
+tasks under the production setup and harvesting the defects it produces naturally makes the
+tamper-artifact confound structurally impossible — nothing was injected, so no authorship signal
+can exist — and the harvested process is the same one that produced the original finding.
+Injection survives only as a supplement for classes the harvest underproduces.
+
+**`tools/check_test_vacuity.py` is the engine, not the estimand.** Identity mutation asks
+whether a suite's verdict depends on the component at all; that is a necessary condition and the
+easiest mutant to catch. Semantic mutation asks whether the verdict separates correct from
+plausibly wrong. A suite can pass the vacuity audit on every leaf and still miss a `p21`-class
+defect entirely, because its assertions check that output is produced rather than that a
+boundary rejects `True`. The reusable part is therefore the temp-copy isolation, the fail-closed
+exactly-once `neutralize_source` check, `LeafRecorder`, the unrepresented-method-to-NG move, and
+byte-stable output — verified present at `tools/check_test_vacuity.py:79`, `:148-155`, and
+`:182-183`. Its natural role is the calibration arm: the identity operator run against each
+task's reference solution is the pre-registered proof that the corpus's suites are not vacuous.
+
+**Split `list-don't-judge` rather than transferring it.** Mechanical outcomes — suite exit code,
+compile failure, diff size — are property checks and must be scored mechanically. Materiality is
+the one predicate no probe covers, and it is where the judgment lives: three of the original nine
+routed-tier wins were test organisation and line wrapping. The binding budget is therefore rater
+hours, not model calls.
+
+**What aggregating above the leaf hides.** Aggregating to the task hides which classes escape, so
+a suite that catches five of six reads as checked. Aggregating to the class hides suite-weakness
+concentration, so one class's miss rate may be three suite-poor tasks wearing a class's face.
+
+**`p21` is a property, not a shape.** In Python `True == 1`, so the natural `if version != 1`
+already admits `True`; the reference must deliberately exclude `bool`, and the defect is dropping
+that exclusion. Two injections written differently satisfy the identical property and the probe
+cannot separate them, which is what makes the class machine-checkable under the repository rule
+that a format is judged on its own properties.
+
+**Arithmetic that was checked and is correct.** Wilson 95% for 6/6 is `[0.610, 1.000]`; the
+per-class half-width at `p = 0.6` is 24.4 points at `n = 12` and 17.9 points at `n = 25`; the
+two-sided 5% critical proportion for 180 forced-choice trials is 57.3%. A leave-one-task-out
+jackknife was proposed as the clustered estimator and matches the delete-one convention already
+implemented at `src/weightclass/advisory/speculative_report.py:865`.
+
+### What did not survive checking
+
+**Item B's symbol count is one release stale.** `ask` uses eight symbols from
+`speculative_run.py`, not seven: `declares_stream_json_input` was added in 0.30.0 and appears at
+`src/weightclass/advisory/advisory_quick.py:1069`. The low-coupling conclusion is unaffected.
+More consequentially, four other modules import that file — `managed_advisory.py` (13 references),
+`advisory_consult.py` (8), `wclass_advisory.py` (3), `managed_cli.py` (1) — so extracting the
+shared runtime decouples the `ask` path but does not by itself remove the 5,526-line file from
+the wheel. Item B is cheaper than the rest of the move, not cheap in absolute terms.
+
+**A small-`n` observation was labelled as evidence.** The review presented cheap acceptance 2/3
+as `p ~ 0.33 < 0.69` and concluded the speculative route's economics are fine. Next Steps item 5
+already states that three observations are far too few to estimate `p`, and that moving the V1
+boundary needs a larger sample landing under 20%. The reviewer's operational conclusion — freeze
+that work until verifier recall is known — is unaffected, but the evidence label was wrong and is
+rejected.
+
+**The proposed decision rule uses the wrong quantile and flips branch under this project's own
+convention.** The review fixed `z = 1.96` throughout and concluded that at `n = 25` a point
+estimate of 0.60 rejects `m <= 0.40`. `speculative_report.py:798-843` deliberately uses a
+`t` quantile at small `n`, states that a narrow interval can flip a break-even judgment, and
+requires rounding to the conservative table entry. Recomputed:
+
+- 15/25 at `z = 1.96` gives a lower bound of 0.4074, which rejects.
+- 15/25 at `t(df=24) = 2.060` gives 0.3983, which does not, and lands in the shortfall branch.
+- Clearing 0.40 under the project's rule needs 16/25, a point estimate of 0.64.
+
+One reclassified instance changes the outcome. The review's own table reports the 18-point width
+at `n = 25` and the decision rule then ignores it.
+
+**The proposed pilot kill gate is indexed to the wrong quantity.** It would declare the
+phenomenon absent at fewer than 8 confirmed material defects in 200 runs, a 4% yield. The
+original finding's own rate is six material defects across fourteen cheap-arm tasks, roughly 43%.
+A floor an order of magnitude below the effect it is meant to detect cannot distinguish
+reproduction from a tenfold weaker effect, and it is the same failure item C identifies in the
+campaign gate. Any pilot must set this near the fixture's observed rate before it is run.
+
+### Status
+
+Nothing here is authorized. Next Steps items A-D remain the reviewed direction rather than a plan
+of record, and this section does not promote them. It narrows item D: its strongest form is a
+harvest pilot of roughly three to four days that writes almost no new code, with the two defects
+above corrected first, and with the taxonomy document as the standalone deliverable that survives
+either result. The reviewer's own recommendation was to build the pilot and nothing else until it
+reports, and to keep the result out of the shipped tool in every branch.
+
+The next safe action is unchanged: ordinary explicit use of `$advisory` or `wclass-advisory ask`.
 
 ## Scoped agent guidance (merged, unreleased)
 
@@ -2032,7 +2158,8 @@ councils, session consent, readable preview). The fifth is not:
   5,463-line `speculative_run.py` (`run_child`, `extract_evidence_result`, `default_child_env`,
   `AGENT_SCAFFOLDING`, `CHILD_TIMEOUT`, `RunFailure`, `MAX_TASK_FILE_BYTES`). Extracting those
   into a small shared runtime module decouples the shipped path from the research runner and
-  makes the "vacuity anchors cannot move" constraint irrelevant to `ask`.
+  makes the "vacuity anchors cannot move" constraint irrelevant to `ask`. That symbol
+  count is one release stale; see the direction-research section above.
 - **C. The 60-task / 12-advised-failure gate is indexed to the wrong quantity.** The event it
   counts is an advised failure, so the cheap route succeeding — good product news — starves the
   study. That is why the population sits at 14/60 tasks while already at 9/12 advised failures.
