@@ -92,7 +92,13 @@ that has already been spent. See `docs/paired-token-study.md`.
 ## Documentation map
 
 - `HANDOFF.md`: continuation facts, known planning issues, and the next safe
-  action. It is the first thing to read and the last thing to update.
+  action. It is the first thing to read and the last thing to update. Keep it
+  readable in one sitting — that is what makes the rule enforceable. When a
+  batch ships and stops being continuation context, move it to the archive
+  rather than letting this file grow past the point where anyone reads it.
+- `docs/handoff-archive.md`: per-release evidence, superseded working notes, and
+  the abandoned approaches behind them. Audit history, not continuation context.
+  Never start new work here.
 - `RELEASING.md`: the release procedure. Releasing is a human action; a tag push
   is the approval and a published PyPI version can never be reused or deleted.
 - `README.md`: the public contract. Keep it truthful about measured results.

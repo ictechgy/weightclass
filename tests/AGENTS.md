@@ -27,6 +27,22 @@ arguments; `dict` without parameters fails the gate.
 `unittest` discovery runs with `-W error::ResourceWarning`, so a leaked file or
 subprocess handle in a test is a failure, not a warning.
 
+## What the runner does not give you
+
+Two failures reached CI green-on-macOS, red-on-Linux because a test assumed
+something about the machine it ran on. Both are cheap to avoid.
+
+- **Never assume a vendor CLI is installed.** `route --source-vendor codex`
+  needs the real executable to pass admission, so it works on a developer
+  machine and exits `3` `unsupported_route` on a runner. Supply the route from a
+  temp policy file with a fake command, the way the rest of the suite does.
+- **Do not spawn interpreters you do not need.** The suite contains timing
+  assertions that share the runner, and
+  `test_redaction_is_fast_on_hostile_input` went 16.55 s against its 15 s bound
+  because a new module spawned thirteen subprocesses. Prefer in-process
+  `cli.main()` with redirected streams. Raising someone else's limit to make
+  room for your load is the wrong fix.
+
 ## What a new test has to prove
 
 - Add focused tests with each behavior change. A change with no test that fails
