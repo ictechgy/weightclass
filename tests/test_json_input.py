@@ -82,7 +82,9 @@ class RuntimeJsonInputTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+            result = self._run(
+                ["route", "--suggest-tier", "--policy", str(path), "--source-vendor", "codex"]
+            )
 
         self._assert_invalid_input(result)
 
@@ -170,7 +172,14 @@ class RuntimeJsonInputTests(unittest.TestCase):
             cases = (
                 (
                     "native policy",
-                    ["route", "--policy", str(root / "policy-fifo"), "--source-vendor", "codex"],
+                    [
+                        "route",
+                        "--suggest-tier",
+                        "--policy",
+                        str(root / "policy-fifo"),
+                        "--source-vendor",
+                        "codex",
+                    ],
                     "task",
                 ),
                 (
@@ -215,7 +224,9 @@ class RuntimeJsonInputTests(unittest.TestCase):
             encoded = json.dumps(_native_policy()).encode("utf-8")
             path.write_bytes(encoded + b" " * (MAX_RUNTIME_JSON_BYTES + 1 - len(encoded)))
 
-            result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+            result = self._run(
+                ["route", "--suggest-tier", "--policy", str(path), "--source-vendor", "codex"]
+            )
 
         self._assert_invalid_input(result)
 
@@ -226,7 +237,9 @@ class RuntimeJsonInputTests(unittest.TestCase):
             encoded = json.dumps(_native_policy()).encode("utf-8")
             path.write_bytes(encoded + b" " * (MAX_RUNTIME_JSON_BYTES - len(encoded)))
 
-            result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+            result = self._run(
+                ["route", "--suggest-tier", "--policy", str(path), "--source-vendor", "codex"]
+            )
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -311,7 +324,9 @@ class RuntimeJsonInputTests(unittest.TestCase):
             path = Path(directory) / "policy.json"
             path.write_text(OVERSIZED_INTEGER_JSON, encoding="utf-8")
 
-            result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+            result = self._run(
+                ["route", "--suggest-tier", "--policy", str(path), "--source-vendor", "codex"]
+            )
 
         self._assert_invalid_input(result)
         self.assertNotIn("Traceback", result.stderr)
@@ -322,7 +337,9 @@ class RuntimeJsonInputTests(unittest.TestCase):
             path = Path(directory) / "deep-policy.json"
             path.write_text(DEEPLY_NESTED_JSON, encoding="utf-8")
 
-            result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+            result = self._run(
+                ["route", "--suggest-tier", "--policy", str(path), "--source-vendor", "codex"]
+            )
 
         self._assert_invalid_input(result)
         self.assertNotIn("Traceback", result.stderr)
@@ -356,7 +373,7 @@ class RuntimeJsonInputTests(unittest.TestCase):
             invalid_policy.write_text('{"duplicate":1,"duplicate":2}', encoding="utf-8")
             calls: tuple[Callable[[], int], ...] = (
                 lambda: cli.route_from_standard_input(invalid_policy, "codex"),
-                lambda: cli.run_from_standard_input(invalid_policy, "codex"),
+                lambda: cli.run_from_standard_input(invalid_policy, "codex", explicit_tier="low"),
                 lambda: cli.v2_route_from_standard_input(
                     invalid_policy, "codex", Path(sys.executable)
                 ),
@@ -418,7 +435,9 @@ class ExclusiveWriteOwnerTests(unittest.TestCase):
                 path.write_text(json.dumps(_native_policy()), encoding="utf-8")
                 os.chmod(path, mode)
 
-                result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+                result = self._run(
+                    ["route", "--suggest-tier", "--policy", str(path), "--source-vendor", "codex"]
+                )
 
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(result.stdout, "")
@@ -432,7 +451,9 @@ class ExclusiveWriteOwnerTests(unittest.TestCase):
                 path.write_text(json.dumps(_native_policy()), encoding="utf-8")
                 os.chmod(path, mode)
 
-                result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+                result = self._run(
+                    ["route", "--suggest-tier", "--policy", str(path), "--source-vendor", "codex"]
+                )
 
                 self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -449,7 +470,9 @@ class ExclusiveWriteOwnerTests(unittest.TestCase):
                 path.write_text(json.dumps(_native_policy()), encoding="utf-8")
                 os.chmod(path, mode)
 
-                result = self._run(["route", "--policy", str(path), "--source-vendor", "codex"])
+                result = self._run(
+                    ["route", "--suggest-tier", "--policy", str(path), "--source-vendor", "codex"]
+                )
 
                 self.assertEqual(result.returncode, 0, result.stderr)
 

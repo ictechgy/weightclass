@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 from . import __version__
 from .classification import (
     CLASSIFICATION_POLICY_VERSION,
+    CLASSIFIER_MEASURED_AGREEMENT,
     InvalidTaskError,
     Tier,
     apply_cautious_posture,
@@ -1190,9 +1191,21 @@ def build_parser() -> argparse.ArgumentParser:
             help="Bind an opaque model label to cost-focused Codex low/standard routes.",
         )
         _add_preset_override_arguments(native)
+        # 티어 출처는 정확히 하나여야 한다. 사전등록된 연구가 티어 라우팅의 이득을
+        # 반증했으므로 분류기는 더 이상 기본값이 아니다. 둘 다 없으면 태스크를 읽기
+        # 전에 닫히고, 둘 다 있으면 한 방향으로 해석하지 않고 거부한다.
+        tier_selection = native.add_mutually_exclusive_group(required=True)
         # wclass classify 가 낸 티어를 그대로 받는다. route 와 run 은 이 경로에서도
         # 네트워크를 쓰지 않는다. 판정은 별도 명령에서 이미 끝났다.
-        native.add_argument("--tier", choices=("low", "standard", "high"))
+        tier_selection.add_argument("--tier", choices=("low", "standard", "high"))
+        tier_selection.add_argument(
+            "--suggest-tier",
+            action="store_true",
+            help=(
+                "Let the local classifier choose the tier and report its own "
+                "measured agreement alongside the suggestion."
+            ),
+        )
         if name == "route":
             native.add_argument(
                 "--bind-executable-identity",
@@ -1785,6 +1798,19 @@ def classify_from_standard_input(
     )
 
 
+def _annotate_tier_source(response: dict[str, object], explicit_tier: Tier | None) -> None:
+    """Never offer a suggested tier without the classifier's own measured record.
+
+    조작자가 티어를 지정한 경우에는 아무것도 싣지 않는다. 파서가 두 플래그 중
+    정확히 하나를 요구하므로 이 키들의 부재가 곧 "조작자가 골랐다" 이고, 동결된
+    schema-1 라우트 출력 바이트도 그대로 유지된다.
+    """
+    if explicit_tier is not None:
+        return
+    response["tier_source"] = "suggested"
+    response["tier_suggestion"] = {"measured": CLASSIFIER_MEASURED_AGREEMENT}
+
+
 def select_task_route(
     task: str,
     policy: RoutingPolicy,
@@ -2115,6 +2141,7 @@ def route_from_standard_input(
     if executable_observation is not None:
         response["executable_binding"] = "observed"
         response["executable_identity"] = asdict(executable_observation)
+    _annotate_tier_source(response, explicit_tier)
     if policy.posture is not None:
         response["posture"] = policy.posture
         response["reason_code"] = reason_code
@@ -2144,6 +2171,7 @@ def _confirm_legacy_route_on_console(
     tier: Tier,
     policy: RoutingPolicy,
     executable_observation: ExecutableObservation | None,
+    explicit_tier: Tier | None = None,
 ) -> bool:
     """Review and confirm one already-selected task-free route on the TTY."""
 
@@ -2166,6 +2194,13 @@ def _confirm_legacy_route_on_console(
                     "  Notice: the task will be visible in local process arguments.",
                     file=console,
                 )
+            _print_tier_source(
+                {
+                    "tier_source": "explicit" if explicit_tier is not None else "suggested",
+                    "tier_suggestion": {"measured": CLASSIFIER_MEASURED_AGREEMENT},
+                },
+                lambda line: print(line, file=console),
+            )
             console.write("Run this route? [y/N] ")
             answer = console.readline(32)
     except (OSError, UnicodeError):
@@ -2212,6 +2247,14 @@ def run_from_standard_input(
     interactive_review: bool = False,
 ) -> int:
     """Run a selected native command without a shell or output capture."""
+    # run 의 stdout 은 자식 것이고 stderr 는 닫힌 JSON 오류 하나만 싣는다. 그래서
+    # 제안의 실적을 낼 자리는 콘솔 검토뿐이고, 검토 없이 제안으로 벤더를 시작하면
+    # 그 실적은 누구에게도 보이지 않는다. 반증된 분류기가 사람이 보지 않는 채로
+    # 자식을 띄우지 못하도록, 제안을 쓰는 run 은 검토를 요구한다. 자동화는 티어를
+    # 직접 지정하면 된다.
+    if explicit_tier is None and not interactive_review:
+        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
+        return 2
     _load_agent_family()
     _load_native_schema_family()
     overrides = overrides or PresetOverrides()
@@ -2347,6 +2390,7 @@ def run_from_standard_input(
             selected_tier,
             policy,
             executable_observation,
+            explicit_tier,
         ):
             print(json.dumps({"error": "execution_cancelled"}), file=sys.stderr)
             return 1
@@ -3126,6 +3170,28 @@ def _output_preference(arguments: Sequence[str]) -> tuple[list[str], bool | None
     return cleaned, selected
 
 
+def _print_tier_source(payload: dict[str, object], emit: Callable[[str], None]) -> None:
+    """Show a suggested tier next to what the classifier actually scored.
+
+    측정 실적을 제안과 떼어 놓으면 읽는 쪽은 두 번째 문서를 찾아가야 하고,
+    대부분 찾아가지 않는다. 제안이 보이는 자리에 실적도 보여야 한다.
+    """
+    if payload.get("tier_source") != "suggested":
+        return
+    suggestion = payload.get("tier_suggestion")
+    measured = suggestion.get("measured") if isinstance(suggestion, dict) else None
+    if not isinstance(measured, dict):
+        return
+    emit("  Tier source: suggested by the local classifier, not established")
+    emit(f"    Corpus: {measured['corpus']}")
+    emit(f"    Agreement: {measured['agreement']}")
+    emit(f"    High-tier recall: {measured['high_tier_recall']}")
+    emit(f"    Over-routing: {measured['over_routing']}")
+    emit(f"    Under-routing: {measured['under_routing']}")
+    emit(f"    Caveat: {measured['caveat']}")
+    emit(f"    See: {measured['reference']}")
+
+
 def _render_human_json(payload: object, command: str | None) -> None:
     if not isinstance(payload, dict):
         print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -3151,6 +3217,7 @@ def _render_human_json(payload: object, command: str | None) -> None:
                 "  Command: "
                 + json.dumps(payload["command"], ensure_ascii=True, separators=(",", ":"))
             )
+        _print_tier_source(payload, print)
         return
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
 

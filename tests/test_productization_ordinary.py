@@ -60,7 +60,15 @@ class ProductizationOrdinaryTests(unittest.TestCase):
             executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             executable.chmod(0o700)
             result = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--source-vendor",
+                    "codex",
+                ],
                 cwd=ROOT,
                 capture_output=True,
                 check=False,
@@ -75,7 +83,15 @@ class ProductizationOrdinaryTests(unittest.TestCase):
     def test_default_route_reports_an_unavailable_executable_without_starting_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--source-vendor",
+                    "codex",
+                ],
                 cwd=ROOT,
                 capture_output=True,
                 check=False,

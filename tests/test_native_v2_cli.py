@@ -70,6 +70,7 @@ class NativeV2CliTests(unittest.TestCase):
                     cli.main(
                         [
                             "route",
+                            "--suggest-tier",
                             "--policy",
                             str(path),
                             "--source-vendor",
@@ -161,6 +162,8 @@ class NativeV2CliTests(unittest.TestCase):
                     cli.main(
                         [
                             "run",
+                            "--tier",
+                            "low",
                             "--policy",
                             str(path),
                             "--source-vendor",
@@ -189,6 +192,8 @@ class NativeV2CliTests(unittest.TestCase):
                     cli.main(
                         [
                             "run",
+                            "--tier",
+                            "low",
                             "--policy",
                             str(path),
                             "--source-vendor",
@@ -347,7 +352,7 @@ class NativeV2CliTests(unittest.TestCase):
         self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_failed"})
 
     def test_schema_one_and_builtins_reject_source_profile_semantically(self) -> None:
-        for arguments in (["route", "--source-profile", "p"],):
+        for arguments in (["route", "--suggest-tier", "--source-profile", "p"],):
             with (
                 self.subTest(arguments=arguments),
                 patch("weightclass.cli.read_task_from_standard_input") as reader,
@@ -364,7 +369,10 @@ class NativeV2CliTests(unittest.TestCase):
             )
             with patch("weightclass.cli.read_task_from_standard_input") as reader:
                 self.assertEqual(
-                    cli.main(["route", "--policy", str(path), "--source-profile", "p"]), 2
+                    cli.main(
+                        ["route", "--suggest-tier", "--policy", str(path), "--source-profile", "p"]
+                    ),
+                    2,
                 )
                 reader.assert_not_called()
 
@@ -376,7 +384,9 @@ class NativeV2CliTests(unittest.TestCase):
                     self.subTest(omitted=omitted),
                     patch("weightclass.cli.read_validated_task_v2") as reader,
                 ):
-                    self.assertEqual(cli.main(["route", "--policy", str(path), *omitted]), 2)
+                    self.assertEqual(
+                        cli.main(["route", "--suggest-tier", "--policy", str(path), *omitted]), 2
+                    )
                     reader.assert_not_called()
 
     def test_source_profile_is_validated_before_task_access(self) -> None:

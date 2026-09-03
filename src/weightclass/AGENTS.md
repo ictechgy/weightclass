@@ -76,6 +76,22 @@ aggregate-only schema-3 usage store.
 
 ## Classification
 
+**The classifier is not the front door.** `route` and `run` require exactly one
+of `--tier` or `--suggest-tier`, and neither ever infers a tier from an absent
+flag. A suggested tier may not start a vendor without `--review`, so a refuted
+judgement never launches a child nobody looked at; automation passes `--tier`.
+
+`--suggest-tier` carries `CLASSIFIER_MEASURED_AGREEMENT` in the receipt and in
+the console review. That constant is the classifier's own blind-evaluation
+record, and it must state **both** routing directions — publishing over-routing
+while omitting that eight of nine majority-`high` prompts went to `standard`
+would hide the stronger warning. An explicit tier adds no receipt field, which
+keeps the frozen schema-1 route bytes unchanged.
+
+Do not make either flag optional again, and do not add a default. The vendor is
+already never inferred from the task: it comes from `--source-vendor`,
+`--preset`, or the policy file, whose first tier route pins it.
+
 `classification.py` holds the policy. Before changing it, read the measured
 results in `docs/paired-token-study.md` and
 `docs/policy4-fresh-blind-evaluation.md`.

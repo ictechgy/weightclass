@@ -44,7 +44,15 @@ class LegacyContractTests(unittest.TestCase):
     def test_cli_invalid_input_is_value_free_and_task_private(self) -> None:
         secret = "PRIVATE-TASK-CONTENT"
         result = subprocess.run(
-            [sys.executable, "-m", "weightclass", "route", "--policy", "/definitely/missing"],
+            [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "route",
+                "--suggest-tier",
+                "--policy",
+                "/definitely/missing",
+            ],
             input=secret,
             text=True,
             capture_output=True,
