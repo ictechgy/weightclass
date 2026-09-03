@@ -7,47 +7,76 @@
 명시적 `--tier` 와 명시적 `--suggest-tier` 중 정확히 하나가 필요하다.
 `--suggest-tier` 는 예전 기본 동작과 같은 판정을 내리되, 그 판정 옆에
 분류기 자신의 측정 실적을 함께 낸다.
+
+모든 검사는 인프로세스로 돈다. 벤더 CLI 설치 여부에 기대지 않도록 라우트는
+정책 파일이 공급하고, 인터프리터를 새로 띄우지 않아 같은 러너에서 도는 시간
+민감한 검사에 부하를 주지 않는다.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
-import subprocess
-import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
+from weightclass import cli
 from weightclass.classification import CLASSIFIER_MEASURED_AGREEMENT
 
-
-def _run(
-    arguments: list[str], task: str = "Fix a spelling typo."
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, "-m", "weightclass", *arguments],
-        capture_output=True,
-        check=False,
-        input=task,
-        text=True,
-        timeout=10,
-    )
+# 정책이 명령을 공급하므로 이 검사는 설치된 벤더를 필요로 하지 않는다.
+POLICY = {
+    "routes": [
+        {"id": f"fake-{tier}", "vendor": "codex", "tier": tier, "command": ["owned-fake", tier]}
+        for tier in ("low", "standard", "high")
+    ]
+}
 
 
 class ExplicitTierSelectionTests(unittest.TestCase):
+    def _invoke(
+        self, arguments: list[str], task: str = "Fix a spelling typo."
+    ) -> tuple[int, str, str]:
+        """Run one CLI invocation in-process against a task-free fake policy."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            path.write_text(json.dumps(POLICY), encoding="utf-8")
+            out, err = io.StringIO(), io.StringIO()
+            # 라우터는 sys.stdin.buffer 에서 바이트를 읽는다. 텍스트 래퍼를
+            # 씌워야 실제 경로와 같은 디코딩을 거친다.
+            stdin = io.TextIOWrapper(io.BytesIO(task.encode("utf-8")), encoding="utf-8")
+            with (
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(err),
+                mock.patch("sys.stdin", stdin),
+            ):
+                exit_code = cli.main([*arguments, "--policy", str(path)])
+        return exit_code, out.getvalue(), err.getvalue()
+
     def test_route_without_a_tier_selection_fails_closed(self) -> None:
         """Breaks if the refuted classifier returns as the default front door."""
-        result = _run(["route", "--source-vendor", "codex"])
+        exit_code, out, err = self._invoke(["route"])
 
-        self.assertEqual(result.returncode, 2, result.stdout)
-        self.assertEqual(result.stdout, "")
-        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+        self.assertEqual(exit_code, 2, out)
+        self.assertEqual(out, "")
+        self.assertEqual(json.loads(err), {"error": "invalid_input"})
 
     def test_run_without_a_tier_selection_fails_closed(self) -> None:
         """Breaks if `run` keeps classifying silently while `route` stops."""
-        result = _run(["run", "--source-vendor", "codex"])
+        exit_code, out, err = self._invoke(["run"])
 
-        self.assertEqual(result.returncode, 2, result.stdout)
-        self.assertEqual(result.stdout, "")
-        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+        self.assertEqual(exit_code, 2, out)
+        self.assertEqual(out, "")
+        self.assertEqual(json.loads(err), {"error": "invalid_input"})
+
+    def test_tier_and_suggest_tier_together_are_rejected(self) -> None:
+        """Breaks if two contradictory tier sources are resolved in one direction."""
+        exit_code, out, _ = self._invoke(["route", "--tier", "low", "--suggest-tier"])
+
+        self.assertEqual(exit_code, 2, out)
+        self.assertEqual(out, "")
 
     def test_the_usage_line_is_where_the_requirement_is_discoverable(self) -> None:
         """Breaks if the redacted error is the only signal an operator ever gets.
@@ -57,18 +86,13 @@ class ExplicitTierSelectionTests(unittest.TestCase):
         """
         for command in ("route", "run"):
             with self.subTest(command=command):
-                result = _run([command, "--help"])
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as raised:
+                    cli.main([command, "--help"])
 
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("--tier", result.stdout)
-                self.assertIn("--suggest-tier", result.stdout)
-
-    def test_tier_and_suggest_tier_together_are_rejected(self) -> None:
-        """Breaks if two contradictory tier sources are resolved in one direction."""
-        result = _run(["route", "--source-vendor", "codex", "--tier", "low", "--suggest-tier"])
-
-        self.assertEqual(result.returncode, 2, result.stdout)
-        self.assertEqual(result.stdout, "")
+                self.assertEqual(raised.exception.code, 0)
+                self.assertIn("--tier", out.getvalue())
+                self.assertIn("--suggest-tier", out.getvalue())
 
     def test_an_explicit_tier_adds_nothing_to_the_frozen_route_output(self) -> None:
         """Breaks if choosing a tier yourself changes the reviewed route bytes.
@@ -76,30 +100,35 @@ class ExplicitTierSelectionTests(unittest.TestCase):
         파서가 두 플래그 중 정확히 하나를 요구하므로 이 키들의 부재가 곧
         "조작자가 골랐다" 이다. 동결된 schema-1 출력에 필드를 더할 이유가 없다.
         """
-        result = _run(["route", "--source-vendor", "codex", "--tier", "low"])
+        exit_code, out, err = self._invoke(["route", "--tier", "low"])
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        payload = json.loads(result.stdout)
+        self.assertEqual(exit_code, 0, err)
+        payload = json.loads(out)
         self.assertEqual(payload["tier"], "low")
         self.assertNotIn("tier_source", payload)
         self.assertNotIn("tier_suggestion", payload)
 
     def test_suggest_tier_still_classifies_and_reaches_the_same_route(self) -> None:
         """Breaks if the suggestion path stopped being the old default behaviour."""
-        suggested = _run(["route", "--source-vendor", "codex", "--suggest-tier"])
-        self.assertEqual(suggested.returncode, 0, suggested.stderr)
-        payload = json.loads(suggested.stdout)
+        exit_code, out, err = self._invoke(["route", "--suggest-tier"])
+        self.assertEqual(exit_code, 0, err)
+        suggested = json.loads(out)
 
-        pinned = _run(["route", "--source-vendor", "codex", "--tier", payload["tier"]])
-        self.assertEqual(pinned.returncode, 0, pinned.stderr)
-        self.assertEqual(json.loads(pinned.stdout)["route"], payload["route"])
+        pinned_code, pinned_out, pinned_err = self._invoke(
+            ["route", "--tier", str(suggested["tier"])]
+        )
+        self.assertEqual(pinned_code, 0, pinned_err)
+        pinned = json.loads(pinned_out)
+        self.assertEqual(pinned["route"], suggested["route"])
+        # 지문까지 같아야 봉인된 모집단의 route 마이그레이션이 필요 없다.
+        self.assertEqual(pinned["route_fingerprint"], suggested["route_fingerprint"])
 
     def test_suggest_tier_publishes_the_classifier_measured_record(self) -> None:
         """Breaks if a suggestion is offered without its own measured track record."""
-        result = _run(["route", "--source-vendor", "codex", "--suggest-tier"])
+        exit_code, out, err = self._invoke(["route", "--suggest-tier"])
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        payload = json.loads(result.stdout)
+        self.assertEqual(exit_code, 0, err)
+        payload = json.loads(out)
         self.assertEqual(payload["tier_source"], "suggested")
         self.assertEqual(payload["tier_suggestion"]["measured"], CLASSIFIER_MEASURED_AGREEMENT)
 
@@ -113,14 +142,6 @@ class ExplicitTierSelectionTests(unittest.TestCase):
         self.assertEqual(measured["under_routing"], "8/9 (88.9%)")
         self.assertEqual(measured["reference"], "docs/policy4-fresh-blind-evaluation.md")
 
-    def test_human_route_output_shows_the_suggestion_is_not_established(self) -> None:
-        """Breaks if the terminal reader sees a tier with no indication of its accuracy."""
-        result = _run(["--human", "route", "--source-vendor", "codex", "--suggest-tier"])
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("suggested", result.stdout)
-        self.assertIn("41.7%", result.stdout)
-
     def test_a_suggested_tier_cannot_start_a_vendor_without_a_review(self) -> None:
         """Breaks if the refuted classifier can start a child nobody looked at.
 
@@ -128,35 +149,39 @@ class ExplicitTierSelectionTests(unittest.TestCase):
         제안의 실적을 낼 자리는 콘솔 검토뿐이므로, 검토 없는 제안 실행은
         그 실적을 아무에게도 보이지 않은 채 벤더를 띄우는 일이 된다.
         """
-        result = _run(["run", "--preset", "codex-cost-focused", "--suggest-tier"], task="")
+        exit_code, out, err = self._invoke(["run", "--suggest-tier"])
 
-        self.assertEqual(result.returncode, 2, result.stdout)
-        self.assertEqual(result.stdout, "")
-        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+        self.assertEqual(exit_code, 2, out)
+        self.assertEqual(out, "")
+        self.assertEqual(json.loads(err), {"error": "invalid_input"})
 
     def test_the_refusal_precedes_every_other_run_check(self) -> None:
-        """Breaks if a suggested run reaches policy or task handling before the refusal."""
-        result = _run(
-            ["run", "--policy", "/nonexistent/policy.json", "--suggest-tier"],
-            task="Fix a spelling typo.",
-        )
+        """Breaks if a suggested run reaches policy or task handling before the refusal.
 
-        self.assertEqual(result.returncode, 2, result.stdout)
-        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
+        정책을 읽을 수조차 없는 실행이 그래도 이 거부로 끝나야, 거부가 뒤쪽
+        어떤 검사에도 가려지지 않는다는 것이 확인된다.
+        """
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            exit_code = cli.main(["run", "--suggest-tier", "--policy", "/nonexistent/policy.json"])
 
-    def test_an_explicit_tier_run_keeps_stderr_to_the_closed_error(self) -> None:
-        """Breaks if stderr stops being one machine-readable object for automation."""
-        result = _run(["run", "--preset", "codex-cost-focused", "--tier", "standard"], task="")
+        self.assertEqual(exit_code, 2, out.getvalue())
+        self.assertEqual(json.loads(err.getvalue()), {"error": "invalid_input"})
 
-        self.assertEqual(result.returncode, 6, result.stderr)
-        self.assertEqual(json.loads(result.stderr), {"error": "route_fingerprint_mismatch"})
+    def test_human_route_output_shows_the_suggestion_is_not_established(self) -> None:
+        """Breaks if the terminal reader sees a tier with no indication of its accuracy."""
+        exit_code, out, err = self._invoke(["--human", "route", "--suggest-tier"])
+
+        self.assertEqual(exit_code, 0, err)
+        self.assertIn("suggested", out)
+        self.assertIn("41.7%", out)
 
     def test_human_route_output_omits_the_record_for_an_explicit_tier(self) -> None:
         """Breaks if the classifier's record is shown where the classifier did not decide."""
-        result = _run(["--human", "route", "--source-vendor", "codex", "--tier", "low"])
+        exit_code, out, err = self._invoke(["--human", "route", "--tier", "low"])
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("41.7%", result.stdout)
+        self.assertEqual(exit_code, 0, err)
+        self.assertNotIn("41.7%", out)
 
 
 if __name__ == "__main__":

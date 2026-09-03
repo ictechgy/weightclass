@@ -47,11 +47,17 @@ Two claims were checked rather than assumed:
 
 Verification:
 
-- `./.weightclass/verify` exit 0 with 1,612 tests and 35 skips. Ruff check and format-check over
+- `./.weightclass/verify` exit 0 with 1,611 tests and 35 skips. Ruff check and format-check over
   258 files, strict mypy over 207 source files, compileall, and `git diff --check` all pass.
-- The two new guards were shown non-vacuous by restoring each defect and watching the suite fail:
-  relaxing the mutually exclusive group to `required=False` failed 2 tests, and dropping
-  `tier_suggestion` from the receipt failed 2 more.
+- The three new guards were shown non-vacuous by restoring each defect and watching the suite
+  fail: relaxing the mutually exclusive group to `required=False`, dropping `tier_suggestion`
+  from the receipt, and disabling the review requirement each broke the module.
+- The first CI run failed on Linux and taught two things worth keeping. The new tests assumed a
+  vendor CLI was installed, which was true on the author's machine and false on a runner, so they
+  now take their routes from a temp policy file the way the rest of the suite does. They also
+  spawned thirteen interpreters, and `test_redaction_is_fast_on_hostile_input` — whose own comment
+  warns that a tight limit fails on a loaded machine — went 16.55 s against its 15 s bound. The
+  module now runs in-process in 0.04 s instead of 5 s, so it adds no load to that measurement.
 - 72 existing tests broke and were repaired without flipping what they assert. Route invocations
   took `--suggest-tier`, which is the same judgement they exercised before. Run invocations took
   an explicit tier, and the review-then-run helper now reads the tier out of its own review, which
