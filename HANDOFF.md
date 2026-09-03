@@ -1,8 +1,78 @@
 # Handoff
 
-_Last updated: 2026-09-02 KST by Claude (direction research, no code change)_
+_Last updated: 2026-09-03 KST by Claude (explicit tier selection on run and route)_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
+
+## Explicit tier selection on `run` and `route` (implemented, unreleased)
+
+Next Steps item A is implemented for `run` and `route`. This is a **breaking CLI change** and
+needs a minor version and release notes before it ships. Nothing is released yet.
+
+The refuted classifier was still the default front door: absent `--tier`, `cli.py` classified the
+task and routed on that judgement. The documentation called the classifier experimental while the
+CLI ran it by default, and that gap is what this change closes.
+
+The released-behaviour-to-be:
+
+- `run` and `route` require **exactly one** of `--tier` or `--suggest-tier`. Neither infers a tier
+  from an absent flag. The requirement is an argparse mutually exclusive group, so it fails before
+  the task is read, and `SafeArgumentParser` keeps the diagnostic redacted to `invalid_input` —
+  discoverability lives in the usage line, which is pinned by a test.
+- `--suggest-tier` is exactly the old default judgement, plus the classifier's own record.
+  `CLASSIFIER_MEASURED_AGREEMENT` in `classification.py` carries the 24-prompt blind evaluation and
+  states **both** directions: agreement 10/24 (41.7%), high-tier recall 1/9 (11.1%), over-routing
+  6/24 (25.0%), and under-routing 8/9 — the last is the stronger warning and the headline metrics
+  hide it.
+- A suggested tier **cannot start a vendor without `--review`**. `run`'s stdout belongs to the
+  child and its stderr carries one closed JSON error object, so the console review is the only
+  place the record can appear; without it the classifier would launch a child nobody looked at.
+  Automation passes `--tier`. The refusal is the first thing `run_from_standard_input` does, so no
+  later check can skip it, and it applies to the function rather than only to argv.
+- An explicit tier adds **no** receipt field. The parser guarantees one of the two flags, so the
+  absence of `tier_source` already means the operator chose, and the frozen schema-1 route output
+  bytes in `test_legacy_contract` stay byte-identical.
+
+Two claims were checked rather than assumed:
+
+- **Item A's vendor half was already satisfied, and implementing it as written would have been
+  wrong.** The vendor is never inferred from the task: it comes from `--source-vendor`, from
+  `--preset` (which embeds it in the reviewed name), or from the policy file, whose first tier
+  route pins it at `router.py:364-370` so a task cannot cross a billing boundary by declaration
+  order. Making `--source-vendor` `required=True` would have broken `--preset` as redundant and
+  broken the policy-file path outright. It was not changed.
+- **No fingerprint migration is needed.** A suggested `low` and an explicit `low` produce the same
+  route and the same `route_fingerprint`; only tier *selection* changed, not any route argv. This
+  is unlike the 0.30.0 `agy` change, which did move every fingerprint for that vendor.
+
+Verification:
+
+- `./.weightclass/verify` exit 0 with 1,611 tests and 35 skips. Ruff check and format-check over
+  258 files, strict mypy over 207 source files, compileall, and `git diff --check` all pass.
+- The three new guards were shown non-vacuous by restoring each defect and watching the suite
+  fail: relaxing the mutually exclusive group to `required=False`, dropping `tier_suggestion`
+  from the receipt, and disabling the review requirement each broke the module.
+- The first CI run failed on Linux and taught two things worth keeping. The new tests assumed a
+  vendor CLI was installed, which was true on the author's machine and false on a runner, so they
+  now take their routes from a temp policy file the way the rest of the suite does. They also
+  spawned thirteen interpreters, and `test_redaction_is_fast_on_hostile_input` — whose own comment
+  warns that a tight limit fails on a loaded machine — went 16.55 s against its 15 s bound. The
+  module now runs in-process in 0.04 s instead of 5 s, so it adds no load to that measurement.
+- 72 existing tests broke and were repaired without flipping what they assert. Route invocations
+  took `--suggest-tier`, which is the same judgement they exercised before. Run invocations took
+  an explicit tier, and the review-then-run helper now reads the tier out of its own review, which
+  is the real two-step flow. `_rendered_route` checks and removes the suggestion keys the same way
+  it already treats the fingerprint, because both are derived from the request rather than pinned
+  per test; the contract itself is pinned in `tests/test_explicit_tier_selection.py`.
+- Out-of-scope surfaces were left alone. `v2` (`cli.py:_v2_task_and_tier`) and `delegate` still
+  classify when no tier is given, and edits that leaked into their tests were reverted.
+
+Follow-ups this change did **not** take:
+
+- `v2` and `delegate` have the same default-classify behaviour and were deliberately excluded to
+  keep the diff reviewable. They should follow, and until they do the surfaces are inconsistent.
+- The release itself. `RELEASING.md` makes a tag push the human approval; this branch only makes
+  the change reviewable.
 
 ## Direction research with an external reviewer (2026-09-02, no code change)
 

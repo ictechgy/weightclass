@@ -146,7 +146,7 @@ import sys
 from unittest import mock
 from weightclass.cli import main
 with mock.patch("weightclass.cli.resolve_builtin_executable", return_value="/bin/echo"):
-    exit_code = main(["route"])
+    exit_code = main(["route", "--suggest-tier"])
 forbidden = sorted(name for name in sys.modules if name in {
     "weightclass.native_v2_compile",
     "weightclass.native_v2_runtime",

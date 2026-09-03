@@ -65,7 +65,15 @@ class ProductizationFollowupTests(unittest.TestCase):
             environment = self._environment(str(bin_directory))
 
             reviewed = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--source-vendor",
+                    "codex",
+                ],
                 cwd=ROOT,
                 capture_output=True,
                 check=False,
@@ -74,7 +82,16 @@ class ProductizationFollowupTests(unittest.TestCase):
                 text=True,
             )
             executed = subprocess.run(
-                [sys.executable, "-m", "weightclass", "run", "--source-vendor", "codex"],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "run",
+                    "--tier",
+                    "low",
+                    "--source-vendor",
+                    "codex",
+                ],
                 cwd=ROOT,
                 capture_output=True,
                 check=False,
@@ -96,7 +113,16 @@ class ProductizationFollowupTests(unittest.TestCase):
             executable.chmod(0o777)
             inventory = render_agent_discovery(str(bin_directory), agent="codex")
             completed = subprocess.run(
-                [sys.executable, "-m", "weightclass", "run", "--source-vendor", "codex"],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "run",
+                    "--tier",
+                    "low",
+                    "--source-vendor",
+                    "codex",
+                ],
                 cwd=ROOT,
                 capture_output=True,
                 check=False,

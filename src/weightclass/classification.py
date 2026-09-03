@@ -21,6 +21,24 @@ ReasonCode = Literal[
 ]
 CLASSIFICATION_POLICY_VERSION: Final = "4"
 
+# 이 정책이 블라인드 평가에서 실제로 얼마나 맞았는지. 제안을 내는 자리에서는
+# 언제나 이 기록을 함께 낸다 — 사전등록된 연구가 티어 라우팅의 이득을 반증한
+# 뒤에도 분류기가 기본 경로로 남아 있었고, 그것이 문서와 CLI 가 서로 다른 말을
+# 하게 만든 원인이었다.
+#
+# 과잉 라우팅만 인용하면 절반을 숨기는 것이다. 근거 문서가 더 강한 경고로
+# 지목한 쪽은 과소 라우팅이다: majority-`high` 아홉 건 중 여덟 건이 `standard`
+# 로 갔다. 두 방향을 모두 낸다.
+CLASSIFIER_MEASURED_AGREEMENT: Final = {
+    "corpus": "24 blind-rated synthetic prompts",
+    "agreement": "10/24 (41.7%)",
+    "high_tier_recall": "1/9 (11.1%)",
+    "over_routing": "6/24 (25.0%)",
+    "under_routing": "8/9 (88.9%)",
+    "caveat": "not an accuracy estimate; the sample and its intervals are too small",
+    "reference": "docs/policy4-fresh-blind-evaluation.md",
+}
+
 
 @dataclass(frozen=True)
 class ClassificationDecision:

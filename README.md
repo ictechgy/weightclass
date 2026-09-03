@@ -12,9 +12,26 @@ provider usage data, infer pricing, or know whether an effort label reduces
 the total tokens needed to finish a task. Retries and rework happen outside the
 router and can outweigh a cheaper first attempt.
 
-The heuristic classifier is experimental. Treat its tier as a deterministic
-local suggestion, review the selected command, and keep the source vendor and
-model choices explicit.
+The heuristic classifier is experimental, and it is **not** the front door.
+`route` and `run` require exactly one of `--tier` (you choose) or
+`--suggest-tier` (the classifier suggests, and reports its own record next to
+the suggestion). A suggested tier cannot start a vendor without `--review`, so
+the classifier never launches a child nobody looked at.
+
+Against 24 blind-rated prompts, policy 4 measured:
+
+| Metric | Result | 95% CI |
+| --- | ---: | ---: |
+| Agreement | 10/24 (41.7%) | 24.5%-61.2% |
+| High-tier recall | 1/9 (11.1%) | 2.0%-43.5% |
+| Over-routing | 6/24 (25.0%) | 12.0%-44.9% |
+
+The stronger warning is the one the headline metrics hide: eight of the nine
+majority-`high` prompts were routed to `standard`. The sample and its intervals
+are too small to be an accuracy estimate, and a separate pre-registered study
+found no benefit from routing up on the work it measured. See
+[the fresh blind check](docs/policy4-fresh-blind-evaluation.md) and
+[the paired token study](docs/paired-token-study.md).
 
 ## Install
 
@@ -44,8 +61,11 @@ authentication or subscription state.
 
 ```sh
 printf '%s' 'Fix a spelling typo.' | wclass classify
-printf '%s' 'Fix a spelling typo.' | wclass route --source-vendor codex
-printf '%s' 'Fix a spelling typo.' | wclass run --source-vendor codex --review
+printf '%s' 'Fix a spelling typo.' | wclass route --source-vendor codex --tier low
+printf '%s' 'Fix a spelling typo.' | wclass run --source-vendor codex --tier low --review
+
+# Or let the classifier suggest, and read its record before confirming.
+printf '%s' 'Fix a spelling typo.' | wclass route --source-vendor codex --suggest-tier
 ```
 
 The first command classifies locally; the second reviews the selected command.
@@ -692,8 +712,10 @@ A vendor CLI that reports success while declining to do the work still exits
 Inspect a route before running it:
 
 ```sh
-printf '%s' 'Fix a spelling typo in the README.' | wclass route --source-vendor codex
-printf '%s' 'Fix a spelling typo in the README.' | wclass run --source-vendor codex
+printf '%s' 'Fix a spelling typo in the README.' |
+  wclass route --source-vendor codex --tier low
+printf '%s' 'Fix a spelling typo in the README.' |
+  wclass run --source-vendor codex --tier low
 ```
 
 For schema-2 `run`, pass the exact `route_fingerprint` from the reviewed route
@@ -956,6 +978,7 @@ materializing a preset policy first:
 ```sh
 printf '%s' "$task" | wclass route \
   --source-vendor codex \
+  --tier low \
   --low-model your-reviewed-cheap-model \
   --high-model your-reviewed-capable-model
 ```
@@ -1161,6 +1184,7 @@ Native schema-1 `route` and `run` can select a packaged policy in memory with
 ```sh
 printf '%s' 'Add a focused unit test.' |
   wclass route --preset codex-cost-focused \
+    --tier standard \
     --model your-reviewed-codex-model
 ```
 
@@ -1213,6 +1237,7 @@ Either selector chooses a policy; it does not waive review. Copy the exact
 ```sh
 printf '%s' 'Add a focused unit test.' |
   wclass run --preset codex-cost-focused \
+    --tier standard \
     --standard-model your-codex-standard-model \
     --standard-effort medium \
     --ack-route-fingerprint 'sha256:REVIEWED_FINGERPRINT'
@@ -1312,9 +1337,11 @@ selection:
 
 ```sh
 task='Review this authorization change.'
-fingerprint="$(printf '%s' "$task" | wclass route --policy policy.json \
+reviewed="$(printf '%s' "$task" | wclass route --policy policy.json --suggest-tier)"
+tier="$(printf '%s' "$reviewed" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tier"])')"
+fingerprint="$(printf '%s' "$reviewed" \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["route_fingerprint"])')"
-printf '%s' "$task" | wclass run --policy policy.json \
+printf '%s' "$task" | wclass run --policy policy.json --tier "$tier" \
   --ack-route-fingerprint "$fingerprint"
 ```
 

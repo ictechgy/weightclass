@@ -80,16 +80,25 @@ def reviewed_run(
     정책 자체가 거부되면 검토 결과가 곧 답이므로 그것을 돌려준다. 그래야 정책
     거부를 확인하는 테스트와 실행 결과를 확인하는 테스트가 같은 헬퍼를 쓴다.
     """
-    review = _weightclass("route", "--policy", str(policy_path), *extra, task=task)
+    tier_arguments = () if "--tier" in extra else ("--suggest-tier",)
+    review = _weightclass(
+        "route", "--suggest-tier", "--policy", str(policy_path), *tier_arguments, *extra, task=task
+    )
     if review.returncode != 0:
         return review
-    fingerprint = json.loads(review.stdout)["route_fingerprint"]
+    reviewed = json.loads(review.stdout)
+    # 검토가 제안을 받았다면 실행은 그 값을 고정한다. 다시 분류하게 두면 검토한
+    # 것과 다른 티어로 시작될 수 있고, 그때 지문 확인만으로는 잡히지 않는다.
+    run_tier = () if "--tier" in extra else ("--tier", str(reviewed["tier"]))
     return _weightclass(
         "run",
+        "--tier",
+        "low",
         "--policy",
         str(policy_path),
         "--ack-route-fingerprint",
-        fingerprint,
+        reviewed["route_fingerprint"],
+        *run_tier,
         *extra,
         task=task,
     )
@@ -199,7 +208,9 @@ class ExecutorSpawnFailureTests(unittest.TestCase):
                 ),
                 contextlib.redirect_stderr(errors),
             ):
-                exit_code = cli.run_from_standard_input(policy_path, None, fingerprint)
+                exit_code = cli.run_from_standard_input(
+                    policy_path, None, fingerprint, explicit_tier="low"
+                )
 
         self.assertEqual(exit_code, 4)
         self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_unavailable"})
@@ -248,7 +259,9 @@ class ExecutorSpawnFailureTests(unittest.TestCase):
                 ),
                 contextlib.redirect_stderr(errors),
             ):
-                exit_code = cli.run_from_standard_input(policy_path, None, fingerprint)
+                exit_code = cli.run_from_standard_input(
+                    policy_path, None, fingerprint, explicit_tier="low"
+                )
 
         self.assertEqual(exit_code, 7)
         self.assertEqual(json.loads(errors.getvalue()), {"error": "executor_failed"})
@@ -295,7 +308,9 @@ class LegacyProcessContextTests(unittest.TestCase):
                     ) as reader,
                     contextlib.redirect_stderr(errors),
                 ):
-                    exit_code = cli.run_from_standard_input(policy_path, None, fingerprint)
+                    exit_code = cli.run_from_standard_input(
+                        policy_path, None, fingerprint, explicit_tier="low"
+                    )
             finally:
                 signal.signal(signal.SIGCHLD, previous_sigchld)
 
@@ -336,6 +351,8 @@ class PolicyRunBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             result = _weightclass(
                 "run",
+                "--tier",
+                "low",
                 "--policy",
                 str(self._policy(Path(temporary_directory))),
                 task="Fix a typo.",
@@ -457,6 +474,8 @@ class PolicyRunBindingTests(unittest.TestCase):
             exit_code = cli.main(
                 [
                     "run",
+                    "--tier",
+                    "low",
                     *options,
                     "--ack-route-fingerprint",
                     descriptor["route_fingerprint"],
@@ -523,6 +542,8 @@ class PolicyRunBindingTests(unittest.TestCase):
             exit_code = cli.main(
                 [
                     "run",
+                    "--tier",
+                    "low",
                     *options,
                     "--ack-route-fingerprint",
                     descriptor["route_fingerprint"],
@@ -557,7 +578,7 @@ class PolicyRunBindingTests(unittest.TestCase):
                 mock.patch.object(cli, "run_owned_foreground") as spawn,
                 contextlib.redirect_stderr(errors),
             ):
-                exit_code = cli.run_from_standard_input(policy_path, None)
+                exit_code = cli.run_from_standard_input(policy_path, None, explicit_tier="low")
 
         self.assertEqual(exit_code, 6)
         self.assertEqual(json.loads(errors.getvalue()), {"error": "route_fingerprint_mismatch"})
@@ -692,7 +713,7 @@ class PolicyRunBindingTests(unittest.TestCase):
             ) as spawn,
             contextlib.redirect_stderr(errors),
         ):
-            exit_code = cli.run_from_standard_input(None, "codex")
+            exit_code = cli.run_from_standard_input(None, "codex", explicit_tier="low")
 
         self.assertEqual(exit_code, 0, errors.getvalue())
         spawn.assert_called_once()
@@ -702,6 +723,8 @@ class PolicyRunBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             result = _weightclass(
                 "run",
+                "--tier",
+                "low",
                 "--policy",
                 str(self._policy(Path(temporary_directory))),
                 "--ack-route-fingerprint",
@@ -764,6 +787,7 @@ class TaskPlaceholderTests(unittest.TestCase):
                     cli.load_routes(path)
                 result = _weightclass(
                     "route",
+                    "--suggest-tier",
                     "--policy",
                     str(path),
                     "--source-vendor",
@@ -938,7 +962,9 @@ class TaskPlaceholderTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            review = _weightclass("route", "--policy", str(policy_path), task="비밀 태스크")
+            review = _weightclass(
+                "route", "--suggest-tier", "--policy", str(policy_path), task="비밀 태스크"
+            )
 
         rendered = json.loads(review.stdout)
         self.assertEqual(review.returncode, 0, review.stderr)
@@ -950,7 +976,9 @@ class TaskPlaceholderTests(unittest.TestCase):
         """Breaks if every existing review output grows a field it never had."""
         with tempfile.TemporaryDirectory() as directory:
             policy_path = self._policy(Path(directory), ["/bin/echo", "ok"])
-            review = _weightclass("route", "--policy", str(policy_path), task="Fix a typo.")
+            review = _weightclass(
+                "route", "--suggest-tier", "--policy", str(policy_path), task="Fix a typo."
+            )
 
         self.assertNotIn("task_delivery", json.loads(review.stdout))
 
@@ -962,8 +990,12 @@ class TaskPlaceholderTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as directory:
             policy_path = self._policy(Path(directory), ["/bin/echo", "{{task}}"])
-            first = _weightclass("route", "--policy", str(policy_path), task="Fix a typo.")
-            second = _weightclass("route", "--policy", str(policy_path), task="Rename a var.")
+            first = _weightclass(
+                "route", "--suggest-tier", "--policy", str(policy_path), task="Fix a typo."
+            )
+            second = _weightclass(
+                "route", "--suggest-tier", "--policy", str(policy_path), task="Rename a var."
+            )
 
         self.assertEqual(
             json.loads(first.stdout)["route_fingerprint"],
@@ -1077,7 +1109,9 @@ class OpenVendorLabelTests(unittest.TestCase):
 
     def test_a_well_formed_but_unrouted_source_vendor_fails_closed_at_selection(self) -> None:
         """Breaks if a syntactically valid label that matches no route is silently accepted."""
-        result = _weightclass("route", "--source-vendor", "qwen", task="Fix a typo.")
+        result = _weightclass(
+            "route", "--suggest-tier", "--source-vendor", "qwen", task="Fix a typo."
+        )
 
         self.assertEqual(result.returncode, 3)
         self.assertEqual(json.loads(result.stderr), {"error": "unsupported_route"})
@@ -1705,6 +1739,7 @@ class CommandSurfaceTests(unittest.TestCase):
                 task = "private invalid override task"
                 result = _weightclass(
                     "route",
+                    "--suggest-tier",
                     "--preset",
                     preset,
                     option,
@@ -1784,6 +1819,7 @@ class CommandSurfaceTests(unittest.TestCase):
             )
             result = _weightclass(
                 "route",
+                "--suggest-tier",
                 "--policy",
                 str(policy_path),
                 "--source-vendor",
@@ -1803,6 +1839,7 @@ class CommandSurfaceTests(unittest.TestCase):
         task = "private ambiguous model task"
         result = _weightclass(
             "route",
+            "--suggest-tier",
             "--preset",
             "codex-cost-focused",
             "--model",
@@ -1839,6 +1876,7 @@ class CommandSurfaceTests(unittest.TestCase):
             )
             result = _weightclass(
                 "route",
+                "--suggest-tier",
                 "--cost-focused",
                 "--policy",
                 str(policy_path),
@@ -1857,6 +1895,7 @@ class CommandSurfaceTests(unittest.TestCase):
         task = "private preset conflict task"
         result = _weightclass(
             "route",
+            "--suggest-tier",
             "--preset",
             "codex-cost-focused",
             "--source-vendor",
@@ -2117,11 +2156,11 @@ class TaskConfidentialityTests(unittest.TestCase):
                     "low",
                 ],
                 ["classify"],
-                ["route"],
-                ["route", "--source-vendor", "codex"],
-                ["route", "--policy", "/nonexistent/policy.json"],
-                ["run", "--policy", str(native_policy_path)],
-                ["run", "--policy", "/nonexistent/policy.json"],
+                ["route", "--suggest-tier"],
+                ["route", "--suggest-tier", "--source-vendor", "codex"],
+                ["route", "--suggest-tier", "--policy", "/nonexistent/policy.json"],
+                ["run", "--tier", "low", "--policy", str(native_policy_path)],
+                ["run", "--tier", "low", "--policy", "/nonexistent/policy.json"],
                 [
                     "render",
                     "--policy",
@@ -2180,7 +2219,7 @@ class CommandLineTests(unittest.TestCase):
                 "codex",
             ]
             classified = subprocess.run(
-                base,
+                [*base, "--suggest-tier"],
                 capture_output=True,
                 check=False,
                 input="Review the security boundary.",
@@ -2215,6 +2254,13 @@ class CommandLineTests(unittest.TestCase):
         fingerprint = str(rendered.pop("route_fingerprint"))
         self.assertTrue(fingerprint.startswith("sha256:"), fingerprint)
         self.assertEqual(len(fingerprint), len("sha256:") + 64)
+        # tier_source 도 지문과 같은 부류다 — 어느 플래그를 썼는지에서 유도되므로
+        # 개별 테스트가 리터럴로 고정할 필요가 없다. 형태만 확인하고 뺀다.
+        # 계약 자체는 tests/test_explicit_tier_selection.py 가 고정한다.
+        tier_source = rendered.pop("tier_source", None)
+        self.assertIn(tier_source, (None, "suggested"))
+        suggestion = rendered.pop("tier_suggestion", None)
+        self.assertEqual(suggestion is None, tier_source is None)
         route_id = rendered.get("route")
         vendor = rendered.get("vendor")
         command = rendered.get("command")
@@ -2312,7 +2358,15 @@ class CommandLineTests(unittest.TestCase):
             text=True,
         )
         route = subprocess.run(
-            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
+            [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "route",
+                "--suggest-tier",
+                "--source-vendor",
+                "codex",
+            ],
             capture_output=True,
             check=False,
             input="Fix the typo.",
@@ -2386,6 +2440,7 @@ class CommandLineTests(unittest.TestCase):
                     "-m",
                     "weightclass",
                     "route",
+                    "--suggest-tier",
                     "--policy",
                     str(policy_path),
                     "--explain",
@@ -2417,7 +2472,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_rejects_invalid_utf8_stdin_with_a_redacted_diagnostic(self) -> None:
         """Breaks if undecodable input produces a traceback instead of failing closed."""
-        for arguments in (["classify"], ["route"], ["run"]):
+        for arguments in (["classify"], ["route", "--suggest-tier"], ["run", "--tier", "low"]):
             with self.subTest(arguments=arguments):
                 result = subprocess.run(
                     [sys.executable, "-m", "weightclass", *arguments],
@@ -2493,7 +2548,15 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--policy",
+                    str(policy_path),
+                ],
                 capture_output=True,
                 check=False,
                 input="Review the security implications of this authorization change.",
@@ -2530,7 +2593,15 @@ class CommandLineTests(unittest.TestCase):
             policy_path.write_text(json.dumps(policy), encoding="utf-8")
 
             balanced = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--policy",
+                    str(policy_path),
+                ],
                 capture_output=True,
                 check=False,
                 input="Implement the requested feature.",
@@ -2539,7 +2610,15 @@ class CommandLineTests(unittest.TestCase):
             policy["posture"] = "cautious"
             policy_path.write_text(json.dumps(policy), encoding="utf-8")
             cautious = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--policy",
+                    str(policy_path),
+                ],
                 capture_output=True,
                 check=False,
                 input="Implement the requested feature.",
@@ -2574,7 +2653,15 @@ class CommandLineTests(unittest.TestCase):
                 encoding="utf-8",
             )
             result = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--policy",
+                    str(policy_path),
+                ],
                 capture_output=True,
                 check=False,
                 input="Fix the typo.",
@@ -2617,6 +2704,7 @@ class CommandLineTests(unittest.TestCase):
                     "-m",
                     "weightclass",
                     "route",
+                    "--suggest-tier",
                     "--policy",
                     str(policy_path),
                     "--source-vendor",
@@ -2695,7 +2783,15 @@ class CommandLineTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 result = subprocess.run(
-                    [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                    [
+                        sys.executable,
+                        "-m",
+                        "weightclass",
+                        "route",
+                        "--suggest-tier",
+                        "--policy",
+                        str(policy_path),
+                    ],
                     capture_output=True,
                     check=False,
                     input="Review authorization.",
@@ -2722,7 +2818,15 @@ class CommandLineTests(unittest.TestCase):
             }
             policy_path.write_text(json.dumps(policy), encoding="utf-8")
             balanced = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--policy",
+                    str(policy_path),
+                ],
                 capture_output=True,
                 check=False,
                 input="Review authorization.",
@@ -2731,7 +2835,15 @@ class CommandLineTests(unittest.TestCase):
             policy["posture"] = "cautious"
             policy_path.write_text(json.dumps(policy), encoding="utf-8")
             cautious = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--policy",
+                    str(policy_path),
+                ],
                 capture_output=True,
                 check=False,
                 input="Review authorization.",
@@ -2743,6 +2855,8 @@ class CommandLineTests(unittest.TestCase):
                     "-m",
                     "weightclass",
                     "run",
+                    "--tier",
+                    json.loads(balanced.stdout)["tier"],
                     "--policy",
                     str(policy_path),
                     "--ack-route-fingerprint",
@@ -2794,7 +2908,15 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--policy",
+                    str(policy_path),
+                ],
                 capture_output=True,
                 check=False,
                 input="Add a helper function to the parser.",
@@ -2828,7 +2950,15 @@ class CommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             policy_path = Path(temporary_directory) / "policy.json"
             policy_path.write_text(json.dumps(mixed_vendor_policy), encoding="utf-8")
-            arguments = [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)]
+            arguments = [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "route",
+                "--suggest-tier",
+                "--policy",
+                str(policy_path),
+            ]
             blocked = subprocess.run(
                 arguments,
                 capture_output=True,
@@ -2886,6 +3016,7 @@ class CommandLineTests(unittest.TestCase):
                     "-m",
                     "weightclass",
                     "route",
+                    "--suggest-tier",
                     "--policy",
                     str(policy_path),
                     "--source-vendor",
@@ -2941,7 +3072,15 @@ class CommandLineTests(unittest.TestCase):
             )
 
             result = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--policy",
+                    str(policy_path),
+                ],
                 capture_output=True,
                 check=False,
                 input="Review the authorization boundary.",
@@ -2985,6 +3124,7 @@ class CommandLineTests(unittest.TestCase):
                     "-m",
                     "weightclass",
                     "route",
+                    "--suggest-tier",
                     "--policy",
                     str(policy_path),
                     "--source-vendor",
@@ -3010,7 +3150,15 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_codex_high_task_to_the_built_in_codex_high_route(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
+            [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "route",
+                "--suggest-tier",
+                "--source-vendor",
+                "codex",
+            ],
             capture_output=True,
             check=False,
             input="Review the security implications of this authorization change.",
@@ -3039,7 +3187,15 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_claude_low_task_to_the_built_in_claude_low_route(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "claude"],
+            [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "route",
+                "--suggest-tier",
+                "--source-vendor",
+                "claude",
+            ],
             capture_output=True,
             check=False,
             input="Fix a typo.",
@@ -3067,7 +3223,15 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_claude_standard_task_to_the_built_in_claude_standard_route(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "claude"],
+            [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "route",
+                "--suggest-tier",
+                "--source-vendor",
+                "claude",
+            ],
             capture_output=True,
             check=False,
             input="Add a focused unit test for this formatter.",
@@ -3096,7 +3260,7 @@ class CommandLineTests(unittest.TestCase):
     def test_keeps_a_high_effort_task_on_the_default_policy_vendor(self) -> None:
         """Breaks if omitting --source-vendor lets the high tier switch vendors."""
         result = subprocess.run(
-            [sys.executable, "-m", "weightclass", "route"],
+            [sys.executable, "-m", "weightclass", "route", "--suggest-tier"],
             capture_output=True,
             check=False,
             input="Assess the security boundary for the new authorization flow.",
@@ -3112,7 +3276,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_short_spelling_fix_to_the_built_in_workspace_codex_command(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "weightclass", "route"],
+            [sys.executable, "-m", "weightclass", "route", "--suggest-tier"],
             capture_output=True,
             check=False,
             input="Fix a typo.",
@@ -3143,7 +3307,7 @@ class CommandLineTests(unittest.TestCase):
 
     def test_routes_a_general_task_to_the_built_in_workspace_codex_command(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "weightclass", "route"],
+            [sys.executable, "-m", "weightclass", "route", "--suggest-tier"],
             capture_output=True,
             check=False,
             input="Add a focused unit test for this formatter.",
@@ -3242,7 +3406,15 @@ class CommandLineTests(unittest.TestCase):
             ascii_only_environment = dict(os.environ, LC_ALL="C", PYTHONUTF8="0")
             task = "개인정보 처리 방침 오타 수정"
             review = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--policy",
+                    str(policy_path),
+                ],
                 capture_output=True,
                 check=False,
                 env=ascii_only_environment,
@@ -3256,6 +3428,8 @@ class CommandLineTests(unittest.TestCase):
                     "-m",
                     "weightclass",
                     "run",
+                    "--tier",
+                    json.loads(review.stdout)["tier"],
                     "--policy",
                     str(policy_path),
                     "--ack-route-fingerprint",
@@ -3435,7 +3609,15 @@ class CommandLineTests(unittest.TestCase):
 
             write_policy("reviewed.py")
             review = subprocess.run(
-                [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                [
+                    sys.executable,
+                    "-m",
+                    "weightclass",
+                    "route",
+                    "--suggest-tier",
+                    "--policy",
+                    str(policy_path),
+                ],
                 capture_output=True,
                 check=False,
                 input="Fix a typo.",
@@ -3450,6 +3632,8 @@ class CommandLineTests(unittest.TestCase):
                     "-m",
                     "weightclass",
                     "run",
+                    "--tier",
+                    json.loads(review.stdout)["tier"],
                     "--policy",
                     str(policy_path),
                     "--ack-route-fingerprint",
@@ -3468,6 +3652,8 @@ class CommandLineTests(unittest.TestCase):
                     "-m",
                     "weightclass",
                     "run",
+                    "--tier",
+                    json.loads(review.stdout)["tier"],
                     "--policy",
                     str(policy_path),
                     "--ack-route-fingerprint",
@@ -3480,7 +3666,9 @@ class CommandLineTests(unittest.TestCase):
             )
             # 여기서만은 헬퍼를 쓰지 않는다. 지문을 아예 제시하지 않는 호출이
             # 무엇을 하는지가 이 단언의 대상이다.
-            unbound = _weightclass("run", "--policy", str(policy_path), task="Fix a typo.")
+            unbound = _weightclass(
+                "run", "--tier", "low", "--policy", str(policy_path), task="Fix a typo."
+            )
 
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         self.assertEqual(accepted.stdout, "reviewed-worker\n")
@@ -3529,7 +3717,15 @@ class CommandLineTests(unittest.TestCase):
 
             def route_fingerprint_for(task: str) -> str:
                 review = subprocess.run(
-                    [sys.executable, "-m", "weightclass", "route", "--policy", str(policy_path)],
+                    [
+                        sys.executable,
+                        "-m",
+                        "weightclass",
+                        "route",
+                        "--suggest-tier",
+                        "--policy",
+                        str(policy_path),
+                    ],
                     capture_output=True,
                     check=False,
                     input=task,
@@ -3538,13 +3734,19 @@ class CommandLineTests(unittest.TestCase):
                 self.assertEqual(review.returncode, 0, review.stderr)
                 return str(json.loads(review.stdout)["route_fingerprint"])
 
-            def run_with(task: str, fingerprint: str) -> subprocess.CompletedProcess[str]:
+            def run_with(
+                task: str, fingerprint: str, tier: str = "low"
+            ) -> subprocess.CompletedProcess[str]:
+                # 티어를 분류에 맡기지 않고 지정한다. 이 테스트가 보는 것은 지문이
+                # 어떤 필드를 묶는지이지 분류기의 판정이 아니다.
                 return subprocess.run(
                     [
                         sys.executable,
                         "-m",
                         "weightclass",
                         "run",
+                        "--tier",
+                        tier,
                         "--policy",
                         str(policy_path),
                         "--ack-route-fingerprint",
@@ -3592,7 +3794,7 @@ class CommandLineTests(unittest.TestCase):
 
             # 3. 티어만 다르다. 세 티어의 명령이 모두 같으므로 명령은 동일하다.
             write_policy("codex", allow_mixed_vendors=False)
-            other_tier = run_with("Review the authorization boundary.", baseline)
+            other_tier = run_with("Review the authorization boundary.", baseline, tier="high")
 
             unchanged = run_with("Fix a typo.", baseline)
 
@@ -3615,14 +3817,22 @@ class CommandLineTests(unittest.TestCase):
         """
         task = "Fix a typo."
         without_vendor = subprocess.run(
-            [sys.executable, "-m", "weightclass", "route"],
+            [sys.executable, "-m", "weightclass", "route", "--suggest-tier"],
             capture_output=True,
             check=False,
             input=task,
             text=True,
         )
         with_vendor = subprocess.run(
-            [sys.executable, "-m", "weightclass", "route", "--source-vendor", "codex"],
+            [
+                sys.executable,
+                "-m",
+                "weightclass",
+                "route",
+                "--suggest-tier",
+                "--source-vendor",
+                "codex",
+            ],
             capture_output=True,
             check=False,
             input=task,
