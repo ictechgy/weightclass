@@ -1046,20 +1046,44 @@ def _preset_overrides_from_arguments(arguments: argparse.Namespace) -> PresetOve
     )
 
 
+# 상위 help 목록에서 빠지는 명령. 파싱과 실행은 그대로이고 epilog 가 이름을 가리킨다.
+ADVANCED_COMMANDS: tuple[str, ...] = (
+    "profile",
+    "select",
+    "review-cost-profile",
+    "recommend",
+    "render",
+    "delegate",
+    "v2",
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the whole command surface so `--help` lists every reachable mode.
 
     allow_abbrev를 끈 것은 --confirm-api-egress 같은 명시적 승인 플래그가
     --c 같은 축약으로 만족되면 안 되기 때문이다.
     """
+    # 상위 help 는 매일 쓰는 명령만 나열한다. 고급 명령은 파싱과 실행이 그대로
+    # 살아 있지만 목록에서 빠지고, epilog 한 줄이 이름을 가리킨다. 표면을 줄이는
+    # 것이지 동작을 지우는 것이 아니다.
     parser = SafeArgumentParser(
         prog="wclass",
-        description="Classify a task and select a reviewable vendor command.",
+        description="Review and start one agent CLI command for a task.",
         allow_abbrev=False,
+        # epilog 는 argparse 의 % 보간을 거치지 않으므로 printf '%s' 가 안전하다.
+        # 이 예제를 help= 문자열로 옮기면 %s 때문에 포맷 오류가 난다.
+        epilog=(
+            "example: printf '%s' 'Fix a spelling typo.' | wclass run "
+            "--source-vendor codex --tier low\n\n"
+            "advanced commands (each has its own --help; see README): "
+            + ", ".join(ADVANCED_COMMANDS)
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     # argparse 내장 version 액션은 argv의 나머지를 검증하기 전에 종료해 버려서
     # `wclass --version --bogus` 가 0으로 성공한다. 파싱을 끝낸 뒤 직접 처리한다.
-    parser.add_argument("--version", action="store_true")
+    parser.add_argument("--version", action="store_true", help="Print the installed version.")
     subcommands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     discover = subcommands.add_parser(
@@ -1071,7 +1095,6 @@ def build_parser() -> argparse.ArgumentParser:
     discover.add_argument("--agent", choices=AGENT_IDS)
     profile = subcommands.add_parser(
         "profile",
-        help="Generate a routing policy for an installed agent.",
         allow_abbrev=False,
         description="Generate a schema-1 policy from an installed agent selection.",
     )
@@ -1082,7 +1105,6 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument("--allow-cross-vendor", action="store_true")
     subcommands.add_parser(
         "select",
-        help="Interactively create and confirm a routing policy.",
         allow_abbrev=False,
         description=(
             "Interactively select and confirm a schema-3 policy on the controlling console."
@@ -1154,14 +1176,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_preset_override_arguments(review_preset)
     review_cost_profile = subcommands.add_parser(
         "review-cost-profile",
-        help="Validate and fingerprint a cost profile.",
         allow_abbrev=False,
         description="Validate and fingerprint one task-free cost profile.",
     )
     review_cost_profile.add_argument("--cost-profile", required=True, type=Path)
     recommend = subcommands.add_parser(
         "recommend",
-        help="Recommend a route without starting a vendor process.",
         allow_abbrev=False,
         description="Recommend or abstain without starting a vendor process.",
     )
@@ -1315,7 +1335,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     render = subcommands.add_parser(
         "render",
-        help="Render a workflow route from a policy.",
         allow_abbrev=False,
         description="Render the command of a policy route named by a workflow descriptor.",
     )
@@ -1324,7 +1343,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     delegate = subcommands.add_parser(
         "delegate",
-        help="Use advanced reviewed delegation workflows.",
         allow_abbrev=False,
         description="Compile a reviewable role-delegation policy.",
     )
@@ -1379,7 +1397,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     api = subcommands.add_parser(
         "v2",
-        help="Use advanced declarative API-runtime routing.",
         allow_abbrev=False,
         description="Select a declarative API route served by an external runtime.",
     )
