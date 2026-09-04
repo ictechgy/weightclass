@@ -1,0 +1,10 @@
+diff --git a/src/ledger/schema.py b/src/ledger/schema.py
+--- a/src/ledger/schema.py
++++ b/src/ledger/schema.py
+@@ -14,5 +14,5 @@ def validate_schema_version(value: object) -> int:
+     `isinstance(value, int)` 로는 `True` 를 거르지 못한다. 타입을 정확히 본다.
+     """
+     if type(value) is not int or value != SCHEMA_VERSION:
+-        raise SchemaError("schema_version must be the integer 1")
++        raise SchemaError(f"schema_version must be the integer {SCHEMA_VERSION}")
+     return value

@@ -1,0 +1,12 @@
+diff --git a/src/ledger/cache.py b/src/ledger/cache.py
+--- a/src/ledger/cache.py
++++ b/src/ledger/cache.py
+@@ -13,7 +13,7 @@ class Ledger:
+ 
+     def add(self, raw_id: str) -> None:
+         """식별자를 검증해 추가한다. 중복은 무시하지 않고 거부한다."""
+-        ledger_id = normalize_ledger_id(raw_id)
++        ledger_id: str = normalize_ledger_id(raw_id)
+         if ledger_id in self._entries:
+             raise KeyError(f"duplicate ledger id: {ledger_id}")
+         self._entries.append(ledger_id)

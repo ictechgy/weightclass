@@ -1,0 +1,16 @@
+diff --git a/src/ledger/cache.py b/src/ledger/cache.py
+--- a/src/ledger/cache.py
++++ b/src/ledger/cache.py
+@@ -19,10 +19,10 @@ class Ledger:
+         self._entries.append(ledger_id)
+ 
+     def remove(self, raw_id: str) -> None:
+-        """식별자를 제거한다. 없으면 KeyError 다. 조용히 넘어가지 않는다."""
++        """식별자를 제거한다. 없으면 아무 일도 하지 않는다."""
+         ledger_id = normalize_ledger_id(raw_id)
+         if ledger_id not in self._entries:
+-            raise KeyError(f"unknown ledger id: {ledger_id}")
++            return
+         self._entries.remove(ledger_id)
+ 
+     def entries(self) -> tuple[str, ...]:

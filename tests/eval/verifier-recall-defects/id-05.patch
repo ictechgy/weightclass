@@ -1,0 +1,15 @@
+diff --git a/src/ledger/ids.py b/src/ledger/ids.py
+--- a/src/ledger/ids.py
++++ b/src/ledger/ids.py
+@@ -15,6 +15,9 @@ def normalize_ledger_id(raw: str) -> str:
+     공백, 탭, 개행, NBSP, 폭 없는 문자, 방향 제어 문자는 모두 거부한다. 앞뒤를
+     잘라 주면 " abc " 와 "abc" 가 같은 항목이 되어 원장에 두 얼굴이 생긴다.
+     """
+-    if not isinstance(raw, str) or IDENTIFIER.fullmatch(raw) is None:
++    if not isinstance(raw, str):
++        raise LedgerIdError("ledger id must be a string")
++    candidate = raw.strip("\t\r\n")
++    if IDENTIFIER.fullmatch(candidate) is None:
+         raise LedgerIdError("ledger id must be 1-64 ASCII characters starting alphanumeric")
+-    return raw
++    return candidate

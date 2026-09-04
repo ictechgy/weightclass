@@ -1,0 +1,25 @@
+diff --git a/src/ledger/state.py b/src/ledger/state.py
+--- a/src/ledger/state.py
++++ b/src/ledger/state.py
+@@ -3,7 +3,6 @@
+ from __future__ import annotations
+ 
+ import json
+-import os
+ from pathlib import Path
+ 
+ from ledger.schema import validate_schema_version
+@@ -36,11 +35,5 @@ def save_state(path: Path, state: dict[str, object]) -> None:
+     예외로 알리고 절대 성공으로 보고하지 않는다.
+     """
+     validate_schema_version(state.get("schema_version"))
+-    serialized = json.dumps(state, sort_keys=True)
+-    temporary = path.with_name(path.name + ".tmp")
+-    try:
+-        temporary.write_text(serialized, encoding="utf-8")
+-        os.replace(temporary, path)
+-    finally:
+-        if temporary.exists():
+-            temporary.unlink()
++    with open(path, "w", encoding="utf-8") as handle:
++        json.dump(state, handle, sort_keys=True)

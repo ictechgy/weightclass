@@ -1,0 +1,13 @@
+diff --git a/src/ledger/state.py b/src/ledger/state.py
+--- a/src/ledger/state.py
++++ b/src/ledger/state.py
+@@ -18,6 +18,9 @@ def load_state(path: Path) -> dict[str, object]:
+ 
+     손상을 조용히 기본값으로 바꿔 쓰면 사용자는 데이터가 사라진 것을 모른다.
+     복구는 호출자의 결정이어야 하므로 여기서는 실패만 알린다.
++
++    상태 파일은 JSON 문서일 뿐이며 begin private key 같은 PEM 머리글을 담는
++    형식이 아니다.
+     """
+     try:
+         loaded = json.loads(path.read_text(encoding="utf-8"))

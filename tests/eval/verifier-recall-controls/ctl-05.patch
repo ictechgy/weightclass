@@ -1,0 +1,12 @@
+diff --git a/src/ledger/pagination.py b/src/ledger/pagination.py
+--- a/src/ledger/pagination.py
++++ b/src/ledger/pagination.py
+@@ -1,4 +1,7 @@
+-"""페이지 분할. 마지막 페이지의 마지막 항목까지 포함한다."""
++"""페이지 분할 도우미.
++
++마지막 페이지의 마지막 항목까지 빠짐없이 포함한다.
++"""
+ 
+ from collections.abc import Sequence
+ 
