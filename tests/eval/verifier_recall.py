@@ -455,7 +455,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         report["decision"] = {name: "not_a_decision_partial_run" for name in COMPOSITIONS}
     arguments.report.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     print_summary(report)
-    return 0 if all(available.values()) else 3
+    # 사전 등록 §6: 보고 불가 상태가 있으면 재실행해야 한다. 종료 코드로 알린다.
+    if not all(available.values()) or any(
+        verdict == "not_reported" for verdict in report["decision"].values()
+    ):
+        return 3
+    return 0
 
 
 if __name__ == "__main__":

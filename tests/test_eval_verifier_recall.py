@@ -77,6 +77,14 @@ def _write_catalogue(directory: pathlib.Path) -> pathlib.Path:
 
 
 class WilsonTests(unittest.TestCase):
+    def test_the_reported_intervals_are_reproducible(self) -> None:
+        """Breaks if the interval behind the recorded no-go changes."""
+        runner = _load_runner()
+        lower, upper = runner.wilson_interval(24, 33)
+        self.assertEqual((round(lower, 4), round(upper, 4)), (0.5578, 0.8493))
+        lower, upper = runner.wilson_interval(21, 26)
+        self.assertEqual((round(lower, 4), round(upper, 4)), (0.6212, 0.9149))
+
     def test_known_values(self) -> None:
         runner = _load_runner()
         lower, upper = runner.wilson_interval(25, 26)
@@ -167,11 +175,13 @@ class DecisionRuleTests(unittest.TestCase):
         entries, runs = self._entries_and_runs(
             runner, caught=25, credential_fired=True, controls_passed=10
         )
-        runs["sc-01"]["C4"] = "check_unavailable"
-        summary = runner.summarize(entries, runs)
-        self.assertEqual(summary["decision"]["C4"], "not_reported")
-        self.assertFalse(summary["recall"]["C4"]["reportable"])
-        self.assertEqual(summary["decision"]["C1"], "go")
+        for status in ("check_unavailable", "timeout", "apply_failed"):
+            runs["sc-01"]["C4"] = status
+            summary = runner.summarize(entries, runs)
+            with self.subTest(status=status):
+                self.assertEqual(summary["decision"]["C4"], "not_reported")
+                self.assertFalse(summary["recall"]["C4"]["reportable"])
+                self.assertEqual(summary["decision"]["C1"], "go")
 
 
 if __name__ == "__main__":

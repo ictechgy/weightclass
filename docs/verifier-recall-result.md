@@ -50,24 +50,28 @@ Per class under C4: schema-coercion 6/6, pagination-bound 3/3, silent-overwrite
    `HANDOFF.md` Next Steps 4: the cheap arm's defects passed its tests because
    tests of that kind cannot see them.
 2. **Static checks add almost nothing here.** Ruff caught one defect (a mutable
-   default argument, B006) and mypy one (a coercion that changed a return type).
-   Both are the "lint demo" instances; the behavioural defects are invisible to
-   both tools.
+   default argument, B006) and mypy one (`sc-03`, a coercion whose `int()` call
+   on an `object` fails strict typing). Both are the "lint demo" instances; the
+   behavioural defects are invisible to both tools.
 3. **Even a class-aware invariant script, written with the class definitions in
-   view, misses a quarter.** The misses cluster in two classes: internal state
-   leaked through a path the invariant did not probe (a second accessor, a
+   view, misses a quarter.** Six of the nine misses fall in two classes: internal
+   state leaked through a path the invariant did not probe (a second accessor, a
    property, a module constant, a sharing `copy()`), and file-level atomicity
-   failures the invariant's crash simulation did not reach. An invariant script
-   is only as complete as the author's list of ways to be wrong, and the blind
-   generator found ways that were not on the list.
+   failures the invariant never targeted — it checks the postcondition of a
+   failed save, not a write interrupted midway. The other three are one each:
+   a load path that rewrites a valid file, an NFKC normalisation that folds
+   full-width characters into identifiers, and an `add` that swallows its own
+   validation error. An invariant script is only as complete as the author's
+   list of ways to be wrong, and the blind generator found ways that were not on
+   the list.
 4. **Specificity held.** No composition flagged a benign refactor or a scan
    near-miss, so the failure is recall, not noise.
 
 Predictions recorded before the run were C0 0–2, C1 0–2, C2 2–4, C3 2–5, C4
 22–26 at n = 26. Tests caught more than predicted (5 at n = 26), ruff and mypy
-fewer, and C4 landed at the bottom of its range. The direction of every miss was
-the same: the author of a check cannot enumerate the defects a different author
-will introduce.
+fewer, and C4 came in one below its range at 21. The predictions erred in both
+directions, but the C4 shortfall has one explanation: the author of a check
+cannot enumerate the defects a different author will introduce.
 
 ## What follows
 
@@ -91,3 +95,23 @@ will introduce.
 One synthetic module, one fixture author, one blind generator, in-sample
 invariants. The numbers are recall on this fixture, not general verifier recall.
 The catalogue and the fixture are public so the run can be repeated.
+
+Deviations from the pre-registration, all disclosed here rather than repaired:
+
+- Two controls drifted from §5: `ctl-05` rewords a docstring rather than moving
+  it, and `ctl-06` adds a comment because the fixture has no dead code to delete.
+  Both remain behaviour-preserving; the catalogue summaries say so.
+- §6 and §7 both describe "one blind defect per class". The run used it as the
+  §6 gate extension, so the separate out-of-sample holdout row §7 anticipated
+  does not exist. Generating another blind set for that row is a follow-up, not
+  part of this verdict.
+- `ctl-07` adds a test file that the frozen `tests` check never discovers
+  (it selects `ledger_acceptance.py` by name), so that control proves less than
+  intended for the `tests` component.
+- The harness sets `UV_OFFLINE=1` alongside the two tool-resolution variables in
+  §4. It only forbids network access, which §4 already requires.
+- Robustness: excluding the two borderline instances (`ow-03`, which rewrites a
+  valid file on read, and `mu-05`, an unused function returning a module-level
+  list) leaves C4 at 24/31, lower bound about 0.60; treating the seven extension
+  defects as a holdout instead of a gate extension leaves 21/26, lower bound
+  0.62. The verdict does not depend on either choice.
