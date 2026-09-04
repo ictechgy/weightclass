@@ -124,19 +124,6 @@ found no benefit from routing up on the work it measured. See
 [the fresh blind check](docs/policy4-fresh-blind-evaluation.md) and
 [the paired token study](docs/paired-token-study.md).
 
-## Native schema and protocol boundaries
-
-Native schema 2 adds explicit source/account profiles, closed
-model-and-effort builders, directional profile/vendor authorization, and
-fingerprint-bound review before one foreground execution. All profile, account,
-recipient, billing, subscription, entitlement, model, effort, permission, and
-ownership labels remain opaque caller declarations.
-
-Native schema 3 adds observation-bound review and the opt-in aggregate usage
-store on top of that, still for exactly one bounded subtask and one foreground
-child. It is direct native execution, not an orchestration runtime. See
-[Native schema 3](docs/native-schema-3.md).
-
 ## Measured results for tier routing
 
 The absence of a saving is now a measured statement, not only a cautious one. A
@@ -221,30 +208,26 @@ By default, a request stays with its explicit source vendor. Cross-vendor
 routing is available only through a reviewed policy opt-in. weightclass never
 reads credentials and never makes a provider network request itself.
 
-## Run locally
+## Commands and exit codes
 
-`wclass --help` lists the daily commands, in this order: `discover`, `usage`,
-`classify`, `example-policy`, `review-preset`, `route`, and `run`. It names the
-two advanced policy generators in one line: `profile` and `select`. The split
-is about daily use, not about which commands read a task or invoke a vendor;
-the paragraph below groups them by that instead. Both advanced commands still
-parse, run, and answer their own `--help`; they are only absent from the
-listing, and an unknown name still exits `2` with the closed JSON diagnostic
-and no command list.
+`wclass --help` lists the daily commands in this order: `discover`, `usage`,
+`classify`, `example-policy`, `review-preset`, `route`, and `run`. One epilog
+line names the two advanced policy generators, `profile` and `select`; both
+still parse, run, and answer their own `--help`, they are only absent from the
+listing. `classify`, `route`, and `run` read the task from standard input; every other
+command is task-free, and only `run` ever starts a vendor. `select` reads
+choices and confirmations from the controlling terminal and writes only the
+confirmed canonical policy to standard output.
 
-`classify`, `route`, and `run` read the task from standard input. `discover`,
-`profile`, `select`, and `usage` are task-free local commands. `select` reads
-numeric choices and confirmations from the controlling terminal and writes only
-the confirmed canonical policy to standard output. `example-policy` emits
-packaged policy JSON; `review-preset` prints every command and fingerprint in
-one packaged policy. Neither of those two review commands reads a task or
-invokes a vendor.
-
-Every malformed invocation — an unknown subcommand, a missing argument, a bad
-policy — exits `2` with `{"error": "invalid_input"}` on standard error and
-nothing else, so a caller can parse the failure without scraping usage text.
-Flag names are never abbreviated: `--confirm-endpoint-transition` cannot be
-shortened.
+`route` and `run` require exactly one of `--tier` and `--suggest-tier`; neither
+infers a tier from an absent flag, and the refusal happens before the task is
+read. A schema-3 policy additionally requires an explicit `--tier`; the
+classifier suggestion is not accepted there. Every malformed invocation —
+unknown subcommand, missing argument, bad policy — exits `2` with
+`{"error": "invalid_input"}` on standard error and no command list; `usage`
+failures add a `reason_code`, and when stdout is a terminal the same error is
+rendered as one human line plus a `Next:` hint. Flag names are never abbreviated:
+`--confirm-endpoint-transition` cannot be shortened.
 
 Exit codes are weightclass's own; a selected command's status never overwrites
 them:
@@ -252,371 +235,169 @@ them:
 | Code | Meaning |
 | --- | --- |
 | `0` | Success. For `run`, the selected command exited `0`. |
-| `1` | `select` was cancelled or reached terminal EOF before policy emission. |
+| `1` | `execution_cancelled` — you declined at the terminal review prompt, or `select` was cancelled or reached terminal EOF before policy emission. Anything else exiting `1` is an unhandled interpreter exception and a bug worth reporting. |
 | `2` | `invalid_task` or `invalid_input`. |
 | `3` | `unsupported_route` — no policy route matched, or a built-in/bound custom route's executable is missing or rejected during review. |
 | `4` | `executor_unavailable` — the command could not be started or a bound custom executable could not be admitted for a run. |
-| `5` | A required endpoint-transition confirmation is absent. |
+| `5` | `confirmation_required` — a required endpoint-transition confirmation is absent. |
 | `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
 | `7` | `executor_failed` — the command started and exited non-zero. |
 | `9` | `usage_unavailable` — enabled schema-3 accounting could not be validated or updated. |
 
-Outside the documented `select` cancellation path, code `1` indicates an
-unhandled interpreter exception and is a bug worth reporting.
+Code `7` carries the real status as
+`{"error": "executor_failed", "executor_exit_code": N}`, or `"executor_signal":
+N` for a signal. The child inherits standard error, so that diagnostic is the
+**last line** of the stream — parse that line, not the whole stream. A vendor
+CLI that reports success while declining to do the work still exits `0`;
+weightclass cannot detect that and does not claim to.
 
-## Local aggregate usage accounting
+## Policy schemas
 
-Accounting is disabled until the user creates a private local store:
+Three schemas are accepted, and every profile, account, recipient, billing,
+subscription, entitlement, model, effort, permission, and ownership label in
+all three is an opaque caller declaration: weightclass validates shape and
+explicit grants, never the truth of a label.
 
-```sh
-wclass usage enable
-wclass usage weight --agent grok --effort medium --relative-cost 1.0
-wclass usage weight --agent grok --effort low --relative-cost 0.25
-wclass usage report
-```
+- **Schema 1** — the built-in routes and simple custom routes: a list of
+  `{id, vendor, tier, command}` objects matched in declaration order by the
+  first route whose `tier` matches. `--policy`, `--preset`, and the policy
+  `wclass profile` generates all use it.
+- **Schema 2** — a native policy adding explicit source/account profiles,
+  closed model-and-effort builders, directional profile/vendor authorization,
+  and fingerprint-bound review. Select a profile with `--source-profile`.
+- **Schema 3** — adds observation-bound review, endpoint-transition
+  confirmation, and the opt-in aggregate usage store on top of that.
 
-The `medium` weight is not optional bookkeeping. It states what the same task
-would have cost on the fixed route it would have taken without routing, and the
-report refuses to compute a saving without it.
+A native `run` needs the exact `route_fingerprint` from the reviewed route as
+`--ack-route-fingerprint`, and a missing acknowledgement stops before task
+access. A route listing `endpoint_transition` needs
+`--confirm-endpoint-transition` and otherwise exits `5`; one still asking for
+the `native_delegation` confirmation exits `3`, because the nested surface that
+offered that consent was removed in 0.32.0 and the route is refused rather than
+run without the consent it names. See
+[Native schema 3](docs/native-schema-3.md) and
+[Native integrations](docs/integrations.md).
 
-`usage enable` and `usage report` include task-free `onboarding` guidance. Its
-closed `next_action` says whether to configure a model-free `medium` baseline,
-configure currently missing weights for observed execution buckets, collect new
-prospective evidence after irreversible historical baseline or unweighted-run
-gaps, collect initial usage, or review the metrics. Current configuration gaps
-and historical gaps are reported separately. The receipt names only configured
-agent labels and aggregate counts; it never adds a task, route, repository,
-profile, or account identifier to the store. Usage-management failures retain
-`invalid_input` and add only the operation-level `usage_enable_failed`,
-`usage_weight_failed`, or `usage_report_failed` reason code.
+## The built-in routes
 
-On macOS the default store is
-`~/Library/Application Support/weightclass/usage-v1.json`. On other supported
-systems it is under `$XDG_STATE_HOME/weightclass`, or `~/.local/state` when
-`XDG_STATE_HOME` is absent or relative. `--store /absolute/path` selects a
-different private store for any `usage` command; schema-3 `run` accepts the
-same path as `--usage-store`.
+Every built-in route covers `low`, `standard`, and `high` and is intentionally
+conservative. Codex uses an ephemeral `exec` session in a workspace-write
+sandbox with `model_reasoning_effort` passed as a `-c` override for that one
+invocation, because Codex has no effort flag. Claude uses print mode with no
+session persistence, the matching `--effort`, and permissions `acceptEdits`:
+print mode is non-interactive, so a permission mode that asks a human has
+nobody to ask and every edit would be refused while `claude` still exits `0`.
+`acceptEdits` auto-accepts file edits only — unlike Codex's `workspace-write`
+it runs no commands. `agy` uses `--print` with `--mode accept-edits` for the
+same reason, and `grok` uses `-p` with `--reasoning-effort` and
+`--permission-mode acceptEdits`, leaving `--sandbox` at its own default because
+that vocabulary was never enumerated in `--help`. `agy` and `grok` take their
+prompt only in argv, so those routes declare `{{task}}` and receive empty
+standard input instead. No built-in route pins a model.
 
-Once the default store exists, normal installed `wclass` schema-3 executions
-record automatically after the selected direct child has completed. Attempts
-that fail before a child status is obtained are not counted. The store contains
-only cumulative agent/model/effort/tier buckets, success/failure and exit-status
-counts, optional self-reported rework/escalation counts, and one cumulative
-baseline total. It contains no task content or hash, per-run event, timestamp,
-policy/profile/account, executable path, or route fingerprint. The store and lock are regular files private to the
-current user, updates are locked and atomic, and an unsafe or malformed enabled
-store fails closed before task access.
-
-Relative cost is a caller assertion: `0.25` means one run of that
-agent/model/effort counts as one quarter of one unit. Unconfigured buckets
-remain `unweighted`; weightclass never fills them from a price list and does not
-claim monetary, token, subscription, or quota savings.
-All configured weights in one store must use the same caller-defined relative
-unit. The report states both that requirement and that weightclass cannot verify
-unit consistency; cross-vendor totals are meaningful only under that common
-unit.
-
-The report also includes a task-free `capacity` object for the 4,096-bucket and
-256 KiB limits. Byte utilization measures the canonical current state that a
-no-op atomic rewrite would produce, not arbitrary whitespace in the current
-file or the unknown growth of a future record.
-`status: near_limit` begins at 90% of either bound. The warning never prunes,
-merges, or rewrites evidence; it gives the owner time to start a separately
-managed store before a later update fails closed.
-
-Savings are reported against a counterfactual, not against a per-run constant.
-The baseline is *the same tasks on the fixed `medium` route* — the built-in
-standard route, which pins no model. The baseline weight is therefore looked up
-without a model (`--agent <agent> --effort medium`, no `--model`) even when the
-run itself used a model override, because the route a task would have taken
-without routing is the vendor's own default model. Pricing a model-routed task
-against that same routed model would compare it to a counterfactual that never
-existed, and would cancel out exactly the saving model routing was meant to
-produce. For a reviewed cross-vendor route, the already validated source vendor
-is passed transiently to accounting, so the baseline uses that source vendor's
-default route while the actual run remains in the destination agent's bucket.
-No per-run source-vendor field is added to the aggregate store.
-
-Given that baseline:
-
-- running the baseline route itself reports `0.000000`, not a saving;
-- a retry costs extra without also enlarging the baseline, because a retry is
-  not a new task. Ten tasks routed to a cheap effort that fail and are reworked
-  on an expensive one report the resulting **overrun**, not a saving;
-- `savings_reason_code` explains every abstention. The report declines to
-  compute a ratio when there are no tasks (`no_tasks`), when any run has no
-  configured weight (`unweighted_runs`), or when any task has no `medium`
-  baseline weight (`missing_baseline_weight`). Partial evidence always flatters
-  the router, so it is refused rather than shown.
-
-Distinguishing a task from a retry is the caller's declaration: pass
-`--usage-rework` when re-running work that was already counted. After a failed
-run against an enabled store, `wclass` prints
-`{"usage_hint": "record_retry_with_usage_rework"}` to standard error as a
-reminder. Omitting it on a retry inflates both the run count and the baseline,
-which is exactly how a failed cheap route comes to look like a saving. There is
-no per-run identifier to reconstruct this from, by design.
-
-Stores created by an earlier build are promoted on read. Schema 1 recorded no
-counterfactual, so a promoted store keeps its counts, recovers its task count as
-`runs - reworks`, and abstains from savings until new evidence accumulates.
-Omit `--model` to configure the native default; passing `--model default`
-configures an opaque model literally named `default`. Weights apply
-prospectively, so configure them before the runs being compared;
-changing a weight does not rewrite already aggregated units. The report lists
-the current configured weights alongside the cumulative metrics.
-Use `--usage-rework` or `--usage-escalation` on the schema-3 run that should
-increment those counters; weightclass cannot infer either without storing task
-identity, so both are explicitly self-reported.
-
-If validation fails before execution, code `9` emits
-`{"error": "usage_unavailable"}` and starts no child. If the child completed but
-the atomic aggregate update failed, code `9` additionally emits
-`"child_completed": true` and its bounded numeric `child_returncode`; callers
-must not automatically retry that task.
-Store JSON uses the same duplicate-key rejection as policy inputs, and bounded
-integer-conversion or recursion failures are normalized to this value-free
-diagnostic rather than escaping as a traceback.
+`--source-vendor` is required when weightclass is called from an agent
+integration: each of `codex`, `claude`, `agy`, and `grok` then selects only
+that vendor's routes, and weightclass never tries to infer its parent
+application. When it is omitted, every tier is still pinned to one vendor — the
+vendor of the first route declared in the policy. A tier is never silently
+served by a second vendor; that requires `"allow_mixed_vendors": true`. The
+`vendor` field is always present in `wclass route` output.
 
 ## Discover installed agents and generate a policy
 
 `discover` checks only for the four package-supported executable names in
-absolute directories from the current `PATH`. Discovery means executable
-presence only; it does not establish a usable profile, authenticated account,
-model entitlement, price, or remaining quota. weightclass does not
-intentionally start a provider or network request during discovery, but a
-caller-supplied `PATH` can name a remote or automounted filesystem whose normal
-metadata lookup has external I/O. Discovery does not start a vendor process,
-read vendor configuration or authentication files, or read task standard
-input:
+absolute directories from the current `PATH`; `profile` turns an agent, model,
+effort, and tier selection into a complete schema-1 policy, so you do not have
+to assemble vendor argv by hand. [Native integrations](docs/integrations.md)
+documents both in full.
 
 ```sh
-wclass discover
 wclass discover --agent grok
-```
-
-The JSON result distinguishes an executable detected on the local path from a
-usable subscription or model. `executable_detected` means only that a regular
-executable file passed local admission checks. A package-managed final-component symlink is resolved,
-and discovery emits and later policy generation binds its canonical regular-file
-target rather than the mutable link name. Subscription, pricing, and quota remain
-`unknown`. The schema-1 `network_used: false` field is retained for compatibility
-and means that weightclass opens no network client; `network_probe_performed:
-false` states the narrower discovery guarantee. Neither field claims that a
-caller-supplied remote filesystem performs no external I/O.
-The package-owned effort catalog describes the command shapes weightclass can
-build; it is not a probe of the installed CLI version. The model catalog
-contains only `default`, meaning that no model override is emitted, and reports
-`availability_verified: false`. Cloud model entitlement is not a locally
-installed property that weightclass can safely infer.
-
-`profile` turns an agent, model, effort, and tier selection into a complete
-schema-1 policy, so the user does not have to assemble vendor argv manually:
-
-```sh
-wclass profile \
-  --agent codex \
-  --tier low \
-  --model default \
-  --effort low > worker-policy.json
-```
-
-Codex, Claude, and Grok accept an opaque `--model` selection through their
-closed package builders. `agy` currently accepts only `--model default`
-because weightclass has no reviewed model-override shape for it. Every
-non-default model label remains caller-supplied opaque configuration;
-weightclass does not verify that the account can use it. The generated policy
-contains the detected absolute executable path and exactly one tier route.
-The command writes nothing unless the caller explicitly redirects its output
-to a chosen file.
-
-For an intentional cross-vendor worker, add `--allow-cross-vendor`. This emits
-the existing schema-1 `allow_mixed_vendors: true` opt-in; it is deliberately
-not a directional grant, so use the generated single-worker policy only at the
-reviewed integration boundary:
-
-```sh
-wclass profile \
-  --agent grok \
-  --tier low \
-  --model default \
-  --effort low \
-  --allow-cross-vendor > worker-policy.json
-
+wclass profile --agent codex --tier low --model default --effort low \
+  > worker-policy.json
 printf '%s' 'Fix a spelling typo.' | \
   wclass route --policy worker-policy.json --source-vendor codex --tier low
 ```
 
-Review the emitted route and pass its fingerprint to the ordinary `run`
-command. Discovery and profile generation never execute the selected agent;
-`run` still starts exactly one foreground child with no retry or fallback.
-Generated `agy` and Grok policies retain `task_delivery: argv` and its local
-process-inspection exposure. Built-in/default schema-1 route review resolves
-PATH to one admitted absolute executable; reviewed custom policies retain their
-existing compatibility behavior unless the explicit executable-identity binding
-opt-in is used. Schema 1 normally binds the lexical executable path in the route
-fingerprint; `--bind-executable-identity` adds incremental observation for an
-explicit custom policy.
+Discovery means executable presence only, and neither command executes the
+selected agent. `executable_detected` means a regular executable file passed
+local admission checks; subscription, pricing, and quota stay `unknown`, and
+the model catalog holds only `default` with `availability_verified: false`. A
+package-managed final-component symlink is resolved, and discovery emits — and
+policy generation binds — its canonical regular-file target rather than the
+mutable link name. `network_used: false` means weightclass opens no network
+client and `network_probe_performed: false` states the narrower discovery
+guarantee; neither claims that a caller-supplied remote or automounted `PATH`
+entry performs no external I/O of its own.
 
-Code `7` carries the real status in its diagnostic, as
-`{"error": "executor_failed", "executor_exit_code": N}` or, for a command killed
-by a signal, `{"error": "executor_failed", "executor_signal": N}`. A selected
-command inherits standard error, so this diagnostic is always written on a fresh
-line and is the **last line** of standard error — parse that line, not the whole
-stream, which also holds whatever the command itself printed.
+A generated policy holds the detected absolute executable path and exactly one
+tier route, and nothing is written unless you redirect the output. `agy`
+accepts only `--model default`. `--allow-cross-vendor` emits the schema-1
+`allow_mixed_vendors: true` opt-in, deliberately not a directional grant, so
+use such a policy only at the reviewed integration boundary; generated `agy`
+and Grok policies keep `task_delivery: argv` and its process-inspection
+exposure.
 
-A vendor CLI that reports success while declining to do the work still exits
-`0`; weightclass cannot detect that and does not claim to.
-
-Inspect a route before running it:
-
-```sh
-printf '%s' 'Fix a spelling typo in the README.' |
-  wclass route --source-vendor codex --tier low
-printf '%s' 'Fix a spelling typo in the README.' |
-  wclass run --source-vendor codex --tier low
-```
-
-For schema-2 `run`, pass the exact `route_fingerprint` from the reviewed route
-as `--ack-route-fingerprint`; a missing acknowledgement stops before task
-access. Cross-profile and cross-vendor changes must be explicitly and
-directionally granted by the reviewed policy. weightclass observes only the
-one direct child's exit, never task or orchestration success.
-
-<!-- kiro-custom-policy -->
-### Hardened Kiro custom policy
-
-Kiro is not a built-in and has no Kiro source family. To use it, write an
-exact reviewed schema-1 custom policy whose `command` begins with an absolute
-resolved executable placeholder such as `/path/to/kiro/bin/kiro-cli`, followed
-by the exact argv approved for that installation. Add
-`--bind-executable-identity` to both `route` and `run` to resolve the final
-symlink, record the admitted executable observation in the review, bind it into
-the fingerprint, and reobserve it before the child starts. A replacement or
-mismatch fails closed; the reviewed resolved target is still started by path.
-
-The review must explicitly approve the Kiro trust and tool-approval posture,
-including any session and log persistence. If the policy uses a positional
-prompt, the review output has `task_delivery: argv`; the task is then visible
-through argv/process inspection (`ps`) rather than stdin. Otherwise the task is
-delivered on stdin. Kiro's own session and log persistence remains the
-responsibility of the reviewed command and its installation.
-
-This is incremental observation hardening, not verified-object or fd-based
-execution. A path-based post-observation spawn race remains: an attacker able
-to replace the executable after the final observation can affect path-based
-spawn resolution.
-<!-- /kiro-custom-policy -->
-
-The built-in routes are intentionally conservative:
-
-- Codex: `low`, `standard`, and `high` use an ephemeral `exec` session in a
-  workspace-write sandbox with `model_reasoning_effort` set to `low`, `medium`,
-  and `high`. Codex has no dedicated effort flag, so the effort is passed as a
-  `-c` configuration override for that one invocation.
-- Claude: `low`, `standard`, and `high` use print mode, no session persistence,
-  and efforts `low`, `medium`, and `high`. Permissions are `acceptEdits`,
-  because print mode is non-interactive: a permission mode that asks a human
-  has nobody to ask, so every edit is refused while `claude` still exits `0` —
-  the router would report success having changed nothing. `acceptEdits`
-  auto-accepts file edits only, which lets the Claude route change files as the
-  Codex route already could. It does not make the two identical: Codex's
-  `workspace-write` also runs commands, while under `acceptEdits` a non-edit
-  tool still goes to a prompt that print mode cannot answer.
-- `agy`: `low`, `standard`, and `high` use `--print` with efforts `low`,
-  `medium`, and `high`, and `--mode accept-edits` for the same non-interactive
-  reason as Claude's `acceptEdits`. `agy` takes its prompt only in argv, so
-  these routes declare `{{task}}` and receive empty stdin instead.
-- `grok`: `low`, `standard`, and `high` use `-p` with `--reasoning-effort`
-  `low`, `medium`, and `high`, and `--permission-mode acceptEdits`. `--sandbox`
-  is left at `grok`'s own default because its profile vocabulary was never
-  enumerated in `--help`, and an unmeasured value is not shipped. `grok` also
-  takes its prompt only in argv, so these routes declare `{{task}}` and receive
-  empty stdin instead.
-
-Neither default route pins a model. Model selection stays your reviewed
-policy's decision, expressed inside that policy's `command`; see
-[Override the routes](#override-the-routes).
-
-`--source-vendor` is required when weightclass is called from an agent
-integration. With the default policy, `--source-vendor codex` selects only
-Codex routes, `--source-vendor claude` selects only Claude routes,
-`--source-vendor agy` selects only Antigravity routes, and `--source-vendor
-grok` selects only Grok routes. weightclass is a standalone process, so it
-does not try to infer its parent application.
-
-When `--source-vendor` is omitted, weightclass still pins every tier to a
-single vendor: the vendor of the first route declared in the policy (`codex`
-for the built-in routes). A tier is never silently served by a second vendor —
-that requires `"allow_mixed_vendors": true`. The `vendor` field is always
-present in `wclass route` output.
+Built-in route review resolves `PATH` to one admitted absolute executable. A
+reviewed custom policy keeps its existing compatibility behavior unless you
+pass `--bind-executable-identity` to both `route` and `run`, which resolves the
+final symlink, records the admitted executable observation in the review, binds
+it into the fingerprint, and reobserves it before the child starts, so a
+replacement or mismatch fails closed. That is how to use an agent weightclass
+ships no built-in for: write an exact reviewed schema-1 policy whose `command`
+begins with the absolute resolved executable, then bind it. It is incremental
+observation hardening, not verified-object execution — the reviewed target is
+still started by path, so an attacker able to replace the executable after the
+final observation can still affect path-based spawn resolution.
 
 ## Classification
 
-By default, classification is local, deterministic, and offline: security,
-authentication, authorization, data, migration, concurrency, performance,
-production, and architecture signals route to `high`, as do narrowly defined
-high-impact outcomes such as duplicate charges, duplicate work, and balances
-becoming negative. An explicit root-cause investigation routes to `high` with
+Classification is local, deterministic, and offline. Security, authentication,
+authorization, data, migration, concurrency, performance, production, and
+architecture signals route to `high`, as do narrowly defined high-impact
+outcomes such as duplicate charges, duplicate work, and balances becoming
+negative — each requiring its full context, so a request merely to display a
+negative balance is not escalated. An explicit root-cause investigation reaches
 `high.uncertain_diagnostic` only when the task also describes an intermittent
-or nondeterministic symptom; either signal alone does not escalate. Short typo,
-spelling, formatting, and rename tasks route to `low`; other valid tasks route
-to `standard`. No inferred cheap rule routes two separate English imperative
-sentences to `low`, while a problem description followed by one imperative
-remains eligible. Outcome patterns require their full context, so a request
-merely to display a negative balance or deliberately repeat a test job is not
-escalated. Unknown or oversized task input fails closed.
-
-Add `--explain` to a local classification to include its versioned static
-reason code:
+or nondeterministic symptom. Short typo, spelling, formatting, and rename tasks
+route to `low`; other valid tasks route to `standard`. Unknown or oversized
+input fails closed. Signals match on whole words, so `reproduction` does not
+count as `production`, but Korean has no word boundaries and its signals match
+by containment. `high` beats `low` when both are present, and length never
+raises a tier: 1,200 characters or more only costs eligibility for `low` and
+reports `standard.length_floor`.
 
 ```sh
 printf '%s' 'Fix a spelling typo.' | wclass classify --explain
 # {"tier": "low", "reason_code": "low.mechanical", "policy_version": "4"}
 ```
 
-The explanation contains policy metadata only: it never includes task text,
-task hashes, matched fragments, credentials, or provider output. Without
-`--explain`, the existing JSON output is unchanged. Narrow security-failure
-phrases use `high.risk_floor`; broader complexity vocabulary uses
-`high.complexity_signal`. Reason-only changes do not enter route fingerprints,
-while a corrected tier can select a different route and therefore a different
-fingerprint.
-
-The same flag on the schema-1 `route` command adds the static reason code,
-classification policy version, and a coarse `confidence_class` to the reviewed
-route receipt. It never adds task text or changes the route fingerprint. Native
-schema-2/3 descriptors are already explicit-selector contracts and do not use
-this classification explanation.
+`--explain` adds policy metadata only: never task text, task hashes, matched
+fragments, credentials, or provider output, and a reason-only change never
+enters a route fingerprint. The same flag on `route` adds the reason code,
+policy version, and a coarse `confidence_class` to the reviewed receipt without
+adding task text or changing the fingerprint. Native schema-2/3 descriptors are
+explicit-selector contracts and do not use it.
 
 **Keyword matching has a measured ceiling.** Before explicit high-impact
 outcome patterns were added, the local classifier agreed with 15 of 40 tasks on
-a benchmark rated independently by three raters (unanimous on 39 of 40). A
-rerun after that narrow refinement yields 17 of 40, but the corpus is now
-public, so neither figure is valid evidence of general accuracy for later
-changes. The remaining failures are not vocabulary gaps that more words would
-close: people describe hard problems in ordinary language with no technical
-term to match. Build and blind-rate a fresh corpus before making a new accuracy
-claim.
+a benchmark rated independently by three raters (unanimous on 39 of 40); a
+rerun after that refinement yields 17 of 40. The corpus is now public, so
+neither figure is valid evidence of general accuracy for later changes, and the
+remaining failures are not vocabulary gaps more words would close: people
+describe hard problems in ordinary language with no technical term to match.
+`PYTHONPATH=src python3 tests/eval/score.py` re-derives the public regression
+result, 21/40 under classification policy 4, with 22.5% over-routing and 5/15
+high-tier recall — a direction check, not an accuracy claim, because a visible
+fixture measures the tuner as much as the classifier. Build and blind-rate a
+fresh corpus before making a new accuracy claim; any future semantic classifier
+stays an opt-in experiment until it beats the pre-registered baseline on one.
+See [`tests/eval/README.md`](tests/eval/README.md).
 
-The current offline command `PYTHONPATH=src python3 tests/eval/score.py`
-re-derives the local public regression result, now 21/40 under classification
-policy 4. Read that number as a direction check, not an accuracy claim: the
-fixture is visible, so a score against it measures the tuner as much as the
-classifier. Policy 4 adds only the paired diagnostic rule and the two-imperative
-guard described above; on this fixture over-routing is 22.5% and high-tier
-recall remains 5/15. The broader cheap-path changes made by policy 3 are
-documented in `src/weightclass/classification.py`.
-
-Any future semantic classifier is an opt-in experiment until it beats the
-pre-registered baseline on a fresh, independently rated blind corpus, as
-documented in [`tests/eval/README.md`](tests/eval/README.md). The public fixture
-is regression data, not acceptance evidence, and improving a score against it is
-not a reason to replace the deterministic offline default.
-
-`wclass route` and `wclass run` never contact a vendor to choose a tier:
-`--tier` takes the tier you supply and `--suggest-tier` uses the same local,
-offline classifier. To reuse a tier you already obtained, pass it:
+`route` and `run` never contact a vendor to choose a tier: `--tier` takes the
+tier you supply and `--suggest-tier` uses the same local, offline classifier.
+`--tier` skips classification but not validation — empty and oversized input
+still fail closed — so a tier you already obtained can simply be passed on:
 
 ```sh
 tier="$(printf '%s' "$task" | wclass classify \
@@ -627,379 +408,211 @@ printf '%s' "$task" | wclass run --source-vendor claude --tier "$tier"
 The `|| exit` matters: a rejected task exits `2` and prints nothing on standard
 output, and without it the pipeline would continue with an empty tier.
 
-`--tier` skips classification but not validation: empty and oversized input
-still fail closed.
+## Override the routes
 
-Four rules make the outcome predictable:
+Review a local policy with `wclass route --policy policy.json`, then run what
+that review selected with
+`wclass run --policy policy.json --tier <tier> --ack-route-fingerprint <fp>`.
+Routes are considered in listed order, so the first matching `tier` wins. Add
+`--source-vendor <vendor>` matching the route's vendor label.
 
-- Signals are matched on whole words, so `reproduction` does not count as
-  `production`. Korean has no word boundaries, so Korean signals are matched by
-  containment and a compound word that embeds a signal may over-escalate.
-- When both a `high` and a `low` signal are present, `high` wins. Under-rating a
-  task is the more expensive mistake.
-- Length never raises a tier. A task of 1,200 characters or more only loses its
-  eligibility for `low` and reports `standard.length_floor`. Length is evidence
-  that work is not mechanical; it is not evidence that work is risky, and
-  treating it as risk made pasting a file list the most expensive route.
-- Beyond the `low` vocabulary, a short task also reaches `low` when a mechanical
-  action meets a narrow mechanical object (`sort` … `imports`), or when it
-  states a literal target to substitute in (`from 20 to 50`, `debug에서 info로`).
-  The substituted value must look like a literal, so `무한 스크롤로 바꿔줘`
-  stays `standard`: a described feature is an implementation request, not a
-  substitution.
+```json
+{
+  "allow_mixed_vendors": false,
+  "posture": "balanced",
+  "routes": [
+    { "id": "codex-low", "vendor": "codex", "tier": "low",
+      "command": ["codex", "exec", "--model", "your-low-model-label", "-"] },
+    { "id": "claude-high", "vendor": "claude", "tier": "high",
+      "command": ["claude", "--print", "--model", "your-high-model", "--effort", "high"] }
+  ]
+}
+```
 
-### Bind a model to a tier of the built-in routes
+`posture` is optional and defaults to `balanced`. An explicitly reviewed
+`"posture": "cautious"` raises only an otherwise `standard` decision to `high`;
+it does not change `low` or already-`high` decisions, override `--tier`, switch
+vendors, inspect model labels, or infer subscription availability, and
+`wclass route` then renders both `posture` and a static `reason_code`. Any
+other value or shape fails closed with the redacted `invalid_input` diagnostic.
+Because `cautious` can select a higher effort route it can raise token use; it
+is a safety preference, not an efficiency setting.
 
-Effort is only one of the two levers, and model grade is usually the larger one.
-Tier-specific labels therefore attach to the built-in routes directly, without
-materializing a preset policy first:
+A policy must be a regular file no larger than 262,144 raw bytes. Parsing is
+strict UTF-8, duplicate object keys are rejected at every nesting depth, special
+files such as FIFOs fail promptly, and the file is validated before weightclass
+reads transient task input. A symlink is accepted only when the object opened for that invocation is
+a regular file, which does not make a path stable between a separate review and
+run. The `command` tokens are opaque: weightclass validates their shape but
+asserts nothing about vendor CLI semantics or subscription access.
+
+A route's `vendor` is a containment label you choose, not a list of tools
+weightclass knows: any printable identifier without whitespace, up to 64 bytes,
+matched and fingerprinted as a string. So an agent weightclass ships no
+built-in command for is still usable by whoever has it installed —
+`{"id": "qwen-low", "vendor": "qwen", "tier": "low", "command": ["qwen", "-p",
+"{{task}}"]}`. Because the label is open, `--source-vendor` can no longer
+reject a typo: `--source-vendor codx` is well-formed, matches no route, and
+exits `3`, while a malformed label — empty, whitespace-bearing, over 64 bytes,
+or non-printable — still exits `2`.
+
+A command may contain the reserved token `{{task}}` once, as a whole argument,
+and never first: `argv[0]` is the fixed reviewed executable, never task data.
+That route receives the task at that argv position and empty standard input
+instead, for agents that read a prompt only from their command line — `agy
+--print ""` and `grok -p ""` both refuse an empty prompt and never read the
+pipe. `wclass route` prints the command with `{{task}}` still in it and adds
+`"task_delivery": "argv"`, so a review never contains task text and the
+fingerprint does not change from task to task. **Command lines are readable by
+every user on the machine**, so such a route exposes the task to anyone who can
+run `ps` for as long as the child runs, and nothing weightclass can do removes
+that. A token may contain ASCII spaces but not a character a reviewer would not
+see: every Unicode `C` category is rejected, as is any other whitespace and any
+leading or trailing whitespace. The same rule applies to a schema-2 or
+schema-3 policy's `model` and `effort` labels, which additionally cannot begin
+with `-` because they occupy reviewed option-value positions.
+
+### Bind a model to a tier
+
+Model grade is usually the larger of the two levers, so tier-specific labels
+attach to the built-in routes directly, without materializing a preset policy:
 
 ```sh
-printf '%s' "$task" | wclass route \
-  --source-vendor codex \
-  --tier low \
+printf '%s' "$task" | wclass route --source-vendor codex --tier low \
   --low-model your-reviewed-cheap-model \
   --high-model your-reviewed-capable-model
 ```
 
-`--source-vendor` is required: without it, which vendor's built-in routes receive
-the label would depend on declaration order. Only the named tiers change; the
-others keep their built-in command exactly. The label is opaque — weightclass
-never checks that the model exists, is available to the account, or costs less.
-Because the command changes, the route fingerprint changes too, so a `run`
-acknowledged with the unlabelled fingerprint still refuses to start.
+`--source-vendor` is required: without it, which vendor's routes receive the
+label would depend on declaration order. Only the named tiers change. The label
+is opaque — weightclass never checks that the model exists, is available to the
+account, or costs less — and because the command changes, the fingerprint
+changes with it, so a `run` acknowledged with the unlabelled fingerprint
+refuses to start. An unsupported combination fails closed rather than being
+silently dropped: `agy` has no model flag and the `grok` effort override is not
+measured. `configuration_status` reports `unqualified_custom` for any bound
+label.
 
-Vendors differ in what they can accept, and an unsupported combination fails
-closed rather than being silently dropped: `agy` has no model flag, and the
-`grok` effort override is not yet measured. `configuration_status` reports
-`unqualified_custom` for any bound label.
-
-## Override the routes
-
-Use `wclass route --policy policy.json` to review a local policy, then
-`wclass run --policy policy.json --ack-route-fingerprint <fingerprint>` to run
-what that review selected. `run` refuses a policy without the acknowledgement;
-see [Bind a run to the selection you reviewed](#bind-a-run-to-the-selection-you-reviewed).
-Routes are considered in listed order, so the first matching `tier` is selected. Add
-`--source-vendor <vendor>` matching the route's vendor label when invoking it
-from that vendor — `codex` or `claude` for the example policy below, but any
-label a route declares works the same way. Configure model labels and
-vendor-specific effort arguments only with labels you know are available to
-you.
-
-```json
-{
-  "allow_mixed_vendors": false,
-  "posture": "balanced",
-  "routes": [
-    {
-      "id": "codex-low",
-      "vendor": "codex",
-      "tier": "low",
-      "command": ["codex", "exec", "--model", "your-low-model-label", "-"]
-    },
-    {
-      "id": "claude-high",
-      "vendor": "claude",
-      "tier": "high",
-      "command": ["claude", "--print", "--model", "your-high-model-label", "--effort", "high"]
-    }
-  ]
-}
-```
-
-`posture` is optional and defaults to `balanced`, preserving the documented
-local classification. An explicitly reviewed `"posture": "cautious"` raises
-only an otherwise `standard` local decision to `high`; it does not change
-`low` or already-`high` decisions, override `--tier`, switch vendors, inspect
-model labels, or infer subscription availability. When posture is explicit,
-`wclass route` renders both `posture` and a static `reason_code`. Any other
-posture value or shape fails closed with the redacted `invalid_input`
-diagnostic. Because `cautious` can select a higher effort route, it can increase
-token use; it is a safety preference, not an efficiency setting.
-
-Native policies and workflow descriptors must each be a regular file no larger
-than 262,144 raw bytes. Parsing is strict UTF-8, duplicate object
-keys are rejected at every nesting depth, and special files such as FIFOs fail
-promptly. Argument-addressed policy and descriptor files are validated before
-weightclass reads transient task input. Symlinks remain accepted only when the
-object opened for that invocation is a regular file; this does not make a path
-stable between a separate review and run.
-
-The `command` tokens are opaque policy values. weightclass validates their shape
-but does not assert vendor CLI semantics or subscription access. Always run
-`wclass route` with a representative non-sensitive task to inspect a policy
-before using `wclass run`.
-
-### Experimental effort-inheritance policy
-
-An evaluator can test a narrower schema-1 policy without changing built-ins or
-adding an `efficient` posture. In this example, only the `standard` route omits
-Claude's effort override and therefore inherits whatever default the installed
-CLI and its configuration choose:
-
-```json
-{
-  "allow_mixed_vendors": false,
-  "posture": "balanced",
-  "routes": [
-    {
-      "id": "experimental-efficient-v1-claude-low",
-      "vendor": "claude",
-      "tier": "low",
-      "command": ["claude", "--print", "--no-session-persistence", "--permission-mode", "acceptEdits", "--effort", "low"]
-    },
-    {
-      "id": "experimental-efficient-v1-claude-standard",
-      "vendor": "claude",
-      "tier": "standard",
-      "command": ["claude", "--print", "--no-session-persistence", "--permission-mode", "acceptEdits"]
-    },
-    {
-      "id": "experimental-efficient-v1-claude-high",
-      "vendor": "claude",
-      "tier": "high",
-      "command": ["claude", "--print", "--no-session-persistence", "--permission-mode", "acceptEdits", "--effort", "high"]
-    }
-  ]
-}
-```
-
-This is an experiment, not a built-in recommendation. weightclass cannot prove
-what provider default is selected, whether that default remains stable, or
-whether omitting the flag saves tokens. Keep the source vendor fixed, review
-the exact route fingerprint, freeze the CLI/model/configuration outside the
-router, and compare total provider-reported usage—including every authorized
-invocation and rework attempt—with the offline paired gate in
-[`tests/eval/README.md`](tests/eval/README.md). Until independent evidence
-passes that gate, the built-in `standard=medium` commands and the accepted
-`balanced`/`cautious` posture vocabulary remain unchanged. Native schema 2 also
-continues to require an explicit reviewed model/effort pair.
-
-Exploratory measurements also found that explicit Haiku/low could use more raw
-tokens while reporting a much lower estimated provider cost. That is not a
-contradiction: model prices differ. The diagnostic covered only one public
-low-risk task across disposable layouts and used JSON output for usage
-collection. The exact evaluation baseline remains in
-[`tests/eval/claude_cost_baseline_policy.json`](tests/eval/claude_cost_baseline_policy.json)
-and the exactly evaluated candidate is available as the explicit opt-in
-[`src/weightclass/examples/claude_cost_focused_policy.json`](src/weightclass/examples/claude_cost_focused_policy.json).
-Only its low route changes model/effort; standard and high remain identical to
-the baseline. The candidate passed the predeclared low-target estimated-cost
-gate, but used more raw tokens. It deliberately exposes JSON as user output for
-measurement and is neither a built-in nor a general-use default. Review its
-exact `wclass route` command and fingerprint before `run`. Wheel installs can
-materialize the same reviewed policy with
-`wclass example-policy claude-model-override > policy.json`. See the separate
-token and estimated-cost gates in
-[`tests/eval/README.md`](tests/eval/README.md); the result authorizes only this
-low-route opt-in and does not change any built-in.
+### Packaged presets
 
 The packaged presets are named `<vendor>-model-override` because that is what
 they do: bind opaque model and effort labels onto the built-in route shapes.
 They used to be called `<vendor>-cost-focused`, a name that claimed a saving
-nothing here has measured. The old names are still accepted everywhere a
-preset is selected, and the policy files, command bytes, and fingerprints are
-unchanged. One thing did change for alias callers: the `preset` field in
-`route` and `review-preset` receipts now carries the current name, so a script
-that compares that field to the old string needs the new one.
-
-The same installable command surface also exposes explicit cost experiments
-for every other built-in vendor:
+nothing here has measured. The old names are still accepted everywhere a preset
+is selected, and the policy files, command bytes, and fingerprints are
+unchanged; only the `preset` field in `review-preset` receipts changed, and it
+now carries the current name.
 
 ```sh
-wclass example-policy codex-model-override > codex-policy.json
-wclass example-policy agy-model-override > agy-policy.json
-wclass example-policy grok-model-override > grok-policy.json
-```
+wclass example-policy claude-model-override > policy.json
+wclass review-preset codex-model-override --low-model your-codex-low-model
 
-Codex additionally accepts an opaque model label without weightclass trying to
-validate availability or price. Prefer the tier-specific low-only form for a
-cost experiment so the failed standard-low candidate stays removed:
-
-```sh
-wclass example-policy codex-model-override \
-  --low-model your-reviewed-codex-low-model > codex-policy.json
-```
-
-The generated command carries `--model your-reviewed-codex-low-model` only on
-the low route. Standard remains on medium effort with the installed Codex
-default model, and high remains unchanged. The older `--model` shorthand still
-changes low and standard together for compatibility, but that custom shape is
-unqualified and is not the recommended cost-evaluation candidate.
-The label must be one printable non-whitespace argv token of at most 240 UTF-8
-bytes and must not begin with `-`. Review the generated route fingerprint
-before execution; changing the model changes that fingerprint.
-
-These three policies are intentionally narrower claims than the evaluated
-Claude policy. Their static forms pin no model and now keep low, standard, and
-high effort aligned with the corresponding built-ins; in particular, standard
-remains medium after the standard-low Codex canary used more tokens. Therefore
-an unmodified Codex, `agy`, or Grok preset is only a reviewable experiment
-scaffold, not an economic candidate: its commands are identical to the
-built-in routes it would replace. Optional tier-specific Codex or Grok model
-overrides change the exact reviewed command and require separate evidence. No provider usage, pricing, or quality evidence has qualified those
-custom configurations, so their names describe an optimization hypothesis—not
-measured token or billing savings.
-Keep them opt-in, review the exact route and fingerprint, and evaluate each
-vendor independently before broader use.
-
-All four examples keep `allow_mixed_vendors` false. Supply the matching
-`--source-vendor` when routing or running a materialized policy file; the
-in-memory preset shorthand below already carries that vendor. Codex and Claude
-receive the task through stdin; `agy` and Grok retain their documented
-`{{task}}` argv delivery and local process-inspection exposure.
-
-For a task-free review of all three routes, use the packaged preset name:
-
-```sh
-wclass review-preset claude-model-override
-wclass review-preset codex-model-override
-wclass review-preset grok-model-override
-```
-
-The JSON output includes every exact command, route fingerprint, tier, vendor,
-and `stdin`/`argv` task-delivery boundary. It also labels the unchanged Claude
-preset `measured_low_route_only`; the other packaged presets are
-`unqualified_experiment`. This command neither reads task stdin nor invokes a
-vendor.
-
-You do not have to materialize those JSON files or repeat the vendor name.
-Native schema-1 `route` and `run` can select a packaged policy in memory with
-`--preset`:
-
-```sh
 printf '%s' 'Add a focused unit test.' |
-  wclass route --preset codex-model-override \
-    --tier standard \
-    --model your-reviewed-codex-model
+  wclass route --preset codex-model-override --tier standard \
+    --standard-model your-reviewed-codex-model
 ```
 
-`--preset` carries its source vendor explicitly in the reviewed name; it cannot
-be combined with `--source-vendor`, `--cost-focused`, `--policy`, or
-`--source-profile`. The older `--cost-focused --source-vendor <vendor>` form
-remains supported. Invalid combinations fail before task input is read.
+`example-policy` materializes a preset as a policy file; `review-preset` prints
+every route in it task-free — exact command, fingerprint, tier, vendor, and
+`stdin`/`argv` delivery boundary — and reads no task. It labels the unchanged
+Claude preset `measured_low_route_only` and the others
+`unqualified_experiment`: only the Claude low route ever passed a predeclared
+estimated-cost gate, and it used *more* raw tokens while reporting a lower
+estimated provider cost, which is a model-price difference rather than a token
+saving. The other three pin no model and keep every tier aligned with the
+corresponding built-in, so an unmodified one is a reviewable scaffold whose
+commands are identical to the routes it would replace. All four keep
+`allow_mixed_vendors` false. The baseline, the evaluated candidate, and the
+token and estimated-cost gates are
+[`tests/eval/claude_cost_baseline_policy.json`](tests/eval/claude_cost_baseline_policy.json),
+[`src/weightclass/examples/claude_cost_focused_policy.json`](src/weightclass/examples/claude_cost_focused_policy.json),
+and [`tests/eval/README.md`](tests/eval/README.md).
 
-Claude and Codex presets accept independent model and effort labels for each
-tier. Grok accepts the same tier-specific model labels while retaining the
-packaged effort command:
+`--preset` selects a packaged policy in memory, carries its source vendor in
+the reviewed name, and cannot be combined with `--source-vendor`,
+`--cost-focused`, `--policy`, or `--source-profile`; the older
+`--cost-focused --source-vendor <vendor>` form remains supported, and invalid
+combinations fail before task input is read. Claude and Codex presets accept
+per-tier model and effort labels (`--low-model`, `--low-effort`, and the
+`standard`/`high` equivalents); Grok accepts model labels but rejects effort
+overrides, `agy` rejects all tier overrides, and the older Codex `--model`
+shorthand applies one label to low and standard together and cannot be combined
+with a tier-specific flag. Each label must be one printable, non-whitespace,
+non-option argv token of at most 240 UTF-8 bytes, and weightclass infers no
+availability, effort vocabulary, subscription access, quality, or price from
+it. Any override is `unqualified_custom` and changes the reviewed fingerprint.
+Nothing is persisted; dropping the selector restores the built-in routes.
+
+## Local aggregate usage accounting
+
+Accounting is disabled until you create a private local store:
 
 ```sh
-wclass review-preset claude-model-override \
-  --low-model your-claude-low-model --low-effort low \
-  --standard-model your-claude-standard-model --standard-effort medium \
-  --high-model your-claude-high-model --high-effort high
-
-wclass review-preset codex-model-override \
-  --low-model your-codex-low-model --low-effort low \
-  --standard-model your-codex-standard-model --standard-effort medium \
-  --high-model your-codex-high-model --high-effort high
-
-wclass review-preset grok-model-override \
-  --low-model your-grok-low-model \
-  --standard-model your-grok-standard-model \
-  --high-model your-grok-high-model
+wclass usage enable
+wclass usage weight --agent grok --effort medium --relative-cost 1.0
+wclass usage weight --agent grok --effort low --relative-cost 0.25
+wclass usage report
 ```
 
-The same vendor-supported tier flags work on `route` and `run` with either
-`--preset` or the older `--cost-focused` selector. Labels are opaque:
-weightclass checks only that each is one printable, non-whitespace, non-option
-argv token of at most 240 UTF-8 bytes. It does not infer model availability,
-effort vocabulary, subscription access, quality, or price.
-`agy` rejects all tier overrides. Grok accepts model overrides through its
-reviewed `--model` shape but rejects effort overrides; the packaged
-`--reasoning-effort` values remain unchanged. The older Codex `--model`
-shorthand still applies one model to low and standard; it cannot be combined
-with any tier-specific model flag.
+On macOS the default store is
+`~/Library/Application Support/weightclass/usage-v1.json`; elsewhere it is
+under `$XDG_STATE_HOME/weightclass`, or `~/.local/state` when `XDG_STATE_HOME`
+is absent or relative. `--store /absolute/path` selects a different private
+store for any `usage` command, and schema-3 `run` accepts the same path as
+`--usage-store`. Once the default store exists, installed schema-3 executions
+record automatically after the selected child has completed; attempts that fail
+before a child status is obtained are not counted.
 
-Any model or effort override is labeled `unqualified_custom`; whenever it
-changes the reviewed command, the fingerprint changes with it. Even if a label
-happens to reproduce an existing command byte-for-byte, the explicit custom
-selection remains outside the packaged Claude low-route claim. Evaluate custom
-configurations independently before claiming token or cost savings.
+**The store is aggregate-only.** It holds cumulative agent/model/effort/tier
+buckets, success/failure and exit-status counts, optional self-reported
+rework/escalation counts, and one cumulative baseline total — no task content
+or hash, per-run event, timestamp, policy/profile/account, executable path, or
+route fingerprint. The store and its lock are regular files private to you,
+updates are locked and atomic, and an unsafe or malformed enabled store fails
+closed before task access.
 
-Either selector chooses a policy; it does not waive review. Copy the exact
-`route_fingerprint` from `route` into the otherwise identical `run` command:
+Relative cost is a caller assertion: `0.25` means one run of that
+agent/model/effort counts as one quarter of one unit. Unconfigured buckets stay
+`unweighted`; weightclass never fills them from a price list and claims no
+monetary, token, subscription, or quota saving. All configured weights in one
+store must use the same caller-defined relative unit, and the report states
+both that requirement and that weightclass cannot verify it. Omitting `--model`
+configures the native default, while `--model default` configures an opaque
+model literally named `default`. **Weights apply prospectively:** configure
+them before the runs being compared, because changing a weight later does not
+rewrite already aggregated units.
 
-```sh
-printf '%s' 'Add a focused unit test.' |
-  wclass run --preset codex-model-override \
-    --tier standard \
-    --standard-model your-codex-standard-model \
-    --standard-effort medium \
-    --ack-route-fingerprint 'sha256:REVIEWED_FINGERPRINT'
-```
+Savings are measured against a counterfactual — the same tasks on the fixed
+`medium` route, which is the built-in standard route and pins no model — so the
+baseline weight is looked up without a model even when the run used a model
+override. Running the baseline route itself reports `0.000000`, not a saving,
+and a retry costs extra without enlarging the baseline. `savings_reason_code`
+explains every abstention: the report declines a ratio when there are no tasks
+(`no_tasks`), when any run has no configured weight (`unweighted_runs`), or
+when any task has no `medium` baseline weight (`missing_baseline_weight`).
+Partial evidence always flatters the router, so it is refused rather than
+shown.
 
-No preference is persisted and no router configuration file is written.
-Removing `--preset` or `--cost-focused` immediately restores the built-in route
-selection.
+**Rework and escalation are self-declared.** Pass `--usage-rework` when
+re-running work that was already counted and `--usage-escalation` on the run
+that should increment that counter; weightclass cannot infer either without
+storing task identity. After a failed run against an enabled store it prints
+`{"usage_hint": "record_retry_with_usage_rework"}` to standard error as a
+reminder, because omitting it on a retry inflates both the run count and the
+baseline — exactly how a failed cheap route comes to look like a saving.
 
-For sanitized provider-export measurements, use the separate offline
-`tests/eval/provider_usage_benchmark.py` adapter. It distinguishes metered cost
-from fixed-price subscription quota. A passing quota result is capacity-only
-and never supports a monthly-bill reduction claim. Never give the scorer a raw
-billing export; normalize it outside the
-repository after removing task data and account identifiers.
-
-A route's `vendor` is a containment label you choose, not a list of tools
-weightclass knows. Any printable identifier without whitespace, up to 64 bytes,
-is valid. Routing compares it as a string and the fingerprint hashes it as a
-string; nothing in weightclass holds vendor-specific knowledge about it.
-
-That means an agent weightclass ships no built-in command for is still usable
-by whoever has it installed:
-
-```json
-{
-  "routes": [
-    { "id": "qwen-low", "vendor": "qwen", "tier": "low",
-      "command": ["qwen", "-p", "{{task}}"] }
-  ]
-}
-```
-
-The label still does its job. Routes of different vendors do not mix without
-`"allow_mixed_vendors": true`, and a fingerprint reviewed for one vendor never
-matches another.
-
-Because the label is open, `--source-vendor` can no longer reject a typo.
-`--source-vendor codx` is well-formed, so it is not an argument error; it simply
-matches no route and exits `3` with `{"error": "unsupported_route"}`. A
-malformed label — empty, containing whitespace, over 64 bytes, or carrying
-non-printable characters — still exits `2` with `{"error": "invalid_input"}`.
-
-A command may contain the reserved token `{{task}}` once, as a whole argument.
-That route receives the task at that argv position and receives empty standard
-input, instead of the default of the task on standard input. This exists for
-agents that read a prompt only from their command line: `agy --print ""` and
-`grok -p ""` both refuse an empty prompt and never read the pipe.
-The token cannot be the first command element: `argv[0]` is the fixed reviewed
-executable, never task data.
-
-`wclass route` prints the command with `{{task}}` still in it and adds
-`"task_delivery": "argv"`, so a review never contains task text and the
-fingerprint does not change from one task to the next.
-
-**Command lines are readable by every user on the machine.** A route that uses
-`{{task}}` exposes the task to anyone who can run `ps` for as long as the child
-runs. On a single-user machine this is inconsequential; on a shared host it is
-not. Nothing weightclass can do removes this — it follows from how these agents
-accept a prompt — so it is your decision each time you write `{{task}}` or
-select an `agy` or `grok` built-in route.
-
-A token is passed to the selected program as one `argv` entry, without a shell,
-so a token may contain spaces — an install path such as
-`/Users/me/My Tools/claude`, or a multi-word flag value.
-
-A token may not contain a character that a reviewer would not see, since review
-is the whole point of rendering the command. Rejected are every Unicode `C`
-category — control characters, format characters such as zero-width space and
-the bidirectional overrides, surrogates, private-use and unassigned code points
-— along with any whitespace other than the ASCII space, and leading or trailing
-whitespace. The same visibility rule applies to a schema-2 or schema-3
-policy's `model` and `effort` labels; because those values occupy reviewed
-option-value positions, they also cannot begin with `-`. Internal ASCII spaces remain one argv token and are
-accepted for schema-2 compatibility.
+`usage enable` and `usage report` also emit task-free `onboarding` guidance
+whose closed `next_action` names the next step, and a task-free `capacity`
+object for the 4,096-bucket and 256 KiB limits; `status: near_limit` begins at
+90% of either bound and never prunes, merges, or rewrites evidence. A store
+from an earlier build is promoted on read and abstains from savings until new
+evidence accumulates. Code `9` before execution emits
+`{"error": "usage_unavailable"}` and starts no child; if the child completed
+but the atomic update failed it additionally emits `"child_completed": true`
+and a bounded numeric `child_returncode`, and callers must not automatically
+retry that task. Store JSON uses the same duplicate-key rejection as policy
+inputs, and bounded integer-conversion or recursion failures are normalized to
+this value-free diagnostic rather than escaping as a traceback.
 
 ## Bind a run to the selection you reviewed
 
@@ -1083,9 +696,8 @@ tier route is used.
   subscription checker, bundled provider runtime, or unattended multi-agent
   supervisor.
 - Policies must be reviewed before use. Do not place secrets in a policy.
-- Every policy, runtime manifest, workflow descriptor, and evidence file you
-  pass on the command line must be owned by you or by root, and must not be
-  world-writable. Either violation is rejected with
+- Every policy file you pass on the command line must be owned by you or by
+  root, and must not be world-writable. Either violation is rejected with
   `{"error": "invalid_input"}` before the file is parsed, because whoever can
   rewrite it can choose both the argv and the vendor boundary between the
   `route` you reviewed and the `run` you start. `chmod o-w <file>` if you hit
