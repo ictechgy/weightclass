@@ -156,6 +156,12 @@ RELEASE_0290_BUNDLE_FILE_SHA256 = {
     "agents/openai.yaml": "feb47181e1b926d95b14c51b3fd87765a4ff8a5f5d951f6cae1004d87fac44d5",
     "references/modes.md": "28f429ce4b100ddf1a60fe0bbdfc166afcb007497d6372ccaab11d5fbc44ce55",
 }
+RELEASE_0300_BUNDLE_FILE_SHA256 = {
+    "SKILL.md": "8583a78c6b33887e8672f34fb674a29a0e713403d6a2ec87b22744114eef2b6d",
+    "manifest.json": "0c761f5a2482bfc84e8a38d33ca4f38785c8f8271d604c856dd0ae9615be59bc",
+    "agents/openai.yaml": "feb47181e1b926d95b14c51b3fd87765a4ff8a5f5d951f6cae1004d87fac44d5",
+    "references/modes.md": "28f429ce4b100ddf1a60fe0bbdfc166afcb007497d6372ccaab11d5fbc44ce55",
+}
 
 
 def historical_bundle_file_sha256() -> tuple[tuple[tuple[str, ...], dict[str, str]], ...]:
@@ -179,6 +185,7 @@ def historical_bundle_file_sha256() -> tuple[tuple[tuple[str, ...], dict[str, st
         (EXPECTED_FILES, RELEASE_0271_BUNDLE_FILE_SHA256),
         (EXPECTED_FILES, RELEASE_0280_BUNDLE_FILE_SHA256),
         (EXPECTED_FILES, RELEASE_0290_BUNDLE_FILE_SHA256),
+        (EXPECTED_FILES, RELEASE_0300_BUNDLE_FILE_SHA256),
     )
 
 
