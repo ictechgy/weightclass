@@ -460,11 +460,14 @@ its manifest remains a declaration, not proof that it enforces delegation.
 
 ## Run locally
 
-`wclass --help` lists the whole surface:
-
-```text
-wclass [-h] [--version] {discover,profile,select,usage,classify,example-policy,review-preset,review-cost-profile,recommend,route,run,render,delegate,v2} ...
-```
+`wclass --help` lists the daily commands, in this order: `discover`, `usage`,
+`classify`, `example-policy`, `review-preset`, `route`, and `run`. It names the
+advanced ones in one line: `profile`, `select`, `review-cost-profile`,
+`recommend`, `render`, `delegate`, and `v2`. The split is about daily use,
+not about which commands read a task or invoke a vendor; the paragraph below
+groups them by that instead. Every advanced command still parses, runs, and
+answers its own `--help`; it is only absent from the listing, and an unknown
+name still exits `2` with the closed JSON diagnostic and no command list.
 
 `classify`, `recommend`, `route`, and `run` read the task from standard input. `discover`,
 `profile`, `select`, and `usage` are task-free local commands. `select` reads
