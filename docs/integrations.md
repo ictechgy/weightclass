@@ -75,9 +75,9 @@ printf '%s' 'Add a focused unit test for this formatter.' | \
 With the built-in policy, this starts exactly one foreground `codex exec`
 process. It does not change the configuration or context of an already-running
 Codex session. For the packaged opt-in, review all three commands with
-`wclass review-preset codex-cost-focused`; tier-specific `--low-model`,
+`wclass review-preset codex-model-override`; tier-specific `--low-model`,
 `--standard-model`, `--high-model`, and matching effort flags can then be
-passed unchanged to `route --preset codex-cost-focused` and `run`. A local
+passed unchanged to `route --preset codex-model-override` and `run`. A local
 `--policy` remains the general extension point. All labels are opaque caller
 configuration.
 
@@ -104,8 +104,8 @@ it the run re-selects whatever the policy says at that moment. It does not
 change
 the configuration or context of an already-running Claude Code session. Use a
 reviewed local policy for arbitrary command shapes, or use the packaged
-`claude-cost-focused` preset with the same tier-specific model/effort flags as
-Codex. First run `wclass review-preset claude-cost-focused` with the intended
+`claude-model-override` preset with the same tier-specific model/effort flags as
+Codex. First run `wclass review-preset claude-model-override` with the intended
 flags, then use identical flags on `route` and fingerprint-acknowledged `run`.
 weightclass never probes model availability, subscription access, remaining
 usage, or price.

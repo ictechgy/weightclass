@@ -30,7 +30,7 @@ task data and account identifiers.
    ```sh
    task='Fix a spelling typo.'
    printf '%s' "$task" | wclass route --source-vendor claude --tier low
-   printf '%s' "$task" | wclass route --preset claude-cost-focused --tier low
+   printf '%s' "$task" | wclass route --preset claude-model-override --tier low
    ```
 
 2. Put those exact route fingerprints and externally supplied cost units in a
@@ -50,7 +50,7 @@ task data and account identifiers.
 
    ```sh
    printf '%s' "$task" | wclass recommend \
-     --preset claude-cost-focused \
+     --preset claude-model-override \
      --cost-profile cost-profile.json \
      --qualification-card qualification-card.json \
      --tier low
@@ -68,7 +68,7 @@ task data and account identifiers.
 
    ```sh
    printf '%s' "$task" | wclass run \
-     --preset claude-cost-focused \
+     --preset claude-model-override \
      --tier low \
      --ack-route-fingerprint 'sha256:REVIEWED_CANDIDATE_FINGERPRINT'
    ```

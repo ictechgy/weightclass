@@ -1164,18 +1164,27 @@ gate, but used more raw tokens. It deliberately exposes JSON as user output for
 measurement and is neither a built-in nor a general-use default. Review its
 exact `wclass route` command and fingerprint before `run`. Wheel installs can
 materialize the same reviewed policy with
-`wclass example-policy claude-cost-focused > policy.json`. See the separate
+`wclass example-policy claude-model-override > policy.json`. See the separate
 token and estimated-cost gates in
 [`tests/eval/README.md`](tests/eval/README.md); the result authorizes only this
-cost-focused low-route opt-in and does not change any built-in.
+low-route opt-in and does not change any built-in.
+
+The packaged presets are named `<vendor>-model-override` because that is what
+they do: bind opaque model and effort labels onto the built-in route shapes.
+They used to be called `<vendor>-cost-focused`, a name that claimed a saving
+nothing here has measured. The old names are still accepted everywhere a
+preset is selected, and the policy files, command bytes, and fingerprints are
+unchanged. One thing did change for alias callers: the `preset` field in
+`route` and `review-preset` receipts now carries the current name, so a script
+that compares that field to the old string needs the new one.
 
 The same installable command surface also exposes explicit cost experiments
 for every other built-in vendor:
 
 ```sh
-wclass example-policy codex-cost-focused > codex-policy.json
-wclass example-policy agy-cost-focused > agy-policy.json
-wclass example-policy grok-cost-focused > grok-policy.json
+wclass example-policy codex-model-override > codex-policy.json
+wclass example-policy agy-model-override > agy-policy.json
+wclass example-policy grok-model-override > grok-policy.json
 ```
 
 Codex additionally accepts an opaque model label without weightclass trying to
@@ -1183,7 +1192,7 @@ validate availability or price. Prefer the tier-specific low-only form for a
 cost experiment so the failed standard-low candidate stays removed:
 
 ```sh
-wclass example-policy codex-cost-focused \
+wclass example-policy codex-model-override \
   --low-model your-reviewed-codex-low-model > codex-policy.json
 ```
 
@@ -1219,9 +1228,9 @@ receive the task through stdin; `agy` and Grok retain their documented
 For a task-free review of all three routes, use the packaged preset name:
 
 ```sh
-wclass review-preset claude-cost-focused
-wclass review-preset codex-cost-focused
-wclass review-preset grok-cost-focused
+wclass review-preset claude-model-override
+wclass review-preset codex-model-override
+wclass review-preset grok-model-override
 ```
 
 The JSON output includes every exact command, route fingerprint, tier, vendor,
@@ -1236,7 +1245,7 @@ Native schema-1 `route` and `run` can select a packaged policy in memory with
 
 ```sh
 printf '%s' 'Add a focused unit test.' |
-  wclass route --preset codex-cost-focused \
+  wclass route --preset codex-model-override \
     --tier standard \
     --model your-reviewed-codex-model
 ```
@@ -1251,17 +1260,17 @@ tier. Grok accepts the same tier-specific model labels while retaining the
 packaged effort command:
 
 ```sh
-wclass review-preset claude-cost-focused \
+wclass review-preset claude-model-override \
   --low-model your-claude-low-model --low-effort low \
   --standard-model your-claude-standard-model --standard-effort medium \
   --high-model your-claude-high-model --high-effort high
 
-wclass review-preset codex-cost-focused \
+wclass review-preset codex-model-override \
   --low-model your-codex-low-model --low-effort low \
   --standard-model your-codex-standard-model --standard-effort medium \
   --high-model your-codex-high-model --high-effort high
 
-wclass review-preset grok-cost-focused \
+wclass review-preset grok-model-override \
   --low-model your-grok-low-model \
   --standard-model your-grok-standard-model \
   --high-model your-grok-high-model
@@ -1289,7 +1298,7 @@ Either selector chooses a policy; it does not waive review. Copy the exact
 
 ```sh
 printf '%s' 'Add a focused unit test.' |
-  wclass run --preset codex-cost-focused \
+  wclass run --preset codex-model-override \
     --tier standard \
     --standard-model your-codex-standard-model \
     --standard-effort medium \

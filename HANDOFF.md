@@ -1,16 +1,65 @@
 # Handoff
 
-_Last updated: 2026-09-04 KST by Claude (handoff split, scoped guidance refresh)_
+_Last updated: 2026-09-04 KST by Claude (usability batch from the three-vendor review)_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
 Current release: **0.30.0** on PyPI and the Homebrew tap. Unreleased on `main`: the scoped
 agent-guidance split, the direction-research record, and explicit tier selection on `run` and
-`route` — the last is a breaking CLI change and needs a minor version before it ships.
+`route` — the last is a breaking CLI change and needs a minor version before it ships. Open as a
+PR stack, not yet merged: the usability batch below (#186 → #187 → #188 → #189 → #190).
 
 Per-release evidence, superseded working notes, and the abandoned approaches behind them live
 in [`docs/handoff-archive.md`](docs/handoff-archive.md). This file carries only what a fresh
 agent needs to continue.
+
+## Usability batch from the three-vendor review (PR stack, unmerged)
+
+On 2026-09-04 the same critique was put to GLM (through `packet-ask`), Antigravity (`agy`), and
+Grok, each reading README, AGENTS.md, three docs, and the released `--help` text. The three
+diagnoses agreed almost entirely, and the intersection became five PR-sized changes, each stacked
+on the previous one so they can be reviewed and merged in order. Every PR carried a GLM review of
+its diff; the accepted and rejected findings are in each PR body.
+
+| PR | Branch | Change |
+| --- | --- | --- |
+| #186 | `fix/integrations-tier-examples` | Five `docs/integrations.md` examples ran `route`/`run` without a tier source and failed on `main` with `invalid_input`. Fixed, plus a test that scans every shell block in every markdown file for the same defect. |
+| #187 | `feature/run-help-and-terminal-review` | When stdout is a terminal, `run` reviews on the controlling terminal by default; `--no-review`, explicit `--json`, or `--ack-route-fingerprint` selects the non-interactive path, and a pipe never gains a prompt. Every `run`/`route` flag now has help text; `--source-vendor` and the tier group lead the usage line. |
+| #188 | `docs/readme-value-first` | README leads with what the tool does, then Install, Quick start, "What you get, and what you do not", and only then the measured classifier record under "Why the classifier is opt-in". Nothing measured was deleted; the paired study got its own "Measured results for tier routing" heading. |
+| #189 | `feature/minimal-top-level-help` | `wclass --help` lists seven daily commands; `profile`, `select`, `review-cost-profile`, `recommend`, `render`, `delegate`, `v2` still parse and run but are named in one epilog line. The description no longer says "Classify". |
+| #190 | `feature/model-override-preset-names` | Packaged presets are `<vendor>-model-override`; the `<vendor>-cost-focused` names remain aliases everywhere. Policy files and command bytes are untouched, so no fingerprint moved. The `preset` receipt field reports the canonical name. |
+
+What the three vendors agreed on and this batch did **not** do, because each needs a decision
+rather than a PR:
+
+- **Cheap-first with automatic escalation in one call.** The only lever the repository has
+  measured as large is model grade, and the design in `docs/speculative-cheap-route-design.md`
+  is still unimplemented. It does not conflict with the credential, HTTP, or task-persistence
+  boundaries, but it does conflict with the V1 one-foreground-child contract in
+  `src/weightclass/AGENTS.md` and with the rejected directions in `docs/routing-roadmap.md`.
+  Relaxing that contract is a minor-version decision; do not slip it into an ergonomics PR.
+- **Any usage or quota feedback loop that reads vendor state.** Conflicts with the product
+  direction in `AGENTS.md` and stays out.
+- **Context-size guards and prompt-shape hints** (warn on oversized stdin, human-readable
+  `reason_code`). No boundary conflict; not started.
+
+Things worth knowing before touching this stack:
+
+- The installed 0.30.0 binary predates explicit tier selection, so its `--help` lacks
+  `--suggest-tier`. Grok's "three front doors" finding was partly an artifact of sending that
+  help snapshot; the real defect it led to was the integrations examples, fixed in #186.
+- Stacked branches were rebased after each amend. If a base PR is amended again, rebase the
+  branches above it with `git rebase --onto <new-base> <old-base-commit>`; a plain rebase
+  replays the old base commit and conflicts.
+- Each branch passed `./.weightclass/verify` (1,628 tests, 35 skips at the top of the stack),
+  Ruff check and format-check, strict mypy over `src` and `tests`, and `git diff --check`.
+- GLM claims that were checked and rejected: that `--review` wins over `--ack-route-fingerprint`
+  (the code rejects the pair), that `delegate`/`v2`/`select` are aliases of `run`, that an
+  unknown subcommand lists the hidden commands (it prints only `{"error": "invalid_input"}`),
+  and a set of test-file weaknesses that turned out to be a stale diff base.
+- The Homebrew formula test still calls `example-policy claude-cost-focused`; the alias keeps it
+  green. Switching it to the new name is a packaging change with its own verification in
+  `packaging/AGENTS.md`.
 
 ## Explicit tier selection on `run` and `route` (implemented, unreleased)
 
