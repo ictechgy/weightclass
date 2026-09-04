@@ -954,7 +954,7 @@ ADVANCED_COMMANDS: tuple[str, ...] = (
 def build_parser() -> argparse.ArgumentParser:
     """Build the whole command surface so `--help` lists every reachable mode.
 
-    allow_abbrev를 끈 것은 --confirm-api-egress 같은 명시적 승인 플래그가
+    allow_abbrev를 끈 것은 --confirm-endpoint-transition 같은 명시적 승인 플래그가
     --c 같은 축약으로 만족되면 안 되기 때문이다.
     """
     # 상위 help 는 매일 쓰는 명령만 나열한다. 고급 명령은 파싱과 실행이 그대로
