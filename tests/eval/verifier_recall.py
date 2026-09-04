@@ -200,6 +200,20 @@ def scrubbed_environment(home: pathlib.Path) -> dict[str, str]:
             cache = None
     if cache:
         environment["UV_CACHE_DIR"] = cache
+    # HOME 을 비우면 uv 가 관리하는 인터프리터 목록도 사라져, 오프라인 캐시에 있는
+    # mypy 휠을 다른 파이썬용으로 다시 찾다가 실패한다. 인터프리터 디렉터리도
+    # 허용 항목으로 넘긴다. 둘 다 도구 해석용이지 픽스처 코드가 읽는 값이 아니다.
+    python_dir = os.environ.get("UV_PYTHON_INSTALL_DIR")
+    if python_dir is None:
+        try:
+            probe = subprocess.run(
+                ["uv", "python", "dir"], capture_output=True, text=True, check=False, timeout=30
+            )
+            python_dir = probe.stdout.strip() if probe.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            python_dir = None
+    if python_dir:
+        environment["UV_PYTHON_INSTALL_DIR"] = python_dir
     return environment
 
 

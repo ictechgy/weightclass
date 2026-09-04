@@ -62,10 +62,14 @@ only for calibration analysis (prediction versus outcome), never for the gate.
 Scripts live in `tests/eval/verifier-recall-checks/`. Exit code is the verdict;
 nothing is parsed from output. Each check runs in a copy of the fixture with the
 scrubbed environment the production runner uses (`PATH`, `LANG`, `LC_ALL`, `TZ`,
-`SHELL`, `USER` only; `HOME` and `TMPDIR` at an empty scratch directory) plus one
-harness-only allowance: `UV_CACHE_DIR` pointing at the maintainer's existing uv
-cache so `uvx --offline` can resolve the pinned tools without network. A check that
-cannot start is recorded as `check_unavailable`, never as passed or caught.
+`SHELL`, `USER` only; `HOME` and `TMPDIR` at an empty scratch directory) plus two
+harness-only allowances for tool resolution: `UV_CACHE_DIR` pointing at the
+maintainer's existing uv cache so `uvx --offline` can resolve the pinned tools
+without network, and `UV_PYTHON_INSTALL_DIR` pointing at uv's managed interpreter
+directory so the cached wheels resolve for the same interpreter. (The second was
+added after the first full run reported `mypy` as `check_unavailable`; that run was
+discarded in full, as §6 requires.) A check that cannot start is recorded as
+`check_unavailable`, never as passed or caught.
 
 | check | command | pin |
 | --- | --- | --- |
