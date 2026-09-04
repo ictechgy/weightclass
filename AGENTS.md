@@ -25,10 +25,11 @@ one only inside its own subtree. A deeper file never relaxes a rule stated here.
 
 ## Product direction
 
-weightclass is a public, local tool that classifies a task and selects or starts
-a supported native agent CLI workflow. Built-in support covers Codex, Claude
-Code, Antigravity (`agy`), and Grok; any other vendor is reachable through a
-reviewed policy naming its exact command.
+weightclass is a public, local tool that starts one supported native agent CLI
+process with the exact command the operator reviewed. Built-in support covers
+Codex, Claude Code, Antigravity (`agy`), and Grok; any other vendor is reachable
+through a reviewed policy naming its exact command. Classification is an opt-in
+input to that selection, never its front door.
 
 Treat model labels, effort labels, and subscription availability as
 user-provided opaque configuration. Do not infer entitlements, pricing, quotas,
@@ -36,8 +37,8 @@ or remaining subscription usage, and do not scrape a provider for them.
 
 weightclass never reads credentials, resolves authentication, makes HTTP
 requests, verifies the intended recipient or billing account, or persists task
-content. Where an external runtime or vendor CLI is started, that runtime owns
-all provider authentication, network, billing, and output behavior.
+content. Where a vendor CLI is started, that CLI owns all provider
+authentication, network, billing, and output behavior.
 
 The classifier's own measured result is part of this repository's honesty
 contract: a pre-registered study found no benefit from routing up on the work
