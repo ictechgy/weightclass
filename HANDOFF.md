@@ -80,9 +80,8 @@ Things worth knowing before touching this stack:
   (the code rejects the pair), that `delegate`/`v2`/`select` are aliases of `run`, that an
   unknown subcommand lists the hidden commands (it prints only `{"error": "invalid_input"}`),
   and a set of test-file weaknesses that turned out to be a stale diff base.
-- The Homebrew formula test still calls `example-policy claude-cost-focused`; the alias keeps it
-  green. Switching it to the new name is a packaging change with its own verification in
-  `packaging/AGENTS.md`.
+- The Homebrew formula test called `example-policy claude-cost-focused` while this batch was
+  open; the 0.31.1 formula update (#195) switched it to `claude-model-override`.
 
 ## Explicit tier selection on `run` and `route` (implemented, unreleased)
 
