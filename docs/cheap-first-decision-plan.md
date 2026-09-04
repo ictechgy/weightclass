@@ -1,6 +1,10 @@
 # Cheap-first routing: contract change scope and measurement plan
 
-**Status: plan for review, not authorized.** This document turns the proposal in
+**Status: closed at Stage A0 on 2026-09-04 — no-go.** The verifier recall gate was
+not met; see [`verifier-recall-result.md`](verifier-recall-result.md). Stage B was
+never started. The rest of this document is kept as the pre-registration it was.
+
+This document turns the proposal in
 [`speculative-cheap-route-design.md`](speculative-cheap-route-design.md) into
 two decisions the owner can take one at a time: what evidence would justify
 moving the V1 boundary, and exactly what would move if it did. Nothing in core
