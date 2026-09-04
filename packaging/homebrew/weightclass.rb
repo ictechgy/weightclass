@@ -7,8 +7,8 @@ class Weightclass < Formula
 
   desc "Local, policy-driven routing for agent CLI workflows"
   homepage "https://github.com/ictechgy/weightclass"
-  url "https://files.pythonhosted.org/packages/1b/8b/77f6c09def78ee43c495be674bcfbcc822c584d972e3c78ba543811cce53/weightclass-0.30.0.tar.gz"
-  sha256 "37fb319cdb9fec9e60bbec1a027921ac9f546d98ff35a3c41d78ffafac2bf5ae"
+  url "https://files.pythonhosted.org/packages/03/18/34b543b6d92ed6d174ede7858f3d57063cd9ae9fd8d7b6ecbb784b0916ab/weightclass-0.31.1.tar.gz"
+  sha256 "622912f4afe140d473f0861247ccd1975abe27e3296fb382be622d71a2862047"
   license "MIT"
 
   depends_on "python@3.13"
@@ -28,7 +28,7 @@ class Weightclass < Formula
     assert_equal '{"tier": "high"}',
                  pipe_output("#{bin}/wclass classify", "Review the authorization boundary.", 0).strip
     assert_match '"schema_version": 1',
-                 shell_output("#{bin}/wclass example-policy claude-cost-focused")
+                 shell_output("#{bin}/wclass example-policy claude-model-override")
     assert_match "wclass-advisory", shell_output("#{bin}/wclass-advisory --help")
     assert_match "--confirm-task-egress", shell_output("#{bin}/wclass-advisory run --help")
     assert_match "usage: wclass-advisory prune", shell_output("#{bin}/wclass-advisory prune --help")
