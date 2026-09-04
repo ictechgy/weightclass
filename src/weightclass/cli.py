@@ -205,7 +205,6 @@ def _load_usage_family() -> None:
 EXECUTOR_FAILED_EXIT_CODE: Final = 7
 USAGE_UNAVAILABLE_EXIT_CODE: Final = 9
 MAX_NATIVE_POLICY_BYTES: Final = 262_144
-MAX_NATIVE_DESCRIPTOR_BYTES: Final = 262_144
 MAX_PRESET_OVERRIDE_LABEL_BYTES: Final = 240
 # 프리셋 이름은 프리셋이 하는 일을 말한다: 모델/effort 라벨을 내장 라우트에
 # 덮어쓴다. 예전 이름 `*-cost-focused` 는 측정되지 않은 절약을 주장했으므로
