@@ -19,7 +19,7 @@ from weightclass import cli
 VISIBLE = ("discover", "classify", "route", "run", "usage", "example-policy", "review-preset")
 ADVANCED = ("profile", "select")
 # 0.32.0 에서 제거된 서브커맨드. 이름을 다시 파서에 넣으면 이 목록이 깨진다.
-REMOVED_COMMANDS = ("recommend", "review-cost-profile", "render")
+REMOVED_COMMANDS = ("recommend", "review-cost-profile", "render", "delegate", "v2")
 # 0.32.0 에서 제거된 플래그. 살아 있는 명령에 붙어 있으므로 파서가 닫아야 한다.
 # run 은 티어 출처를 필수로 요구하므로, 플래그 하나만으로는 무엇이 거부를
 # 일으켰는지 알 수 없다. 정상적으로 통과할 인수를 갖춘 뒤 플래그만 더한다.
