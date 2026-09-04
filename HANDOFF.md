@@ -7,24 +7,24 @@ _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 Current release: **0.30.0** on PyPI and the Homebrew tap. Unreleased on `main`: the scoped
 agent-guidance split, the direction-research record, and explicit tier selection on `run` and
 `route` — the last is a breaking CLI change and needs a minor version before it ships. Open as a
-PR stack, not yet merged: the usability batch below (#186 → #187 → #188 → #189 → #190).
+The usability batch below merged on 2026-09-04 as #186 → #191 → #188 → #189 → #190.
 
 Per-release evidence, superseded working notes, and the abandoned approaches behind them live
 in [`docs/handoff-archive.md`](docs/handoff-archive.md). This file carries only what a fresh
 agent needs to continue.
 
-## Usability batch from the three-vendor review (PR stack, unmerged)
+## Usability batch from the three-vendor review (merged 2026-09-04)
 
 On 2026-09-04 the same critique was put to GLM (through `packet-ask`), Antigravity (`agy`), and
 Grok, each reading README, AGENTS.md, three docs, and the released `--help` text. The three
 diagnoses agreed almost entirely, and the intersection became five PR-sized changes, each stacked
-on the previous one so they can be reviewed and merged in order. Every PR carried a GLM review of
+on the previous one and merged in order. #187 was auto-closed when its base branch was deleted and was reopened as #191 with the same commit. Every PR carried a GLM review of
 its diff; the accepted and rejected findings are in each PR body.
 
 | PR | Branch | Change |
 | --- | --- | --- |
 | #186 | `fix/integrations-tier-examples` | Five `docs/integrations.md` examples ran `route`/`run` without a tier source and failed on `main` with `invalid_input`. Fixed, plus a test that scans every shell block in every markdown file for the same defect. |
-| #187 | `feature/run-help-and-terminal-review` | When stdout is a terminal, `run` reviews on the controlling terminal by default; `--no-review`, explicit `--json`, or `--ack-route-fingerprint` selects the non-interactive path, and a pipe never gains a prompt. Every `run`/`route` flag now has help text; `--source-vendor` and the tier group lead the usage line. |
+| #191 | `feature/run-help-and-terminal-review` | When stdout is a terminal, `run` reviews on the controlling terminal by default; `--no-review`, explicit `--json`, or `--ack-route-fingerprint` selects the non-interactive path, and a pipe never gains a prompt. Every `run`/`route` flag now has help text; `--source-vendor` and the tier group lead the usage line. |
 | #188 | `docs/readme-value-first` | README leads with what the tool does, then Install, Quick start, "What you get, and what you do not", and only then the measured classifier record under "Why the classifier is opt-in". Nothing measured was deleted; the paired study got its own "Measured results for tier routing" heading. |
 | #189 | `feature/minimal-top-level-help` | `wclass --help` lists seven daily commands; `profile`, `select`, `review-cost-profile`, `recommend`, `render`, `delegate`, `v2` still parse and run but are named in one epilog line. The description no longer says "Classify". |
 | #190 | `feature/model-override-preset-names` | Packaged presets are `<vendor>-model-override`; the `<vendor>-cost-focused` names remain aliases everywhere. Policy files and command bytes are untouched, so no fingerprint moved. The `preset` receipt field reports the canonical name. |
