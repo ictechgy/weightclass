@@ -15,8 +15,9 @@ router and can outweigh a cheaper first attempt.
 The heuristic classifier is experimental, and it is **not** the front door.
 `route` and `run` require exactly one of `--tier` (you choose) or
 `--suggest-tier` (the classifier suggests, and reports its own record next to
-the suggestion). A suggested tier cannot start a vendor without `--review`, so
-the classifier never launches a child nobody looked at.
+the suggestion). A suggested tier cannot start a vendor without a terminal
+review (the default on a terminal, or `--review`), so the classifier never
+launches a child nobody looked at.
 
 Against 24 blind-rated prompts, policy 4 measured:
 
@@ -71,7 +72,13 @@ printf '%s' 'Fix a spelling typo.' | wclass route --source-vendor codex --sugges
 The first command classifies locally; the second reviews the selected command.
 The third keeps review and execution in one process: it shows the task-free
 route on the controlling terminal, asks for confirmation, and then starts at
-most one vendor child. No copied fingerprint is needed.
+most one vendor child. No copied fingerprint is needed. When stdout is a
+terminal, `run` reviews by default, so `--review` is only spelling out what
+already happens; pass `--no-review`, `--json`, or `--ack-route-fingerprint` to
+take the non-interactive path, which is also what a pipe or a script gets
+without asking. A pty-backed harness (`script`, `expect`, a tmux pane driven
+by a script) looks like a terminal, so give it one of those flags rather than
+letting it wait on a prompt nobody will answer.
 `route` requires the selected vendor executable to be installed and to pass the
 local admission checks described below; otherwise it exits `3` without starting
 the vendor.
@@ -1331,9 +1338,9 @@ accepted for schema-2 compatibility.
 
 `wclass route` prints a `route_fingerprint` over the selected route id, vendor,
 command, tier, the policy's `allow_mixed_vendors` setting, and an explicitly
-declared posture. `wclass run --policy` requires it — running a policy without
-one exits `6` before the task is read. Pass it back to bind the run to that
-selection:
+declared posture. `wclass run --policy` requires it whenever the run is not
+reviewed on a terminal — a scripted policy run without one exits `6` before
+the task is read. Pass it back to bind the run to that selection:
 
 ```sh
 task='Review this authorization change.'
@@ -1737,9 +1744,11 @@ credential management, background execution, or a bundled provider runtime.
   it is equivalent to world-writable. `stat` cannot tell the two apart, and
   rejecting it would fail every file created under the common `umask 002`. If
   your policy lives in a shared group, keep it at `0o644`.
-- `wclass run --policy` requires the fingerprint that `wclass route` printed.
-  Running a policy is always two steps; there is no unreviewed shortcut. A
-  missing acknowledgement exits `6` before the task is read. This is the boundary
+- `wclass run --policy` requires either a terminal review or the fingerprint
+  that `wclass route` printed. On a terminal, `run` reviews by default; without
+  a terminal, or with `--no-review`, running a policy is always two steps and
+  there is no unreviewed shortcut. A missing acknowledgement then exits `6`
+  before the task is read. This is the boundary
   that actually closes the gap between review and execution, because the
   fingerprint covers the selected command itself: if the policy changes, the
   fingerprint changes and the run refuses. File permissions cannot close that
@@ -1747,10 +1756,11 @@ credential management, background execution, or a bundled provider runtime.
   regardless of its mode. See
   [Bind a run to the selection you reviewed](#bind-a-run-to-the-selection-you-reviewed)
   for what the binding does and does not cover.
-- Built-in route syntax remains executable without an acknowledgement for
-  compatibility, but its admitted absolute executable comes from the current
-  `PATH`. Pass the fingerprint from `route` to `run` when the reviewed absolute
-  path must be binding; without it, `run` resolves and admits `PATH` again.
+- Built-in route syntax remains executable without an acknowledgement when no
+  terminal is present or `--no-review` is given, but its admitted absolute
+  executable comes from the current `PATH`. Pass the fingerprint from `route`
+  to `run` when the reviewed absolute path must be binding; without it, `run`
+  resolves and admits `PATH` again.
   Treat a policy file the way you treat a shell script.
 - weightclass ships built-in commands only for vendors whose CLI invocation was
   measured: `claude`, `codex`, `agy`, and `grok`. It will not guess another

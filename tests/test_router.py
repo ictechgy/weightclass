@@ -1941,7 +1941,7 @@ class CommandSurfaceTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("usage: wclass", result.stdout)
-        self.assertIn("Select, optionally review, and run one agent.", result.stdout)
+        self.assertIn("Review on the terminal by default, then run one agent.", result.stdout)
 
     def test_global_output_flags_work_before_or_after_the_command(self) -> None:
         human = _weightclass("--human", "classify", task="Fix a typo.")

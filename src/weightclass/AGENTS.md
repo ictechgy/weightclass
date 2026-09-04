@@ -36,6 +36,10 @@ a route fingerprint before anything starts.
 - `route` and `run` read the policy separately. Only `--ack-route-fingerprint`
   binds a reviewed selection to the run; without it the policy can change in
   between and a different command executes.
+- When stdout is a terminal, `run` reviews on the controlling terminal by
+  default. `--no-review`, an explicit `--json`, or a fingerprint acknowledgement
+  selects the non-interactive path, and a pipe never gains a prompt. Keep the
+  default keyed to that signal only; do not infer it from the task or the route.
 - If the reviewed output would not tell an operator what bytes the child
   receives, the review is incomplete. Disclose the delivery mode, not just the
   argv.
