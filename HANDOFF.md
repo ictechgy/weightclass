@@ -35,6 +35,13 @@ the tool that shipped in 0.31.1.
 | #203 | `feature/remove-delegate-and-v2` | Removed the `delegate` family and `v2` API routing. |
 | #204 | `feature/remove-recommend-render-triage` | Removed `recommend`, `review-cost-profile`, `render`, vendor triage, and `--suggest-escalation`. |
 
+## What changed but stayed
+
+- The packaged presets were renamed `<vendor>-model-override` in 0.31.1
+  (`feature/model-override-preset-names`, #190); the `<vendor>-cost-focused`
+  names remain aliases, the policy files and fingerprints did not move, and the
+  `preset` field in `review-preset` receipts carries the current name.
+
 ## What was removed and when
 
 Every row below last shipped in **0.31.1**. Anyone who needs one should pin

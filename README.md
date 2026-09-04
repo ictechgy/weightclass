@@ -221,9 +221,12 @@ confirmed canonical policy to standard output.
 
 `route` and `run` require exactly one of `--tier` and `--suggest-tier`; neither
 infers a tier from an absent flag, and the refusal happens before the task is
-read. Every malformed invocation — unknown subcommand, missing argument, bad
-policy — exits `2` with `{"error": "invalid_input"}` on standard error and
-nothing else, with no command list. Flag names are never abbreviated:
+read. A schema-3 policy additionally requires an explicit `--tier`; the
+classifier suggestion is not accepted there. Every malformed invocation —
+unknown subcommand, missing argument, bad policy — exits `2` with
+`{"error": "invalid_input"}` on standard error and no command list; `usage`
+failures add a `reason_code`, and when stdout is a terminal the same error is
+rendered as one human line plus a `Next:` hint. Flag names are never abbreviated:
 `--confirm-endpoint-transition` cannot be shortened.
 
 Exit codes are weightclass's own; a selected command's status never overwrites
@@ -497,8 +500,8 @@ they do: bind opaque model and effort labels onto the built-in route shapes.
 They used to be called `<vendor>-cost-focused`, a name that claimed a saving
 nothing here has measured. The old names are still accepted everywhere a preset
 is selected, and the policy files, command bytes, and fingerprints are
-unchanged; only the `preset` field in `route` and `review-preset` receipts
-changed, and it now carries the current name.
+unchanged; only the `preset` field in `review-preset` receipts changed, and it
+now carries the current name.
 
 ```sh
 wclass example-policy claude-model-override > policy.json

@@ -47,7 +47,8 @@ Per class under C4: schema-coercion 6/6, pagination-bound 3/3, silent-overwrite
    6/33, and every one of those was a defect that happened to change a value the
    tests already looked at. The default `verify.sh` of the design adds only the
    credential rows. This is the measured form of the quality finding in
-   `HANDOFF.md` Next Steps 4: the cheap arm's defects passed its tests because
+   the archived handoff (`docs/handoff-archive.md`, "Next Steps" item 4): the
+   cheap arm's defects passed its tests because
    tests of that kind cannot see them.
 2. **Static checks add almost nothing here.** Ruff caught one defect (a mutable
    default argument, B006) and mypy one (`sc-03`, a coercion whose `int()` call
@@ -79,12 +80,13 @@ cannot enumerate the defects a different author will introduce.
   recall this project required, and the shortfall is not in tooling but in the
   nature of the gate: mechanical verification catches the defects someone
   thought to test for. This is the "verification, not routing" hypothesis from
-  `HANDOFF.md` Next Steps D, answered in the negative for verify commands of this
-  kind.
+  the archived handoff ("Next Steps" item D), answered in the negative for
+  verify commands of this kind.
 - Stage B is not started. The V1 one-child contract stands unchanged.
-- Nothing here changes the 0.31.1 product. `wclass-advisory run` remains the
-  explicit experimental companion; anyone using it should read this file before
-  reading a low `p` as a saving.
+- Nothing here changed the 0.31.1 product. `wclass-advisory run`, the companion
+  that carried the measurement, was removed in 0.32.0 together with the rest of
+  the advisory surface; anyone pinning 0.31.1 for it should read this file
+  before reading a low `p` as a saving.
 - If someone wants to reopen this, the pre-registration names the two things
   that would have to be different: a verifier whose recall is measured out of
   sample above 0.80 on this catalogue, or a gate that accepts what this one
