@@ -11,7 +11,6 @@ authoritative by directory scope, so the rule you need is often not visible from
 the repository root:
 
 - [`src/weightclass/AGENTS.md`](src/weightclass/AGENTS.md)
-- [`src/weightclass/advisory/AGENTS.md`](src/weightclass/advisory/AGENTS.md)
 - [`tests/AGENTS.md`](tests/AGENTS.md)
 - [`.weightclass/AGENTS.md`](.weightclass/AGENTS.md)
 - [`packaging/AGENTS.md`](packaging/AGENTS.md)

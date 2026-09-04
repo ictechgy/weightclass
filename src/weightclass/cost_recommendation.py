@@ -1,4 +1,4 @@
-"""Task-free cost evidence and advisory recommendation contracts."""
+"""Task-free cost evidence and route recommendation contracts."""
 
 from __future__ import annotations
 

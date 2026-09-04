@@ -23,8 +23,6 @@ from tests.verify_distribution_isolation import (
     MAX_ARCHIVE_MEMBER_NAME_BYTES,
     MAX_ARCHIVE_TEXT_BYTES,
     MAX_SDIST_EXTENSION_BYTES,
-    REQUIRED_SDIST_ADVISORY_PATHS,
-    REQUIRED_WHEEL_ADVISORY_PATHS,
     IsolationError,
     _fingerprint_artifact,
     _safe_members,
@@ -122,7 +120,6 @@ def _write_sdist_fixture(
     registry_schema_version_token: str = "1",
     core_metadata: str | None = None,
     include_core_metadata: bool = True,
-    include_advisory: bool = True,
 ) -> Path:
     sdist = Path(directory) / filename
     root = Path(directory) / "payload" / archive_root
@@ -134,11 +131,6 @@ def _write_sdist_fixture(
         ',"suite_revision":"delegation-conformance-v2"}',
         encoding="utf-8",
     )
-    if include_advisory:
-        for relative_path in REQUIRED_SDIST_ADVISORY_PATHS:
-            advisory_asset = root / relative_path
-            advisory_asset.parent.mkdir(parents=True, exist_ok=True)
-            advisory_asset.write_text("installed advisory\n", encoding="utf-8")
     if include_core_metadata:
         (root / "PKG-INFO").write_text(
             core_metadata or "Metadata-Version: 2.1\nName: weightclass\nVersion: 0\n\n",
@@ -206,8 +198,6 @@ def _write_distribution_fixture(
             f"{registry_schema_version_token}"
             ',"suite_revision":"delegation-conformance-v2"}',
         )
-        for relative_path in REQUIRED_WHEEL_ADVISORY_PATHS:
-            archive.writestr(relative_path, "installed advisory\n")
         if include_wheel_core_metadata:
             archive.writestr(
                 f"{wheel_dist_info_root}/METADATA",
@@ -413,31 +403,6 @@ def _workflow_step_name(block: str) -> str:
 
 
 class DistributionIsolationTests(unittest.TestCase):
-    def test_release_verifier_requires_installed_advisory_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            _source, wheel, sdist = _write_distribution_fixture(directory)
-            verify_wheel(wheel, require_advisory=True)
-            verify_sdist(sdist, require_advisory=True)
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            _source, wheel, _sdist = _write_distribution_fixture(directory)
-            missing_wheel = root / "weightclass-0-missing-py3-none-any.whl"
-            with (
-                zipfile.ZipFile(wheel) as source_archive,
-                zipfile.ZipFile(missing_wheel, "w") as destination_archive,
-            ):
-                for member in source_archive.infolist():
-                    if not member.filename.startswith("weightclass/advisory/"):
-                        destination_archive.writestr(member, source_archive.read(member))
-            with self.assertRaises(IsolationError):
-                verify_wheel(missing_wheel, require_advisory=True)
-
-        with tempfile.TemporaryDirectory() as directory:
-            missing_sdist = _write_sdist_fixture(directory, include_advisory=False)
-            with self.assertRaises(IsolationError):
-                verify_sdist(missing_sdist, require_advisory=True)
-
     def test_normalized_views_require_preflight_and_bind_member_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _source, wheel, sdist = _write_distribution_fixture(directory)

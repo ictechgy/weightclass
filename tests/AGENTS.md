@@ -1,7 +1,6 @@
 # Tests — `tests/`
 
-Scope: the test suite and the tools that audit it. The root
-[`AGENTS.md`](../AGENTS.md) still applies.
+Scope: the test suite. The root [`AGENTS.md`](../AGENTS.md) still applies.
 
 ## Which runner is the gate
 
@@ -69,26 +68,11 @@ Answer it explicitly before editing:
   the contract that remains, and add one for the behavior that now exists.
 - If you cannot state which contract the test was protecting, stop and find out.
 
-## The vacuity audit
-
-`tools/check_test_vacuity.py` exists because a test here once passed while
-checking nothing — its probe string was not in the input — and hid a real key
-leak for five rounds. It reruns the suite against a copy of the runner whose
-redaction functions are replaced by identity, and lists what still passes.
-
-Passing under identity redaction is not automatically a defect: preservation
-tests are supposed to pass. The list is for a human to read.
-
-Do not let a tool that audits the suite use a different runner than the gate.
-This tool once counted pytest node IDs, which do not exist for `subTest` cases,
-so it silently lost per-parameter resolution and reported leak-direction tests
-as passing.
-
 ## Protected files
 
-`tests/test_advisory_hardening_batch.py` is protected acceptance and is checked
-by `./.weightclass/verify` itself. See
-[`../.weightclass/AGENTS.md`](../.weightclass/AGENTS.md) before touching it or
+`.weightclass/verify` is the only protected file: the gate refuses to run when a
+change to it is staged. See
+[`../.weightclass/AGENTS.md`](../.weightclass/AGENTS.md) before touching
 anything in that directory.
 
 ## Distribution tests

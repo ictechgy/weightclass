@@ -22,11 +22,6 @@ jobs:
         run: >-
           python tests/verify_release_source.py --repository .
           --tag-commit "$GITHUB_SHA" --main-ref refs/remotes/origin/main
-      - name: Verify previous advisory Skill upgrade ledger
-        run: |
-          previous_tag="$(git describe --tags --abbrev=0 "${GITHUB_SHA}^")"
-          PYTHONPATH=src python tests/verify_advisory_skill_ledger.py \
-            --repository . --previous-ref "$previous_tag"
       - name: Networked CI dependency installation
         run: >-
           python -m pip install --require-hashes --only-binary=:all: --no-deps
@@ -104,21 +99,6 @@ jobs:
           python -m venv "$installed_venv"
           "$installed_venv/bin/python" -m pip install --no-index --no-deps "${packages[0]}"
           test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
-          "$installed_venv/bin/wclass-advisory" --help >/dev/null
-          "$installed_venv/bin/python" -m weightclass.advisory --help >/dev/null
-          "$installed_venv/bin/wclass-advisory" cli-check --help >/dev/null
-          "$installed_venv/bin/wclass-advisory" provider-check --help >/dev/null
-          managed_root="$RUNNER_TEMP/weightclass-advisory-managed"
-          "$installed_venv/bin/wclass-advisory" init --state-root "$managed_root" --vendor codex \
-            --model cheap=cheap --model advisor=advisor --model expensive=expensive \
-            --effort cheap=low --effort advisor=high --effort expensive=high >/dev/null
-          "$installed_venv/bin/wclass-advisory" migrate-gate --state-root "$managed_root" \
-            --vendor codex --workflow review --gate-metric cheap_acceptance \
-            --gate-target-rate-bps 7500 --gate-alpha-bps 500 >/dev/null
-          "$installed_venv/bin/wclass-advisory" campaign-gate --state-root "$managed_root" \
-            --vendor codex --workflow review >/dev/null
-          "$installed_venv/bin/wclass-advisory" doctor --state-root "$managed_root" --vendor codex --workflow all >/dev/null
-          "$installed_venv/bin/wclass-advisory" review --state-root "$managed_root" --vendor codex --workflow review >/dev/null
           installed_agent_bin="$RUNNER_TEMP/weightclass-installed-agent-bin"
           mkdir -m 700 "$installed_agent_bin"
           installed_true="$(type -P true)"
@@ -178,19 +158,6 @@ jobs:
           python -m venv "$installed_venv"
           "$installed_venv/bin/python" -m pip install --no-index --no-deps "${packages[0]}"
           test "$("$installed_venv/bin/wclass" --version)" = "weightclass ${GITHUB_REF_NAME#v}"
-          "$installed_venv/bin/wclass-advisory" --help >/dev/null
-          "$installed_venv/bin/python" -m weightclass.advisory --help >/dev/null
-          managed_root="$RUNNER_TEMP/weightclass-advisory-managed"
-          "$installed_venv/bin/wclass-advisory" init --state-root "$managed_root" --vendor codex \
-            --model cheap=cheap --model advisor=advisor --model expensive=expensive \
-            --effort cheap=low --effort advisor=high --effort expensive=high >/dev/null
-          "$installed_venv/bin/wclass-advisory" migrate-gate --state-root "$managed_root" \
-            --vendor codex --workflow review --gate-metric cheap_acceptance \
-            --gate-target-rate-bps 7500 --gate-alpha-bps 500 >/dev/null
-          "$installed_venv/bin/wclass-advisory" campaign-gate --state-root "$managed_root" \
-            --vendor codex --workflow review >/dev/null
-          "$installed_venv/bin/wclass-advisory" doctor --state-root "$managed_root" --vendor codex --workflow all >/dev/null
-          "$installed_venv/bin/wclass-advisory" review --state-root "$managed_root" --vendor codex --workflow review >/dev/null
           installed_agent_bin="$RUNNER_TEMP/weightclass-installed-agent-bin"
           mkdir -m 700 "$installed_agent_bin"
           installed_true="$(type -P true)"

@@ -16,11 +16,8 @@ one only inside its own subtree. A deeper file never relaxes a rule stated here.
 - [`src/weightclass/AGENTS.md`](src/weightclass/AGENTS.md) — core router: the
   one-foreground-child contract, V2 boundary, task delivery, and the aggregate
   usage store.
-- [`src/weightclass/advisory/AGENTS.md`](src/weightclass/advisory/AGENTS.md) —
-  the explicit experimental companion: egress consent, managed state, campaign
-  gates, route migrations, and the packaged Skill bundle.
-- [`tests/AGENTS.md`](tests/AGENTS.md) — which runner is the gate, what a new
-  test has to prove, and the vacuity audit.
+- [`tests/AGENTS.md`](tests/AGENTS.md) — which runner is the gate and what a new
+  test has to prove.
 - [`.weightclass/AGENTS.md`](.weightclass/AGENTS.md) — pre-registered prospective
   verifiers. Read before editing anything in that directory.
 - [`packaging/AGENTS.md`](packaging/AGENTS.md) — the Homebrew formula source of

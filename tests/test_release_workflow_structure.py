@@ -28,8 +28,6 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
                 self.assertIn('PYTHONPATH="$installed_wheel"', block)
                 self.assertIn('python -m venv "$installed_venv"', block)
                 self.assertIn('"$installed_venv/bin/wclass" --version', block)
-                self.assertIn('"$installed_venv/bin/wclass-advisory" --help', block)
-                self.assertIn('python" -m weightclass.advisory --help', block)
                 self.assertIn('installed_agent_bin="$RUNNER_TEMP', block)
                 self.assertIn('installed_true="$(type -P true)"', block)
                 self.assertIn('test -x "$installed_true"', block)

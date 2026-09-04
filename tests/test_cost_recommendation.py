@@ -258,7 +258,7 @@ class CostRecommendationCliTests(unittest.TestCase):
         self.assertFalse(review["values_verified_by_router"])
 
     def test_recommends_a_qualified_lower_cost_route_without_starting_a_vendor(self) -> None:
-        """Breaks if advisory cost routing stops binding qualified exact routes."""
+        """Breaks if cost routing stops binding qualified exact routes."""
         baseline = _route("--source-vendor", "claude")
         candidate = _route("--preset", "claude-cost-focused")
         profile = _cost_profile(baseline, candidate)

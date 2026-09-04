@@ -27,17 +27,6 @@ from typing import Any, BinaryIO, NoReturn, Protocol, cast
 
 WHEEL_REGISTRY_PATH = "weightclass/delegation_qualifications.json"
 SDIST_REGISTRY_PATH = "src/weightclass/delegation_qualifications.json"
-REQUIRED_WHEEL_ADVISORY_PATHS = (
-    "weightclass/advisory/__init__.py",
-    "weightclass/advisory/managed_advisory.py",
-    "weightclass/advisory/managed_verify.py",
-    "weightclass/advisory/advisory_quick.py",
-    "weightclass/advisory/verifier_cli.py",
-    "weightclass/advisory/wclass_advisory.py",
-    "weightclass/advisory/skill/SKILL.md",
-    "weightclass/advisory/skill/manifest.json",
-)
-REQUIRED_SDIST_ADVISORY_PATHS = tuple(f"src/{path}" for path in REQUIRED_WHEEL_ADVISORY_PATHS)
 EMPTY_REGISTRY = {
     "records": [],
     "registry_schema_version": 1,
@@ -1340,7 +1329,6 @@ def verify_wheel(
     wheel: Path,
     *,
     expected_fingerprint: _ArtifactFingerprint | None = None,
-    require_advisory: bool = False,
 ) -> None:
     with _verified_artifact_snapshot(wheel, expected_fingerprint) as artifact:
         snapshot, _fingerprint = artifact
@@ -1349,14 +1337,6 @@ def verify_wheel(
         try:
             with zipfile.ZipFile(cast(BinaryIO, _ZipSnapshotReader(snapshot))) as archive:
                 members = _wheel_members(archive, wheel)
-                member_names = [member.filename for member in members if not member.is_dir()]
-                if require_advisory:
-                    for required_path in REQUIRED_WHEEL_ADVISORY_PATHS:
-                        if member_names.count(required_path) != 1:
-                            _fail(
-                                f"{wheel.name}: expected one installed advisory artifact: "
-                                f"{required_path}"
-                            )
                 folded_registry_path = WHEEL_REGISTRY_PATH.casefold()
                 folded_registry_suffix = f"/{WHEEL_REGISTRY_PATH}".casefold()
                 registry_aliases = [
@@ -1467,7 +1447,6 @@ def verify_sdist(
     sdist: Path,
     *,
     expected_fingerprint: _ArtifactFingerprint | None = None,
-    require_advisory: bool = False,
 ) -> None:
     with _open_verified_sdist(sdist, expected_fingerprint) as archive:
         members = _safe_members(archive)
@@ -1501,10 +1480,6 @@ def verify_sdist(
         for suffix in REQUIRED_SDIST_TEST_SUFFIXES:
             if regular_names.count(suffix) != 1:
                 _fail(f"{sdist.name}: expected one test-only artifact: {suffix}")
-        if require_advisory:
-            for suffix in REQUIRED_SDIST_ADVISORY_PATHS:
-                if regular_names.count(suffix) != 1:
-                    _fail(f"{sdist.name}: expected one installed advisory artifact: {suffix}")
 
 
 def run_extracted_sdist_tests(
@@ -1616,8 +1591,8 @@ def verify_distribution_directory(
     initial = _distribution_snapshot(dist_dir)
     wheel_fingerprint, sdist_fingerprint = initial.fingerprints
     verify_source_registry(source)
-    verify_wheel(initial.wheel, expected_fingerprint=wheel_fingerprint, require_advisory=True)
-    verify_sdist(initial.sdist, expected_fingerprint=sdist_fingerprint, require_advisory=True)
+    verify_wheel(initial.wheel, expected_fingerprint=wheel_fingerprint)
+    verify_sdist(initial.sdist, expected_fingerprint=sdist_fingerprint)
     _verify_distribution_core_metadata(
         initial.wheel,
         initial.sdist,
@@ -1647,7 +1622,7 @@ def normalized_distribution(path: Path) -> NormalizedDistribution:
 
     fingerprint = _fingerprint_artifact(path)
     if path.name.endswith(".whl"):
-        verify_wheel(path, expected_fingerprint=fingerprint, require_advisory=True)
+        verify_wheel(path, expected_fingerprint=fingerprint)
         name, version = _wheel_core_metadata(path, fingerprint)
         normalized: list[NormalizedArchiveMember] = []
         with _verified_artifact_snapshot(path, fingerprint) as artifact:
@@ -1679,7 +1654,7 @@ def normalized_distribution(path: Path) -> NormalizedDistribution:
             "wheel", roots[0], (("Name", name), ("Version", version)), tuple(sorted(normalized))
         )
     if path.name.endswith(".tar.gz"):
-        verify_sdist(path, expected_fingerprint=fingerprint, require_advisory=True)
+        verify_sdist(path, expected_fingerprint=fingerprint)
         name, version = _sdist_core_metadata(path, fingerprint)
         normalized = []
         with _open_verified_sdist(path, fingerprint) as archive:

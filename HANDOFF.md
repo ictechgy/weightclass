@@ -92,7 +92,7 @@ What the three vendors agreed on and this batch did **not** do, because each nee
 rather than a PR:
 
 - **Cheap-first with automatic escalation in one call.** The only lever the repository has
-  measured as large is model grade, and the design in `docs/speculative-cheap-route-design.md`
+  measured as large is model grade, and the design in `docs/archive/speculative-cheap-route-design.md`
   is still unimplemented. It does not conflict with the credential, HTTP, or task-persistence
   boundaries, but it does conflict with the V1 one-foreground-child contract in
   `src/weightclass/AGENTS.md` and with the rejected directions in `docs/routing-roadmap.md`.
@@ -200,11 +200,11 @@ Both packets carried only files that are already public, and the scrubber report
 redactions in each:
 
 - Strategy packet: root, core, and advisory `AGENTS.md`, `README.md`, and
-  `docs/advisory-product-roadmap-v2.md`, plus an inline brief assembled from this file.
+  `docs/archive/advisory-product-roadmap-v2.md`, plus an inline brief assembled from this file.
   135,719 bytes, SHA-256 prefix `f4b4be0e2468`, 565 s.
-- Harness-design packet: `AGENTS.md`, `docs/speculative-cheap-route-design.md`,
+- Harness-design packet: `AGENTS.md`, `docs/archive/speculative-cheap-route-design.md`,
   `tools/check_test_vacuity.py`, `docs/policy4-fresh-blind-evaluation.md`,
-  `docs/phase4-go-no-go-template.md`, and `docs/measuring-p-at-work.md`.
+  `docs/phase4-go-no-go-template.md`, and `docs/archive/measuring-p-at-work.md`.
   77,342 bytes, SHA-256 prefix `cbff0490e80f`, 599 s.
 
 Provider output was treated as untrusted throughout and verified against the source before
@@ -763,7 +763,7 @@ converge with the owner before starting one.
    stronger one on estimated API cost (95% interval [60.57%, 77.47%]) at equal
    quality (85/90 both arms), and it was rejected only for two new critical
    failures out of ninety. Those failures are mechanically detectable and
-   reversible, so `docs/speculative-cheap-route-design.md` proposes running the
+   reversible, so `docs/archive/speculative-cheap-route-design.md` proposes running the
    cheap route in a disposable clone, verifying, and escalating only on failure.
    Expected cost is `c + p`; at c = 0.31 break-even is p = 0.69, so the cheap
    route can fail two times in three and still not lose money.
@@ -783,7 +783,7 @@ converge with the owner before starting one.
    stdin probes exited successfully, but they are connectivity checks, not
    evidence. The separate sealed campaigns still need at least 60 usable tasks
    and 12 advised failures each under a user-supplied single-origin price table;
-   see `docs/advisory-vendor-profiles.md`. Do not integrate retry/advice into
+   see `docs/archive/advisory-vendor-profiles.md`. Do not integrate retry/advice into
    core `wclass` from these pilots; the companion remains explicit and experimental.
 7. **Policy 4 needs broader high-tier evidence before another classifier
    change.** The public fixture remains 5/15 high recall; the fresh blind
