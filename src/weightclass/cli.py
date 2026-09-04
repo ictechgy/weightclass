@@ -81,10 +81,8 @@ if TYPE_CHECKING:
     )
     from .delegation_runtime import (
         DelegationRuntimeFailedError,
-        DelegationRuntimeUnavailableError,
         run_delegation_runtime,
         validate_delegation_runtime,
-        validate_runtime_process_context,
     )
     from .delegation_schema import (
         DelegationInvalidInputError,
@@ -117,6 +115,10 @@ if TYPE_CHECKING:
     )
     from .native_v3_schema import NativePolicyV3, validate_native_selector_v3
     from .native_v3_selector import InteractiveSelectorError, run_interactive_selector
+    from .process_context import (
+        DelegationRuntimeUnavailableError,
+        validate_runtime_process_context,
+    )
     from .task_v2 import ValidatedTaskV2, read_validated_task_v2
     from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
     from .usage_aggregation import (
@@ -175,10 +177,10 @@ _LAZY_SYMBOL_MODULES: Final = {
     "select_qualification_for_descriptor": "delegation_qualification",
     "verify_qualified_runtime": "delegation_qualification",
     "DelegationRuntimeFailedError": "delegation_runtime",
-    "DelegationRuntimeUnavailableError": "delegation_runtime",
+    "DelegationRuntimeUnavailableError": "process_context",
     "run_delegation_runtime": "delegation_runtime",
     "validate_delegation_runtime": "delegation_runtime",
-    "validate_runtime_process_context": "delegation_runtime",
+    "validate_runtime_process_context": "process_context",
     "DelegationInvalidInputError": "delegation_schema",
     "DelegationUnsupportedError": "delegation_schema",
     "current_platform_contract": "delegation_schema",
@@ -274,6 +276,7 @@ def _load_native_family() -> None:
             "native_v3_runtime",
             "native_v3_schema",
             "native_v3_selector",
+            "process_context",
             "task_v2",
             "v2_validation",
         )
@@ -291,6 +294,7 @@ def _load_delegation_family() -> None:
             "delegation_types",
             "executable_observation",
             "native_v2_types",
+            "process_context",
             "task_v2",
             "v2_validation",
         )
@@ -298,7 +302,7 @@ def _load_delegation_family() -> None:
 
 
 def _load_api_family() -> None:
-    _load_symbols(("delegation_runtime", "v2", "v2_validation"))
+    _load_symbols(("process_context", "v2", "v2_validation"))
 
 
 def _load_agent_family() -> None:
@@ -306,7 +310,7 @@ def _load_agent_family() -> None:
 
 
 def _load_legacy_run_family() -> None:
-    _load_symbols(("delegation_runtime", "foreground_process"))
+    _load_symbols(("process_context", "foreground_process"))
 
 
 def _load_usage_family() -> None:

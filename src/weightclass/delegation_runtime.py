@@ -15,7 +15,12 @@ from typing import Any, Final
 from .delegation_types import DirectChildCleanup
 from .executable_observation import ExecutableObservation, observe_executable
 from .process_context import (
-    has_safe_sigchld_disposition,
+    DelegationRuntimeUnavailableError as DelegationRuntimeUnavailableError,
+)
+from .process_context import (
+    validate_runtime_process_context as validate_runtime_process_context,
+)
+from .process_context import (
     wait_owned_child,
 )
 from .process_errors import ChildStatusLostError
@@ -23,10 +28,6 @@ from .process_errors import ChildStatusLostError
 RUNTIME_ARGUMENTS: Final = ("--weightclass-delegation-protocol", "1")
 _SIGINT_POLL_SECONDS: Final = 0.05
 _CHILD_STATUS_LOST: Final = -sys.maxsize
-
-
-class DelegationRuntimeUnavailableError(OSError):
-    """Raised without path details when the reviewed runtime cannot start."""
 
 
 class DelegationRuntimeFailedError(OSError):
@@ -116,20 +117,6 @@ def validate_delegation_runtime(runtime_path: str) -> ExecutableObservation:
         return observe_executable(runtime_path)
     except (OSError, ValueError):
         raise DelegationRuntimeUnavailableError() from None
-
-
-def validate_runtime_process_context() -> None:
-    """Require a reviewed context that preserves direct-child status.
-
-    This observation cannot prevent hostile concurrent native mutation. The
-    caller must retain exclusive child-status ownership throughout invocation;
-    the second check next to ``Popen`` narrows but cannot remove that residual.
-    """
-    if (
-        threading.current_thread() is not threading.main_thread()
-        or not has_safe_sigchld_disposition()
-    ):
-        raise DelegationRuntimeUnavailableError()
 
 
 def _write_all(

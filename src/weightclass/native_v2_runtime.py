@@ -2,10 +2,10 @@
 
 import subprocess
 
-from .delegation_runtime import validate_runtime_process_context
 from .executable_observation import ExecutableObservation, observe_executable
 from .foreground_process import run_owned_foreground
 from .native_v2_types import CompiledExecutionV2
+from .process_context import validate_runtime_process_context
 from .v2_validation import V2ValidationError
 
 

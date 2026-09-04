@@ -9,11 +9,10 @@ from unittest.mock import Mock, patch
 
 from tests.runtime_guard import guarded_launch
 from weightclass import cli
-from weightclass.delegation_runtime import DelegationRuntimeUnavailableError
 from weightclass.executable_observation import ExecutableObservation
 from weightclass.native_v2_compile import compile_native_v2
 from weightclass.native_v2_schema import parse_native_policy_v2
-from weightclass.process_context import ChildStatusLostError
+from weightclass.process_context import ChildStatusLostError, DelegationRuntimeUnavailableError
 from weightclass.task_v2 import read_validated_task_v2
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_native_runtime.py"

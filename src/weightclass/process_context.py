@@ -30,6 +30,28 @@ _PERMISSION_EXIT_RACE_POLL_SECONDS: Final = 0.001
 LEADER_ALREADY_EXITED: Final = object()
 
 
+class DelegationRuntimeUnavailableError(OSError):
+    """Raised without path details when the reviewed runtime cannot start.
+
+    이름은 위임 런타임 시절의 것이지만, 실제로는 모든 `run` 경로가 자식 상태
+    소유권을 보장하지 못할 때 내는 예외다. 호출자는 exit 4 로 매핑한다.
+    """
+
+
+def validate_runtime_process_context() -> None:
+    """Require a reviewed context that preserves direct-child status.
+
+    This observation cannot prevent hostile concurrent native mutation. The
+    caller must retain exclusive child-status ownership throughout invocation;
+    the second check next to ``Popen`` narrows but cannot remove that residual.
+    """
+    if (
+        threading.current_thread() is not threading.main_thread()
+        or not has_safe_sigchld_disposition()
+    ):
+        raise DelegationRuntimeUnavailableError()
+
+
 class LeaderObserverError(ValueError):
     """Raised without pid detail when a leader-exit observer cannot be registered."""
 
