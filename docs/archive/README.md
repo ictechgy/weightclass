@@ -44,6 +44,17 @@ describe as something the shipped tool still provides.
   unimplemented proposal to run the cheap route first and escalate when a verify
   command fails.
 
+## Cost-recommendation documents
+
+These described `wclass recommend` and `wclass review-cost-profile`, removed in
+0.32.0 together with vendor triage, `wclass render`, and
+`run --suggest-escalation`.
+
+- [`cost-recommendation.md`](cost-recommendation.md) — the evidence-gated
+  `recommend` layer: the opaque cost profile and qualification card it consumed,
+  its fixed quality and uncertainty gates, canonical fingerprints, and the
+  end-to-end workflow it prescribed. Last shipped in 0.31.1.
+
 ## Delegation and API-routing documents
 
 These described `wclass delegate` and `wclass v2`, removed in 0.32.0.

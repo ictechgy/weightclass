@@ -36,12 +36,9 @@ from .router import (
     InvalidVendorLabelError,
     Posture,
     Route,
-    RouteRequest,
     RouteSelectionError,
     RoutingPolicy,
     native_route_fingerprint,
-    next_tier,
-    select_route,
     select_tier_route,
     substitute_task,
     uses_argv_task_delivery,
@@ -57,13 +54,6 @@ if TYPE_CHECKING:
         resolve_builtin_executable,
     )
     from .canonical_v2 import canonical_json_bytes_v2
-    from .cost_recommendation import (
-        CostRecommendationError,
-        build_cost_profile_review,
-        build_recommendation_receipt,
-        load_cost_profile,
-        load_qualification_card,
-    )
     from .executable_observation import ExecutableObservation, observe_executable
     from .foreground_process import run_owned_foreground
     from .native_v2_compile import compile_native_v2
@@ -90,7 +80,6 @@ if TYPE_CHECKING:
         validate_runtime_process_context,
     )
     from .task_v2 import ValidatedTaskV2, read_validated_task_v2
-    from .triage import TriageUnavailableError, ask_vendor_for_tier, triage_descriptor
     from .usage_aggregation import (
         STORE_SCHEMA_VERSION,
         UsageAggregationError,
@@ -110,11 +99,6 @@ if TYPE_CHECKING:
 AGENT_IDS: Final = ("agy", "claude", "codex", "grok")
 
 _LAZY_SYMBOL_MODULES: Final = {
-    "CostRecommendationError": "cost_recommendation",
-    "build_cost_profile_review": "cost_recommendation",
-    "build_recommendation_receipt": "cost_recommendation",
-    "load_cost_profile": "cost_recommendation",
-    "load_qualification_card": "cost_recommendation",
     "run_owned_foreground": "foreground_process",
     "AgentDiscoveryError": "agent_discovery",
     "AgentUnavailableError": "agent_discovery",
@@ -143,9 +127,6 @@ _LAZY_SYMBOL_MODULES: Final = {
     "run_interactive_selector": "native_v3_selector",
     "ValidatedTaskV2": "task_v2",
     "read_validated_task_v2": "task_v2",
-    "TriageUnavailableError": "triage",
-    "ask_vendor_for_tier": "triage",
-    "triage_descriptor": "triage",
     "V2ValidationError": "v2_validation",
     "STORE_SCHEMA_VERSION": "usage_aggregation",
     "UsageAggregationError": "usage_aggregation",
@@ -565,94 +546,6 @@ def _legacy_route_fingerprint(
     )
 
 
-def _print_escalation_suggestion(
-    policy: RoutingPolicy,
-    tier: Tier,
-    source_vendor: str | None,
-    bind_executable_identity: bool = False,
-    resolve_default_executable: bool = False,
-) -> None:
-    """Name the route one tier up after a child failed, without running anything.
-
-    V1 은 자식을 하나만 포그라운드로 돌리고 재시도하거나 감독하지 않는다. 그
-    경계는 그대로 둔다. 여기서 하는 일은 실행이 아니라 지목이다.
-
-    지목만으로도 의미가 있는 이유는 이렇다. 싼 티어로 먼저 보내는 전략이
-    성립하려면 실패했을 때 다음 경로가 즉시 손에 있어야 하는데, 지금은 사용자가
-    다음 라우트를 직접 찾아 지문을 다시 검토하고 --usage-rework 를 기억해서
-    붙여야 했다. 그 마찰 때문에 아무도 싼 티어를 쓰지 않고, 그래서 라우터가
-    안전하게 가려고 위로 올려 보내며 비용이 샌다.
-
-    이것은 진단이 아니다. 자식이 실패한 원인이 티어라는 주장을 하지 않는다.
-    태스크가 애초에 불가능하거나 환경이 망가졌을 수도 있으며, 라우터는 자식의
-    출력을 읽지 않으므로 구분할 방법이 없다. 그 사실을 출력에 명시한다.
-    """
-    # 사다리를 한 칸만 올라가면 정책에 그 티어가 없을 때 제안이 사라진다. low 와
-    # high 만 정의한 정책에서 low 가 실패하면 high 라우트가 멀쩡히 있는데도
-    # 아무것도 알려주지 못했다. 실제로 있는 다음 티어까지 올라간다.
-    higher = next_tier(tier)
-    route = None
-    while higher is not None:
-        try:
-            route = select_tier_route(
-                policy.routes, higher, source_vendor, policy.allow_mixed_vendors
-            )
-            break
-        except RouteSelectionError:
-            higher = next_tier(higher)
-    if route is None:
-        reason = "already_highest_tier" if next_tier(tier) is None else "no_route_for_higher_tier"
-        print(json.dumps({"escalation": None, "reason": reason}), file=sys.stderr)
-        return
-    assert higher is not None
-    observed: ExecutableObservation | None = None
-    if resolve_default_executable:
-        try:
-            route = _resolve_default_route_executable(route)
-        except (AgentDiscoveryError, AgentUnavailableError):
-            print(
-                json.dumps({"escalation": None, "reason": "higher_route_unavailable"}),
-                file=sys.stderr,
-            )
-            return
-    elif bind_executable_identity:
-        try:
-            route, observed = _observe_bound_legacy_route(route)
-        except (OSError, RuntimeError, V2ValidationError, ValueError):
-            print(
-                json.dumps({"escalation": None, "reason": "higher_route_unavailable"}),
-                file=sys.stderr,
-            )
-            return
-    # 명령 자체는 싣지 않는다. 사용자가 승급을 실행하는 데 필요한 것은 티어와
-    # 지문이지 argv 가 아니다.
-    #
-    # 라우트 검토는 wclass route 가 하는 일이고, 그것은 사용자가 일부러 부르는
-    # 명령이다. 여기서 argv 를 함께 내면, low 로만 돌리고 상위 라우트를 한 번도
-    # 검토한 적 없는 사용자가 실패 로그를 통해 그 명령을 처음 보게 된다. 정책
-    # 명령에 자격증명이 인라인으로 들어 있으면 그것이 로그로 나가는 경로가
-    # 하나 늘어나는 셈이다. 명령을 보고 싶으면 wclass route --tier <위> 로
-    # 명시적으로 검토하면 된다.
-    suggestion: dict[str, object] = {
-        "from_tier": tier,
-        "to_tier": higher,
-        "route": route.route_id,
-        "vendor": route.vendor,
-        "route_fingerprint": _legacy_route_fingerprint(route, policy, observed),
-        # Legacy/schema-1 runs cannot write the schema-3 aggregate usage store.
-        # Keep this field explicit so callers do not translate the suggestion
-        # into an unsupported --usage-rework flag.
-        "record_as_rework": None,
-        "usage_rework_supported": False,
-        "failure_cause_diagnosed": False,
-    }
-    if uses_argv_task_delivery(route.command):
-        suggestion["task_delivery"] = "argv"
-    if observed is not None:
-        suggestion["executable_binding"] = "observed"
-    print(json.dumps({"escalation": suggestion}), file=sys.stderr)
-
-
 def _report_executor_result(completed_process: subprocess.CompletedProcess[bytes]) -> int:
     """Map a finished child's status to a router exit code without hiding it.
 
@@ -696,11 +589,6 @@ def _read_json_object(path: Path, *, max_bytes: int) -> dict[str, Any]:
         return load_json_object(path, max_bytes=max_bytes, require_exclusive_write_owner=True)
     except JsonInputError:
         raise InvalidInputError() from None
-
-
-def _require_exact_keys(value: dict[str, Any], expected_keys: set[str]) -> None:
-    if set(value) != expected_keys:
-        raise InvalidInputError()
 
 
 def _require_nonempty_string(value: object) -> str:
@@ -795,9 +683,10 @@ def _parse_route(value: object) -> Route:
     parsed_command = _require_at_most_one_task_slot(
         tuple(_require_command_argument(argument) for argument in command)
     )
-    # workflow 라우트는 select_tier_route 의 후보가 아니라 render 만 다루므로
-    # 아무도 이 자리를 채우지 않는다. 여기서 닫지 않으면 render 가 미치환
-    # 리터럴 "{{task}}" 를 그대로 내보내 검토 산출물이 실제 실행과 어긋난다.
+    # workflow 라우트는 티어 선택의 후보가 아니므로 아무도 이 자리를 채우지
+    # 않는다. 여기서 닫지 않으면 미치환 리터럴 "{{task}}" 를 담은 라우트가
+    # 정책에 남아, 나중에 그 라우트를 읽는 쪽이 태스크 없는 명령을 실행 가능한
+    # 것으로 오해한다.
     if has_workflow and TASK_PLACEHOLDER in parsed_command:
         raise InvalidInputError()
     return Route(
@@ -848,17 +737,6 @@ def _parse_routing_policy(policy: dict[str, Any]) -> RoutingPolicy:
     if len({route.route_id for route in parsed_routes}) != len(parsed_routes):
         raise InvalidInputError()
     return RoutingPolicy(parsed_routes, allow_mixed_vendors, cast(Posture | None, posture))
-
-
-def load_request(descriptor_path: Path) -> RouteRequest:
-    """Load a redacted descriptor without task content or credentials."""
-    descriptor = _read_json_object(descriptor_path, max_bytes=MAX_NATIVE_DESCRIPTOR_BYTES)
-    _require_exact_keys(descriptor, {"vendor", "workflow"})
-    try:
-        vendor = validate_vendor_label(descriptor["vendor"])
-    except InvalidVendorLabelError:
-        raise InvalidInputError() from None
-    return RouteRequest(vendor=vendor, workflow=_require_nonempty_string(descriptor["workflow"]))
 
 
 def _add_usage_run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -945,9 +823,6 @@ PRESET_HELP: Final = (
 ADVANCED_COMMANDS: tuple[str, ...] = (
     "profile",
     "select",
-    "review-cost-profile",
-    "recommend",
-    "render",
 )
 
 
@@ -1040,10 +915,6 @@ def build_parser() -> argparse.ArgumentParser:
         description="Print the tier of a task read from standard input.",
     )
     classify.add_argument("--source-vendor")
-    # 로컬 판정이 기본이다. 이 플래그를 줄 때만 벤더 CLI 를 한 번 실행한다.
-    classify.add_argument("--ask-vendor", action="store_true")
-    # 판정 명령도 내장 벤더 명령이므로 실행 전에 볼 수 있어야 한다.
-    classify.add_argument("--show-triage-command", action="store_true")
     classify.add_argument(
         "--explain",
         action="store_true",
@@ -1067,25 +938,6 @@ def build_parser() -> argparse.ArgumentParser:
     review_preset.add_argument("name", choices=PRESET_CHOICES, metavar="PRESET", help=PRESET_HELP)
     review_preset.add_argument("--model")
     _add_preset_override_arguments(review_preset)
-    review_cost_profile = subcommands.add_parser(
-        "review-cost-profile",
-        allow_abbrev=False,
-        description="Validate and fingerprint one task-free cost profile.",
-    )
-    review_cost_profile.add_argument("--cost-profile", required=True, type=Path)
-    recommend = subcommands.add_parser(
-        "recommend",
-        allow_abbrev=False,
-        description="Recommend or abstain without starting a vendor process.",
-    )
-    recommend.add_argument(
-        "--preset", required=True, choices=PRESET_CHOICES, metavar="PRESET", help=PRESET_HELP
-    )
-    recommend.add_argument("--cost-profile", required=True, type=Path)
-    recommend.add_argument("--qualification-card", required=True, type=Path)
-    recommend.add_argument("--model")
-    recommend.add_argument("--tier", choices=("low", "standard", "high"))
-    _add_preset_override_arguments(recommend)
     for name, description in (
         ("route", "Select and print a command for a task read from standard input."),
         ("run", "Select and start a command for a task read from standard input."),
@@ -1222,52 +1074,19 @@ def build_parser() -> argparse.ArgumentParser:
                     "acknowledges that the child talks to a different endpoint."
                 ),
             )
-            native.add_argument(
-                "--suggest-escalation",
-                action="store_true",
-                help=(
-                    "After a child exits non-zero, print the route one tier up and "
-                    "its fingerprint. Nothing is retried or started."
-                ),
-            )
             _add_usage_run_arguments(native)
-
-    render = subcommands.add_parser(
-        "render",
-        allow_abbrev=False,
-        description="Render the command of a policy route named by a workflow descriptor.",
-    )
-    render.add_argument("--policy", required=True, type=Path)
-    render.add_argument("--descriptor", required=True, type=Path)
     return parser
 
 
 def classify_from_standard_input(
     source_vendor: str | None = None,
-    ask_vendor: bool = False,
-    show_triage_command: bool = False,
     explain: bool = False,
 ) -> int:
     """Retain the historical direct-call seam while sharing the lightweight core."""
     from .classification_cli import classify_task_input
 
-    if ask_vendor or show_triage_command:
-        _load_symbols(("triage",))
-        return classify_task_input(
-            source_vendor,
-            ask_vendor,
-            show_triage_command,
-            explain,
-            ask_vendor_for_tier=ask_vendor_for_tier,
-            triage_descriptor=triage_descriptor,
-            triage_unavailable_error=TriageUnavailableError,
-            read_task=read_task_from_standard_input,
-        )
-
     return classify_task_input(
         source_vendor,
-        ask_vendor,
-        show_triage_command,
         explain,
         read_task=read_task_from_standard_input,
     )
@@ -1383,93 +1202,6 @@ def review_packaged_preset(
             }
         )
     )
-    return 0
-
-
-def recommend_from_standard_input(
-    preset: str,
-    cost_profile_path: Path,
-    qualification_card_path: Path,
-    explicit_tier: Tier | None = None,
-    model: str | None = None,
-    overrides: PresetOverrides | None = None,
-) -> int:
-    """Render one evidence-bound recommendation without starting a vendor."""
-    _load_symbols(("cost_recommendation",))
-    _load_agent_family()
-    overrides = overrides or PresetOverrides()
-    try:
-        source_vendor = _preset_source_vendor(preset)
-        profile = load_cost_profile(cost_profile_path)
-        card = load_qualification_card(qualification_card_path)
-        candidate_policy = _automatic_cost_policy(
-            True,
-            None,
-            source_vendor,
-            None,
-            model,
-            overrides,
-        )
-    except (CostRecommendationError, InvalidInputError):
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    if candidate_policy is None:
-        raise AssertionError("packaged policy resolution returned no policy")
-    try:
-        tier, routing_reason_code, candidate_route, candidate_policy = select_task_route(
-            read_task_from_standard_input(),
-            candidate_policy,
-            source_vendor,
-            explicit_tier,
-        )
-        candidate_route = _resolve_default_route_executable(candidate_route)
-        baseline_route = _resolve_default_route_executable(
-            select_tier_route(DEFAULT_ROUTES, tier, source_vendor, False)
-        )
-        baseline_fingerprint = native_route_fingerprint(baseline_route, False)
-        candidate_fingerprint = native_route_fingerprint(
-            candidate_route,
-            candidate_policy.allow_mixed_vendors,
-            candidate_policy.posture,
-        )
-        receipt = build_recommendation_receipt(
-            profile,
-            card,
-            baseline_route=baseline_route,
-            baseline_route_fingerprint=baseline_fingerprint,
-            baseline_allow_mixed_vendors=False,
-            candidate_route=candidate_route,
-            candidate_route_fingerprint=candidate_fingerprint,
-            candidate_allow_mixed_vendors=candidate_policy.allow_mixed_vendors,
-            candidate_posture=candidate_policy.posture,
-            routing_reason_code=routing_reason_code,
-            candidate_configuration_status=_packaged_configuration_status(preset, model, overrides),
-        )
-    except InvalidTaskError:
-        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
-        return 2
-    except CostRecommendationError:
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    except RouteSelectionError:
-        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
-        return 3
-    except (AgentDiscoveryError, AgentUnavailableError):
-        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
-        return 3
-    print(json.dumps(receipt))
-    return 0
-
-
-def review_cost_profile(cost_profile_path: Path) -> int:
-    """Validate and fingerprint one cost profile without reading task input."""
-    _load_symbols(("cost_recommendation",))
-    try:
-        profile = load_cost_profile(cost_profile_path)
-    except CostRecommendationError:
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    print(json.dumps(build_cost_profile_review(profile)))
     return 0
 
 
@@ -1719,7 +1451,6 @@ def run_from_standard_input(
     usage_rework: bool = False,
     usage_escalation: bool = False,
     use_default_usage_store: bool = False,
-    suggest_escalation: bool = False,
     bind_executable_identity: bool = False,
     interactive_review: bool = False,
 ) -> int:
@@ -1772,9 +1503,6 @@ def run_from_standard_input(
             or usage_rework
             or usage_escalation
         ) and version != 3:
-            print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-            return 2
-        if suggest_escalation and version != 1:
             print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
             return 2
         if version == 2:
@@ -1923,18 +1651,7 @@ def run_from_standard_input(
         # 진단으로 닫히도록 두 번째 방어선을 둔다.
         print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
         return 4
-    status = _report_executor_result(completed_process)
-    # 라우터가 스스로 진단한 실패(2~6)에는 승급을 제안하지 않는다. 자식이 실제로
-    # 돌아서 비영으로 끝난 경우에만 다음 티어를 지목하는 것이 의미를 갖는다.
-    if status == EXECUTOR_FAILED_EXIT_CODE and suggest_escalation:
-        _print_escalation_suggestion(
-            policy,
-            selected_tier,
-            effective_source_vendor,
-            bind_executable_identity,
-            policy_path is None,
-        )
-    return status
+    return _report_executor_result(completed_process)
 
 
 def _v2_task_and_tier(explicit_tier: Tier | None) -> tuple[ValidatedTaskV2, Tier]:
@@ -2239,20 +1956,6 @@ def _native_v3_run(
     )
 
 
-def render_workflow_route(policy_path: Path, descriptor_path: Path) -> int:
-    """Render the command of the policy route named by a workflow descriptor."""
-    try:
-        route = select_route(load_routes(policy_path), load_request(descriptor_path))
-    except InvalidInputError:
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    except RouteSelectionError:
-        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
-        return 3
-    print(json.dumps({"command": list(route.command), "route": route.route_id}))
-    return 0
-
-
 def _main_json(
     argv: Sequence[str] | None = None,
     *,
@@ -2391,12 +2094,7 @@ def _main_json(
             return 2
 
     if arguments.command == "classify":
-        return classify_from_standard_input(
-            arguments.source_vendor,
-            arguments.ask_vendor,
-            arguments.show_triage_command,
-            arguments.explain,
-        )
+        return classify_from_standard_input(arguments.source_vendor, arguments.explain)
     if arguments.command == "example-policy":
         try:
             policy_text = _render_example_policy(
@@ -2415,17 +2113,6 @@ def _main_json(
             arguments.model,
             _preset_overrides_from_arguments(arguments),
         )
-    if arguments.command == "recommend":
-        return recommend_from_standard_input(
-            arguments.preset,
-            arguments.cost_profile,
-            arguments.qualification_card,
-            arguments.tier,
-            arguments.model,
-            _preset_overrides_from_arguments(arguments),
-        )
-    if arguments.command == "review-cost-profile":
-        return review_cost_profile(arguments.cost_profile)
     if arguments.command == "route":
         return route_from_standard_input(
             arguments.policy,
@@ -2455,12 +2142,9 @@ def _main_json(
             arguments.usage_rework,
             arguments.usage_escalation,
             use_default_usage_store,
-            arguments.suggest_escalation,
             arguments.bind_executable_identity,
             _interactive_review_requested(arguments, terminal_review_default),
         )
-    if arguments.command == "render":
-        return render_workflow_route(arguments.policy, arguments.descriptor)
     print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
     return 2
 

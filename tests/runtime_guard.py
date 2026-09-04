@@ -104,7 +104,6 @@ CLAIMED_LAUNCH_TESTS = {
     "native_v2": (
         "tests.test_native_v2_cli.NativeV2CliTests.test_route_then_run_owned_fixture_end_to_end"
     ),
-    "triage": "tests.test_triage.AskVendorTests.test_guarded_owned_absolute_vendor",
 }
 
 EXCLUDED_LAUNCH_SCOPES = ("build", "packaging", "extracted_sdist")
@@ -113,7 +112,6 @@ EXCLUDED_LAUNCH_SCOPES = ("build", "packaging", "extracted_sdist")
 def register_claimed_launches(guard: RuntimeGuard, category: str) -> None:
     """Register only the exact owned executable or Python harness prefixes for a claim."""
     python = Path(sys.executable).resolve(strict=True)
-    fixtures = Path(__file__).parent / "fixtures"
     prefixes: dict[str, tuple[tuple[Path, tuple[str, ...]], ...]] = {
         # run --policy 는 검토한 지문을 요구하므로 native v1 도 route 를 먼저 띄운다.
         "native_v1": (
@@ -124,7 +122,6 @@ def register_claimed_launches(guard: RuntimeGuard, category: str) -> None:
             (python, ("-m", "weightclass", "route")),
             (python, ("-m", "weightclass", "run")),
         ),
-        "triage": ((fixtures / "fake_triage_vendor.py", ()),),
     }
     try:
         selected = prefixes[category]
