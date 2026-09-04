@@ -1,0 +1,11 @@
+diff --git a/src/ledger/pagination.py b/src/ledger/pagination.py
+--- a/src/ledger/pagination.py
++++ b/src/ledger/pagination.py
+@@ -12,5 +12,7 @@ def page(entries: Sequence[str], page_size: int, index: int) -> tuple[str, ...]:
+     """
+     if page_size < 1 or index < 0:
+         raise ValueError("page_size must be >= 1 and index >= 0")
++    if index >= len(entries) // page_size:
++        return ()
+     start = index * page_size
+     return tuple(entries[start : start + page_size])

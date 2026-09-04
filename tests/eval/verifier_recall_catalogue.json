@@ -5,7 +5,7 @@
     {
       "class_id": "schema-coercion",
       "grounding": "documented",
-      "n": 5,
+      "n": 6,
       "expected_checks": [
         "invariant"
       ]
@@ -13,7 +13,7 @@
     {
       "class_id": "silent-overwrite",
       "grounding": "documented",
-      "n": 5,
+      "n": 6,
       "expected_checks": [
         "invariant"
       ]
@@ -21,7 +21,7 @@
     {
       "class_id": "id-padding",
       "grounding": "documented",
-      "n": 5,
+      "n": 6,
       "expected_checks": [
         "invariant"
       ]
@@ -29,7 +29,7 @@
     {
       "class_id": "mutable-leak",
       "grounding": "documented",
-      "n": 5,
+      "n": 6,
       "expected_checks": [
         "invariant"
       ]
@@ -37,7 +37,7 @@
     {
       "class_id": "error-swallow",
       "grounding": "design-doc",
-      "n": 2,
+      "n": 3,
       "expected_checks": [
         "invariant"
       ]
@@ -45,7 +45,7 @@
     {
       "class_id": "pagination-bound",
       "grounding": "guess",
-      "n": 2,
+      "n": 3,
       "expected_checks": [
         "invariant"
       ]
@@ -53,7 +53,7 @@
     {
       "class_id": "non-atomic-save",
       "grounding": "design-doc",
-      "n": 2,
+      "n": 3,
       "expected_checks": [
         "invariant"
       ]
@@ -104,6 +104,13 @@
       "operator": "delete the version check entirely and return the value"
     },
     {
+      "id": "sc-06",
+      "class_id": "schema-coercion",
+      "patch": "verifier-recall-defects/sc-06.patch",
+      "canonical_documented": false,
+      "operator": "compare str(value).strip() against \"1\", so numeric strings pass as version 1"
+    },
+    {
       "id": "ow-01",
       "class_id": "silent-overwrite",
       "patch": "verifier-recall-defects/ow-01.patch",
@@ -137,6 +144,13 @@
       "patch": "verifier-recall-defects/ow-05.patch",
       "canonical_documented": false,
       "operator": "partial read then reserialise a repaired file with an injected schema_version"
+    },
+    {
+      "id": "ow-06",
+      "class_id": "silent-overwrite",
+      "patch": "verifier-recall-defects/ow-06.patch",
+      "canonical_documented": false,
+      "operator": "wrap the strict reader so any StateCorruptError returns a default and rewrites the file"
     },
     {
       "id": "id-01",
@@ -174,6 +188,13 @@
       "operator": "strip leading/trailing tab, CR and newline only"
     },
     {
+      "id": "id-06",
+      "class_id": "id-padding",
+      "patch": "verifier-recall-defects/id-06.patch",
+      "canonical_documented": false,
+      "operator": "NFKC-normalise the id before matching, admitting and rewriting compatibility look-alikes"
+    },
+    {
       "id": "mu-01",
       "class_id": "mutable-leak",
       "patch": "verifier-recall-defects/mu-01.patch",
@@ -209,6 +230,13 @@
       "operator": "return a module-level mutable constant"
     },
     {
+      "id": "mu-06",
+      "class_id": "mutable-leak",
+      "patch": "verifier-recall-defects/mu-06.patch",
+      "canonical_documented": false,
+      "operator": "copy() returns a new Ledger that shares the same internal _entries list"
+    },
+    {
       "id": "es-01",
       "class_id": "error-swallow",
       "patch": "verifier-recall-defects/es-01.patch",
@@ -221,6 +249,13 @@
       "patch": "verifier-recall-defects/es-02.patch",
       "canonical_documented": false,
       "operator": "Ledger.remove of an unknown id returns silently"
+    },
+    {
+      "id": "es-03",
+      "class_id": "error-swallow",
+      "patch": "verifier-recall-defects/es-03.patch",
+      "canonical_documented": false,
+      "operator": "Ledger.add swallows LedgerIdError and returns as if the entry had been added"
     },
     {
       "id": "pg-01",
@@ -237,6 +272,13 @@
       "operator": "pages overlap by one via start = index * (page_size - 1)"
     },
     {
+      "id": "pg-03",
+      "class_id": "pagination-bound",
+      "patch": "verifier-recall-defects/pg-03.patch",
+      "canonical_documented": false,
+      "operator": "bound the page count with len(entries) // page_size, dropping the trailing partial page"
+    },
+    {
       "id": "at-01",
       "class_id": "non-atomic-save",
       "patch": "verifier-recall-defects/at-01.patch",
@@ -249,6 +291,13 @@
       "patch": "verifier-recall-defects/at-02.patch",
       "canonical_documented": false,
       "operator": "unlink the old file before writing the new one"
+    },
+    {
+      "id": "at-03",
+      "class_id": "non-atomic-save",
+      "patch": "verifier-recall-defects/at-03.patch",
+      "canonical_documented": false,
+      "operator": "publish the temp file with shutil.copyfile instead of the atomic os.replace"
     },
     {
       "id": "cr-01",
@@ -346,5 +395,17 @@
     "generator_blind_to_fixture_tests": true,
     "generator": "claude subagent, fresh context, source-only",
     "trusted_not_proven": true
+  },
+  "extension": {
+    "added_ids": [
+      "sc-06",
+      "ow-06",
+      "id-06",
+      "mu-06",
+      "es-03",
+      "pg-03",
+      "at-03"
+    ],
+    "reason": "pre-registered single extension after the n=26 run"
   }
 }
