@@ -35,16 +35,10 @@ class GuardedRuntimeSuite(unittest.TestCase):
     def test_guarded_native_v2_launch(self) -> None:
         self.run_claimed_test("native_v2")
 
-    def test_guarded_triage_launch(self) -> None:
-        self.run_claimed_test("triage")
-
 
 class GuardedRuntimeEnrollmentTests(unittest.TestCase):
     def test_every_claimed_launch_path_is_enrolled(self) -> None:
-        self.assertEqual(
-            set(CLAIMED_LAUNCH_TESTS),
-            {"native_v1", "native_v2", "triage"},
-        )
+        self.assertEqual(set(CLAIMED_LAUNCH_TESTS), {"native_v1", "native_v2"})
         for category, symbol in CLAIMED_LAUNCH_TESTS.items():
             with self.subTest(category=category):
                 module_name, class_name, method_name = symbol.rsplit(".", 2)

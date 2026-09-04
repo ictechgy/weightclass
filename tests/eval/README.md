@@ -79,12 +79,14 @@ Pre-register at least these pairwise comparisons on the same task set:
 2. provider-direct default versus the current balanced local route;
 3. provider-direct default versus the experimental schema-1 policy whose
    standard command omits the effort override; and
-4. provider-direct default versus `--ask-vendor` followed by `run`, with both
-   full-task invocations and any rework included in the candidate total.
+4. provider-direct default versus any evaluator-owned tier-selection procedure
+   run outside weightclass, with every full-task invocation it causes and any
+   rework included in the candidate total. weightclass ships no such
+   procedure: `wclass classify` is local and offline.
 
 Run the scorer once per candidate. Keep the provider, runtime, model, other
 command settings, terminal rule, and blind quality rubric fixed; counterbalance
-execution order. The direct provider and vendor-triage collection steps can
+execution order. The direct provider and evaluator-owned collection steps can
 make network, disclosure, quota, and billing changes and therefore require
 approval outside this offline scorer.
 
@@ -244,9 +246,11 @@ account identifiers. These are evaluator assertions, not facts verified by the
 scorer.
 
 `metered_cost` requires `fixed_subscription_charge: false`. A passing result is
-labeled `cost_opt_in` and may be used to prepare the separate reviewed cost
-profile and qualification card; it does not create those documents or authorize
-execution. `subscription_quota` requires `fixed_subscription_charge: true`.
+labeled `cost_opt_in`; it is one evaluator's aggregate finding and authorizes
+no execution. The `recommend` command that once consumed a cost profile and a
+qualification card was removed in 0.32.0, so these labels are scorer output
+only and no shipped command reads them.
+`subscription_quota` requires `fixed_subscription_charge: true`.
 Even when its statistical decision is `go`, its promotion scope is
 `capacity_only`, `eligible_for_cost_recommendation` is false, and
 `monthly_bill_reduction_claimed` is false. The scorer never fetches prices,
@@ -397,40 +401,45 @@ met, confidence intervals and language/category slices have been reviewed, and
 no slice shows an unexplained safety regression. The committed public fixture
 remains useful for detecting known regressions but cannot satisfy this gate.
 
-## Opt-in semantic triage comparison gate
+## Offline vendor-tier comparison gate
 
-Vendor triage is an opt-in experiment, not the default classifier and not a
-fallback for `route` or `run`. Any future local semantic model is also an
-opt-in experiment until it independently passes this gate; it must not replace
-the deterministic local default merely because it improves the public fixture.
+`score.py --compare-triage` is an **offline scorer only**. weightclass ships no
+command that asks a vendor for a tier: `wclass classify` is local, deterministic,
+and offline, and `route`/`run` take the tier from `--tier` or the same local
+classifier via `--suggest-tier`. The `wclass classify --ask-vendor` and
+`--show-triage-command` boundaries this section once described were removed in
+0.32.0.
 
-After the candidate and thresholds are frozen, an authorized evaluator may use
-the explicit `wclass classify --source-vendor claude --ask-vendor` boundary to
-obtain one tier for each sealed task. That separate collection step owns vendor
-access, disclosure, and quota/billing, and requires separate approval. The
-Codex adapter currently fails closed because Codex has no documented
-all-tools-disabled CLI contract. Add authorized results as a `vendor_tier`
-field in the evaluator-owned temporary corpus, then compare the three
-pre-registered candidates entirely offline:
+A vendor-assisted or local semantic classifier is therefore an experiment that
+lives entirely outside the tool until it independently passes this gate. It must
+not replace the deterministic local default merely because it improves the
+public fixture.
+
+After the candidate and thresholds are frozen, an authorized evaluator collects
+one tier per sealed task by whatever procedure they own. That collection step is
+outside this repository: it owns vendor access, disclosure, and quota/billing,
+and requires separate approval. Add the results as a `vendor_tier` field in the
+evaluator-owned temporary corpus, then compare the three pre-registered
+candidates entirely offline:
 
 ```sh
 PYTHONPATH=src python3 tests/eval/score.py \
   --corpus /path/to/sealed-corpus.json --compare-triage
 ```
 
-The comparison harness never invokes a vendor CLI. It reports local-only,
-vendor-only, and raise-only (`max(local, vendor)`) aggregate metrics. The public
-fixture is rejected in comparison mode, and a missing or malformed
-`vendor_tier` fails closed. Accept a composition only if it beats the
-pre-registered baseline and thresholds on the fresh blind corpus, including
-review of confidence intervals and every language/category slice.
+The comparison harness never invokes a vendor CLI, and neither does any other
+scorer here. It reports local-only, vendor-only, and raise-only
+(`max(local, vendor)`) aggregate metrics. The public fixture is rejected in
+comparison mode, and a missing or malformed `vendor_tier` fails closed. Accept a
+composition only if it beats the pre-registered baseline and thresholds on the
+fresh blind corpus, including review of confidence intervals and every
+language/category slice.
 
-Vendor failure remains terminal: unavailable, timed-out, oversized, malformed,
-or non-zero vendor output exits `8` with only `triage_unavailable`; it never
-quietly becomes the local result. This experiment adds no credentials, HTTP
+A collection failure is the evaluator's to handle before scoring: a corpus with
+a missing or malformed `vendor_tier` fails closed rather than quietly falling
+back to the local result. Scoring a composition here adds no credentials, HTTP
 client, task persistence, retry supervisor, or automatic cross-vendor route to
-weightclass. The external CLI still owns its authentication and network. The
-source vendor remains explicit for collection and for any later execution.
+weightclass, and does not make any of them a shipped surface.
 
 ## Offline Phase 4 candidate decision
 

@@ -35,8 +35,6 @@ class ReleaseWorkflowStructureTests(unittest.TestCase):
                 self.assertNotIn("command -v true", block)
                 self.assertIn('export PATH="$installed_agent_bin:$PATH"', block)
                 self.assertIn('"$installed_venv/bin/wclass" classify', block)
-                self.assertIn('"$installed_venv/bin/wclass" review-cost-profile --help', block)
-                self.assertIn('"$installed_venv/bin/wclass" recommend --help', block)
                 for policy_name in (
                     "agy-cost-focused",
                     "claude-cost-focused",

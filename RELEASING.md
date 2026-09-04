@@ -71,9 +71,11 @@ publisher once, on PyPI:
    `python@3.13` framework `bin/` ships only `python3.13`, so on such a machine
    run the verifier with an interpreter whose `bin/` has `python3` (the default
    `python3` does); the release workflow re-runs it on Linux either way.
-   The release is also blocked unless CI's macOS Python 3.10 and 3.14 triage
-   process-group/FIFO boundary jobs pass. After building, verify the wheel's
-   metadata version and an installed `wclass --version` against
+   The release is also blocked unless CI's macOS Python 3.10 and 3.14
+   routing-boundary jobs pass: routing, agent discovery, native v2 runtime,
+   executable observation, foreground process, process context, JSON input, and
+   the guarded runtime suite. After building, verify the wheel's metadata
+   version and an installed `wclass --version` against
    `weightclass.__version__`.
 
 3. Tag the merged commit and push the tag:

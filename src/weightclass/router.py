@@ -312,17 +312,6 @@ def native_route_fingerprint(
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
-# 승급 사다리. 라우터는 스스로 올라가지 않는다. 어디로 올라갈 수 있는지만 안다.
-# 타입을 명시해야 mypy 가 키와 값이 실제로 Tier 리터럴인지 검사한다. bare Final
-# 로 두면 dict[str, str] 로 추론되어 오타가 그대로 통과한다.
-_TIER_LADDER: Final[dict[Tier, Tier]] = {"low": "standard", "standard": "high"}
-
-
-def next_tier(tier: Tier) -> Tier | None:
-    """Return the tier one step above, or None at the top."""
-    return _TIER_LADDER.get(tier)
-
-
 def select_route(routes: tuple[Route, ...], request: RouteRequest) -> Route:
     """Return the first policy route that exactly matches the request."""
     for route in routes:

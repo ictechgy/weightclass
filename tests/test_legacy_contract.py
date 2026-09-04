@@ -95,31 +95,6 @@ class LegacyContractTests(unittest.TestCase):
             '"sha256:62bb321ad863d908cf93919e5b45db08922bbad2be41220ef0368c87fcdba3c3"}\n',
         )
 
-    def test_legacy_render_bytes_are_frozen(self) -> None:
-        policy = {
-            "routes": [
-                {
-                    "id": "legacy",
-                    "vendor": "claude",
-                    "workflow": "review",
-                    "command": ["owned-fake", "--print"],
-                }
-            ]
-        }
-        descriptor = {"vendor": "claude", "workflow": "review"}
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            policy_path, descriptor_path = root / "policy.json", root / "descriptor.json"
-            policy_path.write_text(json.dumps(policy), encoding="utf-8")
-            descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
-            result = self._cli(
-                "render", "--policy", str(policy_path), "--descriptor", str(descriptor_path)
-            )
-        self.assertEqual((result.returncode, result.stderr), (0, ""))
-        self.assertEqual(
-            result.stdout, '{"command": ["owned-fake", "--print"], "route": "legacy"}\n'
-        )
-
 
 EXPECTED_BUILTINS = (
     b'[["codex-low","codex","low",["codex","exec","--ephemeral","--sandbox",'

@@ -4,9 +4,6 @@ import json
 import subprocess
 import sys
 import unittest
-from unittest import mock
-
-from weightclass import classification_cli
 
 
 class CliStartupTests(unittest.TestCase):
@@ -34,7 +31,6 @@ loaded = sorted(
         "weightclass.process_context",
         "importlib.resources",
         "weightclass.task_v2",
-        "weightclass.triage",
         "weightclass.v2_validation",
     }
 )
@@ -88,18 +84,6 @@ print(json.dumps({"exit_code": exit_code, "forbidden": forbidden}))
             {"exit_code": 0, "forbidden": []},
         )
 
-    def test_local_classify_does_not_mislabel_unexpected_failures_as_vendor_unavailable(
-        self,
-    ) -> None:
-        """Breaks if the no-vendor path catches every internal exception."""
-        with mock.patch.object(
-            classification_cli,
-            "classify_task",
-            side_effect=RuntimeError("unexpected"),
-        ):
-            with self.assertRaises(RuntimeError):
-                classification_cli.classify_task_input(read_task=lambda: "Fix a spelling typo.")
-
     def test_local_classify_does_not_load_unrelated_command_families(self) -> None:
         """Breaks if the fast local path eagerly imports runtime protocols again."""
         program = """
@@ -116,7 +100,6 @@ forbidden = sorted(
         "weightclass.cli",
         "weightclass.native_v2_compile",
         "weightclass.native_v3_compile",
-        "weightclass.triage",
     }
 )
 print(json.dumps({"exit_code": exit_code, "forbidden": forbidden}))
@@ -152,7 +135,6 @@ forbidden = sorted(
         "weightclass.cli",
         "weightclass.native_v2_compile",
         "weightclass.native_v3_compile",
-        "weightclass.triage",
     }
 )
 print(json.dumps({"exit_code": exit_code, "forbidden": forbidden}))
