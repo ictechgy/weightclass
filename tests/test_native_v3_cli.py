@@ -37,6 +37,13 @@ class HostileOneReadStream:
         return self.payload
 
 
+class TerminalStdout(io.StringIO):
+    """stdout 이 단말이라고 보고하는 캡처 스트림. 단말 기본 검토의 유일한 신호다."""
+
+    def isatty(self) -> bool:
+        return True
+
+
 def observation(path: str, *, inode: int = 2) -> ExecutableObservation:
     return ExecutableObservation(path, 1, inode, 0o100000, 0o100755, 100, 3, 4, True)
 
@@ -268,6 +275,59 @@ class NativeV3CliTests(unittest.TestCase):
         confirmation.assert_called_once()
         self.assertEqual(stream.read_calls, 1)
         spawn.assert_called_once()
+
+    def test_terminal_stdout_guides_a_schema_three_run_without_a_flag(self) -> None:
+        """Breaks if the terminal review default stops at schema 1 and leaves schema 3 on exit 6."""
+        stream = HostileOneReadStream()
+        first = observation("/opt/grok")
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_policy(directory)
+            with (
+                patch.object(sys, "stdin", stream),
+                patch.object(sys, "stdout", TerminalStdout()),
+                patch("weightclass.cli.validate_runtime_process_context"),
+                patch("weightclass.cli.observe_executable", return_value=first),
+                patch(
+                    "weightclass.cli._confirm_native_descriptor_on_console",
+                    return_value=True,
+                ) as confirmation,
+                patch("weightclass.native_v3_runtime.observe_executable", return_value=first),
+                patch(
+                    "weightclass.native_v3_runtime.run_owned_foreground_redacted",
+                    return_value=0,
+                ) as spawn,
+            ):
+                result = cli.main(self.run_arguments(path, "--confirm-endpoint-transition"))
+
+        self.assertEqual(result, 0)
+        confirmation.assert_called_once()
+        spawn.assert_called_once()
+
+    def test_terminal_review_does_not_replace_the_endpoint_transition_confirmation(self) -> None:
+        """Breaks if a console prompt can stand in for --confirm-endpoint-transition."""
+        stream = HostileOneReadStream()
+        errors = io.StringIO()
+        first = observation("/opt/grok")
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_policy(directory)
+            with (
+                patch.object(sys, "stdin", stream),
+                patch.object(sys, "stdout", TerminalStdout()),
+                patch.object(sys, "stderr", errors),
+                patch("weightclass.cli.validate_runtime_process_context"),
+                patch("weightclass.cli.observe_executable", return_value=first),
+                patch("weightclass.cli._confirm_native_descriptor_on_console") as confirmation,
+                patch("weightclass.native_v3_runtime.run_owned_foreground_redacted") as spawn,
+            ):
+                result = cli.main(self.run_arguments(path))
+
+        # 전이 확인은 검토보다 앞선 별도 게이트다. 단말 검토 기본값이 있어도 그
+        # 게이트는 confirmation_required(5) 로 먼저 닫히고, 프롬프트는 열리지 않는다.
+        self.assertEqual(result, 5)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "confirmation_required"})
+        confirmation.assert_not_called()
+        self.assertEqual(stream.read_calls, 0)
+        spawn.assert_not_called()
 
     def test_invalid_task_is_read_once_after_exact_ack_and_never_spawned(self) -> None:
         """Breaks if V2 task validation is bypassed or retried for schema 3."""

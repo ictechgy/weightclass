@@ -80,10 +80,9 @@ def reviewed_run(
     정책 자체가 거부되면 검토 결과가 곧 답이므로 그것을 돌려준다. 그래야 정책
     거부를 확인하는 테스트와 실행 결과를 확인하는 테스트가 같은 헬퍼를 쓴다.
     """
+    # 호출자가 --tier 를 주면 그대로 쓰고, 아니면 검토 단계만 분류기에 맡긴다.
     tier_arguments = () if "--tier" in extra else ("--suggest-tier",)
-    review = _weightclass(
-        "route", "--suggest-tier", "--policy", str(policy_path), *tier_arguments, *extra, task=task
-    )
+    review = _weightclass("route", "--policy", str(policy_path), *tier_arguments, *extra, task=task)
     if review.returncode != 0:
         return review
     reviewed = json.loads(review.stdout)
@@ -92,8 +91,6 @@ def reviewed_run(
     run_tier = () if "--tier" in extra else ("--tier", str(reviewed["tier"]))
     return _weightclass(
         "run",
-        "--tier",
-        "low",
         "--policy",
         str(policy_path),
         "--ack-route-fingerprint",

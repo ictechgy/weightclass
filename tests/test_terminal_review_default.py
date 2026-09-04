@@ -162,6 +162,23 @@ class TerminalReviewDefaultTests(unittest.TestCase):
         self.assertEqual(exit_code, 6)
         self.assertEqual(json.loads(err), {"error": "route_fingerprint_mismatch"})
 
+    def test_review_and_an_acknowledged_fingerprint_together_are_rejected(self) -> None:
+        """Breaks if a scripted acknowledgement can be combined with a console prompt.
+
+        `--review` 는 검토를 사람에게, 지문은 검토를 스크립트에 맡긴다는 뜻이다.
+        둘을 함께 주면 어느 쪽이 검토했는지 알 수 없으므로 한 방향으로 해석하지
+        않고 거부한다. 외부 리뷰가 이 쌍을 "검토가 이긴다" 고 읽었는데, 코드는
+        거부한다. 그 사실을 여기서 고정한다.
+        """
+        exit_code, err, prompts = self._invoke(
+            ["run", "--tier", "low", "--review", "--ack-route-fingerprint", "sha256:x"],
+            terminal=True,
+        )
+
+        self.assertEqual(prompts, [])
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(json.loads(err), {"error": "invalid_input"})
+
     def test_review_and_no_review_together_are_rejected(self) -> None:
         """Breaks if two contradictory review instructions resolve in one direction."""
         exit_code, err, prompts = self._invoke(
