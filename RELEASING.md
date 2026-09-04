@@ -11,8 +11,9 @@ publishes on a merge to `main`.
 
 - The version lives in exactly one place, `src/weightclass/__init__.py`.
   `pyproject.toml` reads it through `[tool.setuptools.dynamic]`.
-- The advisory companion first publishes in `0.16.2`; the failed, unpublished
-  `v0.16.0` and `v0.16.1` candidates are retained and must not be moved or reused.
+- The advisory companion first published in `0.16.2` and was removed in
+  `0.32.0`; the failed, unpublished `v0.16.0` and `v0.16.1` candidates are
+  retained and must not be moved or reused.
 - Tags are `v<version>`, e.g. `v0.1.0`. The release workflow refuses to publish
   when the tag and the declared version disagree, because PyPI never lets a
   version number be reused.
@@ -49,12 +50,8 @@ publisher once, on PyPI:
 
 1. Update `__version__` in `src/weightclass/__init__.py`, add the reviewed
    `.github/release-notes/v<version>.md` file, and merge both changes. Release
-   notes must include every breaking change. Add the exact previous release
-   bundle to the ledger in `install_advisory_skill.py` **every release**, whether
-   or not a packaged advisory Skill file changed: the release workflow derives
-   those hashes from the previous tag and fails before build if that tag's
-   bundle is absent. The `v0.31.0` candidate failed exactly this way and its tag
-   is retained.
+   notes must include every breaking change. The Skill upgrade ledger check that
+   used to run here was removed with the companion in `0.32.0`.
 2. Confirm `main` is green and reproduce the gates locally:
 
    ```sh
@@ -62,7 +59,6 @@ publisher once, on PyPI:
      --requirement requirements/release.txt
    PYTHONPATH=src python3 -W error::ResourceWarning -m unittest discover -s tests
    ruff check src tests && ruff format --check src tests && mypy
-   PYTHONPATH=src python3 -m weightclass.advisory cli-check --vendor all
    release_dist_dir=$(mktemp -d "${TMPDIR:-/tmp}/weightclass-release.XXXXXX")
    python3.13 -m build --no-isolation --outdir "$release_dist_dir"
    twine check --strict "$release_dist_dir"/*.whl "$release_dist_dir"/*.tar.gz
@@ -79,11 +75,6 @@ publisher once, on PyPI:
    process-group/FIFO boundary jobs pass. After building, verify the wheel's
    metadata version and an installed `wclass --version` against
    `weightclass.__version__`.
-   The task-free CLI check is a maintainer-machine compatibility gate for the
-   installed Claude, Codex, agy, and Grok versions. It invokes only local
-   `--help`/`--version` with a minimal environment and temporary working directory,
-   sends no task or provider prompt, and must report every vendor
-   `ready` before tagging.
 
 3. Tag the merged commit and push the tag:
 

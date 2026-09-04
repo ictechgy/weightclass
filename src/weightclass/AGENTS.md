@@ -1,7 +1,6 @@
 # Core router — `src/weightclass`
 
-Scope: the `wclass` command and every module here except `advisory/`, which has
-its own [`AGENTS.md`](advisory/AGENTS.md). The root
+Scope: the `wclass` command and every module here. The root
 [`AGENTS.md`](../../AGENTS.md) still applies; nothing here relaxes it.
 
 ## The V1 contract
@@ -9,8 +8,7 @@ its own [`AGENTS.md`](advisory/AGENTS.md). The root
 `wclass run` may start **exactly one selected vendor process in the foreground**.
 It does not retry, recover, background, or supervise that process. If a change
 would add a second child, a retry, a supervisor, or a background lane to this
-surface, it is out of scope for V1 — the advisory companion is where bounded
-multi-call sequences live, and it is explicitly experimental.
+surface, it is out of scope for V1.
 
 By default a route stays with its explicit source vendor. Cross-vendor routing
 requires an explicit policy opt-in (`allow_mixed_vendors`), and that opt-in is
@@ -55,10 +53,6 @@ reviewed `{{task}}` slot. The built-in core `agy` and `grok` routes currently us
 it. Such a route must surface `"task_delivery": "argv"` before execution and
 retains the documented local process-inspection exposure — the task is visible in
 `ps` to any process of the same user.
-
-This exception does **not** extend to the advisory companion. No built-in
-advisory route carries a task in argv; see
-[`advisory/AGENTS.md`](advisory/AGENTS.md).
 
 Substitution happens once, immediately before spawn, so the reviewed output and
 the fingerprint never contain the task. `execve` cannot carry NUL, so argv

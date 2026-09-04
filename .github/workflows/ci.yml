@@ -33,15 +33,6 @@ jobs:
         run: |
           output="$(printf '%s' 'Fix a spelling typo in the README heading.' | wclass classify)"
           test "$output" = '{"tier": "low"}'
-          wclass-advisory --help >/dev/null
-          wclass-advisory cli-check --help >/dev/null
-          wclass-advisory provider-check --help >/dev/null
-          managed_root="$RUNNER_TEMP/weightclass-advisory-managed"
-          wclass-advisory init --state-root "$managed_root" --vendor codex \
-            --model cheap=cheap --model advisor=advisor --model expensive=expensive \
-            --effort cheap=low --effort advisor=high --effort expensive=high >/dev/null
-          wclass-advisory doctor --state-root "$managed_root" --vendor codex --workflow all >/dev/null
-          wclass-advisory review --state-root "$managed_root" --vendor codex --workflow review >/dev/null
       - name: Run full source suite with ResourceWarning boundary
         if: matrix.python-version == '3.10' || matrix.python-version == '3.14'
         run: python -W error::ResourceWarning -m pytest -q

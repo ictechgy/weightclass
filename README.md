@@ -29,9 +29,8 @@ cd weightclass
 python3 -m pip install .
 ```
 
-All three install the core `wclass` command and the explicit experimental
-`wclass-advisory` companion. weightclass bundles no vendor CLI itself:
-whichever built-in route you use — `codex`, `claude`, `agy`, or
+All three install the core `wclass` command. weightclass bundles no vendor CLI
+itself: whichever built-in route you use — `codex`, `claude`, `agy`, or
 `grok` — that vendor's own CLI must already be installed and authenticated on
 the machine that runs it. weightclass never reads or changes their
 authentication or subscription state.
@@ -66,10 +65,6 @@ examples. Current security status, including the still-open path-based spawn
 boundary, is documented in [the security follow-up](docs/security-performance-followup.md).
 
 ## What you get, and what you do not
-
-These bullets describe the core `wclass` command. The separate, explicitly
-experimental `wclass-advisory` companion is described in
-[Advisory companion](#advisory-companion) and has its own boundaries.
 
 You get:
 
@@ -128,224 +123,7 @@ found no benefit from routing up on the work it measured. See
 [the fresh blind check](docs/policy4-fresh-blind-evaluation.md) and
 [the paired token study](docs/paired-token-study.md).
 
-## Advisory companion
-
-`wclass-advisory` is installed with weightclass but is never selected by
-`wclass run`. The default path is one stateless, read-only answer using the
-selected CLI's configured default model. It needs no initialization, profile,
-campaign, verifier, copied digest, or task file, and records no sample:
-
-```sh
-printf '%s' 'Review this change.' | wclass-advisory ask \
-  --vendor codex --workflow review --stage final --context diff \
-  --repo . --confirm-task-egress
-wclass-advisory ask --vendor codex --workflow review --stage final \
-  --context diff --repo . --preview
-wclass-advisory skill status --target both
-```
-
-The one-shot result is closed-schema validated but explicitly
-`quality_verified:false` and model-authored content remains untrusted. The
-runner checks local CLI capability before reading stdin and rejects any
-non-`.git` worktree mutation detected by its bounded before/after snapshots.
-The receipt explicitly reports that Git metadata is not checked.
-Capability checking starts two task-free bounded local vendor processes for
-`--help` and `--version`; a successful advisory then starts one task-bearing
-vendor process.
-`--stage` selects `manual`, `plan`, `pivot`, or `final`; optional
-`--auto-skip-trivial` avoids plan/final calls for tasks the local classifier
-conservatively marks low. The skip decision runs locally before vendor probes,
-consent, or snapshot; non-skipped calls retain consent-first egress. `--context`
-selects task-only, a bounded tracked diff,
-explicit UTF-8 files, or the existing read-only repository view. Review mode
-adds local `file:line` validation plus invocation-only semantic grouping without
-changing or persisting the model result.
-Diff context is limited to tracked `HEAD` changes and disables external diff,
-textconv, hooks, fsmonitor, and optional locks; untracked files are not included.
-It observes an absolute non-repository Git executable before task input and
-binds `--git-dir` and `--work-tree` to the selected repository. For this narrow
-selector, `.git` must be a real directory; linked worktrees fail closed.
-Explicit files reject `.git`, symlinks, traversal, binary/non-UTF-8 content,
-files over 32 KiB, and aggregates over 128 KiB.
-Every task-bearing run needs explicit egress consent. Without
-`--confirm-task-egress` the runner asks on the controlling terminal. Exporting
-`WCLASS_ADVISORY_EGRESS=session` authorizes the same action without asking, but
-it is a standing grant, not a per-invocation one: it covers every later call in
-that shell and every descendant process, so a wrapper script or agent harness
-inherits it, and exporting it from a shell rc file makes the prompt permanently
-unreachable. Nothing is written to disk and the grant dies with the shell.
-Skipping the question does not skip the disclosure — the vendor list, delivery
-mode, and context warning still print on the terminal — and the receipt records
-which of `flag`, `session_environment`, or `terminal` approved the run.
-`--preview` reports whether such a grant is already active. The variable is not
-in the vendor child environment allowlist, so no vendor CLI sees it.
-
-Route review also reports `task_stdin_encoding`. A route that declares NDJSON
-standard input has its task wrapped as one `stream-json` user message, so the
-reviewed argv alone would not tell you what bytes the child receives. A route
-that both declares that input and carries a `{{task}}`/`{{task_file}}` slot is
-rejected rather than resolved in one direction. Diff/file content can still
-contain secrets, so the confirmation and preview disclose the selected context.
-The local triage labels prove only that a bounded `file:line` exists and whether
-the model cited it with supporting text; they are not semantic correctness
-verification. File bytes are bound to the pre-execution snapshot, duplicate
-mute requires the same normalized title and full `file:line` set, and all
-original findings remain in JSON. Human output still shows rejected high and
-critical findings for manual review and calls structural results "locally
-checkable," not semantically supported.
-
-An explicit `--council codex,claude` runs two to four named built-in vendors in
-fresh independent processes. One output is never fed to another. The receipt
-preserves every result, descriptive consensus and dissent, and partial failures;
-it never ranks a winner or claims quality verification. Preview reads neither
-task stdin nor repository content and starts no vendor process.
-Council members start together, each in its own fresh vendor process, under one
-whole-council deadline (`--total-timeout-seconds`, defaulting to one per-child
-timeout). Wall-clock is therefore the slowest member rather than the sum, and
-every member receives the same remaining budget instead of the later ones being
-starved. Results are always reported in the requested vendor order, never in
-completion order. A failed peer is not cancelled: that would discard work the
-vendor has already charged for. A partial receipt exits 3, while a complete
-council exits 0. The target worktree is compared before the members start and
-again after all of them finish; any detected mutation rejects the entire
-invocation.
-Task-only context requests no repository access or snapshot and reports
-`worktree_checked:false`; local file:line triage is unavailable in that mode.
-All one-shot receipts use schema version 2 and distinguish requested repository
-access from verified enforcement.
-This is not host filesystem confinement; use an external container or jail for
-a hostile CLI or repository.
-
-Campaign setup is required only when the user explicitly wants implementation
-or measurement. `wclass-advisory campaign init` persists caller-supplied opaque
-model and effort labels and creates separate sealed populations. A project must
-commit the workflow's prospective `.weightclass/verify*` before `campaign run`;
-`campaign verifier scaffold` provides a safe reject-all starting point and
-workflow criteria checklist. The grouped `campaign run` reads task bytes from
-stdin and forwards them through anonymous pipes; the flat `dispatch --task-file`
-alias remains for automation compatibility. See the
-[managed onboarding guide](docs/advisory-onboarding.md),
-[Advisory campaign vendor profiles](docs/advisory-vendor-profiles.md), and
-the [campaign contract](docs/advisory-campaign.md). Distribution makes the
-tool available; it does not establish cost savings, model quality, pricing,
-entitlement, or subscription availability.
-Offline stopping, Context Guard, brainstorming, and confidence study inputs are
-specified in [Advisory experiment records](docs/advisory-experiments.md).
-
-Advisory-owned Git inspection disables executable repository-local fsmonitor
-configuration and optional index locking, captures stdout/stderr under explicit
-limits, and refuses a generated patch larger than 64 MiB. Vendor and verifier
-streams are captured under one combined byte ceiling with process-group cleanup
-on timeout, overflow, interruption, or child-status loss; legacy report, price,
-campaign-record, token, and JSON integer paths also fail closed under explicit
-byte/count/digit limits. Workspace registration is owner-private, bounded,
-nofollow, atomically replaced, and locked against concurrent run/prune updates.
-Quiet bounded-capture and Git waits block on kernel events until their actual
-deadline instead of waking every 100 ms. The managed project verifier passes
-only a fixed environment allowlist plus its workflow, starts an isolated process
-group, and kills that group on timeout. A live-leader group-signal denial is an
-error; only the bounded Darwin race in which the leader becomes an owned zombie
-is tolerated.
-These are local availability and integrity controls, not a host sandbox. The
-selected vendor and verifier still run with the invoking user's granted
-filesystem authority.
-
-For a formal statistical claim, preregister one primary vendor/workflow in the
-managed state root before its first dispatch. `migrate-gate` validates the
-current schema-1/2 source population, preserves all of its bytes, and starts a
-separate empty schema-3 generation. It never copies or rebinds old records:
-
-```sh
-wclass-advisory migrate-gate --vendor codex --workflow review \
-  --gate-metric cheap_acceptance \
-  --gate-target-rate-bps 7500 --gate-alpha-bps 500
-wclass-advisory campaign-gate --vendor codex --workflow review
-```
-
-The schema-3 fingerprint seals the metric, nonzero target, alpha, versioned
-simultaneous-Hoeffding method, and population rule. One managed state root
-accepts exactly one primary vendor/workflow; a second unadjusted primary is
-rejected instead of silently multiplying the false-positive budget. The
-pre-gate source remains available with `campaign-gate --generation source` for
-explicitly exploratory analysis, but it always reports
-`gate_preregistered:false` and `promotion_eligible:false`. If the selected
-Claude, Grok, or agy population uses an older route generation, complete its
-documented `migrate-evidence` or `migrate-routes` step first. Even a registered
-gate can only become `eligible_for_human_review`; it never authorizes or changes
-core routing.
-
-`doctor` locally invokes installed-CLI `--help`/`--version` with a minimal
-environment and temporary working directory, sends no task bytes or provider prompt,
-checks every requested workflow route, and reports `campaign_ready` separately
-from `dispatch_ready`. It also reports the managed verifier-wrapper SHA and
-whether it matches the installed package. To test authentication and
-all three configured model roles without sending a project task, explicitly run
-`wclass-advisory provider-check --vendor codex --workflow review
---confirm-provider-egress`. That command may consume quota or incur cost, never
-writes a campaign sample, and stores no provider output. It checks all three
-roles per vendor. Calls resolving to the same executable identity remain
-serial; distinct executable groups use separate temporary workspaces under a
-fixed concurrency ceiling of four, and receipts are restored to deterministic
-vendor/role order.
-
-`ask` is the recommended one-shot, non-recording path for review, research,
-diagnosis, and design. The older `consult` command remains available when a
-caller deliberately wants one selected cheap or expensive managed-profile route.
-It emits one tagged NDJSON receipt whose nested result is explicitly marked
-`untrusted_model_authored`, and never acquires a campaign lane or appends a
-sample. A custom schema-2 vendor profile additionally requires
-`--confirm-provider-egress` and passes its task-free provider conformance check
-before the task file is inspected. One-shot consult checks only its selected
-cheap or expensive role; full `provider-check` and campaign dispatch retain the
-all-role check. Review its profile-only route surface first
-with `wclass-advisory review --consult --vendor VENDOR --workflow WORKFLOW`,
-then acknowledge each workflow-specific `route_sha256` as
-`--ack-route-sha256 VENDOR=sha256:...`. The digest binds the profile, workflow,
-and exact argv; the child rechecks it before reading the task.
-
-Consult defaults to a 5,400-second per-vendor outer deadline, accepts an
-explicit `--timeout-seconds` from 1 through 28,800, and emits multi-vendor NDJSON
-in completion order. Failure receipts contain only closed stage/reason and
-numeric or boolean child/result/verifier status; arbitrary internal stderr is
-discarded. Schema-2 custom campaign dispatch also requires
-`--confirm-provider-egress`, allowing three task-free conformance calls before
-task inspection. That check does not prove recipient, billing, entitlement, or
-host filesystem containment.
-
-Managed dispatch binds each spawned runner to the package version already
-loaded by its parent. If `uv`, Homebrew, or another installer replaces
-weightclass during an active dispatch, the child exits before reading the task
-and the command reports `managed_runner_version_changed`; start a fresh
-dispatch after the install completes. `init` and migration setup locks also
-have a bounded wait and report `managed_setup_busy` instead of hanging.
-Upgrades that change sealed provider argv use preserving, explicit migrations:
-`migrate-evidence` for Claude/Grok evidence and `migrate-routes` for agy.
-The complete `.weightclass` directory is protected during candidate
-verification; keep trusted verifier helpers and fixtures there. Gate population
-rule v2 excludes infrastructure failures from every attempted route, while
-historical sealed v1 gates retain their original rule.
-
-Read-only evidence workspaces use a bounded parent-owned, no-follow snapshot
-without trusting the vendor child's `.git`. When execution already failed, the
-result contract is invalid, or a repository mutation is detected, acceptance
-is impossible and the runner skips the otherwise wasted second clone and
-verifier. A valid unchanged result still runs its repository-aware verifier in
-the original fresh full handover clone; the verifier never runs in the
-child-owned workspace. The snapshot covers path set, content, file type, mode,
-symlink target, hardlink/root identity, mount boundary, ignored files,
-scaffolding, and nested `.git` under explicit entry/size/depth bounds. Extended
-attributes remain outside the existing Git-visible contract, and true host
-filesystem isolation still requires an external sandbox.
-
-The optional packaged advisory skill currently uses managed onboarding 17.
-Previewing never overwrites an installed skill; `--upgrade` replaces only an
-exact package-owned older bundle and rejects customized, extra-file, or
-symlinked destinations:
-
-```sh
-wclass-advisory skill install --target both --upgrade --dry-run
-wclass-advisory skill install --target both --upgrade
-```
+## Native schema and protocol boundaries
 
 Native schema 2 and delegation protocol 2 add explicit source/account profiles,
 closed model-and-effort builders, directional profile/vendor authorization, and
@@ -423,23 +201,16 @@ which is why every savings surface here abstains by default.
 Two proposals for what to do with the one lever that did survive — model grade,
 −69.02% cost among the 88 runs without a critical failure, but rejected for two
 mechanically detectable critical failures in 90 — are written up but **not implemented**:
-[`docs/speculative-cheap-route-design.md`](docs/speculative-cheap-route-design.md)
+[`docs/archive/speculative-cheap-route-design.md`](docs/archive/speculative-cheap-route-design.md)
 runs the cheap route and escalates when a verify command fails, and
-[`docs/advisor-arm-design.md`](docs/advisor-arm-design.md) measures Anthropic's
-Advisor tool as a rival mechanism that buys expensive *guidance* instead of
-expensive *output*. Both require a number nobody has yet:
-[`docs/measuring-p-at-work.md`](docs/measuring-p-at-work.md) is how to get it.
-Any evidence intended to move the product boundary must use the sealed,
-task-free [`docs/advisory-campaign.md`](docs/advisory-campaign.md) contract. Deterministic,
-operator-selected built-in and exact-command advisory profiles are documented in
-[`docs/advisory-vendor-profiles.md`](docs/advisory-vendor-profiles.md);
-the task-free [next-experiment plan](docs/advisory-next-experiments.md) keeps
-Codex review collection, Shape A+B, and opaque implementation cohorts in
-separate sealed populations;
-the installed, explicit opt-in [`advisory` Agent Skill](docs/advisory-skill.md) can be
-installed for Codex, Claude Code, or both without campaign configuration;
-task-free campaign inputs are required only for explicit campaign use;
-legacy unbound logs remain descriptive only.
+[`docs/archive/advisor-arm-design.md`](docs/archive/advisor-arm-design.md) measures
+Anthropic's Advisor tool as a rival mechanism that buys expensive *guidance*
+instead of expensive *output*. Both require a number nobody has yet:
+[`docs/archive/measuring-p-at-work.md`](docs/archive/measuring-p-at-work.md) is how to
+get it. The sealed, task-free campaign contract those proposals would have
+collected evidence under shipped with the separate companion that was removed in
+0.32.0; its design notes are archived under
+[`docs/archive/`](docs/archive/README.md).
 
 Raw tokens and estimated provider cost must be evaluated separately. The
 offline evaluation tools can score externally normalized aggregate evidence,
@@ -1311,7 +1082,7 @@ selection.
 
 ### Evidence-gated cost recommendation
 
-`wclass recommend` is a non-executing, same-vendor advisory layer over the
+`wclass recommend` is a non-executing, same-vendor recommendation layer over the
 packaged presets. It consumes a user-reviewed opaque cost profile and a strict
 qualification card, then returns either `recommend` or `abstain`. It does not
 infer provider pricing, inspect billing, start a child, retry, fall back, or
@@ -1755,32 +1526,6 @@ credential management, background execution, or a bundled provider runtime.
   arguments in a reviewed policy's `command` when model routing is required.
 - `wclass run` starts exactly one configured command in the foreground without
   a shell, retry, backgrounding, recovery, or process supervision.
-- The separately selected `wclass-advisory` companion may start the bounded
-  cheap/advisor/retry/expensive sequence described by a sealed campaign. It
-  requires `--confirm-task-egress` for exact-command, profile, and sealed-campaign
-  execution, requires an owner-private task file, never applies a patch
-  automatically, and writes only owner-private aggregate campaign records
-  without task content, task hashes, repository paths, timestamps, profiles, or
-  fingerprints derived from the task. Explicit `init` stores only caller-selected
-  task-free profiles, optional price tables, sealed contracts, and owner-private
-  aggregate result lanes under the platform advisory state root. The caller owns
-  the task file; `wclass run` never reads this advisory state.
-- Custom advisory state roots reject symlinks at the managed boundary and any
-  ancestor owned or writable by an unrelated local user. User/root-owned `0755`
-  ancestors and user/root-owned sticky `1777` directories remain compatible;
-  shared-group-writable ancestors do not. Advisory skill publication and upgrade
-  retain one opened `skills` parent descriptor through staging, verification,
-  rename, rollback, cleanup, and fsync, so a pathname swap cannot redirect those
-  mutations.
-- Advisory `{{task_file}}` routes stream task bytes through an inherited pipe
-  and pass only `/dev/fd/N` to the child. No task pathname or task file is
-  created. If anonymous descriptor delivery cannot be established, no vendor
-  child starts.
-- Advisory children own provider authentication and may read files visible
-  through their supplied HOME and sandbox. The runner narrows environment
-  variables but is not a credential sandbox; use separate minimally staged
-  `--cheap-home`, `--advisor-home`, and `--expensive-home` directories when
-  credential isolation is required.
 - weightclass is not an API proxy, credential manager, cloud service,
   subscription checker, bundled provider runtime, or unattended multi-agent
   supervisor.

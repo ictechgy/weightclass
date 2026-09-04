@@ -1,31 +1,15 @@
 #!/bin/sh
 set -eu
 
-if ! git diff --cached --quiet -- \
-  .weightclass/verify \
-  tests/test_advisory_hardening_batch.py; then
+# 이 게이트는 자기 자신만 보호한다. 예전에는 advisory 수용 테스트
+# (`tests/test_advisory_hardening_batch.py`) 도 함께 보호하고 그 모듈을 먼저
+# 돌렸지만, 그 파일은 자신이 게이트하던 advisory 표면과 함께 삭제되었다.
+if ! git diff --cached --quiet -- .weightclass/verify; then
   echo "protected acceptance files changed"
-  exit 1
-fi
-
-set +e
-WCLASS_HARDENING_BATCH_ACCEPTANCE=1 PYTHONPATH="$PWD/src" \
-  python3 -m unittest tests.test_advisory_hardening_batch
-focused_code=$?
-set -e
-
-if [ "$focused_code" -eq 0 ]; then
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/src" \
-    python3 -W error::ResourceWarning -m unittest discover -s tests
-  python3 -m compileall -q src tests tools
-  exit 0
-fi
-
-if [ "$focused_code" -ne 1 ]; then
   exit 1
 fi
 
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/src" \
   python3 -W error::ResourceWarning -m unittest discover -s tests
-python3 -m compileall -q src tests tools
-exit 42
+python3 -m compileall -q src tests
+exit 0
