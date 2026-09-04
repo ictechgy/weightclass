@@ -104,19 +104,7 @@ CLAIMED_LAUNCH_TESTS = {
     "native_v2": (
         "tests.test_native_v2_cli.NativeV2CliTests.test_route_then_run_owned_fixture_end_to_end"
     ),
-    "delegation_v1": (
-        "tests.test_delegation_runtime.DelegationRunTests."
-        "test_success_sends_one_reviewed_frame_and_inherits_output"
-    ),
-    "delegation_v2": (
-        "tests.test_delegation_v2_runtime.DelegationV2RuntimeTests."
-        "test_owned_fixture_receives_a_real_wcd2_frame"
-    ),
     "triage": "tests.test_triage.AskVendorTests.test_guarded_owned_absolute_vendor",
-    "conformance": (
-        "tests.test_delegation_conformance.DelegationConformanceRunnerTests."
-        "test_full_run_emits_candidate_compatible_evidence_without_reading_stdin"
-    ),
 }
 
 EXCLUDED_LAUNCH_SCOPES = ("build", "packaging", "extracted_sdist")
@@ -136,18 +124,7 @@ def register_claimed_launches(guard: RuntimeGuard, category: str) -> None:
             (python, ("-m", "weightclass", "route")),
             (python, ("-m", "weightclass", "run")),
         ),
-        "delegation_v1": (
-            (python, ("-m", "weightclass", "delegate", "route")),
-            (python, ("-m", "weightclass", "delegate", "run")),
-        ),
-        "delegation_v2": (
-            (
-                fixtures / "fake_delegation_v2_runtime.py",
-                ("--weightclass-delegation-protocol", "2"),
-            ),
-        ),
         "triage": ((fixtures / "fake_triage_vendor.py", ()),),
-        "conformance": ((python, ("-m", "weightclass.delegation_conformance")),),
     }
     try:
         selected = prefixes[category]

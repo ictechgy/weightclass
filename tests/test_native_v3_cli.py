@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -79,6 +80,54 @@ class NativeV3CliTests(unittest.TestCase):
         value = bind_native_observation_v3(selected, first)["route_fingerprint"]
         assert isinstance(value, str)
         return value
+
+    def test_a_required_native_delegation_confirmation_fails_closed(self) -> None:
+        """Breaks if a route naming the removed native-delegation consent still runs.
+
+        `delegate native run` 이 그 확인을 제공하던 유일한 표면이었다. 표면이
+        사라진 뒤 확인을 요구하는 선택지를 그냥 통과시키면, 아무도 승인하지
+        않은 실행이 조용히 시작된다. 태스크를 읽기 전에 닫아야 한다.
+        """
+        stream = HostileOneReadStream()
+        errors = io.StringIO()
+        delegating = replace(
+            compile_static_native_policy_v3(
+                parse_native_policy_v3(valid_policy()),
+                source_vendor="codex",
+                source_profile_id="source",
+                tier="low",
+                purpose="native_route",
+            ),
+            required_confirmations=("native_delegation", "endpoint_transition"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_policy(directory)
+            with (
+                patch.object(sys, "stdin", stream),
+                patch.object(sys, "stderr", errors),
+                patch(
+                    "weightclass.cli.compile_static_native_policy_v3",
+                    return_value=delegating,
+                ),
+                patch("weightclass.cli.validate_runtime_process_context") as context,
+                patch("weightclass.cli.observe_executable") as observe,
+                patch("weightclass.native_v3_runtime.run_owned_foreground_redacted") as spawn,
+            ):
+                result = cli.main(
+                    self.run_arguments(
+                        path,
+                        "--confirm-endpoint-transition",
+                        "--ack-route-fingerprint",
+                        "reviewed",
+                    )
+                )
+
+        self.assertEqual(result, 3)
+        self.assertEqual(json.loads(errors.getvalue()), {"error": "unsupported_route"})
+        self.assertEqual(stream.read_calls, 0)
+        context.assert_not_called()
+        observe.assert_not_called()
+        spawn.assert_not_called()
 
     def test_transition_confirmation_precedes_ack_context_observation_task_and_spawn(self) -> None:
         """Breaks if a cross-endpoint schema-3 run can pass without explicit consent."""

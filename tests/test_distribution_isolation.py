@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import gzip
 import io
-import json
 import os
 import struct
 import subprocess
@@ -11,7 +10,6 @@ import tarfile
 import tempfile
 import unicodedata
 import unittest
-import warnings
 import zipfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -21,7 +19,6 @@ from unittest.mock import patch
 from tests.verify_distribution_isolation import (
     ARCHIVE_MEMBER_NAME_LIMIT_ERROR,
     MAX_ARCHIVE_MEMBER_NAME_BYTES,
-    MAX_ARCHIVE_TEXT_BYTES,
     MAX_SDIST_EXTENSION_BYTES,
     IsolationError,
     _fingerprint_artifact,
@@ -31,7 +28,6 @@ from tests.verify_distribution_isolation import (
     normalized_distribution,
     run_extracted_sdist_tests,
     verify_sdist,
-    verify_source_registry,
     verify_wheel,
 )
 
@@ -48,68 +44,6 @@ class _DistributionFixtureOptions(TypedDict, total=False):
     sdist_archive_root: str
 
 
-def _candidate_like_record() -> dict[str, object]:
-    return {
-        "record_schema_version": 1,
-        "artifact_sha256": "a" * 64,
-        "artifact_size_bytes": 24,
-        "runtime_build_id": "opaque-runtime-build",
-        "platform": {"os": "linux", "architecture": "x86_64"},
-        "protocol_version": 1,
-        "suite_revision": "delegation-conformance-v2",
-        "adapter_id": "claude-native-v1",
-        "vendor_family": "claude",
-        "conformance_evidence_sha256": "b" * 64,
-        "result_matrix": [
-            {
-                "role": role,
-                "category": category,
-                "action": action,
-                "mode": mode,
-                "passed": True,
-            }
-            for role in ("orchestrator", "worker", "reviewer")
-            for category in ("implementation", "tests", "documentation")
-            for action in ("workspace_read", "workspace_write", "command_execution")
-            for mode in ("allow", "deny")
-        ],
-        "scenario_results": [
-            {"id": scenario_id, "passed": True}
-            for scenario_id in (
-                "action_attribution",
-                "artifact_integrity_and_substitution",
-                "descendant_cleanup",
-                "descendant_leakage",
-                "distinct_enforcement_contexts",
-                "integration_restriction",
-                "integration_verification_commands",
-                "output_channel_separation",
-                "process_creation_attribution",
-                "reviewer_rejection",
-                "runtime_deadline",
-                "stage_order",
-                "worker_concurrency_bound",
-            )
-        ],
-    }
-
-
-def _evidence_like_document() -> dict[str, object]:
-    candidate = _candidate_like_record()
-    return {
-        "evidence_schema_version": 2,
-        **{
-            key: value
-            for key, value in candidate.items()
-            if key
-            not in {
-                "record_schema_version",
-                "conformance_evidence_sha256",
-            }
-        },
-    }
-
-
 def _write_sdist_fixture(
     directory: str,
     extra_members: tuple[str, ...] = (),
@@ -117,20 +51,14 @@ def _write_sdist_fixture(
     *,
     filename: str = "weightclass-0.tar.gz",
     archive_root: str = "weightclass-0",
-    registry_schema_version_token: str = "1",
     core_metadata: str | None = None,
     include_core_metadata: bool = True,
 ) -> Path:
     sdist = Path(directory) / filename
     root = Path(directory) / "payload" / archive_root
-    registry = root / "src/weightclass/delegation_qualifications.json"
-    registry.parent.mkdir(parents=True, exist_ok=True)
-    registry.write_text(
-        '{"records":[],"registry_schema_version":'
-        f"{registry_schema_version_token}"
-        ',"suite_revision":"delegation-conformance-v2"}',
-        encoding="utf-8",
-    )
+    package = root / "src/weightclass/__init__.py"
+    package.parent.mkdir(parents=True, exist_ok=True)
+    package.write_text("VALUE = 1\n", encoding="utf-8")
     if include_core_metadata:
         (root / "PKG-INFO").write_text(
             core_metadata or "Metadata-Version: 2.1\nName: weightclass\nVersion: 0\n\n",
@@ -166,7 +94,6 @@ def _write_distribution_fixture(
     directory: str,
     *,
     extracted_test: str | None = None,
-    registry_schema_version_token: str = "1",
     wheel_core_metadata: str | None = None,
     sdist_core_metadata: str | None = None,
     include_wheel_core_metadata: bool = True,
@@ -179,25 +106,12 @@ def _write_distribution_fixture(
 ) -> tuple[Path, Path, Path]:
     base = Path(directory)
     source = base / "source"
-    source_registry = source / "src/weightclass/delegation_qualifications.json"
-    source_registry.parent.mkdir(parents=True)
-    source_registry.write_text(
-        '{"records":[],"registry_schema_version":'
-        f"{registry_schema_version_token}"
-        ',"suite_revision":"delegation-conformance-v2"}',
-        encoding="utf-8",
-    )
+    (source / "src" / "weightclass").mkdir(parents=True)
 
     dist = base / "dist"
     dist.mkdir()
     wheel = dist / wheel_filename
     with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr(
-            "weightclass/delegation_qualifications.json",
-            '{"records":[],"registry_schema_version":'
-            f"{registry_schema_version_token}"
-            ',"suite_revision":"delegation-conformance-v2"}',
-        )
         if include_wheel_core_metadata:
             archive.writestr(
                 f"{wheel_dist_info_root}/METADATA",
@@ -216,7 +130,6 @@ def _write_distribution_fixture(
         extra_files=extra_files,
         filename=sdist_filename,
         archive_root=sdist_archive_root,
-        registry_schema_version_token=registry_schema_version_token,
         core_metadata=sdist_core_metadata,
         include_core_metadata=include_sdist_core_metadata,
     )
@@ -306,13 +219,9 @@ def _run_distribution_verifier(
 
 def _write_wheel_with_member_count(path: Path, member_count: int) -> None:
     if member_count < 1:
-        raise AssertionError("a test wheel must contain its production registry")
+        raise AssertionError("a test wheel must contain at least one member")
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(
-            "weightclass/delegation_qualifications.json",
-            '{"records":[],"registry_schema_version":1,'
-            '"suite_revision":"delegation-conformance-v2"}',
-        )
+        archive.writestr("weightclass/__init__.py", b"")
         for index in range(member_count - 1):
             archive.writestr(f"weightclass/bounded_{index:04d}.py", b"")
 
@@ -686,11 +595,7 @@ class DistributionIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
             with zipfile.ZipFile(wheel, "w", compression=zipfile.ZIP_STORED) as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
+                archive.writestr("weightclass/__init__.py", b"VALUE = 1\n")
             raw = bytearray(wheel.read_bytes())
             (
                 _eocd_offset,
@@ -838,67 +743,6 @@ class DistributionIsolationTests(unittest.TestCase):
                     self.assertNotIn("Traceback", result.stderr)
                     self.assertNotIn("physical-pax-extension", result.stderr)
                     self.assertNotIn("physical-gnu-longname", result.stderr)
-                    self.assertLess(len(result.stderr), 512)
-
-    def test_oversized_json_integer_failures_are_bounded_and_value_free(self) -> None:
-        private_integer = "7" * 5_000
-        with tempfile.TemporaryDirectory() as root_directory:
-            for location in ("source-registry", "wheel-member"):
-                with (
-                    self.subTest(location=location),
-                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
-                ):
-                    source, wheel, _sdist = _write_distribution_fixture(directory)
-                    if location == "source-registry":
-                        registry = source / "src/weightclass/delegation_qualifications.json"
-                        registry.write_text(
-                            '{"records":[' + private_integer + '],"registry_schema_version":1,'
-                            '"suite_revision":"delegation-conformance-v2"}',
-                            encoding="utf-8",
-                        )
-                    else:
-                        with zipfile.ZipFile(wheel, "a") as archive:
-                            archive.writestr(
-                                "weightclass/private-integer.json",
-                                '{"private":' + private_integer + "}",
-                            )
-                    result = _run_distribution_verifier(source, wheel.parent)
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("distribution isolation failed", result.stderr)
-                    self.assertNotIn("Traceback", result.stderr)
-                    self.assertNotIn(private_integer, result.stderr)
-                    self.assertLess(len(result.stderr), 512)
-
-    def test_deeply_nested_json_failures_are_bounded_and_value_free(self) -> None:
-        private_nested_value = "[" * 2_000 + "0" + "]" * 2_000
-        candidate = _candidate_like_record()
-        candidate["result_matrix"] = "private-nested-value"
-        candidate_json = json.dumps(candidate, separators=(",", ":")).replace(
-            '"private-nested-value"',
-            private_nested_value,
-        )
-        with tempfile.TemporaryDirectory() as root_directory:
-            for location in ("source-registry", "wheel-member"):
-                with (
-                    self.subTest(location=location),
-                    tempfile.TemporaryDirectory(dir=root_directory) as directory,
-                ):
-                    source, wheel, _sdist = _write_distribution_fixture(directory)
-                    if location == "source-registry":
-                        registry = source / "src/weightclass/delegation_qualifications.json"
-                        registry.write_text(
-                            '{"records":' + private_nested_value + ',"registry_schema_version":1,'
-                            '"suite_revision":"delegation-conformance-v2"}',
-                            encoding="utf-8",
-                        )
-                    else:
-                        with zipfile.ZipFile(wheel, "a") as archive:
-                            archive.writestr("weightclass/private-nested.json", candidate_json)
-                    result = _run_distribution_verifier(source, wheel.parent)
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("distribution isolation failed", result.stderr)
-                    self.assertNotIn("Traceback", result.stderr)
-                    self.assertNotIn(private_nested_value, result.stderr)
                     self.assertLess(len(result.stderr), 512)
 
     def test_physical_sdist_rejects_unsafe_extensions(self) -> None:
@@ -1701,175 +1545,6 @@ class DistributionIsolationTests(unittest.TestCase):
         )
         _safe_members(cast(tarfile.TarFile, _SdistMemberArchive(sdist_size_members)))
 
-    def test_source_registry_must_remain_empty(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            registry = root / "src/weightclass/delegation_qualifications.json"
-            registry.parent.mkdir(parents=True)
-            registry.write_text(
-                '{"records":[],"registry_schema_version":1,'
-                '"suite_revision":"delegation-conformance-v2"}',
-                encoding="utf-8",
-            )
-            verify_source_registry(root)
-
-            registry.write_text(
-                json.dumps(
-                    {
-                        "records": [{"adapter_id": "forbidden"}],
-                        "registry_schema_version": 1,
-                        "suite_revision": "delegation-conformance-v2",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaises(IsolationError):
-                verify_source_registry(root)
-
-            registry.write_text(
-                '{"records":[{"adapter_id":"forbidden"}],"records":[],'
-                '"registry_schema_version":1,'
-                '"suite_revision":"delegation-conformance-v2"}',
-                encoding="utf-8",
-            )
-            with self.assertRaises(IsolationError):
-                verify_source_registry(root)
-
-    def test_registry_schema_version_requires_exact_integer_across_artifacts(self) -> None:
-        for token in ("true", "1.0", "1e0"):
-            with self.subTest(token=token), tempfile.TemporaryDirectory() as directory:
-                source, wheel, sdist = _write_distribution_fixture(
-                    directory,
-                    registry_schema_version_token=token,
-                )
-                for verifier, artifact in (
-                    (verify_source_registry, source),
-                    (verify_wheel, wheel),
-                    (verify_sdist, sdist),
-                ):
-                    with self.subTest(artifact=artifact.name):
-                        with self.assertRaisesRegex(IsolationError, "registry shape"):
-                            verifier(artifact)
-
-    def test_registry_shape_rejects_noncanonical_empty_value_types(self) -> None:
-        from tests.verify_distribution_isolation import _load_empty_registry
-
-        class RegistryObject(dict[str, object]):
-            pass
-
-        class RegistryList(list[object]):
-            pass
-
-        cases: tuple[dict[str, object], ...] = (
-            RegistryObject(
-                records=[],
-                registry_schema_version=1,
-                suite_revision="delegation-conformance-v2",
-            ),
-            {
-                "records": RegistryList(),
-                "registry_schema_version": 1,
-                "suite_revision": "delegation-conformance-v2",
-            },
-            {
-                "records": (),
-                "registry_schema_version": 1,
-                "suite_revision": "delegation-conformance-v2",
-            },
-        )
-        for value in cases:
-            with self.subTest(value_type=type(value).__name__, records_type=type(value["records"])):
-                with patch(
-                    "tests.verify_distribution_isolation.json.loads",
-                    return_value=value,
-                ):
-                    with self.assertRaisesRegex(IsolationError, "registry shape"):
-                        _load_empty_registry(b"{}", "fixture registry")
-
-    def test_source_registry_rejects_symlink_without_reading_target(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            target = root / "private-target.json"
-            target.write_text(
-                '{"records":[],"registry_schema_version":1,'
-                '"suite_revision":"delegation-conformance-v2"}',
-                encoding="utf-8",
-            )
-            registry = root / "src/weightclass/delegation_qualifications.json"
-            registry.parent.mkdir(parents=True)
-            registry.symlink_to(target)
-            with self.assertRaises(IsolationError) as context:
-                verify_source_registry(root)
-            message = str(context.exception)
-            self.assertLess(len(message), 256)
-            self.assertNotIn(target.name, message)
-            self.assertNotIn(registry.name, message)
-
-    def test_source_registry_rejects_fifo_promptly(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            source, wheel, _sdist = _write_distribution_fixture(directory)
-            registry = source / "src/weightclass/delegation_qualifications.json"
-            registry.unlink()
-            os.mkfifo(registry)
-            result = _run_distribution_verifier(source, wheel.parent, timeout=2.0)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertNotIn("Traceback", result.stderr)
-            self.assertLess(len(result.stderr), 512)
-
-    def test_source_registry_rejects_oversize_before_reading(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            registry = root / "src/weightclass/delegation_qualifications.json"
-            registry.parent.mkdir(parents=True)
-            with registry.open("wb") as stream:
-                stream.seek(MAX_ARCHIVE_TEXT_BYTES)
-                stream.write(b"x")
-            with patch(
-                "tests.verify_distribution_isolation.os.read",
-                side_effect=AssertionError("oversized source registry was read"),
-            ):
-                with self.assertRaisesRegex(IsolationError, "source registry exceeds"):
-                    verify_source_registry(root)
-
-    def test_source_registry_rejects_mutation_during_bounded_read(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            registry = root / "src/weightclass/delegation_qualifications.json"
-            registry.parent.mkdir(parents=True)
-            registry.write_text(
-                '{"records":[],"registry_schema_version":1,'
-                '"suite_revision":"delegation-conformance-v2"}',
-                encoding="utf-8",
-            )
-            real_read = os.read
-            mutated = False
-
-            def mutate_after_read(descriptor: int, size: int) -> bytes:
-                nonlocal mutated
-                raw = real_read(descriptor, size)
-                if raw and not mutated:
-                    mutated = True
-                    registry.write_text(
-                        '{"records":[],"registry_schema_version":1,'
-                        '"suite_revision":"delegation-conformance-x2"}',
-                        encoding="utf-8",
-                    )
-                return raw
-
-            with (
-                patch(
-                    "tests.verify_distribution_isolation._stat_identity",
-                    return_value=(0, 0, 0, 0, 0, 0),
-                ),
-                patch(
-                    "tests.verify_distribution_isolation.os.read",
-                    side_effect=mutate_after_read,
-                ),
-            ):
-                with self.assertRaisesRegex(IsolationError, "source registry changed"):
-                    verify_source_registry(root)
-            self.assertTrue(mutated)
-
     def test_malformed_distribution_cli_failures_are_redacted_without_tracebacks(self) -> None:
         with tempfile.TemporaryDirectory() as root_directory:
             for malformed in ("wheel", "sdist"):
@@ -1887,15 +1562,11 @@ class DistributionIsolationTests(unittest.TestCase):
                     self.assertNotIn("private malformed", result.stderr)
                     self.assertLess(len(result.stderr), 512)
 
-    def test_wheel_rejects_test_assets_and_candidate_like_content(self) -> None:
+    def test_wheel_rejects_test_only_assets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
             with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
+                archive.writestr("weightclass/__init__.py", b"")
                 archive.writestr("weightclass/module.py", "VALUE = 1\n")
             verify_wheel(wheel)
 
@@ -1908,11 +1579,7 @@ class DistributionIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
             with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
+                archive.writestr("weightclass/__init__.py", b"")
                 archive.writestr("weightclass/café.py", "VALUE = 1\n")
                 archive.writestr("weightclass/cafe\u0301.py", "VALUE = 2\n")
 
@@ -1923,11 +1590,7 @@ class DistributionIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
             with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
+                archive.writestr("weightclass/__init__.py", b"")
                 archive.writestr("weightclass/pkg/", "")
                 archive.writestr("weightclass/pkg", "VALUE = 1\n")
 
@@ -1959,11 +1622,7 @@ class DistributionIsolationTests(unittest.TestCase):
                     if not parent_first:
                         ordered_members = tuple(reversed(conflicting_members))
                     with zipfile.ZipFile(wheel, "w") as archive:
-                        archive.writestr(
-                            "weightclass/delegation_qualifications.json",
-                            '{"records":[],"registry_schema_version":1,'
-                            '"suite_revision":"delegation-conformance-v2"}',
-                        )
+                        archive.writestr("weightclass/__init__.py", b"")
                         for member_name, contents in ordered_members:
                             archive.writestr(member_name, contents)
 
@@ -1982,11 +1641,7 @@ class DistributionIsolationTests(unittest.TestCase):
                 wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
                 members: tuple[tuple[str, str], ...] = (
                     ("weightclass/", ""),
-                    (
-                        "weightclass/delegation_qualifications.json",
-                        '{"records":[],"registry_schema_version":1,'
-                        '"suite_revision":"delegation-conformance-v2"}',
-                    ),
+                    ("weightclass/__init__.py", ""),
                     ("weightclass/module.py", "VALUE = 1\n"),
                 )
                 if not directory_first:
@@ -2021,11 +1676,7 @@ class DistributionIsolationTests(unittest.TestCase):
                     if reverse_order:
                         aliases = tuple(reversed(aliases))
                     with zipfile.ZipFile(wheel, "w") as archive:
-                        archive.writestr(
-                            "weightclass/delegation_qualifications.json",
-                            '{"records":[],"registry_schema_version":1,'
-                            '"suite_revision":"delegation-conformance-v2"}',
-                        )
+                        archive.writestr("weightclass/__init__.py", b"")
                         for member_name, contents in aliases:
                             archive.writestr(member_name, contents)
 
@@ -2088,11 +1739,7 @@ class DistributionIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
             with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
+                archive.writestr("weightclass/__init__.py", b"")
                 archive.writestr(f"weightclass/{deep_suffix}", "VALUE = 1\n")
             with self.assertRaisesRegex(
                 IsolationError,
@@ -2112,11 +1759,7 @@ class DistributionIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
             with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
+                archive.writestr("weightclass/__init__.py", b"")
                 archive.writestr(f"weightclass/{long_suffix}", "VALUE = 1\n")
             with self.assertRaisesRegex(
                 IsolationError,
@@ -2136,11 +1779,7 @@ class DistributionIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
             with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
+                archive.writestr("weightclass/__init__.py", b"")
                 archive.writestr(f"weightclass/{long_suffix}", "VALUE = 1\n")
 
             sdist = _write_sdist_fixture(
@@ -2178,11 +1817,7 @@ class DistributionIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
             with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
+                archive.writestr("weightclass/__init__.py", b"")
                 archive.writestr("weightclass/contests/example.py", "VALUE = 1\n")
 
             verify_wheel(wheel)
@@ -2191,237 +1826,32 @@ class DistributionIsolationTests(unittest.TestCase):
                 "tests/example.py",
                 "weightclass/tests/example.py",
                 "weightclass/synthetic_probe_report.py",
-                "weightclass/delegation_claim_map_v3.json",
+                "weightclass/synthetic_descendant_report.py",
             ):
                 with zipfile.ZipFile(wheel, "w") as archive:
-                    archive.writestr(
-                        "weightclass/delegation_qualifications.json",
-                        '{"records":[],"registry_schema_version":1,'
-                        '"suite_revision":"delegation-conformance-v2"}',
-                    )
+                    archive.writestr("weightclass/__init__.py", b"")
                     archive.writestr(member_name, "test-only\n")
                 with self.assertRaises(IsolationError):
                     verify_wheel(wheel)
-
-    def test_wheel_rejects_nonempty_or_candidate_compatible_registry(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
-            with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    json.dumps(
-                        {
-                            "records": [],
-                            "registry_schema_version": 1,
-                            "suite_revision": "delegation-conformance-v2",
-                            "runtime_build_id": "candidate-shaped",
-                        }
-                    ),
-                )
-            with self.assertRaises(IsolationError):
-                verify_wheel(wheel)
-
-    def test_wheel_rejects_candidate_record_at_non_registry_package_path(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
-            with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
-                archive.writestr(
-                    "weightclass/_reviewed_candidate.json",
-                    json.dumps(_candidate_like_record()),
-                )
-
-            with self.assertRaises(IsolationError):
-                verify_wheel(wheel)
-
-    def test_wheel_rejects_populated_data_purelib_registry_alias(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
-            with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
-                archive.writestr(
-                    "weightclass-0.data/purelib/weightclass/delegation_qualifications.json",
-                    json.dumps(
-                        {
-                            "records": [{"adapter_id": "decoy"}],
-                            "registry_schema_version": 1,
-                            "suite_revision": "delegation-conformance-v2",
-                        }
-                    ),
-                )
-
-            with self.assertRaises(IsolationError):
-                verify_wheel(wheel)
-
-    def test_wheel_rejects_case_variant_registry_alias(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
-            with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
-                archive.writestr(
-                    "WeightClass/delegation_qualifications.json",
-                    json.dumps(
-                        {
-                            "records": [{"adapter_id": "case-decoy"}],
-                            "registry_schema_version": 1,
-                            "suite_revision": "delegation-conformance-v2",
-                        }
-                    ),
-                )
-
-            with self.assertRaises(IsolationError):
-                verify_wheel(wheel)
-
-    def test_wheel_rejects_candidate_hidden_by_duplicate_member_name(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
-            with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
-                archive.writestr(
-                    "weightclass/_reviewed_candidate.json",
-                    json.dumps(_candidate_like_record()),
-                )
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", UserWarning)
-                    archive.writestr("weightclass/_reviewed_candidate.json", "not JSON")
-
-            with self.assertRaises(IsolationError):
-                verify_wheel(wheel)
 
     def test_wheel_rejects_noncanonical_member_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
             with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
+                archive.writestr("weightclass/__init__.py", b"")
                 archive.writestr("weightclass/./module.py", "VALUE = 1\n")
 
             with self.assertRaises(IsolationError):
                 verify_wheel(wheel)
 
-    def test_wheel_rejects_candidate_at_extensionless_package_path(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
-            with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
-                archive.writestr(
-                    "weightclass/_reviewed_candidate",
-                    json.dumps(_candidate_like_record()),
-                )
-
-            with self.assertRaises(IsolationError):
-                verify_wheel(wheel)
-
-    def test_wheel_bounds_production_registry_read(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
-            oversized_registry = b"{" + b" " * MAX_ARCHIVE_TEXT_BYTES + b"}"
-            with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr("weightclass/delegation_qualifications.json", oversized_registry)
-
-            with patch.object(zipfile.ZipFile, "read", side_effect=AssertionError):
-                with self.assertRaises(IsolationError):
-                    verify_wheel(wheel)
-
-    def test_wheel_rejects_evidence_document_at_non_registry_package_path(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
-            with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
-                archive.writestr(
-                    "weightclass/_conformance_evidence.json",
-                    json.dumps(_evidence_like_document()),
-                )
-
-            with self.assertRaises(IsolationError):
-                verify_wheel(wheel)
-
-    def test_wheel_allows_unrelated_text_that_mentions_schema_fields(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
-            with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
-                archive.writestr(
-                    "weightclass/README.md",
-                    "The record_schema_version and evidence_schema_version fields "
-                    "are reserved for test-owned qualification documents.\n",
-                )
-
-            verify_wheel(wheel)
-
-    def test_wheel_rejects_duplicate_fields_in_qualification_document(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
-            with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
-                archive.writestr(
-                    "weightclass/_candidate.json",
-                    '{"record_schema_version":1,"record_schema_version":1}',
-                )
-
-            with self.assertRaises(IsolationError):
-                verify_wheel(wheel)
-
-    def test_wheel_rejects_decoy_registry_path(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            wheel = Path(directory) / "weightclass-0-py3-none-any.whl"
-            with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr(
-                    "decoy/weightclass/delegation_qualifications.json",
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                )
-
-            with self.assertRaises(IsolationError):
-                verify_wheel(wheel)
-
-    def test_sdist_requires_empty_registry_and_keeps_synthetic_assets_test_only(self) -> None:
+    def test_sdist_keeps_synthetic_assets_test_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             sdist = Path(directory) / "weightclass-0.tar.gz"
             with tarfile.open(sdist, "w:gz") as archive:
                 root = Path(directory) / "payload"
-                registry = root / "weightclass-0/src/weightclass/delegation_qualifications.json"
-                registry.parent.mkdir(parents=True)
-                registry.write_text(
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                    encoding="utf-8",
-                )
+                package = root / "weightclass-0/src/weightclass/__init__.py"
+                package.parent.mkdir(parents=True)
+                package.write_text("VALUE = 1\n", encoding="utf-8")
                 for relative_path in (
                     "tests/synthetic_descendant_containment.py",
                     "tests/synthetic_probe_child.py",
@@ -2442,13 +1872,9 @@ class DistributionIsolationTests(unittest.TestCase):
             sdist = Path(directory) / "weightclass-0.tar.gz"
             with tarfile.open(sdist, "w:gz") as archive:
                 root = Path(directory) / "payload"
-                registry = root / "weightclass-0/src/weightclass/delegation_qualifications.json"
-                registry.parent.mkdir(parents=True)
-                registry.write_text(
-                    '{"records":[],"registry_schema_version":1,'
-                    '"suite_revision":"delegation-conformance-v2"}',
-                    encoding="utf-8",
-                )
+                package = root / "weightclass-0/src/weightclass/__init__.py"
+                package.parent.mkdir(parents=True)
+                package.write_text("VALUE = 1\n", encoding="utf-8")
                 archive.add(root / "weightclass-0", arcname="weightclass-0")
 
             with self.assertRaises(IsolationError):
@@ -2458,13 +1884,9 @@ class DistributionIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             sdist = Path(directory) / "weightclass-0.tar.gz"
             root = Path(directory) / "payload/weightclass-0"
-            registry = root / "src/weightclass/delegation_qualifications.json"
-            registry.parent.mkdir(parents=True)
-            registry.write_text(
-                '{"records":[],"registry_schema_version":1,'
-                '"suite_revision":"delegation-conformance-v2"}',
-                encoding="utf-8",
-            )
+            package = root / "src/weightclass/__init__.py"
+            package.parent.mkdir(parents=True)
+            package.write_text("VALUE = 1\n", encoding="utf-8")
             for relative_path in (
                 "tests/synthetic_descendant_containment.py",
                 "tests/synthetic_probe_child.py",
@@ -2483,61 +1905,13 @@ class DistributionIsolationTests(unittest.TestCase):
             with self.assertRaises(IsolationError):
                 verify_sdist(sdist)
 
-    def test_sdist_rejects_casefold_registry_alias_with_populated_registry(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            sdist = Path(directory) / "weightclass-0.tar.gz"
-            root = Path(directory) / "payload/weightclass-0"
-            registry = root / "src/weightclass/delegation_qualifications.json"
-            registry.parent.mkdir(parents=True)
-            registry.write_text(
-                '{"records":[],"registry_schema_version":1,'
-                '"suite_revision":"delegation-conformance-v2"}',
-                encoding="utf-8",
-            )
-            for relative_path in (
-                "tests/synthetic_descendant_containment.py",
-                "tests/synthetic_probe_child.py",
-                "tests/synthetic_probe_protocol.py",
-                "tests/synthetic_probe_runner.py",
-                "tests/test_distribution_isolation.py",
-                "tests/test_synthetic_probe_protocol.py",
-                "tests/verify_distribution_isolation.py",
-            ):
-                asset = root / relative_path
-                asset.parent.mkdir(parents=True, exist_ok=True)
-                asset.write_text("test-only\n", encoding="utf-8")
-            with tarfile.open(sdist, "w:gz") as archive:
-                archive.add(root, arcname="weightclass-0")
-                alias_name = "weightclass-0/src/WeightClass/delegation_qualifications.json"
-                alias_raw = json.dumps(_candidate_like_record()).encode("utf-8")
-                alias = tarfile.TarInfo(alias_name)
-                alias.size = len(alias_raw)
-                archive.addfile(alias, io.BytesIO(alias_raw))
-
-            with self.assertRaises(IsolationError):
-                verify_sdist(sdist)
-
-    def test_sdist_rejects_registry_suffix_alias(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            sdist = _write_sdist_fixture(
-                directory,
-                ("weightclass-0/decoy/weightclass/delegation_qualifications.json",),
-            )
-
-            with self.assertRaisesRegex(IsolationError, "expected exactly one production registry"):
-                verify_sdist(sdist)
-
     def test_sdist_rejects_casefold_collision_in_required_assets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             sdist = Path(directory) / "weightclass-0.tar.gz"
             root = Path(directory) / "payload/weightclass-0"
-            registry = root / "src/weightclass/delegation_qualifications.json"
-            registry.parent.mkdir(parents=True)
-            registry.write_text(
-                '{"records":[],"registry_schema_version":1,'
-                '"suite_revision":"delegation-conformance-v2"}',
-                encoding="utf-8",
-            )
+            package = root / "src/weightclass/__init__.py"
+            package.parent.mkdir(parents=True)
+            package.write_text("VALUE = 1\n", encoding="utf-8")
             for relative_path in (
                 "tests/synthetic_descendant_containment.py",
                 "tests/synthetic_probe_child.py",
@@ -2565,13 +1939,9 @@ class DistributionIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             sdist = Path(directory) / "weightclass-0.tar.gz"
             root = Path(directory) / "payload/weightclass-0"
-            registry = root / "src/weightclass/delegation_qualifications.json"
-            registry.parent.mkdir(parents=True)
-            registry.write_text(
-                '{"records":[],"registry_schema_version":1,'
-                '"suite_revision":"delegation-conformance-v2"}',
-                encoding="utf-8",
-            )
+            package = root / "src/weightclass/__init__.py"
+            package.parent.mkdir(parents=True)
+            package.write_text("VALUE = 1\n", encoding="utf-8")
             for relative_path in (
                 "tests/synthetic_descendant_containment.py",
                 "tests/synthetic_probe_child.py",
@@ -2612,7 +1982,7 @@ class DistributionIsolationTests(unittest.TestCase):
             for member_name in (
                 "weightclass-0/not/tests/example.py",
                 "weightclass-0/weightclass/synthetic_probe_report.py",
-                "weightclass-0/weightclass/delegation_claim_map_v3.json",
+                "weightclass-0/weightclass/synthetic_descendant_report.py",
             ):
                 sdist = _write_sdist_fixture(directory, (member_name,))
                 with self.assertRaises(IsolationError):
@@ -2649,13 +2019,9 @@ class DistributionIsolationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             sdist = Path(directory) / "weightclass-0.tar.gz"
             root = Path(directory) / "payload/weightclass-0"
-            registry = root / "src/weightclass/delegation_qualifications.json"
-            registry.parent.mkdir(parents=True)
-            registry.write_text(
-                '{"records":[],"registry_schema_version":1,'
-                '"suite_revision":"delegation-conformance-v2"}',
-                encoding="utf-8",
-            )
+            package = root / "src/weightclass/__init__.py"
+            package.parent.mkdir(parents=True)
+            package.write_text("VALUE = 1\n", encoding="utf-8")
             for relative_path in (
                 "tests/synthetic_descendant_containment.py",
                 "tests/synthetic_probe_child.py",

@@ -655,65 +655,6 @@ class UsageAggregationTests(unittest.TestCase):
         self.assertEqual(report["totals"]["runs"], 0)
         spawn.assert_not_called()
 
-    def test_native_delegation_run_uses_the_same_aggregate_contract(self) -> None:
-        """Breaks if lower-agent delegation escapes accounting available to ordinary runs."""
-        usage = importlib.import_module("weightclass.usage_aggregation")
-        first = observation("/opt/grok")
-        selected = compile_static_native_policy_v3(
-            parse_native_policy_v3(valid_policy()),
-            source_vendor="codex",
-            source_profile_id="source",
-            tier="low",
-            purpose="native_delegation",
-        )
-        fingerprint = bind_native_observation_v3(selected, first)["route_fingerprint"]
-        assert isinstance(fingerprint, str)
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            policy = root / "policy.json"
-            policy.write_text(json.dumps(valid_policy()), encoding="utf-8")
-            store = root / "usage-v1.json"
-            usage.ensure_usage_store(store)
-            with (
-                patch.object(sys, "stdin", HostileOneReadStream()),
-                patch("weightclass.cli.validate_runtime_process_context"),
-                patch("weightclass.cli.observe_executable", return_value=first),
-                patch("weightclass.native_v3_runtime.observe_executable", return_value=first),
-                patch(
-                    "weightclass.native_v3_runtime.run_owned_foreground_redacted",
-                    return_value=0,
-                ),
-            ):
-                status = cli.main(
-                    [
-                        "delegate",
-                        "native",
-                        "run",
-                        "--policy",
-                        str(policy),
-                        "--source-vendor",
-                        "codex",
-                        "--source-profile",
-                        "source",
-                        "--tier",
-                        "low",
-                        "--confirm-native-delegation",
-                        "--confirm-endpoint-transition",
-                        "--ack-route-fingerprint",
-                        fingerprint,
-                        "--usage-store",
-                        str(store),
-                        "--usage-escalation",
-                    ]
-                )
-            report = usage.render_usage_report(store)
-
-        self.assertEqual(status, 0)
-        self.assertEqual(report["totals"]["runs"], 1)
-        self.assertEqual(report["totals"]["escalations"], 1)
-        self.assertEqual(report["buckets"][0]["agent"], "grok")
-
     def test_concurrent_completed_runs_are_not_lost(self) -> None:
         """Breaks if independent foreground invocations overwrite aggregate counters."""
         usage = importlib.import_module("weightclass.usage_aggregation")

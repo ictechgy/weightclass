@@ -3,10 +3,8 @@ import math
 import os
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
-from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
@@ -21,14 +19,7 @@ from tests.synthetic_probe_protocol import (
     parse_probe_manifest,
 )
 from tests.synthetic_probe_runner import run_synthetic_probe
-from weightclass.delegation_qualification import (
-    QualificationInvalidInputError,
-    build_qualification_candidate,
-    load_packaged_qualification_registry,
-    load_qualification_registry,
-)
 
-CLAIM_MAP_PATH = Path(__file__).parent / "fixtures" / "delegation_claim_map_v3.json"
 PROVENANCE = {
     "collector": "weightclass.synthetic-probe.runner",
     "purpose": "synthetic-self-test-only",
@@ -60,25 +51,19 @@ def _child_argv(mode: str) -> tuple[str, ...]:
     return (sys.executable, "-m", CHILD_MODULE, mode)
 
 
-def _claim_ids() -> set[str]:
-    value = json.loads(CLAIM_MAP_PATH.read_text(encoding="utf-8"))
-    claim_map = cast(dict[str, object], value)
-    cases = cast(list[dict[str, object]], claim_map["permission_cases"]) + cast(
-        list[dict[str, object]], claim_map["scenario_cases"]
-    )
-    return {cast(str, case["case_id"]) for case in cases}
-
-
 class SyntheticProbeProtocolTests(unittest.TestCase):
-    def test_self_test_namespace_is_disjoint_from_all_qualification_claims(self) -> None:
-        claim_ids = _claim_ids()
-        self.assertEqual(len(claim_ids), 67)
+    def test_self_test_namespace_is_closed_to_foreign_identifiers(self) -> None:
+        """Breaks if a probe manifest can carry an identifier from outside its namespace."""
         self.assertTrue(all(item.startswith("wcp-selftest/v1/") for item in PROBE_SELF_TEST_IDS))
-        self.assertTrue(claim_ids.isdisjoint(PROBE_SELF_TEST_IDS))
-        for claim_id in claim_ids:
-            with self.subTest(claim_id=claim_id):
+        for foreign_id in (
+            "wcd/v3/permission/workspace-write-denied",
+            "wcp-selftest/v2/exit-status",
+            "wcp-selftest/v1",
+            "",
+        ):
+            with self.subTest(foreign_id=foreign_id):
                 with self.assertRaises(ProbeProtocolInvalidInputError):
-                    build_probe_manifest([claim_id], provenance=PROVENANCE)
+                    build_probe_manifest([foreign_id], provenance=PROVENANCE)
 
     def test_manifest_is_canonical_and_input_order_independent(self) -> None:
         forward = build_probe_manifest(PROBE_SELF_TEST_IDS, provenance=PROVENANCE)
@@ -103,7 +88,8 @@ class SyntheticProbeProtocolTests(unittest.TestCase):
         self.assertIs(manifest["qualification_eligible"], False)
         self.assertIs(manifest["delegation_support"], False)
 
-    def test_manifest_is_not_candidate_or_registry_compatible(self) -> None:
+    def test_manifest_never_grows_qualification_record_fields(self) -> None:
+        """Breaks if the synthetic manifest starts to look like a shippable claim record."""
         manifest = build_probe_manifest(PROBE_SELF_TEST_IDS, provenance=PROVENANCE)
         candidate_fields = {
             "record_schema_version",
@@ -114,16 +100,6 @@ class SyntheticProbeProtocolTests(unittest.TestCase):
             "scenario_results",
         }
         self.assertTrue(candidate_fields.isdisjoint(manifest))
-        with self.assertRaises(QualificationInvalidInputError):
-            build_qualification_candidate(manifest, Path(__file__))
-
-        with tempfile.TemporaryDirectory() as directory:
-            registry_path = Path(directory) / "registry.json"
-            registry_path.write_bytes(canonical_probe_manifest_bytes(manifest))
-            with self.assertRaises(QualificationInvalidInputError):
-                load_qualification_registry(registry_path)
-
-        self.assertEqual(load_packaged_qualification_registry().records, ())
 
     def test_rejects_unknown_duplicate_ambiguous_or_malformed_values(self) -> None:
         valid = build_probe_manifest(PROBE_SELF_TEST_IDS, provenance=PROVENANCE)

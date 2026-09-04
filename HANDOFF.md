@@ -515,13 +515,7 @@ This is the reason the study existed, so keep the conclusion with the code.
 
 ## Key Files & State
 
-- `HANDOFF.md`: this restart-safe state. A rewrite that drops required strings turns
-  `tests/test_completion_audit_v2.py` red in the working tree while CI stays
-  green. Keep the `docs/completion-audit-v2.md` line below.
-- `docs/completion-audit-v2.md`: requirement-to-test completion map.
-  Goal g12 is leader-verified; retain this audit connection when refreshing
-  this file. Both that path and that sentence are asserted verbatim by
-  `test_handoff_points_to_current_g12_audit`, so do not let a rewrap split them.
+- `HANDOFF.md`: this restart-safe state.
 - `AGENTS.md`: global rules and the scoped guidance index. Path-specific rules now live in
   `src/weightclass/AGENTS.md`, `src/weightclass/advisory/AGENTS.md`, `tests/AGENTS.md`,
   `.weightclass/AGENTS.md`, and `packaging/AGENTS.md`. Read the one that governs the subtree
@@ -550,7 +544,7 @@ This is the reason the study existed, so keep the conclusion with the code.
   only for the installed CLI entrypoint, preventing in-process tests from
   mutating a user's store.
 - `tests/test_usage_aggregation.py`: privacy, failure ordering, concurrency,
-  atomicity, weight semantics, ordinary run, and native-delegation coverage.
+  atomicity, weight semantics, and ordinary run coverage.
 - `README.md` and `docs/native-schema-3.md`: public accounting contract and
   exit-code `9` semantics.
 

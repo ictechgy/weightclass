@@ -22,15 +22,7 @@ loaded = sorted(
     for name in sys.modules
     if name in {
         "weightclass.agent_discovery",
-        "weightclass.delegation_compile",
-        "weightclass.delegation_protocol",
-        "weightclass.delegation_qualification",
-        "weightclass.delegation_runtime",
-        "weightclass.delegation_schema",
-        "weightclass.delegation_v2_compile",
-        "weightclass.delegation_v2_protocol",
-        "weightclass.delegation_v2_runtime",
-        "weightclass.delegation_v2_schema",
+        "weightclass.canonical_v2",
         "weightclass.executable_observation",
         "weightclass.native_v2_compile",
         "weightclass.native_v2_runtime",
@@ -43,7 +35,6 @@ loaded = sorted(
         "importlib.resources",
         "weightclass.task_v2",
         "weightclass.triage",
-        "weightclass.v2",
         "weightclass.v2_validation",
     }
 )
@@ -62,11 +53,9 @@ print(json.dumps(loaded))
 
     def test_parser_metadata_matches_its_deferred_authorities(self) -> None:
         from weightclass.adapter_registry import BUILT_IN_AGENT_IDS
-        from weightclass.cli import AGENT_IDS, API_SOURCE_VENDORS
-        from weightclass.v2 import API_SOURCE_VENDORS as V2_API_SOURCE_VENDORS
+        from weightclass.cli import AGENT_IDS
 
         self.assertEqual(AGENT_IDS, BUILT_IN_AGENT_IDS)
-        self.assertEqual(frozenset(API_SOURCE_VENDORS), V2_API_SOURCE_VENDORS)
 
     def test_schema_one_route_does_not_load_native_execution_families(self) -> None:
         program = """
@@ -125,10 +114,9 @@ forbidden = sorted(
     for name in sys.modules
     if name in {
         "weightclass.cli",
-        "weightclass.delegation_runtime",
         "weightclass.native_v2_compile",
+        "weightclass.native_v3_compile",
         "weightclass.triage",
-        "weightclass.v2",
     }
 )
 print(json.dumps({"exit_code": exit_code, "forbidden": forbidden}))
@@ -162,10 +150,9 @@ forbidden = sorted(
     for name in sys.modules
     if name in {
         "weightclass.cli",
-        "weightclass.delegation_runtime",
         "weightclass.native_v2_compile",
+        "weightclass.native_v3_compile",
         "weightclass.triage",
-        "weightclass.v2",
     }
 )
 print(json.dumps({"exit_code": exit_code, "forbidden": forbidden}))

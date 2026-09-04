@@ -17,7 +17,7 @@ import unittest
 from weightclass import cli
 
 VISIBLE = ("discover", "classify", "route", "run", "usage", "example-policy", "review-preset")
-ADVANCED = ("profile", "select", "review-cost-profile", "recommend", "render", "delegate", "v2")
+ADVANCED = ("profile", "select", "review-cost-profile", "recommend", "render")
 
 
 class TopLevelHelpTests(unittest.TestCase):

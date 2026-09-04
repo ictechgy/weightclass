@@ -121,7 +121,7 @@ jobs:
           PYTHONPATH="$installed_wheel" python -m compileall -q "$installed_wheel/weightclass"
           test "$(PYTHONPATH="$installed_wheel" python -c 'import importlib.metadata; print(importlib.metadata.version("weightclass"))')" = "${GITHUB_REF_NAME#v}"
           test "$(PYTHONPATH="$installed_wheel" python -m weightclass --version)" = "weightclass ${GITHUB_REF_NAME#v}"
-          PYTHONPATH="$installed_wheel" python -W error::ResourceWarning -m unittest tests.test_native_v2_compile.NativeV2CompileTests.test_claude_builder_and_golden_fingerprint tests.test_delegation_v2_compile.DelegationV2CompileTests.test_descriptor_matches_canonical_golden
+          PYTHONPATH="$installed_wheel" python -W error::ResourceWarning -m unittest tests.test_native_v2_compile.NativeV2CompileTests.test_claude_builder_and_golden_fingerprint
           python tests/verify_release_candidate.py --artifact-download artifact-download --print-staging-paths dist-under-test >/dev/null
 
   validate-python-314:
@@ -180,7 +180,7 @@ jobs:
           PYTHONPATH="$installed_wheel" python -m compileall -q "$installed_wheel/weightclass"
           test "$(PYTHONPATH="$installed_wheel" python -c 'import importlib.metadata; print(importlib.metadata.version("weightclass"))')" = "${GITHUB_REF_NAME#v}"
           test "$(PYTHONPATH="$installed_wheel" python -m weightclass --version)" = "weightclass ${GITHUB_REF_NAME#v}"
-          PYTHONPATH="$installed_wheel" python -W error::ResourceWarning -m unittest tests.test_native_v2_compile.NativeV2CompileTests.test_claude_builder_and_golden_fingerprint tests.test_delegation_v2_compile.DelegationV2CompileTests.test_descriptor_matches_canonical_golden
+          PYTHONPATH="$installed_wheel" python -W error::ResourceWarning -m unittest tests.test_native_v2_compile.NativeV2CompileTests.test_claude_builder_and_golden_fingerprint
           python tests/verify_release_candidate.py --artifact-download artifact-download --print-staging-paths dist-under-test >/dev/null
 
   macos-routing-boundaries:
@@ -194,15 +194,14 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Verify routing, observation, process, guarded, and conformance boundaries
+      - name: Verify routing, observation, process, and guarded boundaries
         run: |
           PYTHONPATH=src python -W error::ResourceWarning -m unittest \
             tests.test_router tests.test_agent_discovery tests.test_native_v2_runtime \
             tests.test_executable_observation tests.test_foreground_process \
             tests.test_process_context tests.test_triage tests.test_json_input \
             tests.test_cost_recommendation \
-            tests.test_delegation_runtime tests.test_delegation_v2_runtime \
-            tests.test_guarded_runtime_suite tests.test_delegation_conformance
+            tests.test_guarded_runtime_suite
 
   publish:
     name: Publish exact reviewed candidate

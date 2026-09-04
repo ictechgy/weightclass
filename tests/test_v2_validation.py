@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from weightclass.v2_validation import (
-    DELEGATION_LIST_PATHS,
     NATIVE_LIST_PATHS,
     V2ValidationError,
     canonicalize_registered_lists,
@@ -35,27 +34,23 @@ class V2ValidationTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), "")
 
     def test_every_frozen_list_path_has_one_ordering_rule(self) -> None:
-        production_registries = {
-            "native_v2_schema": NATIVE_LIST_PATHS,
-            "delegation_v2_schema": DELEGATION_LIST_PATHS,
-        }
-        for family in ("native_v2_schema", "delegation_v2_schema"):
-            with self.subTest(family=family):
-                contract = cast(
-                    dict[str, Any],
-                    json.loads((ROOT / "tests/fixtures" / family / "contract.json").read_text()),
+        family = "native_v2_schema"
+        contract = cast(
+            dict[str, Any],
+            json.loads((ROOT / "tests/fixtures" / family / "contract.json").read_text()),
+        )
+        registry = cast(dict[str, str], contract["list_paths"])
+        self.assertEqual(NATIVE_LIST_PATHS, registry)
+        self.assertTrue(registry)
+        for path, ordering in registry.items():
+            with self.subTest(path=path):
+                self.assertIsInstance(ordering, str)
+                self.assertTrue(ordering)
+                self.assertEqual(
+                    canonicalize_registered_lists({}, registry, encountered_paths=()),
+                    {},
                 )
-                registry = cast(dict[str, str], contract["list_paths"])
-                self.assertEqual(production_registries[family], registry)
-                self.assertTrue(registry)
-                for path, ordering in registry.items():
-                    self.assertIsInstance(ordering, str)
-                    self.assertTrue(ordering)
-                    self.assertEqual(
-                        canonicalize_registered_lists({}, registry, encountered_paths=()),
-                        {},
-                    )
-                    self.assertTrue(path.startswith("/"))
+                self.assertTrue(path.startswith("/"))
 
     def test_unknown_list_path_fails_closed(self) -> None:
         with self.assertRaisesRegex(V2ValidationError, "^$"):

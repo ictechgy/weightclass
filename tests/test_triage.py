@@ -28,7 +28,7 @@ from typing import Any, cast
 from unittest import mock
 
 from tests.runtime_guard import guarded_launch
-from weightclass import cli, delegation_conformance, process_context, triage
+from weightclass import cli, process_context, triage
 from weightclass.router import BUILT_IN_VENDORS
 from weightclass.triage import (
     TRIAGE_COMMANDS,
@@ -1990,10 +1990,10 @@ class ExplicitTierTests(unittest.TestCase):
 class LeaderObserverSharingTests(unittest.TestCase):
     """자식 수명주기 관찰은 한 곳에만 있어야 한다.
 
-    conformance 러너는 Darwin 이 이미 종료한 자식의 EVFILT_PROC 등록을 ESRCH 로
-    거부한다는 사실을 처리하고 있었지만, 같은 로직의 사본을 들고 있던 triage 는
-    그 처리를 받지 못해 빠르게 죽는 벤더의 정상 답변까지 버렸다. 사본이 다시
-    생기면 같은 일이 반복된다.
+    Darwin 이 이미 종료한 자식의 EVFILT_PROC 등록을 ESRCH 로 거부한다는 사실은
+    공유 관찰자가 처리하고 있었지만, 같은 로직의 사본을 들고 있던 triage 는 그
+    처리를 받지 못해 빠르게 죽는 벤더의 정상 답변까지 버렸다. 사본이 다시 생기면
+    같은 일이 반복된다.
     """
 
     def test_triage_uses_the_shared_observer_rather_than_a_private_copy(self) -> None:
@@ -2008,15 +2008,6 @@ class LeaderObserverSharingTests(unittest.TestCase):
         for name, implementation in shared:
             with self.subTest(helper=name):
                 self.assertIs(getattr(triage, name), implementation)
-
-        conformance_aliases = (
-            ("_observe_leader_exit", process_context.observe_leader_exit),
-            ("_has_leader_exit_observer", process_context.has_leader_exit_observer),
-            ("_signal_process_group", process_context.signal_process_group),
-        )
-        for name, implementation in conformance_aliases:
-            with self.subTest(helper=f"conformance.{name}"):
-                self.assertIs(getattr(delegation_conformance, name), implementation)
 
     def test_an_already_exited_leader_is_observed_rather_than_treated_as_a_failure(
         self,

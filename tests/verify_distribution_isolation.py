@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
-import json
 import os
 import re
 import stat
@@ -17,21 +16,14 @@ import tempfile
 import unicodedata
 import zipfile
 import zlib
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
-from typing import Any, BinaryIO, NoReturn, Protocol, cast
+from typing import BinaryIO, NoReturn, Protocol, cast
 
-WHEEL_REGISTRY_PATH = "weightclass/delegation_qualifications.json"
-SDIST_REGISTRY_PATH = "src/weightclass/delegation_qualifications.json"
-EMPTY_REGISTRY = {
-    "records": [],
-    "registry_schema_version": 1,
-    "suite_revision": "delegation-conformance-v2",
-}
 MAX_WHEEL_MEMBER_BYTES = 256 * 1_024
 MAX_ARCHIVE_TEXT_BYTES = MAX_WHEEL_MEMBER_BYTES
 MAX_ARCHIVE_MEMBER_NAME_BYTES = 4_096
@@ -77,42 +69,9 @@ _CANONICAL_VERSION_PATTERN = re.compile(
     r"(?:\.dev(?:0|[1-9][0-9]*))?"
     r"(?:\+[a-z0-9]+(?:\.[a-z0-9]+)*)?"
 )
-CANDIDATE_SCHEMA_KEYS = frozenset(
-    {
-        "record_schema_version",
-        "artifact_sha256",
-        "artifact_size_bytes",
-        "runtime_build_id",
-        "platform",
-        "protocol_version",
-        "suite_revision",
-        "adapter_id",
-        "vendor_family",
-        "conformance_evidence_sha256",
-        "result_matrix",
-        "scenario_results",
-    }
-)
-EVIDENCE_SCHEMA_KEYS = frozenset(
-    {
-        "evidence_schema_version",
-        "artifact_sha256",
-        "artifact_size_bytes",
-        "suite_revision",
-        "runtime_build_id",
-        "platform",
-        "protocol_version",
-        "adapter_id",
-        "vendor_family",
-        "result_matrix",
-        "scenario_results",
-    }
-)
 FORBIDDEN_FUZZY_PATH_PARTS = (
     "synthetic_probe",
     "synthetic_descendant",
-    "delegation_claim_map",
-    "fake_conformance_driver",
 )
 FORBIDDEN_TOP_LEVEL_CONTENT = frozenset({"skills", "tools"})
 FORBIDDEN_WHEEL_TEXT = ("wcp-selftest/v1", '"qualification_eligible"')
@@ -128,11 +87,7 @@ REQUIRED_SDIST_TEST_SUFFIXES = (
 
 
 class IsolationError(ValueError):
-    """A distribution crossed the qualification-isolation boundary."""
-
-
-class _DuplicateKeyError(ValueError):
-    pass
+    """A distribution crossed the test-only isolation boundary."""
 
 
 class _ReadableBytes(Protocol):
@@ -213,43 +168,6 @@ def _fail(message: str) -> NoReturn:
 def _reject_forbidden_top_level_content(path: PurePosixPath, location: str) -> None:
     if path.parts and path.parts[0].casefold() in FORBIDDEN_TOP_LEVEL_CONTENT:
         _fail(f"{location}: forbidden top-level content: {path.as_posix()}")
-
-
-def _object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    value: dict[str, object] = {}
-    for key, item in pairs:
-        if key in value:
-            raise _DuplicateKeyError
-        value[key] = item
-    return value
-
-
-def _load_empty_registry(raw: bytes, location: str) -> None:
-    try:
-        value: Any = json.loads(
-            raw.decode("utf-8"), object_pairs_hook=_object_without_duplicate_keys
-        )
-    except (RecursionError, ValueError):
-        _fail(f"{location}: registry is not canonical JSON")
-    if type(value) is not dict:
-        _fail(f"{location}: registry shape is not the empty production shape")
-    try:
-        keys = frozenset(value)
-        records = value["records"]
-        registry_schema_version = value["registry_schema_version"]
-        suite_revision = value["suite_revision"]
-    except (KeyError, TypeError, ValueError):
-        _fail(f"{location}: registry shape is not the empty production shape")
-    if (
-        keys != frozenset(EMPTY_REGISTRY)
-        or type(records) is not list
-        or records != []
-        or type(registry_schema_version) is not int
-        or registry_schema_version != 1
-        or type(suite_revision) is not str
-        or suite_revision != "delegation-conformance-v2"
-    ):
-        _fail(f"{location}: registry shape is not the empty production shape")
 
 
 def _read_archive_member(archive: zipfile.ZipFile, member: zipfile.ZipInfo, location: str) -> bytes:
@@ -928,82 +846,6 @@ def _verify_physical_sdist(sdist: Path) -> None:
         pass
 
 
-def _qualification_document_kind(raw: bytes, location: str) -> str | None:
-    if not raw.lstrip().startswith(b"{"):
-        return None
-    try:
-        value: Any = json.loads(
-            raw.decode("utf-8"), object_pairs_hook=_object_without_duplicate_keys
-        )
-    except _DuplicateKeyError:
-        _fail(f"{location}: duplicate JSON object field")
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    except (RecursionError, ValueError):
-        _fail(f"{location}: JSON document exceeds the safety limit")
-    if not isinstance(value, Mapping):
-        return None
-    keys = frozenset(value)
-    if keys == CANDIDATE_SCHEMA_KEYS and value.get("record_schema_version") == 1:
-        return "candidate"
-    if keys == EVIDENCE_SCHEMA_KEYS and value.get("evidence_schema_version") == 2:
-        return "evidence"
-    return None
-
-
-def _read_source_registry(registry: Path) -> bytes:
-    def read_bounded(descriptor: int) -> bytes:
-        raw = bytearray()
-        while chunk := os.read(
-            descriptor,
-            min(65_536, MAX_ARCHIVE_TEXT_BYTES + 1 - len(raw)),
-        ):
-            raw.extend(chunk)
-            if len(raw) > MAX_ARCHIVE_TEXT_BYTES:
-                _fail("source registry exceeds the safety limit")
-        return bytes(raw)
-
-    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
-    try:
-        descriptor = _open_no_follow(str(registry), flags)
-    except OSError:
-        _fail("source registry could not be opened safely")
-    try:
-        try:
-            before = os.fstat(descriptor)
-            if not stat.S_ISREG(before.st_mode):
-                _fail("source registry must be a nonsymlink regular file")
-            if before.st_size < 0 or before.st_size > MAX_ARCHIVE_TEXT_BYTES:
-                _fail("source registry exceeds the safety limit")
-            raw = read_bounded(descriptor)
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            confirmed_raw = read_bounded(descriptor)
-            after = os.fstat(descriptor)
-        except IsolationError:
-            raise
-        except OSError:
-            _fail("source registry could not be inspected")
-    finally:
-        os.close(descriptor)
-    try:
-        current = registry.stat(follow_symlinks=False)
-    except OSError:
-        _fail("source registry changed while it was inspected")
-    if (
-        len(raw) != after.st_size
-        or raw != confirmed_raw
-        or _stat_identity(before) != _stat_identity(after)
-        or _stat_identity(after) != _stat_identity(current)
-    ):
-        _fail("source registry changed while it was inspected")
-    return confirmed_raw
-
-
-def verify_source_registry(root: Path) -> None:
-    registry = root / "src" / "weightclass" / "delegation_qualifications.json"
-    _load_empty_registry(_read_source_registry(registry), "source registry")
-
-
 def _is_tests_path(path: PurePosixPath) -> bool:
     return any(part.casefold() == "tests" for part in path.parts)
 
@@ -1337,32 +1179,6 @@ def verify_wheel(
         try:
             with zipfile.ZipFile(cast(BinaryIO, _ZipSnapshotReader(snapshot))) as archive:
                 members = _wheel_members(archive, wheel)
-                folded_registry_path = WHEEL_REGISTRY_PATH.casefold()
-                folded_registry_suffix = f"/{WHEEL_REGISTRY_PATH}".casefold()
-                registry_aliases = [
-                    member
-                    for member in members
-                    if member.filename.casefold() == folded_registry_path
-                    or member.filename.casefold().endswith(folded_registry_suffix)
-                ]
-                canonical_registries = [
-                    member for member in registry_aliases if member.filename == WHEEL_REGISTRY_PATH
-                ]
-                if (
-                    len(registry_aliases) != 1
-                    or len(canonical_registries) != 1
-                    or canonical_registries[0].is_dir()
-                ):
-                    _fail(f"{wheel.name}: expected exactly one production registry")
-                registry = canonical_registries[0]
-                _load_empty_registry(
-                    _read_archive_member(
-                        archive,
-                        registry,
-                        f"{wheel.name}:{WHEEL_REGISTRY_PATH}",
-                    ),
-                    f"{wheel.name}:{WHEEL_REGISTRY_PATH}",
-                )
                 for member in members:
                     _reject_forbidden_top_level_content(PurePosixPath(member.filename), wheel.name)
                     if member.is_dir():
@@ -1374,10 +1190,7 @@ def verify_wheel(
                         _fail(f"{wheel.name}: test-only artifact shipped: {name}")
                     raw = _read_archive_member(archive, member, f"{wheel.name}:{name}")
                     if any(token.encode() in raw for token in FORBIDDEN_WHEEL_TEXT):
-                        _fail(f"{wheel.name}: synthetic or candidate-like content shipped: {name}")
-                    document_kind = _qualification_document_kind(raw, f"{wheel.name}:{name}")
-                    if document_kind is not None:
-                        _fail(f"{wheel.name}: qualification {document_kind} shipped: {name}")
+                        _fail(f"{wheel.name}: synthetic test content shipped: {name}")
         except IsolationError:
             raise
         except (
@@ -1451,21 +1264,6 @@ def verify_sdist(
     with _open_verified_sdist(sdist, expected_fingerprint) as archive:
         members = _safe_members(archive)
         root = _sdist_root(members)
-        expected_registry = f"{root}/{SDIST_REGISTRY_PATH}"
-        folded_registry_suffix = WHEEL_REGISTRY_PATH.casefold()
-        registries = [
-            member for member in members if member.name.casefold().endswith(folded_registry_suffix)
-        ]
-        if len(registries) != 1 or registries[0].name != expected_registry:
-            _fail(f"{sdist.name}: expected exactly one production registry")
-        extracted = archive.extractfile(registries[0])
-        if extracted is None:
-            _fail(f"{sdist.name}: registry is not a regular file")
-        with extracted:
-            registry_raw = extracted.read(MAX_ARCHIVE_TEXT_BYTES + 1)
-        if len(registry_raw) > MAX_ARCHIVE_TEXT_BYTES:
-            _fail(f"{sdist.name}:{registries[0].name}: registry exceeds the scan limit")
-        _load_empty_registry(registry_raw, f"{sdist.name}:{registries[0].name}")
         for member in members:
             relative = PurePosixPath(member.name).relative_to(root)
             _reject_forbidden_top_level_content(relative, sdist.name)
@@ -1587,10 +1385,13 @@ def verify_distribution_directory(
     run_sdist_tests_requested: bool,
     expected_version: str | None = None,
 ) -> None:
+    # `source` 는 더 이상 검사 대상이 아니다. 자격 레지스트리가 사라지면서 이
+    # 검증기가 소스 트리에서 읽을 것이 없어졌지만, 고정된 CI/릴리스 명령줄이
+    # `--source` 를 넘기고 있으므로 인수는 그대로 받는다.
+    del source
     _validate_expected_version(expected_version)
     initial = _distribution_snapshot(dist_dir)
     wheel_fingerprint, sdist_fingerprint = initial.fingerprints
-    verify_source_registry(source)
     verify_wheel(initial.wheel, expected_fingerprint=wheel_fingerprint)
     verify_sdist(initial.sdist, expected_fingerprint=sdist_fingerprint)
     _verify_distribution_core_metadata(

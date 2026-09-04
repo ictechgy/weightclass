@@ -43,3 +43,27 @@ describe as something the shipped tool still provides.
 - [`speculative-cheap-route-design.md`](speculative-cheap-route-design.md) — an
   unimplemented proposal to run the cheap route first and escalate when a verify
   command fails.
+
+## Delegation and API-routing documents
+
+These described `wclass delegate` and `wclass v2`, removed in 0.32.0.
+
+Each line names what the document described and the last release that shipped
+that surface.
+
+- [`completion-audit-v2.md`](completion-audit-v2.md) — requirement-to-test
+  completion map for the protocol-2 delegation and native routing brief. Last
+  shipped in 0.31.1.
+- [`delegation-qualification-oracles.md`](delegation-qualification-oracles.md) —
+  the decision oracles behind the `delegate` conformance suite and its
+  intentionally empty qualification registry. Last shipped in 0.31.1.
+- [`delegation-roadmap.md`](delegation-roadmap.md) — the WCD1 role-delegation
+  protocol, its policy schema, and the qualified-runtime plan. Last shipped in
+  0.31.1.
+- [`protocol-v2-migration.md`](protocol-v2-migration.md) — migration guide from
+  protocol 1 to the WCD2 delegation protocol. Last shipped in 0.31.1.
+- [`protocol-v2-security.md`](protocol-v2-security.md) — the security boundary
+  and residual risks of the WCD2 delegation protocol. Last shipped in 0.31.1.
+- [`protocol-v2-specification.md`](protocol-v2-specification.md) — the WCD2
+  frame, descriptor, and permission-projection specification. Last shipped in
+  0.31.1.

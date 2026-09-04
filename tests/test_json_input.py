@@ -30,27 +30,6 @@ def _native_policy() -> dict[str, object]:
     }
 
 
-def _api_policy() -> dict[str, object]:
-    return {
-        "schema_version": 2,
-        "allow_cross_provider": False,
-        "allow_api": True,
-        "routes": [
-            {
-                "id": "openai-low-api",
-                "tier": "low",
-                "eligible_source_vendors": ["codex"],
-                "provider": "openai",
-                "transport": "api",
-                "model": "opaque-model",
-                "effort": "low",
-                "intended_recipient": "OpenAI API",
-                "intended_billing_boundary": "user OpenAI API account",
-            }
-        ],
-    }
-
-
 class RuntimeJsonInputTests(unittest.TestCase):
     def _run(
         self, arguments: list[str], task: str = "Fix a typo."
@@ -113,55 +92,6 @@ class RuntimeJsonInputTests(unittest.TestCase):
 
         self._assert_invalid_input(result)
 
-    def test_v2_policy_rejects_duplicate_top_level_keys(self) -> None:
-        """Breaks if a duplicated API kill switch can be changed by ordering."""
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "policy.json"
-            raw = json.dumps(_api_policy()).replace(
-                '"allow_api": true', '"allow_api": false, "allow_api": true'
-            )
-            path.write_text(raw, encoding="utf-8")
-
-            result = self._run(
-                [
-                    "v2",
-                    "route",
-                    "--policy",
-                    str(path),
-                    "--source-vendor",
-                    "codex",
-                    "--api-runtime",
-                    sys.executable,
-                ]
-            )
-
-        self._assert_invalid_input(result)
-
-    def test_v2_policy_rejects_duplicate_nested_keys(self) -> None:
-        """Breaks if duplicate detection covers only the document root."""
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "policy.json"
-            raw = json.dumps(_api_policy()).replace(
-                '"provider": "openai"', '"provider": "anthropic", "provider": "openai"'
-            )
-            path.write_text(raw, encoding="utf-8")
-
-            result = self._run(
-                [
-                    "v2",
-                    "route",
-                    "--policy",
-                    str(path),
-                    "--source-vendor",
-                    "codex",
-                    "--api-runtime",
-                    sys.executable,
-                ]
-            )
-
-        self._assert_invalid_input(result)
-
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO is not available")
     def test_every_runtime_json_consumer_rejects_a_fifo_promptly(self) -> None:
         """Breaks if validation stats a path and then blocks while opening it."""
         with tempfile.TemporaryDirectory() as directory:
@@ -192,20 +122,6 @@ class RuntimeJsonInputTests(unittest.TestCase):
                         str(root / "descriptor-fifo"),
                     ],
                     "",
-                ),
-                (
-                    "v2 policy",
-                    [
-                        "v2",
-                        "route",
-                        "--policy",
-                        str(root / "v2-fifo"),
-                        "--source-vendor",
-                        "codex",
-                        "--api-runtime",
-                        sys.executable,
-                    ],
-                    "task",
                 ),
             )
             for label, arguments, task in cases:
@@ -344,28 +260,6 @@ class RuntimeJsonInputTests(unittest.TestCase):
         self._assert_invalid_input(result)
         self.assertNotIn("Traceback", result.stderr)
 
-    def test_v2_cli_redacts_json_decoder_recursion_failure(self) -> None:
-        """Breaks if the API policy loader diverges from native redaction."""
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "deep-policy.json"
-            path.write_text(DEEPLY_NESTED_JSON, encoding="utf-8")
-
-            result = self._run(
-                [
-                    "v2",
-                    "route",
-                    "--policy",
-                    str(path),
-                    "--source-vendor",
-                    "codex",
-                    "--api-runtime",
-                    sys.executable,
-                ]
-            )
-
-        self._assert_invalid_input(result)
-        self.assertNotIn("Traceback", result.stderr)
-
     def test_invalid_static_policy_is_rejected_before_task_input_is_read(self) -> None:
         """Breaks if invalid configuration causes unnecessary task handling."""
         with tempfile.TemporaryDirectory() as directory:
@@ -374,16 +268,6 @@ class RuntimeJsonInputTests(unittest.TestCase):
             calls: tuple[Callable[[], int], ...] = (
                 lambda: cli.route_from_standard_input(invalid_policy, "codex"),
                 lambda: cli.run_from_standard_input(invalid_policy, "codex", explicit_tier="low"),
-                lambda: cli.v2_route_from_standard_input(
-                    invalid_policy, "codex", Path(sys.executable)
-                ),
-                lambda: cli.v2_run_from_standard_input(
-                    invalid_policy,
-                    "codex",
-                    Path(sys.executable),
-                    False,
-                    None,
-                ),
             )
             for invoke in calls:
                 with self.subTest(call=invoke):

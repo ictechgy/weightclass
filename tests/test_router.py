@@ -1923,7 +1923,6 @@ class CommandSurfaceTests(unittest.TestCase):
             "route",
             "run",
             "render",
-            "v2",
         ):
             with self.subTest(subcommand=subcommand):
                 self.assertIn(subcommand, result.stdout)
@@ -1982,21 +1981,19 @@ class CommandSurfaceTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
 
-    def test_unexpected_parser_state_fails_closed_without_v2_dispatch(self) -> None:
-        """Breaks if an unknown command implicitly falls through to a V2 handler."""
+    def test_unexpected_parser_state_fails_closed_without_route_dispatch(self) -> None:
+        """Breaks if an unknown command implicitly falls through to a route handler."""
         arguments = SimpleNamespace(
             version=False,
             command="future-command",
-            api_command="route",
             policy=None,
             source_vendor=None,
-            api_runtime=None,
         )
-        v2_was_called = False
+        route_was_called = False
 
-        def unexpected_v2_call(*_arguments: object) -> int:
-            nonlocal v2_was_called
-            v2_was_called = True
+        def unexpected_route_call(*_arguments: object) -> int:
+            nonlocal route_was_called
+            route_was_called = True
             return 91
 
         parser = SimpleNamespace(parse_args=lambda _arguments: arguments)
@@ -2004,8 +2001,8 @@ class CommandSurfaceTests(unittest.TestCase):
         with (
             mock.patch("weightclass.cli.build_parser", return_value=parser),
             mock.patch(
-                "weightclass.cli.v2_route_from_standard_input",
-                side_effect=unexpected_v2_call,
+                "weightclass.cli.route_from_standard_input",
+                side_effect=unexpected_route_call,
             ),
             contextlib.redirect_stderr(errors),
         ):
@@ -2013,67 +2010,21 @@ class CommandSurfaceTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 2)
         self.assertEqual(json.loads(errors.getvalue()), {"error": "invalid_input"})
-        self.assertFalse(v2_was_called)
+        self.assertFalse(route_was_called)
 
-    def test_rejects_an_abbreviated_api_egress_confirmation(self) -> None:
-        """Breaks if an explicit egress gate can be satisfied by a prefix of its flag.
+    def test_rejects_an_abbreviated_confirmation_flag(self) -> None:
+        """Breaks if an explicit confirmation gate can be satisfied by a prefix of its flag.
 
-        정책과 런타임을 모두 유효하게 준다. 축약이 허용되면 --c 가
-        --confirm-api-egress 로 해석되어 지문 검사(exit 6)까지 진행하므로,
-        가드가 있을 때(exit 2)와 결과가 갈린다.
+        축약이 허용되면 --confirm-e 가 --confirm-endpoint-transition 으로
+        해석되어, 아무도 그 이름을 쓰지 않은 실행 승인이 만족된다. 정확한
+        이름은 받고 접두사는 닫는다는 두 방향을 함께 고정한다.
         """
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            policy_path = Path(temporary_directory) / "api-policy.json"
-            policy_path.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 2,
-                        "allow_cross_provider": False,
-                        "allow_api": True,
-                        "routes": [
-                            {
-                                "id": "openai-low-api",
-                                "tier": "low",
-                                "eligible_source_vendors": ["codex"],
-                                "provider": "openai",
-                                "transport": "api",
-                                "model": "opaque-openai-low-model",
-                                "effort": "low",
-                                "intended_recipient": "OpenAI API",
-                                "intended_billing_boundary": "user OpenAI API account",
-                            }
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
+        parser = cli.build_parser()
+        accepted = parser.parse_args(["run", "--tier", "low", "--confirm-endpoint-transition"])
+        self.assertTrue(accepted.confirm_endpoint_transition)
+        with self.assertRaises(cli.InvalidInputError):
+            parser.parse_args(["run", "--tier", "low", "--confirm-e"])
 
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "weightclass",
-                    "v2",
-                    "run",
-                    "--policy",
-                    str(policy_path),
-                    "--source-vendor",
-                    "codex",
-                    "--api-runtime",
-                    sys.executable,
-                    "--c",
-                ],
-                capture_output=True,
-                check=False,
-                input="Fix a typo.",
-                text=True,
-            )
-
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(json.loads(result.stderr), {"error": "invalid_input"})
-
-
-class TaskConfidentialityTests(unittest.TestCase):
     def test_no_subcommand_echoes_any_word_of_the_task(self) -> None:
         """Breaks if any mode starts placing task content in its output or diagnostics.
 
@@ -2108,39 +2059,6 @@ class TaskConfidentialityTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            api_policy_path = directory / "api-policy.json"
-            api_policy_path.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 2,
-                        "allow_cross_provider": False,
-                        "allow_api": True,
-                        "routes": [
-                            {
-                                "id": "openai-high-api",
-                                "tier": "high",
-                                "eligible_source_vendors": ["codex"],
-                                "provider": "openai",
-                                "transport": "api",
-                                "model": "opaque-openai-high-model",
-                                "effort": "high",
-                                "intended_recipient": "OpenAI API",
-                                "intended_billing_boundary": "user OpenAI API account",
-                            }
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            api_arguments = [
-                "--policy",
-                str(api_policy_path),
-                "--source-vendor",
-                "codex",
-                "--api-runtime",
-                sys.executable,
-            ]
-
             for arguments in (
                 ["discover"],
                 [
@@ -2165,9 +2083,6 @@ class TaskConfidentialityTests(unittest.TestCase):
                     "--descriptor",
                     "/nonexistent/d.json",
                 ],
-                ["v2", "route", *api_arguments],
-                ["v2", "run", *api_arguments],
-                ["v2", "run", *api_arguments, "--confirm-api-egress"],
             ):
                 with self.subTest(arguments=arguments):
                     result = subprocess.run(
