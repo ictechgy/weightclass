@@ -1,0 +1,930 @@
+{
+  "bindings": {
+    "catalogue_fingerprint": "sha256:cc3a151a59044883886cf4aaf96f2c678b03ba0d15cfb25f5038522e74d6f323",
+    "composition_fingerprints": {
+      "C0": "sha256:9e96dc455e80b63a6a00f5322e62555d50b681d04ba096c25e824716d1a5030d",
+      "C1": "sha256:3a9ffa12bef5c87b4659c3611b7983365bd80dccf2711ca61260374e5e6cc579",
+      "C2": "sha256:b9e0344e397d82ccb6b6c1f4ae291705167713422697d290d9e93601b6d5ab58",
+      "C3": "sha256:245b13e2ebeda572cade4e9354ecd571795ece4e58d49d145c2ed2fe5d123c15",
+      "C4": "sha256:5d9c7032b87ccbe5dced72685b2d9b43b5df7924169b696d5b8362023deefeca"
+    },
+    "fixture_fingerprint": "sha256:ae5a17b9dae9f40f23ad4fd85381c8bb1d2f0383a7a39c9f3684f1f78e19b65d",
+    "preregistration_fingerprint": "sha256:1c541072687118ba4a966265080aaa73ffdcfe2ebbefadc57077286aa19e428a",
+    "tools": {
+      "mypy": "2.3.0",
+      "python": "3.14.6",
+      "ruff": "0.16.2"
+    }
+  },
+  "checks_available": {
+    "invariant": true,
+    "mypy": true,
+    "ruff": true,
+    "scan": true,
+    "tests": true
+  },
+  "decision": {
+    "C0": "no-go",
+    "C1": "no-go",
+    "C2": "no-go",
+    "C3": "no-go",
+    "C4": "no-go"
+  },
+  "decision_rule": "Wilson 95% lower bound of recall over non-credential defects >= 0.80, credential defects all caught, controls all passed; per composition",
+  "label": "verifier recall on the public verifier-recall fixture; not general recall",
+  "provenance": {
+    "fixture_frozen_before_defects": true,
+    "generator": "claude subagent, fresh context, source-only",
+    "generator_blind_to_fixture_tests": true,
+    "trusted_not_proven": true
+  },
+  "recall": {
+    "C0": {
+      "by_class": {
+        "error-swallow": {
+          "caught": 0,
+          "n": 2
+        },
+        "id-padding": {
+          "caught": 0,
+          "n": 5
+        },
+        "mutable-leak": {
+          "caught": 1,
+          "n": 5
+        },
+        "non-atomic-save": {
+          "caught": 0,
+          "n": 2
+        },
+        "pagination-bound": {
+          "caught": 2,
+          "n": 2
+        },
+        "schema-coercion": {
+          "caught": 1,
+          "n": 5
+        },
+        "silent-overwrite": {
+          "caught": 1,
+          "n": 5
+        }
+      },
+      "caught": 5,
+      "credential_all_fired": false,
+      "credential_n": 4,
+      "n": 26,
+      "rate": 0.1923,
+      "reportable": true,
+      "wilson95": [
+        0.0851,
+        0.3788
+      ]
+    },
+    "C1": {
+      "by_class": {
+        "error-swallow": {
+          "caught": 0,
+          "n": 2
+        },
+        "id-padding": {
+          "caught": 0,
+          "n": 5
+        },
+        "mutable-leak": {
+          "caught": 1,
+          "n": 5
+        },
+        "non-atomic-save": {
+          "caught": 0,
+          "n": 2
+        },
+        "pagination-bound": {
+          "caught": 2,
+          "n": 2
+        },
+        "schema-coercion": {
+          "caught": 1,
+          "n": 5
+        },
+        "silent-overwrite": {
+          "caught": 1,
+          "n": 5
+        }
+      },
+      "caught": 5,
+      "credential_all_fired": true,
+      "credential_n": 4,
+      "n": 26,
+      "rate": 0.1923,
+      "reportable": true,
+      "wilson95": [
+        0.0851,
+        0.3788
+      ]
+    },
+    "C2": {
+      "by_class": {
+        "error-swallow": {
+          "caught": 0,
+          "n": 2
+        },
+        "id-padding": {
+          "caught": 0,
+          "n": 5
+        },
+        "mutable-leak": {
+          "caught": 1,
+          "n": 5
+        },
+        "non-atomic-save": {
+          "caught": 0,
+          "n": 2
+        },
+        "pagination-bound": {
+          "caught": 2,
+          "n": 2
+        },
+        "schema-coercion": {
+          "caught": 1,
+          "n": 5
+        },
+        "silent-overwrite": {
+          "caught": 1,
+          "n": 5
+        }
+      },
+      "caught": 5,
+      "credential_all_fired": true,
+      "credential_n": 4,
+      "n": 26,
+      "rate": 0.1923,
+      "reportable": true,
+      "wilson95": [
+        0.0851,
+        0.3788
+      ]
+    },
+    "C3": {
+      "by_class": {
+        "error-swallow": {
+          "caught": 0,
+          "n": 2
+        },
+        "id-padding": {
+          "caught": 0,
+          "n": 5
+        },
+        "mutable-leak": {
+          "caught": 1,
+          "n": 5
+        },
+        "non-atomic-save": {
+          "caught": 0,
+          "n": 2
+        },
+        "pagination-bound": {
+          "caught": 2,
+          "n": 2
+        },
+        "schema-coercion": {
+          "caught": 2,
+          "n": 5
+        },
+        "silent-overwrite": {
+          "caught": 1,
+          "n": 5
+        }
+      },
+      "caught": 6,
+      "credential_all_fired": true,
+      "credential_n": 4,
+      "n": 26,
+      "rate": 0.2308,
+      "reportable": true,
+      "wilson95": [
+        0.1103,
+        0.4205
+      ]
+    },
+    "C4": {
+      "by_class": {
+        "error-swallow": {
+          "caught": 2,
+          "n": 2
+        },
+        "id-padding": {
+          "caught": 5,
+          "n": 5
+        },
+        "mutable-leak": {
+          "caught": 2,
+          "n": 5
+        },
+        "non-atomic-save": {
+          "caught": 1,
+          "n": 2
+        },
+        "pagination-bound": {
+          "caught": 2,
+          "n": 2
+        },
+        "schema-coercion": {
+          "caught": 5,
+          "n": 5
+        },
+        "silent-overwrite": {
+          "caught": 4,
+          "n": 5
+        }
+      },
+      "caught": 21,
+      "credential_all_fired": true,
+      "credential_n": 4,
+      "n": 26,
+      "rate": 0.8077,
+      "reportable": true,
+      "wilson95": [
+        0.6212,
+        0.9149
+      ]
+    }
+  },
+  "runs": [
+    {
+      "class_id": "schema-coercion",
+      "id": "sc-01",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "schema-coercion",
+      "id": "sc-02",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "schema-coercion",
+      "id": "sc-03",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "caught",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "caught",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "schema-coercion",
+      "id": "sc-04",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "schema-coercion",
+      "id": "sc-05",
+      "results": {
+        "C0": "caught",
+        "C1": "caught",
+        "C2": "caught",
+        "C3": "caught",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "caught"
+      }
+    },
+    {
+      "class_id": "silent-overwrite",
+      "id": "ow-01",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "silent-overwrite",
+      "id": "ow-02",
+      "results": {
+        "C0": "caught",
+        "C1": "caught",
+        "C2": "caught",
+        "C3": "caught",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "caught"
+      }
+    },
+    {
+      "class_id": "silent-overwrite",
+      "id": "ow-03",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "silent-overwrite",
+      "id": "ow-04",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "silent-overwrite",
+      "id": "ow-05",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "id-padding",
+      "id": "id-01",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "id-padding",
+      "id": "id-02",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "id-padding",
+      "id": "id-03",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "id-padding",
+      "id": "id-04",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "id-padding",
+      "id": "id-05",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "mutable-leak",
+      "id": "mu-01",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "mutable-leak",
+      "id": "mu-02",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "mutable-leak",
+      "id": "mu-03",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "mutable-leak",
+      "id": "mu-04",
+      "results": {
+        "C0": "caught",
+        "C1": "caught",
+        "C2": "caught",
+        "C3": "caught",
+        "C4": "caught",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "caught",
+        "scan": "passed",
+        "tests": "caught"
+      }
+    },
+    {
+      "class_id": "mutable-leak",
+      "id": "mu-05",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "error-swallow",
+      "id": "es-01",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "error-swallow",
+      "id": "es-02",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "pagination-bound",
+      "id": "pg-01",
+      "results": {
+        "C0": "caught",
+        "C1": "caught",
+        "C2": "caught",
+        "C3": "caught",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "caught"
+      }
+    },
+    {
+      "class_id": "pagination-bound",
+      "id": "pg-02",
+      "results": {
+        "C0": "caught",
+        "C1": "caught",
+        "C2": "caught",
+        "C3": "caught",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "caught"
+      }
+    },
+    {
+      "class_id": "non-atomic-save",
+      "id": "at-01",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "caught",
+        "invariant": "caught",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "non-atomic-save",
+      "id": "at-02",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "credential",
+      "id": "cr-01",
+      "results": {
+        "C0": "passed",
+        "C1": "caught",
+        "C2": "caught",
+        "C3": "caught",
+        "C4": "caught",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "caught",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "credential",
+      "id": "cr-02",
+      "results": {
+        "C0": "passed",
+        "C1": "caught",
+        "C2": "caught",
+        "C3": "caught",
+        "C4": "caught",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "caught",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "credential",
+      "id": "cr-03",
+      "results": {
+        "C0": "passed",
+        "C1": "caught",
+        "C2": "caught",
+        "C3": "caught",
+        "C4": "caught",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "caught",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "credential",
+      "id": "cr-04",
+      "results": {
+        "C0": "passed",
+        "C1": "caught",
+        "C2": "caught",
+        "C3": "caught",
+        "C4": "caught",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "caught",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "control",
+      "id": "ctl-01",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "control",
+      "id": "ctl-02",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "control",
+      "id": "ctl-03",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "control",
+      "id": "ctl-04",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "control",
+      "id": "ctl-05",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "control",
+      "id": "ctl-06",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "control",
+      "id": "ctl-07",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "control",
+      "id": "ctl-08",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "control",
+      "id": "ctl-09",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    },
+    {
+      "class_id": "control",
+      "id": "ctl-10",
+      "results": {
+        "C0": "passed",
+        "C1": "passed",
+        "C2": "passed",
+        "C3": "passed",
+        "C4": "passed",
+        "invariant": "passed",
+        "mypy": "passed",
+        "ruff": "passed",
+        "scan": "passed",
+        "tests": "passed"
+      }
+    }
+  ],
+  "schema_version": 1,
+  "specificity": {
+    "C0": {
+      "passed": 10,
+      "reportable": true,
+      "total": 10
+    },
+    "C1": {
+      "passed": 10,
+      "reportable": true,
+      "total": 10
+    },
+    "C2": {
+      "passed": 10,
+      "reportable": true,
+      "total": 10
+    },
+    "C3": {
+      "passed": 10,
+      "reportable": true,
+      "total": 10
+    },
+    "C4": {
+      "passed": 10,
+      "reportable": true,
+      "total": 10
+    }
+  },
+  "status_vocabulary": [
+    "caught",
+    "passed",
+    "check_unavailable",
+    "timeout",
+    "apply_failed"
+  ]
+}
