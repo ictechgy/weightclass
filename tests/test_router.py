@@ -1552,7 +1552,7 @@ class CommandSurfaceTests(unittest.TestCase):
                 "vendor",
             },
         )
-        self.assertEqual(descriptor["preset"], "claude-cost-focused")
+        self.assertEqual(descriptor["preset"], "claude-model-override")
         self.assertEqual(descriptor["vendor"], "claude")
         self.assertEqual(descriptor["configuration_status"], "measured_low_route_only")
         self.assertFalse(descriptor["allow_mixed_vendors"])

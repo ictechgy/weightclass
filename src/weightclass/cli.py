@@ -318,12 +318,41 @@ USAGE_UNAVAILABLE_EXIT_CODE: Final = 9
 MAX_NATIVE_POLICY_BYTES: Final = 262_144
 MAX_NATIVE_DESCRIPTOR_BYTES: Final = 262_144
 MAX_PRESET_OVERRIDE_LABEL_BYTES: Final = 240
+# 프리셋 이름은 프리셋이 하는 일을 말한다: 모델/effort 라벨을 내장 라우트에
+# 덮어쓴다. 예전 이름 `*-cost-focused` 는 측정되지 않은 절약을 주장했으므로
+# 별칭으로만 남긴다. 패키지 파일과 그 안의 명령 바이트는 그대로이므로 지문은
+# 바뀌지 않는다.
+PRESET_SUFFIX: Final = "-model-override"
+LEGACY_PRESET_SUFFIX: Final = "-cost-focused"
 EXAMPLE_POLICY_RESOURCES: Final = {
-    "agy-cost-focused": "agy_cost_focused_policy.json",
-    "claude-cost-focused": "claude_cost_focused_policy.json",
-    "codex-cost-focused": "codex_cost_focused_policy.json",
-    "grok-cost-focused": "grok_cost_focused_policy.json",
+    "agy-model-override": "agy_cost_focused_policy.json",
+    "claude-model-override": "claude_cost_focused_policy.json",
+    "codex-model-override": "codex_cost_focused_policy.json",
+    "grok-model-override": "grok_cost_focused_policy.json",
 }
+LEGACY_PRESET_ALIASES: Final = {
+    name.removesuffix(PRESET_SUFFIX) + LEGACY_PRESET_SUFFIX: name
+    for name in EXAMPLE_POLICY_RESOURCES
+}
+# argparse 선택지: 정식 이름과 별칭 모두 받되, usage 줄에는 metavar 만 보인다.
+PRESET_CHOICES: Final = (*EXAMPLE_POLICY_RESOURCES, *LEGACY_PRESET_ALIASES)
+
+
+def canonical_preset_name(name: str) -> str:
+    """Resolve a packaged preset name, accepting the retired `-cost-focused` alias.
+
+    별칭은 같은 프리셋으로만 해석되고 그 밖의 이름은 추측 없이 닫힌다.
+    """
+    if name in EXAMPLE_POLICY_RESOURCES:
+        return name
+    if name in LEGACY_PRESET_ALIASES:
+        return LEGACY_PRESET_ALIASES[name]
+    raise InvalidInputError()
+
+
+def _preset_source_vendor(name: str) -> str:
+    """Return the vendor a packaged preset belongs to, whichever name selected it."""
+    return canonical_preset_name(name).removesuffix(PRESET_SUFFIX)
 
 
 def encode_delegation_frame_v2(descriptor: bytes, task: bytes) -> bytes:
@@ -469,7 +498,7 @@ def _apply_route_overrides(
 def _apply_preset_overrides(policy: dict[str, Any], name: str, overrides: PresetOverrides) -> None:
     if overrides.is_empty():
         return
-    vendor = name.removesuffix("-cost-focused")
+    vendor = _preset_source_vendor(name)
     routes = policy.get("routes")
     if not isinstance(routes, list):
         raise InvalidInputError()
@@ -526,6 +555,7 @@ def _render_example_policy(
     from importlib.resources import files
 
     overrides = overrides or PresetOverrides()
+    name = canonical_preset_name(name)
     try:
         policy_text = (
             files("weightclass")
@@ -536,7 +566,7 @@ def _render_example_policy(
         raise InvalidInputError() from error
     if model is None and overrides.is_empty():
         return policy_text
-    if model is not None and name != "codex-cost-focused":
+    if model is not None and name != "codex-model-override":
         raise InvalidInputError()
     if model is not None and any(
         (overrides.low_model, overrides.standard_model, overrides.high_model)
@@ -591,7 +621,7 @@ def _automatic_cost_policy(
         raise InvalidInputError()
     try:
         raw_policy = json.loads(
-            _render_example_policy(f"{source_vendor}-cost-focused", model, overrides)
+            _render_example_policy(f"{source_vendor}{PRESET_SUFFIX}", model, overrides)
         )
     except (InvalidInputError, json.JSONDecodeError, UnicodeError) as error:
         raise InvalidInputError() from error
@@ -620,14 +650,14 @@ def _resolve_packaged_policy_selection(
     if preset is None:
         return cost_focused, source_vendor
     if (
-        preset not in EXAMPLE_POLICY_RESOURCES
+        preset not in PRESET_CHOICES
         or cost_focused
         or policy_path is not None
         or source_vendor is not None
         or source_profile is not None
     ):
         raise InvalidInputError()
-    return True, preset.removesuffix("-cost-focused")
+    return True, _preset_source_vendor(preset)
 
 
 def _legacy_route_fingerprint(
@@ -1046,6 +1076,13 @@ def _preset_overrides_from_arguments(arguments: argparse.Namespace) -> PresetOve
     )
 
 
+# 프리셋 선택지 help: 정식 이름만 보이고 별칭은 한 문장으로 언급한다.
+PRESET_HELP: Final = (
+    "One packaged preset: "
+    + ", ".join(EXAMPLE_POLICY_RESOURCES)
+    + ". The retired <vendor>-cost-focused names are accepted as aliases."
+)
+
 # 상위 help 목록에서 빠지는 명령. 파싱과 실행은 그대로이고 epilog 가 이름을 가리킨다.
 ADVANCED_COMMANDS: tuple[str, ...] = (
     "profile",
@@ -1162,7 +1199,7 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
         description="Print an installable reviewed policy example.",
     )
-    example_policy.add_argument("name", choices=tuple(EXAMPLE_POLICY_RESOURCES))
+    example_policy.add_argument("name", choices=PRESET_CHOICES, metavar="PRESET", help=PRESET_HELP)
     example_policy.add_argument("--model")
     _add_preset_override_arguments(example_policy)
     review_preset = subcommands.add_parser(
@@ -1171,7 +1208,7 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
         description="Review every task-free route in one packaged policy.",
     )
-    review_preset.add_argument("name", choices=tuple(EXAMPLE_POLICY_RESOURCES))
+    review_preset.add_argument("name", choices=PRESET_CHOICES, metavar="PRESET", help=PRESET_HELP)
     review_preset.add_argument("--model")
     _add_preset_override_arguments(review_preset)
     review_cost_profile = subcommands.add_parser(
@@ -1185,7 +1222,9 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
         description="Recommend or abstain without starting a vendor process.",
     )
-    recommend.add_argument("--preset", required=True, choices=tuple(EXAMPLE_POLICY_RESOURCES))
+    recommend.add_argument(
+        "--preset", required=True, choices=PRESET_CHOICES, metavar="PRESET", help=PRESET_HELP
+    )
     recommend.add_argument("--cost-profile", required=True, type=Path)
     recommend.add_argument("--qualification-card", required=True, type=Path)
     recommend.add_argument("--model")
@@ -1258,16 +1297,20 @@ def build_parser() -> argparse.ArgumentParser:
         native.add_argument(
             "--cost-focused",
             action="store_true",
-            help="Select the packaged opt-in policy for --source-vendor.",
+            help="Deprecated alias for --preset <source-vendor>-model-override.",
         )
         native.add_argument(
             "--preset",
-            choices=tuple(EXAMPLE_POLICY_RESOURCES),
-            help="Select one packaged policy without a separate vendor flag.",
+            choices=PRESET_CHOICES,
+            metavar="PRESET",
+            help=PRESET_HELP,
         )
         native.add_argument(
             "--model",
-            help="Bind an opaque model label to cost-focused Codex low/standard routes.",
+            help=(
+                "Bind an opaque model label to the low and standard routes of the "
+                "codex-model-override preset."
+            ),
         )
         _add_preset_override_arguments(native)
         if name == "route":
@@ -1944,7 +1987,8 @@ def _packaged_configuration_status(
     """
     if name is None or model is not None or not overrides.is_empty():
         return "unqualified_custom"
-    if name == "claude-cost-focused":
+    # 호출부가 정식 이름을 만들지만, 별칭이 들어와도 같은 판정이 나야 한다.
+    if canonical_preset_name(name) == "claude-model-override":
         return "measured_low_route_only"
     return "unqualified_experiment"
 
@@ -1957,10 +2001,11 @@ def review_packaged_preset(
     """Render every bound command in one preset without accessing task input."""
     _load_agent_family()
     overrides = overrides or PresetOverrides()
-    if name not in EXAMPLE_POLICY_RESOURCES:
+    if name not in PRESET_CHOICES:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
-    source_vendor = name.removesuffix("-cost-focused")
+    name = canonical_preset_name(name)
+    source_vendor = _preset_source_vendor(name)
     try:
         policy = _automatic_cost_policy(True, None, source_vendor, None, model, overrides)
     except InvalidInputError:
@@ -2008,8 +2053,8 @@ def recommend_from_standard_input(
     _load_symbols(("cost_recommendation",))
     _load_agent_family()
     overrides = overrides or PresetOverrides()
-    source_vendor = preset.removesuffix("-cost-focused")
     try:
+        source_vendor = _preset_source_vendor(preset)
         profile = load_cost_profile(cost_profile_path)
         card = load_qualification_card(qualification_card_path)
         candidate_policy = _automatic_cost_policy(
@@ -2241,7 +2286,7 @@ def route_from_standard_input(
     if automatic_policy is not None:
         assert effective_source_vendor is not None
         response["configuration_status"] = _packaged_configuration_status(
-            f"{effective_source_vendor}-cost-focused" if automatic_enabled else None,
+            f"{effective_source_vendor}{PRESET_SUFFIX}" if automatic_enabled else None,
             model,
             overrides,
         )
