@@ -975,9 +975,21 @@ def _add_native_v3_delegation_arguments(parser: argparse.ArgumentParser) -> None
 
 def _add_usage_run_arguments(parser: argparse.ArgumentParser) -> None:
     """Declare aggregate-only accounting flags for schema-3 execution."""
-    parser.add_argument("--usage-store", type=Path)
-    parser.add_argument("--usage-rework", action="store_true")
-    parser.add_argument("--usage-escalation", action="store_true")
+    parser.add_argument(
+        "--usage-store",
+        type=Path,
+        help="Record aggregate-only usage units in this opt-in schema-3 store.",
+    )
+    parser.add_argument(
+        "--usage-rework",
+        action="store_true",
+        help="Count this run as rework of an earlier attempt in the usage store.",
+    )
+    parser.add_argument(
+        "--usage-escalation",
+        action="store_true",
+        help="Count this run as an escalation from a cheaper tier in the usage store.",
+    )
 
 
 def _add_preset_override_arguments(parser: argparse.ArgumentParser) -> None:
@@ -1168,14 +1180,61 @@ def build_parser() -> argparse.ArgumentParser:
             help=(
                 "Review the selected route for a task."
                 if name == "route"
-                else "Select, optionally review, and run one agent."
+                else "Review on the terminal by default, then run one agent."
             ),
             allow_abbrev=False,
             description=description,
+            epilog=(
+                f"example: printf '%s' 'Fix a spelling typo.' | wclass {name} "
+                "--source-vendor codex --tier low"
+                + (
+                    "\n\nWhen stdout is a terminal, run shows the task-free route on the "
+                    "controlling terminal (not stdin) and asks before starting it. "
+                    "For automation pass --no-review or --ack-route-fingerprint, or put "
+                    "--json before the command: wclass --json run ... A pty harness "
+                    "counts as a terminal, so give it one of those flags."
+                    if name == "run"
+                    else ""
+                )
+            ),
+            formatter_class=argparse.RawDescriptionHelpFormatter,
         )
-        native.add_argument("--policy", type=Path)
-        native.add_argument("--source-vendor")
-        native.add_argument("--source-profile")
+        native.add_argument(
+            "--source-vendor",
+            help=(
+                "Run the task with this vendor's built-in routes: "
+                + ", ".join(AGENT_IDS)
+                + ". A policy may also name the vendor."
+            ),
+        )
+        # 티어 출처는 정확히 하나여야 한다. 사전등록된 연구가 티어 라우팅의 이득을
+        # 반증했으므로 분류기는 더 이상 기본값이 아니다. 둘 다 없으면 태스크를 읽기
+        # 전에 닫히고, 둘 다 있으면 한 방향으로 해석하지 않고 거부한다.
+        tier_selection = native.add_mutually_exclusive_group(required=True)
+        # wclass classify 가 낸 티어를 그대로 받는다. route 와 run 은 이 경로에서도
+        # 네트워크를 쓰지 않는다. 판정은 별도 명령에서 이미 끝났다.
+        tier_selection.add_argument(
+            "--tier",
+            choices=("low", "standard", "high"),
+            help="Use this tier; the classifier is not consulted.",
+        )
+        tier_selection.add_argument(
+            "--suggest-tier",
+            action="store_true",
+            help=(
+                "Let the local classifier choose the tier and report its own "
+                "measured agreement alongside the suggestion."
+            ),
+        )
+        native.add_argument(
+            "--policy",
+            type=Path,
+            help="Read routes from this local policy file instead of the built-in routes.",
+        )
+        native.add_argument(
+            "--source-profile",
+            help="Select a named profile inside a schema-2 or schema-3 policy.",
+        )
         native.add_argument(
             "--cost-focused",
             action="store_true",
@@ -1191,21 +1250,6 @@ def build_parser() -> argparse.ArgumentParser:
             help="Bind an opaque model label to cost-focused Codex low/standard routes.",
         )
         _add_preset_override_arguments(native)
-        # 티어 출처는 정확히 하나여야 한다. 사전등록된 연구가 티어 라우팅의 이득을
-        # 반증했으므로 분류기는 더 이상 기본값이 아니다. 둘 다 없으면 태스크를 읽기
-        # 전에 닫히고, 둘 다 있으면 한 방향으로 해석하지 않고 거부한다.
-        tier_selection = native.add_mutually_exclusive_group(required=True)
-        # wclass classify 가 낸 티어를 그대로 받는다. route 와 run 은 이 경로에서도
-        # 네트워크를 쓰지 않는다. 판정은 별도 명령에서 이미 끝났다.
-        tier_selection.add_argument("--tier", choices=("low", "standard", "high"))
-        tier_selection.add_argument(
-            "--suggest-tier",
-            action="store_true",
-            help=(
-                "Let the local classifier choose the tier and report its own "
-                "measured agreement alongside the suggestion."
-            ),
-        )
         if name == "route":
             native.add_argument(
                 "--bind-executable-identity",
@@ -1223,16 +1267,42 @@ def build_parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="Bind an explicit custom route to its observed executable identity.",
             )
-            native.add_argument("--ack-route-fingerprint")
             native.add_argument(
+                "--ack-route-fingerprint",
+                help=(
+                    "Start only if the selected route still matches this fingerprint "
+                    "printed by route; for scripts that reviewed the route elsewhere."
+                ),
+            )
+            # 단말에서는 검토가 기본이다. 두 플래그는 그 기본을 양방향으로 고정
+            # 하기 위한 것이므로 함께 오면 한 방향으로 해석하지 않고 거부한다.
+            review_selection = native.add_mutually_exclusive_group()
+            review_selection.add_argument(
                 "--review",
                 action="store_true",
                 help=(
                     "Show the selected task-free route on the controlling terminal and "
-                    "ask before starting it; no copied fingerprint is required."
+                    "ask before starting it; no copied fingerprint is required. "
+                    "This is the default when stdout is a terminal and cannot be "
+                    "combined with --ack-route-fingerprint."
                 ),
             )
-            native.add_argument("--confirm-endpoint-transition", action="store_true")
+            review_selection.add_argument(
+                "--no-review",
+                action="store_true",
+                help=(
+                    "Do not ask on the terminal. A policy or preset then needs "
+                    "--ack-route-fingerprint; a built-in route starts directly."
+                ),
+            )
+            native.add_argument(
+                "--confirm-endpoint-transition",
+                action="store_true",
+                help=(
+                    "Required when the reviewed schema-3 route lists endpoint_transition; "
+                    "acknowledges that the child talks to a different endpoint."
+                ),
+            )
             native.add_argument(
                 "--suggest-escalation",
                 action="store_true",
@@ -2866,8 +2936,14 @@ def _main_json(
     argv: Sequence[str] | None = None,
     *,
     use_default_usage_store: bool = False,
+    terminal_review_default: bool = False,
 ) -> int:
-    """Classify, route, render, or run a native command from explicit input."""
+    """Classify, route, render, or run a native command from explicit input.
+
+    `terminal_review_default` 는 사람이 보고 있는 단말에서 `run` 이 검토를
+    기본으로 켜도록 한다. 자동화 신호(`--no-review`, 지문 인수)가 있으면
+    켜지 않는다.
+    """
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     if not raw_arguments:
@@ -3060,7 +3136,7 @@ def _main_json(
             use_default_usage_store,
             arguments.suggest_escalation,
             arguments.bind_executable_identity,
-            arguments.review,
+            _interactive_review_requested(arguments, terminal_review_default),
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
@@ -3147,6 +3223,20 @@ _HUMAN_ERROR_ACTIONS = {
     "route_fingerprint_mismatch": "Review the route again before running it.",
     "execution_cancelled": "No vendor process was started.",
 }
+
+
+def _interactive_review_requested(arguments: argparse.Namespace, terminal_default: bool) -> bool:
+    """Decide whether this `run` reviews on the console.
+
+    명시적 `--review` 는 언제나 검토한다. 단말 기본값은 사용자가 `--no-review`
+    로 끄거나 검토를 스크립트 쪽에서 이미 끝냈다는 뜻인 지문 인수를 넘기면
+    물러선다. 비단말에서는 기본값이 없으므로 예전 계약이 그대로다.
+    """
+    if arguments.review:
+        return True
+    if arguments.no_review or arguments.ack_route_fingerprint is not None:
+        return False
+    return terminal_default
 
 
 def _output_preference(arguments: Sequence[str]) -> tuple[list[str], bool | None]:
@@ -3252,17 +3342,26 @@ def main(
     except InvalidInputError:
         print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
         return 2
-    human = (
-        bool(getattr(sys.stdout, "isatty", lambda: False)())
-        if explicit_human is None
-        else explicit_human
-    )
+    stdout_is_terminal = bool(getattr(sys.stdout, "isatty", lambda: False)())
+    human = stdout_is_terminal if explicit_human is None else explicit_human
     command = arguments[0] if arguments and not arguments[0].startswith("-") else None
+    # 검토 기본값의 근거는 stdout 이 실제 단말이라는 사실 하나뿐이다. 명시적
+    # --human 은 렌더링 선호일 뿐 단말을 만들지 않고, 명시적 --json 은 단말에서도
+    # 자동화 신호로 읽는다.
+    terminal_review_default = (
+        stdout_is_terminal and explicit_human is not False and command == "run"
+    )
     # Execution surfaces inherit vendor stdout/stderr directly. Capturing those
     # streams to prettify router receipts would silently change the one-child
     # foreground contract.
     if not human or command in {"run", "delegate", "v2", "select"}:
-        return _main_json(arguments, use_default_usage_store=use_default_usage_store)
+        # run 의 stdout 은 자식 것이므로 사람용 렌더링은 하지 않지만, stdout 이
+        # 단말이라는 사실은 검토를 기본으로 켜는 근거로 넘긴다.
+        return _main_json(
+            arguments,
+            use_default_usage_store=use_default_usage_store,
+            terminal_review_default=terminal_review_default,
+        )
 
     output = io.StringIO()
     errors = io.StringIO()
