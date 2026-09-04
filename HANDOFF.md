@@ -1,11 +1,13 @@
 # Handoff
 
-_Last updated: 2026-09-05 KST. Current release: **0.31.1** on PyPI and the
-Homebrew tap._
+_Last updated: 2026-09-05 KST. Current release: **0.32.0** on PyPI and the
+Homebrew tap (release run `33899992985`, GitHub Release `v0.32.0` marked latest,
+tap commit `e1b3f31`)._
 
-Unreleased on `main`: the launcher narrowing (#200–#204, below) and this
-documentation pass. The next action is the **0.32.0 release** — PR 6 of
-[`docs/launcher-scope.md`](docs/launcher-scope.md) §5 — once this pass merges.
+Nothing is unreleased on `main` except this handoff note and the formula source
+update. 0.32.0 is the launcher narrowing (#200–#206, below) released; 0.31.1 is
+the last release that had the advisory companion, `delegate`, `v2`, `recommend`,
+`review-cost-profile`, `render`, vendor triage, and `--suggest-escalation`.
 Releasing is a human action; see [`RELEASING.md`](RELEASING.md).
 
 Per-release evidence, superseded working notes, and abandoned approaches live in
@@ -155,13 +157,14 @@ None of these is authorized work; each needs owner agreement first.
 
 ## Next steps
 
-1. Merge this documentation pass.
-2. Cut **0.32.0** — PR 6 in [`docs/launcher-scope.md`](docs/launcher-scope.md)
-   §5. Not 1.0.0: §6 leaves questions open and `0.x` is the declared unstable
-   range. Write `.github/release-notes/v0.32.0.md` first, listing the breaking
-   removals and the `weightclass==0.31.1` pin, and run the full gate in
-   [`tests/AGENTS.md`](tests/AGENTS.md).
-3. Nothing is scheduled after that.
+Nothing is scheduled. 0.32.0 shipped on 2026-09-05: the release workflow passed
+every job on the first tag (the Skill ledger step that failed `v0.31.0` no longer
+exists), the `pypi` environment was approved at the maintainer's instruction, the
+tap formula was verified with `brew style`/`audit --strict`/`upgrade
+--build-from-source`/`test`, and the user-level uv tool reports 0.32.0.
+
+If work resumes, the open questions above are the candidates; none is
+authorized by this file.
 
 ## Resume Prompt
 
