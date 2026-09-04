@@ -61,7 +61,7 @@ def _read_bounded_bytes(file_descriptor: int, max_bytes: int) -> bytes:
 def _has_exclusive_write_owner(metadata: os.stat_result) -> bool:
     """Report whether the opened file is closed to writers other than its owner.
 
-    A policy, manifest, or descriptor decides which argv runs and which vendor
+    A policy file decides which argv runs and which vendor
     boundary a task crosses, so whoever can write it can choose both. `route`
     and `run` read the file in separate processes, so a review of the first read
     says nothing about the second unless the set of writers is closed.

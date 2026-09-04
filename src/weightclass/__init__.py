@@ -1,3 +1,3 @@
 """weightclass: local, policy-driven routing for supported native agent CLIs."""
 
-__version__ = "0.31.1"
+__version__ = "0.32.0"

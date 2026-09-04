@@ -34,7 +34,7 @@ class ProductizationFollowupTests(unittest.TestCase):
                 "-m",
                 "weightclass",
                 "example-policy",
-                "codex-cost-focused",
+                "codex-model-override",
                 "--low-model",
                 "reviewed-low-model",
             ],
@@ -53,7 +53,7 @@ class ProductizationFollowupTests(unittest.TestCase):
         self.assertNotIn("--model", commands["high"])
 
     def test_checkout_uses_an_unreleased_development_version(self) -> None:
-        self.assertEqual(__version__, "0.16.0.dev0")
+        self.assertEqual(__version__, "0.32.0")
 
     def test_default_route_reviews_and_runs_one_admitted_absolute_executable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
