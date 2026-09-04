@@ -1,38 +1,16 @@
 # weightclass
 
-**weightclass** is a local, policy-driven router for agent CLI workflows.
-Built-in support covers Codex, Claude Code, Antigravity (`agy`), and Grok; any
-other vendor is reachable by writing its exact command in a policy. It
-classifies a task in memory as `low`, `standard`, or `high`, chooses a
-deterministic model-and-effort route, and can start one selected vendor
-process in the foreground.
+**weightclass** starts one agent CLI process — Codex, Claude Code, Antigravity
+(`agy`), or Grok — with the exact command you reviewed. You choose the tier,
+`wclass` prints the task-free argv and a route fingerprint, and on a terminal
+it asks before starting anything. Any other vendor is reachable by writing its
+exact command in a local policy.
 
-This is effort routing, not a token-saving claim. weightclass does not read
-provider usage data, infer pricing, or know whether an effort label reduces
-the total tokens needed to finish a task. Retries and rework happen outside the
-router and can outweigh a cheaper first attempt.
-
-The heuristic classifier is experimental, and it is **not** the front door.
-`route` and `run` require exactly one of `--tier` (you choose) or
-`--suggest-tier` (the classifier suggests, and reports its own record next to
-the suggestion). A suggested tier cannot start a vendor without a terminal
-review (the default on a terminal, or `--review`), so the classifier never
-launches a child nobody looked at.
-
-Against 24 blind-rated prompts, policy 4 measured:
-
-| Metric | Result | 95% CI |
-| --- | ---: | ---: |
-| Agreement | 10/24 (41.7%) | 24.5%-61.2% |
-| High-tier recall | 1/9 (11.1%) | 2.0%-43.5% |
-| Over-routing | 6/24 (25.0%) | 12.0%-44.9% |
-
-The stronger warning is the one the headline metrics hide: eight of the nine
-majority-`high` prompts were routed to `standard`. The sample and its intervals
-are too small to be an accuracy estimate, and a separate pre-registered study
-found no benefit from routing up on the work it measured. See
-[the fresh blind check](docs/policy4-fresh-blind-evaluation.md) and
-[the paired token study](docs/paired-token-study.md).
+It is a local, policy-driven router and nothing more: it reads no credentials,
+makes no network requests, and persists no task content. It is not a
+subscription-savings tool. The heuristic classifier that can suggest a tier is
+experimental and opt-in; its measured record is in
+[Why the classifier is opt-in](#why-the-classifier-is-opt-in).
 
 ## Install
 
@@ -87,7 +65,70 @@ Releases are cut by pushing a tag; see [RELEASING.md](RELEASING.md). See
 examples. Current security status, including the still-open path-based spawn
 boundary, is documented in [the security follow-up](docs/security-performance-followup.md).
 
-### Advisory companion
+## What you get, and what you do not
+
+These bullets describe the core `wclass` command. The separate, explicitly
+experimental `wclass-advisory` companion is described in
+[Advisory companion](#advisory-companion) and has its own boundaries.
+
+You get:
+
+- A deterministic route: the same policy, vendor, and tier always select the
+  same command, and `wclass route` shows it before anything runs.
+- Review before execution. On a terminal `run` asks first. In a script, passing
+  the fingerprint from `route` binds a policy run to the command you reviewed;
+  a built-in route can still start unacknowledged there, and the
+  [security boundary](#security-boundary-and-non-goals) says exactly when.
+- Exactly one foreground vendor child, started without a shell, inheriting your
+  terminal. `wclass` does not capture, retry, or supervise it.
+- No credential reads, no network requests, and no persisted task content. The
+  vendor CLI owns authentication, billing, and network.
+- Opt-in, aggregate-only usage accounting with weights you declare yourself.
+
+You do not get:
+
+- Pricing, quota, or remaining-subscription knowledge. Model and effort labels
+  are opaque configuration; weightclass never infers what they cost.
+- A measured saving. Tier routing showed no benefit on the work that was
+  measured; see [Why the classifier is opt-in](#why-the-classifier-is-opt-in)
+  and [Measured results for tier routing](#measured-results-for-tier-routing).
+- Automatic retries, escalation, or rework accounting. `--suggest-escalation`
+  prints the next route and stops, and the usage store counts rework only when
+  you declare it with `--usage-rework`.
+- Quality verification or filesystem confinement. `wclass` never reads or
+  judges the child's output, and nothing here confines the child to a
+  directory.
+
+## Why the classifier is opt-in
+
+This is effort routing, not a token-saving claim. weightclass does not read
+provider usage data, infer pricing, or know whether an effort label reduces
+the total tokens needed to finish a task. Retries and rework happen outside the
+router and can outweigh a cheaper first attempt.
+
+The heuristic classifier is experimental, and it is **not** the front door.
+`route` and `run` require exactly one of `--tier` (you choose) or
+`--suggest-tier` (the classifier suggests, and reports its own record next to
+the suggestion). A suggested tier cannot start a vendor without a terminal
+review (the default on a terminal, or `--review`), so the classifier never
+launches a child nobody looked at.
+
+Against 24 blind-rated prompts, policy 4 measured:
+
+| Metric | Result | 95% CI |
+| --- | ---: | ---: |
+| Agreement | 10/24 (41.7%) | 24.5%-61.2% |
+| High-tier recall | 1/9 (11.1%) | 2.0%-43.5% |
+| Over-routing | 6/24 (25.0%) | 12.0%-44.9% |
+
+The stronger warning is the one the headline metrics hide: eight of the nine
+majority-`high` prompts were routed to `standard`. The sample and its intervals
+are too small to be an accuracy estimate, and a separate pre-registered study
+found no benefit from routing up on the work it measured. See
+[the fresh blind check](docs/policy4-fresh-blind-evaluation.md) and
+[the paired token study](docs/paired-token-study.md).
+
+## Advisory companion
 
 `wclass-advisory` is installed with weightclass but is never selected by
 `wclass run`. The default path is one stateless, read-only answer using the
@@ -319,8 +360,10 @@ Native schema 3 adds observation-bound native review and an additive
 one foreground child. It is direct native execution, not an orchestration
 runtime. See [Native schema 3](docs/native-schema-3.md).
 
-That is now a measured statement, not only a cautious one. A pre-registered
-study ([`docs/paired-token-study.md`](docs/paired-token-study.md)) built a
+## Measured results for tier routing
+
+The absence of a saving is now a measured statement, not only a cautious one. A
+pre-registered study ([`docs/paired-token-study.md`](docs/paired-token-study.md)) built a
 synthetic fixture, 36 blind-rated tasks, and a paired harness, then ran a pilot
 and a difficulty calibration against real vendors. **Wherever it observed the
 same task at two tiers, the tier never changed whether the task got done.** In
