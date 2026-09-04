@@ -5,10 +5,10 @@ from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 from weightclass import process_context
-from weightclass.delegation_runtime import DelegationRuntimeUnavailableError
 from weightclass.executable_observation import ExecutableObservation, observe_executable
 from weightclass.native_v2_runtime import run_native_v2
 from weightclass.native_v2_types import CompiledExecutionV2, FrozenCleanupV2
+from weightclass.process_context import DelegationRuntimeUnavailableError
 from weightclass.v2_validation import V2ValidationError
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_native_runtime.py"

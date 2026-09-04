@@ -9,13 +9,13 @@ from unittest.mock import patch
 from tests.test_native_v2_cli import policy as valid_v2_policy
 from tests.test_native_v3_schema import valid_policy
 from weightclass import cli
-from weightclass.delegation_runtime import DelegationRuntimeUnavailableError
 from weightclass.executable_observation import ExecutableObservation
 from weightclass.native_v3_compile import (
     bind_native_observation_v3,
     compile_static_native_policy_v3,
 )
 from weightclass.native_v3_schema import parse_native_policy_v3
+from weightclass.process_context import DelegationRuntimeUnavailableError
 from weightclass.v2_validation import V2ValidationError
 
 
