@@ -1,13 +1,36 @@
 # Handoff
 
-_Last updated: 2026-09-04 KST by Claude (usability batch from the three-vendor review)_
+_Last updated: 2026-09-04 KST by Claude (0.31.1 released)_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
-Current release: **0.30.0** on PyPI and the Homebrew tap. Unreleased on `main`: the scoped
-agent-guidance split, the direction-research record, and explicit tier selection on `run` and
-`route` — the last is a breaking CLI change and needs a minor version before it ships. Open as a
-The usability batch below merged on 2026-09-04 as #186 → #191 → #188 → #189 → #190.
+Current release: **0.31.1** on PyPI and the Homebrew tap (release run `33861118565`, GitHub
+Release `v0.31.1` marked latest, tap commit `1a24a54`). The usability batch below merged on
+2026-09-04 as #186 → #191 → #188 → #189 → #190 and shipped in that release. Nothing is
+unreleased on `main` except the formula-source PR and this handoff note.
+
+## 0.31.1 release record
+
+- **`v0.31.0` is a retained failed candidate.** Its tag exists on `main` but nothing was
+  published under it. The release workflow's "Verify previous advisory Skill upgrade ledger"
+  step failed before build because the 0.30.0 Skill bundle was not in the ledger in
+  `install_advisory_skill.py`. The bundle had not changed since 0.30.0, and `RELEASING.md` said
+  the ledger only needed an entry when it changed; the workflow requires the previous tag's
+  bundle **every release**. `RELEASING.md` now says so, the 0.30.0 hashes are registered, and
+  `v0.31.1` was cut from the next commit.
+- Three breaking changes shipped, all in `.github/release-notes/v0.31.1.md`: `run`/`route`
+  require a tier source; terminal runs review by default; the `preset` receipt field carries the
+  canonical `<vendor>-model-override` name.
+- Local gate note for this machine: `RELEASING.md` step 2 invokes `python3.13` directly, but the
+  Homebrew `python@3.13` framework `bin/` has no `python3`, so the extracted-sdist sentinel test
+  (`test_parent_sentinel_is_absent`) fails under it. The same verifier passes under the default
+  `python3` (3.14), and the release workflow re-runs it on Linux. Use `python3` here, or a
+  Python whose real `bin/` contains `python3`.
+- The Homebrew formula test now calls `example-policy claude-model-override`; the alias for the
+  old name still works but the packaged test uses the canonical name.
+- Deployment approval for the `pypi` environment was given through the GitHub API at the
+  maintainer's explicit instruction, with an approval comment naming the session.
+
 
 Per-release evidence, superseded working notes, and the abandoned approaches behind them live
 in [`docs/handoff-archive.md`](docs/handoff-archive.md). This file carries only what a fresh
