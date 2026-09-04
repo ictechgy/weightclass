@@ -14,10 +14,7 @@ MACOS_BOUNDARY_MODULES = (
     "tests.test_triage",
     "tests.test_json_input",
     "tests.test_cost_recommendation",
-    "tests.test_delegation_runtime",
-    "tests.test_delegation_v2_runtime",
     "tests.test_guarded_runtime_suite",
-    "tests.test_delegation_conformance",
 )
 
 
@@ -69,10 +66,8 @@ class CIWorkflowStructureTests(unittest.TestCase):
             "python -m compileall -q src tests",
             "git diff --check",
             "tests/test_guarded_runtime_suite.py",
-            "tests/test_orchestration_traceability.py",
             "tests/test_ci_workflow_structure.py",
             "tests/test_release_workflow_structure.py",
-            "tests/test_completion_audit_v2.py",
         ):
             with self.subTest(command=command):
                 self.assertIn(command, quality)

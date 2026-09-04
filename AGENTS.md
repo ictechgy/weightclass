@@ -14,7 +14,7 @@ directory scope when you work under that path, and a deeper file overrides this
 one only inside its own subtree. A deeper file never relaxes a rule stated here.
 
 - [`src/weightclass/AGENTS.md`](src/weightclass/AGENTS.md) — core router: the
-  one-foreground-child contract, V2 boundary, task delivery, and the aggregate
+  one-foreground-child contract, the schema-2/3 boundary, task delivery, and the aggregate
   usage store.
 - [`tests/AGENTS.md`](tests/AGENTS.md) — which runner is the gate and what a new
   test has to prove.

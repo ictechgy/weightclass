@@ -1,12 +1,10 @@
 import json
-import struct
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from weightclass.delegation_protocol import encode_delegation_frame
 from weightclass.router import DEFAULT_ROUTES, native_route_fingerprint
 
 
@@ -28,18 +26,6 @@ class LegacyContractTests(unittest.TestCase):
         self.assertEqual(
             json.dumps(rows, ensure_ascii=True, separators=(",", ":")).encode(), EXPECTED_BUILTINS
         )
-
-    def test_wcd1_bytes_remain_unchanged(self) -> None:
-        descriptor = b'{"descriptor_schema_version":1}'
-        task = "Fix caf\u00e9"
-        expected = (
-            b"WCD1"
-            + struct.pack(">I", len(descriptor))
-            + descriptor
-            + struct.pack(">I", len(task.encode()))
-            + task.encode()
-        )
-        self.assertEqual(encode_delegation_frame(descriptor, task), expected)
 
     def test_cli_invalid_input_is_value_free_and_task_private(self) -> None:
         secret = "PRIVATE-TASK-CONTENT"

@@ -21,7 +21,7 @@ descriptors, acknowledgement-bound run, two executable observations, and one
 exact foreground spawn. Model, effort, profile/account, subscription, and
 entitlement labels remain opaque declarations; vendor and builder values are
 closed structural vocabularies. Cross-vendor routing remains policy-authorized
-only. See `protocol-v2-security.md` and `protocol-v2-migration.md`.
+only. See `archive/protocol-v2-security.md` and `archive/protocol-v2-migration.md`.
 
 The earlier five-round RALPLAN ended `max_rounds/ITERATE`; mandatory Critic
 findings informed this implementation, but there was no consensus approval.

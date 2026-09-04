@@ -16,13 +16,13 @@ deliberately not directional.
 
 ## The V2 boundary
 
-V2 API routing is intentionally narrower than an API proxy. weightclass selects
-a declarative policy and starts at most one reviewed, user-supplied external
-runtime. It does not make the request itself, does not resolve authentication,
-and does not verify the recipient or billing account.
-
-V2 execution additionally requires `--confirm-api-egress` and an exact reviewed
-route fingerprint.
+Schema-2 and schema-3 native policies stay: they select one installed vendor CLI
+and start it in the foreground, and their shared parsing, validation, and
+canonical-encoding modules (`native_v2_*`, `native_v3_*`, `canonical_v2.py`,
+`v2_validation.py`, `task_v2.py`) are load-bearing for every policy this tool
+accepts. The external API runtime that once sat behind `wclass v2` was removed
+in 0.32.0 along with the `delegate` family; weightclass starts no user-supplied
+orchestration or API runtime, and there is no egress confirmation left to give.
 
 ## Review before execution
 

@@ -67,10 +67,8 @@ jobs:
         run: |
           PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q \
             tests/test_guarded_runtime_suite.py \
-            tests/test_orchestration_traceability.py \
             tests/test_ci_workflow_structure.py \
-            tests/test_release_workflow_structure.py \
-            tests/test_completion_audit_v2.py
+            tests/test_release_workflow_structure.py
       - name: Reject whitespace errors
         run: git diff --check HEAD^1 HEAD
       - name: Build distributions
@@ -97,12 +95,11 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Verify routing, observation, process, guarded, and conformance boundaries
+      - name: Verify routing, observation, process, and guarded boundaries
         run: |
           PYTHONPATH=src python -W error::ResourceWarning -m unittest \
             tests.test_router tests.test_agent_discovery tests.test_native_v2_runtime \
             tests.test_executable_observation tests.test_foreground_process \
             tests.test_process_context tests.test_triage tests.test_json_input \
             tests.test_cost_recommendation \
-            tests.test_delegation_runtime tests.test_delegation_v2_runtime \
-            tests.test_guarded_runtime_suite tests.test_delegation_conformance
+            tests.test_guarded_runtime_suite

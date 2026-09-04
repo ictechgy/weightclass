@@ -17,13 +17,6 @@ class LegacyDistributionContractTests(unittest.TestCase):
         )
         self.assertIn("exactly one wheel and one sdist", source)
 
-    def test_production_qualification_registry_remains_canonical_and_empty(self) -> None:
-        raw = (ROOT / "src/weightclass/delegation_qualifications.json").read_bytes()
-        self.assertEqual(
-            raw,
-            b'{"records":[],"registry_schema_version":1,"suite_revision":"delegation-conformance-v2"}\n',
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

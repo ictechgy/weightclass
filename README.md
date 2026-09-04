@@ -125,18 +125,16 @@ found no benefit from routing up on the work it measured. See
 
 ## Native schema and protocol boundaries
 
-Native schema 2 and delegation protocol 2 add explicit source/account profiles,
-closed model-and-effort builders, directional profile/vendor authorization, and
+Native schema 2 adds explicit source/account profiles, closed
+model-and-effort builders, directional profile/vendor authorization, and
 fingerprint-bound review before one foreground execution. All profile, account,
 recipient, billing, subscription, entitlement, model, effort, permission, and
-ownership labels remain opaque caller declarations. See the
-[protocol 2 security boundary](docs/protocol-v2-security.md) and
-[migration guide](docs/protocol-v2-migration.md).
+ownership labels remain opaque caller declarations.
 
-Native schema 3 adds observation-bound native review and an additive
-`wclass delegate native route|run` surface for exactly one bounded subtask and
-one foreground child. It is direct native execution, not an orchestration
-runtime. See [Native schema 3](docs/native-schema-3.md).
+Native schema 3 adds observation-bound review and the opt-in aggregate usage
+store on top of that, still for exactly one bounded subtask and one foreground
+child. It is direct native execution, not an orchestration runtime. See
+[Native schema 3](docs/native-schema-3.md).
 
 ## Measured results for tier routing
 
@@ -219,22 +217,15 @@ An optional local usage store can count completed schema-3 runs and compare
 user-supplied relative cost weights without reading provider usage or prices.
 
 By default, a request stays with its explicit source vendor. Cross-vendor
-routing is available only through a reviewed policy opt-in. An optional V2
-route can start a separately installed API runtime after explicit review and
-egress acknowledgement; weightclass never reads API credentials or makes
-provider network requests itself.
-
-The `delegate` surface can also compile a Claude- or Codex-native
-planner/worker/reviewer policy into one offline review descriptor. P0.5 may
-start one explicitly trusted user-supplied orchestration runtime after review;
-its manifest remains a declaration, not proof that it enforces delegation.
+routing is available only through a reviewed policy opt-in. weightclass never
+reads credentials and never makes a provider network request itself.
 
 ## Run locally
 
 `wclass --help` lists the daily commands, in this order: `discover`, `usage`,
 `classify`, `example-policy`, `review-preset`, `route`, and `run`. It names the
 advanced ones in one line: `profile`, `select`, `review-cost-profile`,
-`recommend`, `render`, `delegate`, and `v2`. The split is about daily use,
+`recommend`, and `render`. The split is about daily use,
 not about which commands read a task or invoke a vendor; the paragraph below
 groups them by that instead. Every advanced command still parses, runs, and
 answers its own `--help`; it is only absent from the listing, and an unknown
@@ -250,28 +241,25 @@ prints every command and fingerprint in one packaged policy.
 `review-cost-profile` validates and fingerprints task-free cost input. None of
 those three review commands reads a task or invokes a vendor. `recommend`
 emits evidence-bound advice or an explicit abstention and never invokes a
-vendor. `v2` selects a declarative API route; see
-[V2 API routing](#v2-api-routing-through-an-external-runtime).
-`delegate route` reads only its policy and manifest and does not consume task
-standard input or inspect the supplied runtime path. `delegate run` reads the
-task only after confirmation, fingerprint, and runtime-availability gates.
+vendor.
 
 Every malformed invocation — an unknown subcommand, a missing argument, a bad
 policy — exits `2` with `{"error": "invalid_input"}` on standard error and
 nothing else, so a caller can parse the failure without scraping usage text.
-Flag names are never abbreviated: `--confirm-api-egress` cannot be shortened.
+Flag names are never abbreviated: `--confirm-endpoint-transition` cannot be
+shortened.
 
 Exit codes are weightclass's own; a selected command's status never overwrites
 them:
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success. For `run` and `v2 run`, the selected command exited `0`. |
+| `0` | Success. For `run`, the selected command exited `0`. |
 | `1` | `select` was cancelled or reached terminal EOF before policy emission. |
 | `2` | `invalid_task` or `invalid_input`. |
 | `3` | `unsupported_route` — no policy route matched, or a built-in/bound custom route's executable is missing or rejected during review. |
 | `4` | `executor_unavailable` — the command could not be started or a bound custom executable could not be admitted for a run. |
-| `5` | A required API, runtime, endpoint-transition, or native-delegation confirmation is absent. |
+| `5` | A required endpoint-transition confirmation is absent. |
 | `6` | `route_fingerprint_mismatch` — the reviewed route changed. |
 | `7` | `executor_failed` — the command started and exited non-zero. |
 | `8` | `triage_unavailable` — `--ask-vendor` could not obtain a tier. |
@@ -359,8 +347,8 @@ On macOS the default store is
 `~/Library/Application Support/weightclass/usage-v1.json`. On other supported
 systems it is under `$XDG_STATE_HOME/weightclass`, or `~/.local/state` when
 `XDG_STATE_HOME` is absent or relative. `--store /absolute/path` selects a
-different private store for any `usage` command; schema-3 `run` and
-`delegate native run` accept the same path as `--usage-store`.
+different private store for any `usage` command; schema-3 `run` accepts the
+same path as `--usage-store`.
 
 Once the default store exists, normal installed `wclass` schema-3 executions
 record automatically after the selected direct child has completed. Attempts
@@ -551,8 +539,7 @@ one direct child's exit, never task or orchestration success.
 <!-- kiro-custom-policy -->
 ### Hardened Kiro custom policy
 
-Kiro is not a built-in and has no Kiro V2/source family or Kiro source family.
-To use it, write an
+Kiro is not a built-in and has no Kiro source family. To use it, write an
 exact reviewed schema-1 custom policy whose `command` begins with an absolute
 resolved executable placeholder such as `/path/to/kiro/bin/kiro-cli`, followed
 by the exact argv approved for that installation. Add
@@ -863,8 +850,8 @@ posture value or shape fails closed with the redacted `invalid_input`
 diagnostic. Because `cautious` can select a higher effort route, it can increase
 token use; it is a safety preference, not an efficiency setting.
 
-Native policies, workflow descriptors, and V2 policies must each be a regular
-file no larger than 262,144 raw bytes. Parsing is strict UTF-8, duplicate object
+Native policies and workflow descriptors must each be a regular file no larger
+than 262,144 raw bytes. Parsing is strict UTF-8, duplicate object
 keys are rejected at every nesting depth, and special files such as FIFOs fail
 promptly. Argument-addressed policy and descriptor files are validated before
 weightclass reads transient task input. Symlinks remain accepted only when the
@@ -1155,9 +1142,9 @@ is the whole point of rendering the command. Rejected are every Unicode `C`
 category — control characters, format characters such as zero-width space and
 the bidirectional overrides, surrogates, private-use and unassigned code points
 — along with any whitespace other than the ASCII space, and leading or trailing
-whitespace. The same visibility rule applies to V2's `model` and `effort`
-labels; because those values occupy reviewed option-value positions, they also
-cannot begin with `-`. Internal ASCII spaces remain one argv token and are
+whitespace. The same visibility rule applies to a schema-2 or schema-3
+policy's `model` and `effort` labels; because those values occupy reviewed
+option-value positions, they also cannot begin with `-`. Internal ASCII spaces remain one argv token and are
 accepted for schema-2 compatibility.
 
 ## Bind a run to the selection you reviewed
@@ -1190,8 +1177,9 @@ Two limits are worth stating plainly:
   content.
 - **The argv is bound, not the program.** If the command names a path whose
   contents are replaced between review and run, the fingerprint still matches.
-  It binds the policy's selection, not the identity of the executable — the same
-  limit V2 has for `--api-runtime`.
+  It binds the policy's selection, not the identity of the executable. Use
+  `--bind-executable-identity` when you want the reviewed executable's `lstat`
+  identity bound too.
 
 A route has no separate `model` field, and a policy that declares one is
 rejected. Only `command` is ever executed, and weightclass cannot verify that a
@@ -1206,311 +1194,22 @@ the vendor filter is applied before tier selection — including when
 `--source-vendor` is omitted, in which case the vendor of the first declared
 tier route is used.
 
-## One-child native delegation (schema 3)
-
-Schema 3 can review and run exactly one bounded subtask through one of the four
-closed native builders. First produce a task-free review descriptor:
-
-```sh
-wclass delegate native route \
-  --policy native-policy-v3.json \
-  --source-vendor codex \
-  --source-profile work \
-  --tier low
-```
-
-The canonical descriptor has `purpose: "native_delegation"`, includes the
-selected executable's `lstat` identity, lists its required confirmations, and
-binds all of that into `route_fingerprint`. It reads no subtask. An ordinary
-schema-3 `wclass route` descriptor has `purpose: "native_route"`; its
-fingerprint cannot authorize this delegation command.
-
-Run only after reviewing that exact output:
-
-```sh
-printf '%s' 'Implement the one reviewed subtask.' | \
-  wclass delegate native run \
-  --policy native-policy-v3.json \
-  --source-vendor codex \
-  --source-profile work \
-  --tier low \
-  --confirm-native-delegation \
-  --confirm-endpoint-transition \
-  --ack-route-fingerprint 'sha256:copied-from-delegate-native-route'
-```
-
-`--confirm-native-delegation` is always required. Add
-`--confirm-endpoint-transition` only when the reviewed artifact lists
-`endpoint_transition`; a route whose source and destination are the same
-profile/vendor does not require it. Review produces information, while these
-run flags provide execution consent; neither one substitutes for the other.
-
-After confirmations and an exact acknowledgement, run checks safe direct-child
-status ownership, observes and binds the executable, compares the fingerprint,
-reads stdin exactly once, observes the executable again, and starts one
-foreground child with inherited output. Codex and Claude receive the exact
-validated UTF-8 task bytes on stdin. The built-in `agy` and Grok command shapes
-replace one reviewed `{{task}}` argv slot and use empty child stdin, so the task
-is visible to local process inspection while the child runs. Argv delivery
-rejects NUL, more than 32,768 UTF-8 bytes, and a Grok task beginning with `-`.
-
-This command does not decompose the subtask, start a planner or reviewer,
-capture or interpret child output, persist task artifacts, synthesize results,
-retry, fall back, supervise descendants, or read provider usage. When the
-optional local aggregate store is enabled, it records only the selected
-schema-3 dimensions and direct-child status described above. Profile, account,
-model, entitlement, pricing, subscription, and quota labels are opaque caller
-assertions. The executable observations detect ordinary replacement
-between review and run and immediately before spawn, but path-based execution
-still has a residual replacement race after the final observation. See
-[Native schema 3](docs/native-schema-3.md) for the exact boundary and exit
-mapping.
-
-## Reviewed role delegation
-
-P0 adds a compatibility-isolated review command:
-
-```sh
-wclass delegate route \
-  --policy delegation-policy.json \
-  --runtime-manifest runtime-manifest.json \
-  --delegation-runtime /absolute/reviewed/runtime \
-  --source-vendor codex \
-  --tier standard
-```
-
-It selects exactly one workflow, fully inlines its orchestrator, worker, and
-reviewer profiles plus the matching adapter, and emits a canonical descriptor
-whose fingerprint can be reproduced from the output alone. Claude and Codex
-use the same role/action/stage contract, while protocol 1 requires every role
-to match `--source-vendor` and use the native transport. Model and effort
-labels remain opaque policy values.
-
-The runtime path may be nonexistent during review: route compilation validates it
-lexically but never resolves, stats, opens, hashes, or executes it. The output
-therefore says `declared_enforcement`; it does not say the runtime exists, that
-it delegated work, or that any named model authored an artifact.
-
-To run, copy the exact fingerprint and provide both execution gates:
-
-```sh
-printf '%s' 'Apply the reviewed change.' | \
-  wclass delegate run \
-  --policy delegation-policy.json \
-  --runtime-manifest runtime-manifest.json \
-  --delegation-runtime /absolute/reviewed/runtime \
-  --source-vendor codex \
-  --tier standard \
-  --confirm-trusted-delegation-runtime \
-  --ack-route-fingerprint 'sha256:copied-from-route'
-```
-
-`delegate run` recompiles without printing, checks confirmation and the exact
-fingerprint, verifies that the reviewed path is currently a regular executable,
-then reads and validates task stdin. It constructs the complete bounded WCD1
-frame before spawning exactly one foreground process:
-
-```text
-/absolute/reviewed/runtime --weightclass-delegation-protocol 1
-```
-
-The canonical review descriptor and UTF-8 task are sent on the child's standard
-input within the fingerprinted `direct_child_cleanup.grace_seconds` deadline.
-Its stdout/stderr and environment are inherited. weightclass does not capture,
-parse, redact, limit, or retain runtime output. Runtime nonzero and post-spawn
-framing failure map to exit `7`; framing failure triggers the fingerprinted
-direct-child `close -> wait -> terminate -> wait -> kill -> reap` sequence.
-weightclass does not enumerate descendants.
-
-Before task input is read, run rejects a non-main-thread launch or a
-Python-visible non-default `SIGCHLD` disposition. Platform flags hidden from
-Python can only be detected after spawn; weightclass owns the direct
-`waitpid`, never converts unavailable child status to exit zero, and maps that
-condition to the same redacted exit `7` failure.
-
-P0.5 includes no bundled Claude/Codex orchestrator. The user-supplied runtime
-owns vendor authentication, network and billing behavior, role processes,
-permission enforcement, review, integration, its deadline, descendants, and
-output. A dishonest runtime can exit zero without doing those things, so the
-descriptor remains `declared_enforcement`.
-
-P1's local qualification foundation is opt-in. Add
-`--require-qualified-runtime` to both `delegate route` and `delegate run` to
-require a package-owned record matching the manifest build ID, host platform,
-protocol, adapter, and source vendor. The qualified route fingerprint also
-binds the recorded executable SHA-256 and size, conformance-suite revision,
-and evidence digest. Run reopens the absolute path and checks the exact bytes
-before reading task stdin. Qualified mode rejects a final symlink and retains a
-documented hash-to-spawn path-replacement race because the child is still
-started by path.
-
-The shipped registry is intentionally empty, so qualified route/run currently
-fail closed with `unsupported_route`: no real Claude or Codex adapter has been
-independently qualified. There is no CLI, environment variable, or user path
-that overrides the production registry.
-
-Package maintainers can normalize a task-free conformance report into an
-untrusted review candidate without changing that registry:
-
-```sh
-wclass delegate qualification-candidate \
-  --evidence /absolute/conformance-evidence.json \
-  --delegation-runtime /absolute/runtime
-```
-
-Candidate input must contain all 54 role/category/action/mode observations and
-all required lifecycle, attribution, review, integrity, integration, deadline,
-cleanup, leakage, and output-channel scenarios, with every result passing.
-This command validates shape and hashes the local executable; it does not prove
-that the evidence is independent and does not qualify the runtime. Review and a
-source change to the package registry are still required.
-
-Repository maintainers can produce that evidence through the bounded external
-driver contract:
-
-```sh
-PYTHONPATH=src python3 -m weightclass.delegation_conformance \
-  --driver /absolute/reviewed/adapter-conformance-driver \
-  --runtime /absolute/runtime \
-  --runtime-build-id 'opaque runtime build' \
-  --adapter-id claude-native-v1 \
-  --vendor-family claude
-```
-
-The runner creates a new private workspace for each of the 67 predeclared
-cases, never reads task stdin, and starts the driver with exactly:
-
-```text
-/absolute/reviewed/adapter-conformance-driver \
-  --weightclass-conformance-driver 1
-```
-
-Each case has a fixed 60-second deadline and a 4,096-byte stdout limit; driver
-stderr is discarded. The driver process starts in a new session. A nonzero
-exit, malformed or mismatched response, timeout, oversized output, or a live
-same-process-group descendant records that case as failed, then the runner
-cleans the group. An interrupt also cleans the active group and returns exit
-`130` with a redacted diagnostic. Driver and runtime environment variables are
-inherited, so a real driver may still cause vendor authentication, network,
-quota, and billing effects; invoke it only after reviewing both artifacts and
-the exact command.
-
-The runner hashes the executable before and after all cases and evidence schema
-2 carries that exact size and SHA-256. Candidate construction rechecks the
-current executable against those observed bytes, so a post-suite replacement
-cannot inherit the earlier passing matrix.
-
-No real Claude-family or Codex-family conformance driver is shipped. The test
-fixture merely pressure-tests the runner and can trivially claim success
-without using the runtime. Evidence from an arbitrary `--driver` is therefore
-untrusted, and escaped sessions or process groups remain a driver-side
-conformance concern. The package registry stays empty until source-reviewed,
-adapter-specific drivers independently establish every required observation.
-
-The exact schema, permission modes, retention rules, byte representations,
-process-lifecycle boundary, and P0.5/P1/P2 gates are documented in the
-[Claude and Codex delegation roadmap](docs/delegation-roadmap.md).
-
-## V2 API routing through an external runtime
-
-V2 adds declarative API-route selection without turning weightclass into an API
-client. weightclass does not read API keys, inspect authentication, or make
-network requests. Instead, you provide an already-installed, trusted runtime
-at an absolute, executable path. That runtime is responsible for provider
-credentials, HTTP, billing, and any provider output.
-
-Use a V2 policy only for API routes; unlike the V1 legacy policy, it cannot
-contain arbitrary command arrays. A route is eligible only for its declared
-source vendors. `codex` maps to the OpenAI provider family and `claude` maps to
-the Anthropic provider family. OpenAI, Anthropic, and Bedrock are supported
-destination providers, but Bedrock adds no source-vendor family; a Bedrock
-route therefore requires `allow_cross_provider: true`. Kiro likewise has no V2
-source family. The same opt-in must be `true` before any route can cross the two
-existing source-provider mappings.
-
-```json
-{
-  "schema_version": 2,
-  "allow_cross_provider": false,
-  "allow_api": true,
-  "routes": [
-    {
-      "id": "openai-high-api",
-      "tier": "high",
-      "eligible_source_vendors": ["codex"],
-      "provider": "openai",
-      "transport": "api",
-      "model": "your-openai-model-label",
-      "effort": "high",
-      "intended_recipient": "OpenAI API",
-      "intended_billing_boundary": "your OpenAI API account"
-    }
-  ]
-}
-```
-
-First review the selected destination and copy the returned fingerprint.
-weightclass reports the intended recipient and billing boundary from the
-reviewed policy; it does not verify either claim.
-
-```sh
-printf '%s' 'Review this authorization change.' | \
-  wclass v2 route \
-  --policy api-policy.json --source-vendor codex \
-  --api-runtime /absolute/path/to/weightclass-runtime
-```
-
-Starting an API route requires both an explicit egress confirmation and the
-exact fingerprint from that review. weightclass recomputes the route before
-spawning the runtime, so a change to the selected model, effort, source,
-destination, resolved runtime path, runtime identity, or API/cross-provider
-permission invalidates the acknowledgement. API `run` rejects a missing egress
-confirmation or a missing route fingerprint before checking process context,
-inspecting the runtime, or consuming task standard input.
-
-```sh
-printf '%s' 'Review this authorization change.' | \
-  wclass v2 run \
-  --policy api-policy.json --source-vendor codex \
-  --api-runtime /absolute/path/to/weightclass-runtime \
-  --confirm-api-egress --ack-route-fingerprint 'sha256:copied-from-route'
-```
-
-For a selected V2 route, weightclass invokes exactly this fixed protocol,
-without a shell, and passes the task only on standard input:
-
-```text
-/absolute/path/to/weightclass-runtime --provider PROVIDER --model MODEL --effort EFFORT
-```
-
-Do not put API keys, tokens, task text, or personal information in the policy,
-route metadata, or command line. V2 does not provide retries, failover,
-credential management, background execution, or a bundled provider runtime.
-
 ## Security boundary and non-goals
 
 - Core `wclass` has no persistence: it writes no router artifacts or vendor
   configuration.
 - Task text is read only from standard input, held in memory to classify and
-  pass to the selected child process, then discarded. `delegate route` does not
-  read it; `delegate run` and `delegate native run` read it only after their
-  static execution gates.
+  pass to the selected child process, then discarded. `route` never reads it;
+  `run` reads it only after its static execution gates.
   weightclass never logs, stores, echoes, hashes, or places it in diagnostics.
 - Core `wclass` never reads credentials, subscription balances, pricing, cookies,
-  or vendor configuration. It does not capture or process vendor output. V2
-  does not issue provider HTTP requests; a separately installed runtime may do
-  so only after the explicit acknowledgement described above.
+  or vendor configuration. It does not capture or process vendor output, and it
+  issues no provider HTTP request of its own.
 - Every execution path requires the main thread and a native `SIGCHLD`
   disposition that preserves its direct child's exit status before consuming
   task input. An unsafe context fails closed as `executor_unavailable`; a
   concurrent native change after the check remains a documented residual.
-- For V2 API routes, weightclass resolves the supplied runtime path before
-  review and executes that resolved regular executable path. Its device, inode,
-  mode, size, and timestamps are bound into the review fingerprint and checked
-  again immediately before spawn. This detects ordinary replacement between
-  review and run, but cannot eliminate a replacement after the final check;
-  execution remains path-based rather than inode-bound.
-- Schema-3 native route and delegation descriptors bind an `lstat` observation
+- Schema-3 native route descriptors bind an `lstat` observation
   and recheck it immediately before spawn. That narrows but cannot eliminate
   executable replacement after the final check because execution is still by
   path. Admission rejects other-writable executable files, group-writable

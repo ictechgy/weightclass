@@ -56,6 +56,7 @@ if TYPE_CHECKING:
         render_agent_discovery,
         resolve_builtin_executable,
     )
+    from .canonical_v2 import canonical_json_bytes_v2
     from .cost_recommendation import (
         CostRecommendationError,
         build_cost_profile_review,
@@ -63,36 +64,6 @@ if TYPE_CHECKING:
         load_cost_profile,
         load_qualification_card,
     )
-    from .delegation_compile import (
-        canonical_json_bytes,
-        compile_delegation_descriptor,
-        render_review_descriptor,
-    )
-    from .delegation_protocol import DelegationFrameError, encode_delegation_frame
-    from .delegation_qualification import (
-        QualificationRecord,
-        QualifiedRuntimeUnavailableError,
-        attach_qualification_requirement,
-        build_qualification_candidate,
-        load_conformance_evidence,
-        load_packaged_qualification_registry,
-        select_qualification_for_descriptor,
-        verify_qualified_runtime,
-    )
-    from .delegation_runtime import (
-        DelegationRuntimeFailedError,
-        run_delegation_runtime,
-        validate_delegation_runtime,
-    )
-    from .delegation_schema import (
-        DelegationInvalidInputError,
-        DelegationUnsupportedError,
-        current_platform_contract,
-        load_delegation_manifest,
-        load_delegation_policy,
-        validate_runtime_path_lexically,
-    )
-    from .delegation_types import DelegationTier, DirectChildCleanup, VendorFamily
     from .executable_observation import ExecutableObservation, observe_executable
     from .foreground_process import run_owned_foreground
     from .native_v2_compile import compile_native_v2
@@ -104,7 +75,6 @@ if TYPE_CHECKING:
     )
     from .native_v2_types import CompiledExecutionV2
     from .native_v3_compile import (
-        PurposeV3,
         bind_native_observation_v3,
         compile_static_native_policy_v3,
     )
@@ -132,24 +102,12 @@ if TYPE_CHECKING:
         resolve_usage_store,
         set_relative_cost_weight,
     )
-    from .v2 import (
-        V2InvalidInputError,
-        load_api_policy,
-        observe_api_runtime,
-        render_api_route,
-        route_fingerprint,
-        select_api_route,
-    )
     from .v2_validation import V2ValidationError
 
 
 # These values are parser metadata. Importing discovery merely to construct help would
 # otherwise pull in executable observation and API validation modules.
 AGENT_IDS: Final = ("agy", "claude", "codex", "grok")
-
-# This is intentionally duplicated as parser metadata. Importing the API family merely to
-# construct help would defeat the command-family startup boundary.
-API_SOURCE_VENDORS: Final = ("claude", "codex")
 
 _LAZY_SYMBOL_MODULES: Final = {
     "CostRecommendationError": "cost_recommendation",
@@ -163,33 +121,8 @@ _LAZY_SYMBOL_MODULES: Final = {
     "generate_selected_policy": "agent_discovery",
     "render_agent_discovery": "agent_discovery",
     "resolve_builtin_executable": "agent_discovery",
-    "canonical_json_bytes": "delegation_compile",
-    "compile_delegation_descriptor": "delegation_compile",
-    "render_review_descriptor": "delegation_compile",
-    "DelegationFrameError": "delegation_protocol",
-    "encode_delegation_frame": "delegation_protocol",
-    "QualificationRecord": "delegation_qualification",
-    "QualifiedRuntimeUnavailableError": "delegation_qualification",
-    "attach_qualification_requirement": "delegation_qualification",
-    "build_qualification_candidate": "delegation_qualification",
-    "load_conformance_evidence": "delegation_qualification",
-    "load_packaged_qualification_registry": "delegation_qualification",
-    "select_qualification_for_descriptor": "delegation_qualification",
-    "verify_qualified_runtime": "delegation_qualification",
-    "DelegationRuntimeFailedError": "delegation_runtime",
     "DelegationRuntimeUnavailableError": "process_context",
-    "run_delegation_runtime": "delegation_runtime",
-    "validate_delegation_runtime": "delegation_runtime",
     "validate_runtime_process_context": "process_context",
-    "DelegationInvalidInputError": "delegation_schema",
-    "DelegationUnsupportedError": "delegation_schema",
-    "current_platform_contract": "delegation_schema",
-    "load_delegation_manifest": "delegation_schema",
-    "load_delegation_policy": "delegation_schema",
-    "validate_runtime_path_lexically": "delegation_schema",
-    "DelegationTier": "delegation_types",
-    "DirectChildCleanup": "delegation_types",
-    "VendorFamily": "delegation_types",
     "ExecutableObservation": "executable_observation",
     "observe_executable": "executable_observation",
     "compile_native_v2": "native_v2_compile",
@@ -198,7 +131,7 @@ _LAZY_SYMBOL_MODULES: Final = {
     "dispatch_native_policy_schema": "native_v2_schema",
     "validate_native_selector": "native_v2_schema",
     "CompiledExecutionV2": "native_v2_types",
-    "PurposeV3": "native_v3_compile",
+    "canonical_json_bytes_v2": "canonical_v2",
     "bind_native_observation_v3": "native_v3_compile",
     "compile_static_native_policy_v3": "native_v3_compile",
     "NativeV3ExecutorUnavailableError": "native_v3_runtime",
@@ -213,12 +146,6 @@ _LAZY_SYMBOL_MODULES: Final = {
     "TriageUnavailableError": "triage",
     "ask_vendor_for_tier": "triage",
     "triage_descriptor": "triage",
-    "V2InvalidInputError": "v2",
-    "load_api_policy": "v2",
-    "observe_api_runtime": "v2",
-    "render_api_route": "v2",
-    "route_fingerprint": "v2",
-    "select_api_route": "v2",
     "V2ValidationError": "v2_validation",
     "STORE_SCHEMA_VERSION": "usage_aggregation",
     "UsageAggregationError": "usage_aggregation",
@@ -265,8 +192,7 @@ def _load_native_schema_family() -> None:
 def _load_native_family() -> None:
     _load_symbols(
         (
-            "delegation_compile",
-            "delegation_runtime",
+            "canonical_v2",
             "executable_observation",
             "native_v2_compile",
             "native_v2_runtime",
@@ -281,28 +207,6 @@ def _load_native_family() -> None:
             "v2_validation",
         )
     )
-
-
-def _load_delegation_family() -> None:
-    _load_symbols(
-        (
-            "delegation_compile",
-            "delegation_protocol",
-            "delegation_qualification",
-            "delegation_runtime",
-            "delegation_schema",
-            "delegation_types",
-            "executable_observation",
-            "native_v2_types",
-            "process_context",
-            "task_v2",
-            "v2_validation",
-        )
-    )
-
-
-def _load_api_family() -> None:
-    _load_symbols(("process_context", "v2", "v2_validation"))
 
 
 def _load_agent_family() -> None:
@@ -357,24 +261,6 @@ def canonical_preset_name(name: str) -> str:
 def _preset_source_vendor(name: str) -> str:
     """Return the vendor a packaged preset belongs to, whichever name selected it."""
     return canonical_preset_name(name).removesuffix(PRESET_SUFFIX)
-
-
-def encode_delegation_frame_v2(descriptor: bytes, task: bytes) -> bytes:
-    """Compatibility seam that imports protocol 2 only when delegation uses it."""
-    from .delegation_v2_protocol import encode_delegation_frame_v2 as encode
-
-    return encode(descriptor, task)
-
-
-def run_delegation_v2_runtime(
-    compiled: CompiledExecutionV2,
-    frame: bytes,
-    first_observation: ExecutableObservation,
-) -> subprocess.CompletedProcess[bytes]:
-    """Compatibility seam that imports the protocol-2 runtime on demand."""
-    from .delegation_v2_runtime import run_delegation_v2_runtime as run
-
-    return run(compiled, frame, first_observation)
 
 
 class InvalidInputError(ValueError):
@@ -975,38 +861,6 @@ def load_request(descriptor_path: Path) -> RouteRequest:
     return RouteRequest(vendor=vendor, workflow=_require_nonempty_string(descriptor["workflow"]))
 
 
-def _add_api_route_arguments(parser: argparse.ArgumentParser) -> None:
-    """Declare the arguments shared by both V2 API subcommands."""
-    parser.add_argument("--policy", required=True, type=Path)
-    parser.add_argument("--source-vendor", required=True, choices=sorted(API_SOURCE_VENDORS))
-    parser.add_argument("--api-runtime", required=True, type=Path)
-
-
-def _add_delegation_route_arguments(parser: argparse.ArgumentParser) -> None:
-    """Declare offline inputs shared by future delegation commands."""
-    parser.add_argument("--policy", required=True, type=Path)
-    parser.add_argument("--runtime-manifest", required=True, type=Path)
-    parser.add_argument("--delegation-runtime", required=True)
-    parser.add_argument("--source-vendor", required=True, choices=("claude", "codex"))
-    parser.add_argument("--source-profile")
-    parser.add_argument("--tier", required=True, choices=("low", "standard", "high"))
-    parser.add_argument(
-        "--require-qualified-runtime",
-        action="store_true",
-        help="Require a matching package-owned exact-artifact record.",
-    )
-
-
-def _add_native_v3_delegation_arguments(parser: argparse.ArgumentParser) -> None:
-    """Declare the exact schema-3 selector shared by nested native delegation."""
-    parser.add_argument("--policy", required=True, type=Path)
-    parser.add_argument(
-        "--source-vendor", required=True, choices=("agy", "claude", "codex", "grok")
-    )
-    parser.add_argument("--source-profile", required=True)
-    parser.add_argument("--tier", required=True, choices=("low", "standard", "high"))
-
-
 def _add_usage_run_arguments(parser: argparse.ArgumentParser) -> None:
     """Declare aggregate-only accounting flags for schema-3 execution."""
     parser.add_argument(
@@ -1094,8 +948,6 @@ ADVANCED_COMMANDS: tuple[str, ...] = (
     "review-cost-profile",
     "recommend",
     "render",
-    "delegate",
-    "v2",
 )
 
 
@@ -1387,518 +1239,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     render.add_argument("--policy", required=True, type=Path)
     render.add_argument("--descriptor", required=True, type=Path)
-
-    delegate = subcommands.add_parser(
-        "delegate",
-        allow_abbrev=False,
-        description="Compile a reviewable role-delegation policy.",
-    )
-    delegate_subcommands = delegate.add_subparsers(dest="delegate_command", required=True)
-    _add_delegation_route_arguments(
-        delegate_subcommands.add_parser(
-            "route",
-            allow_abbrev=False,
-            description="Compile an offline delegation review descriptor.",
-        )
-    )
-    delegate_run = delegate_subcommands.add_parser(
-        "run",
-        allow_abbrev=False,
-        description="Run one reviewed trusted delegation runtime.",
-    )
-    _add_delegation_route_arguments(delegate_run)
-    delegate_run.add_argument("--confirm-trusted-delegation-runtime", action="store_true")
-    delegate_run.add_argument("--ack-route-fingerprint")
-    qualification_candidate = delegate_subcommands.add_parser(
-        "qualification-candidate",
-        allow_abbrev=False,
-        description="Build an untrusted qualification candidate from task-free evidence.",
-    )
-    qualification_candidate.add_argument("--evidence", required=True, type=Path)
-    qualification_candidate.add_argument("--delegation-runtime", required=True, type=Path)
-    native_delegation = delegate_subcommands.add_parser(
-        "native",
-        allow_abbrev=False,
-        description="Delegate one bounded subtask to one reviewed native child.",
-    )
-    native_delegation_subcommands = native_delegation.add_subparsers(
-        dest="native_delegation_command", required=True
-    )
-    _add_native_v3_delegation_arguments(
-        native_delegation_subcommands.add_parser(
-            "route",
-            allow_abbrev=False,
-            description="Review one observation-bound schema-3 native delegation.",
-        )
-    )
-    native_delegation_run = native_delegation_subcommands.add_parser(
-        "run",
-        allow_abbrev=False,
-        description="Run one reviewed schema-3 native delegation.",
-    )
-    _add_native_v3_delegation_arguments(native_delegation_run)
-    native_delegation_run.add_argument("--confirm-native-delegation", action="store_true")
-    native_delegation_run.add_argument("--confirm-endpoint-transition", action="store_true")
-    native_delegation_run.add_argument("--ack-route-fingerprint")
-    _add_usage_run_arguments(native_delegation_run)
-
-    api = subcommands.add_parser(
-        "v2",
-        allow_abbrev=False,
-        description="Select a declarative API route served by an external runtime.",
-    )
-    api_subcommands = api.add_subparsers(dest="api_command", required=True)
-    _add_api_route_arguments(
-        api_subcommands.add_parser(
-            "route",
-            allow_abbrev=False,
-            description="Review a declarative API route.",
-        )
-    )
-    api_run = api_subcommands.add_parser(
-        "run",
-        allow_abbrev=False,
-        description="Run a reviewed declarative API route.",
-    )
-    _add_api_route_arguments(api_run)
-    api_run.add_argument("--confirm-api-egress", action="store_true")
-    api_run.add_argument("--ack-route-fingerprint")
     return parser
-
-
-def _compile_delegation_inputs(
-    policy_path: Path,
-    manifest_path: Path,
-    runtime_path: str,
-    source_vendor: VendorFamily,
-    tier: DelegationTier,
-    require_qualified_runtime: bool = False,
-) -> tuple[dict[str, Any], str, QualificationRecord | None]:
-    policy = load_delegation_policy(policy_path)
-    manifest = load_delegation_manifest(manifest_path)
-    normalized_runtime_path = validate_runtime_path_lexically(runtime_path)
-    target_platform = current_platform_contract()
-    descriptor = compile_delegation_descriptor(
-        policy,
-        manifest,
-        runtime_path=normalized_runtime_path,
-        source_vendor=source_vendor,
-        tier=tier,
-        target_platform=target_platform,
-    )
-    qualification = None
-    if require_qualified_runtime:
-        registry = load_packaged_qualification_registry()
-        qualification = select_qualification_for_descriptor(descriptor, registry)
-        descriptor = attach_qualification_requirement(descriptor, qualification)
-    return descriptor, render_review_descriptor(descriptor), qualification
-
-
-def _dispatch_delegation_cli_version(
-    policy_path: Path,
-    manifest_path: Path,
-    runtime_path: str,
-    source_vendor: str,
-    source_profile: str | None,
-    tier: str,
-    require_qualified_runtime: bool,
-) -> int | CompiledExecutionV2 | None:
-    """Dispatch v2 parsing while leaving the protocol-1 compiler untouched."""
-    from .delegation_v2_compile import compile_delegation_v2
-    from .delegation_v2_schema import (
-        DelegationV2InvalidInputError,
-        parse_delegation_manifest_v2,
-        parse_delegation_policy_v2,
-    )
-    from .delegation_v2_versions import DelegationVersionError, dispatch_delegation_versions
-
-    try:
-        raw_policy = _read_json_object(policy_path, max_bytes=262_144)
-        raw_manifest = _read_json_object(manifest_path, max_bytes=262_144)
-        policy_version = raw_policy.get("schema_version")
-        if policy_version == 1 and raw_manifest.get("manifest_schema_version") == 1:
-            version = dispatch_delegation_versions((1, 1, 1, 1, "WCD1"))
-        else:
-            version = dispatch_delegation_versions(
-                (
-                    policy_version,
-                    raw_manifest.get("schema_version"),
-                    raw_policy.get("compiler_contract_version"),
-                    raw_policy.get("runtime_protocol_version"),
-                    raw_policy.get("frame_version"),
-                )
-            )
-        if version == 1:
-            if source_profile is not None:
-                raise DelegationV2InvalidInputError()
-            return None
-        if source_profile is None:
-            raise DelegationV2InvalidInputError()
-        # Protocol 2 has no qualification semantics. This precedence is before
-        # confirmation, acknowledgement, executable inspection, or task input.
-        if require_qualified_runtime:
-            print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
-            return 3
-        policy = parse_delegation_policy_v2(raw_policy)
-        manifest = parse_delegation_manifest_v2(raw_manifest)
-        return compile_delegation_v2(
-            policy,
-            manifest,
-            source_vendor_family=source_vendor,
-            source_profile_id=source_profile,
-            tier=tier,
-            runtime_path=runtime_path,
-        )
-    except (
-        InvalidInputError,
-        DelegationVersionError,
-        DelegationV2InvalidInputError,
-        RecursionError,
-    ):
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    raise AssertionError("unreachable")
-
-
-def delegation_route(
-    policy_path: Path,
-    manifest_path: Path,
-    runtime_path: str,
-    source_vendor: VendorFamily,
-    tier: DelegationTier,
-    require_qualified_runtime: bool = False,
-    source_profile: str | None = None,
-) -> int:
-    """Compile a descriptor without reading task stdin or inspecting a runtime."""
-    _load_delegation_family()
-    version_result = (
-        _dispatch_delegation_cli_version(
-            policy_path,
-            manifest_path,
-            runtime_path,
-            source_vendor,
-            source_profile,
-            tier,
-            require_qualified_runtime,
-        )
-        if source_profile is not None
-        else None
-    )
-    if version_result is not None:
-        if isinstance(version_result, CompiledExecutionV2):
-            print(version_result.canonical_descriptor_bytes.decode("ascii"))
-            return 0
-        return version_result
-    try:
-        _, rendered, _ = _compile_delegation_inputs(
-            policy_path,
-            manifest_path,
-            runtime_path,
-            source_vendor,
-            tier,
-            require_qualified_runtime,
-        )
-    except DelegationInvalidInputError:
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    except DelegationUnsupportedError:
-        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
-        return 3
-    print(rendered)
-    return 0
-
-
-def delegation_run_from_standard_input(
-    policy_path: Path,
-    manifest_path: Path,
-    runtime_path: str,
-    source_vendor: VendorFamily,
-    tier: DelegationTier,
-    confirm_trusted_runtime: bool,
-    acknowledged_fingerprint: str | None,
-    require_qualified_runtime: bool = False,
-    source_profile: str | None = None,
-) -> int:
-    """Run one acknowledged external orchestrator without handling credentials."""
-    _load_delegation_family()
-    version_result = (
-        _dispatch_delegation_cli_version(
-            policy_path,
-            manifest_path,
-            runtime_path,
-            source_vendor,
-            source_profile,
-            tier,
-            require_qualified_runtime,
-        )
-        if source_profile is not None
-        else None
-    )
-    if version_result is not None:
-        if isinstance(version_result, CompiledExecutionV2):
-            return _delegation_v2_run(
-                version_result,
-                confirm_trusted_runtime,
-                acknowledged_fingerprint,
-            )
-        return version_result
-    try:
-        descriptor, rendered, qualification = _compile_delegation_inputs(
-            policy_path,
-            manifest_path,
-            runtime_path,
-            source_vendor,
-            tier,
-            require_qualified_runtime,
-        )
-    except DelegationInvalidInputError:
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    except DelegationUnsupportedError:
-        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
-        return 3
-
-    if not confirm_trusted_runtime:
-        print(json.dumps({"error": "delegation_confirmation_required"}), file=sys.stderr)
-        return 5
-    if acknowledged_fingerprint != descriptor["route_fingerprint"]:
-        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
-        return 6
-    runtime_observation: ExecutableObservation
-    try:
-        if qualification is None:
-            runtime_observation = validate_delegation_runtime(runtime_path)
-        else:
-            verify_qualified_runtime(Path(runtime_path), qualification)
-            runtime_observation = validate_delegation_runtime(runtime_path)
-        validate_runtime_process_context()
-    except (DelegationRuntimeUnavailableError, QualifiedRuntimeUnavailableError):
-        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
-        return 4
-    try:
-        task = read_task_from_standard_input()
-        validate_task(task)
-    except InvalidTaskError:
-        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
-        return 2
-    try:
-        frame = encode_delegation_frame(rendered.encode("ascii"), task)
-    except DelegationFrameError:
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-
-    workflow_cleanup = descriptor["runtime_contract"]["direct_child_cleanup"]
-    cleanup = DirectChildCleanup(
-        grace_seconds=workflow_cleanup["grace_seconds"],
-        terminate_grace_seconds=workflow_cleanup["terminate_grace_seconds"],
-    )
-    try:
-        completed_process = run_delegation_runtime(
-            runtime_path,
-            frame,
-            cleanup,
-            runtime_observation,
-        )
-    except DelegationRuntimeUnavailableError:
-        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
-        return 4
-    except DelegationRuntimeFailedError:
-        print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
-        return EXECUTOR_FAILED_EXIT_CODE
-    return _report_executor_result(completed_process)
-
-
-def _delegation_v2_run(
-    compiled: CompiledExecutionV2,
-    confirm_trusted_runtime: bool,
-    acknowledged_fingerprint: str | None,
-) -> int:
-    """Run one already-compiled protocol-2 route without v1 lifecycle calls."""
-    from .delegation_v2_protocol import DelegationFrameV2Error
-
-    if not confirm_trusted_runtime:
-        print(json.dumps({"error": "delegation_confirmation_required"}), file=sys.stderr)
-        return 5
-    if acknowledged_fingerprint is None:
-        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
-        return 6
-    # 환경을 먼저 확인하고 페이로드를 만진다. native schema-2 run 과 delegation
-    # protocol-1 run 이 이미 이렇게 하고 있었고, 이 경로만 빠져 있었다. 자식의
-    # 종료 상태를 신뢰할 수 없는 컨텍스트라면 태스크를 읽기 전에 닫는다.
-    try:
-        validate_runtime_process_context()
-    except DelegationRuntimeUnavailableError:
-        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
-        return 4
-    if acknowledged_fingerprint != compiled.route_fingerprint:
-        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
-        return 6
-    try:
-        task = read_validated_task_v2(getattr(sys.stdin, "buffer", sys.stdin))
-    except V2ValidationError:
-        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
-        return 2
-    try:
-        first_observation = observe_executable(compiled.executable)
-    except (V2ValidationError, OSError, ValueError):
-        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
-        return 4
-    try:
-        frame = encode_delegation_frame_v2(
-            compiled.canonical_descriptor_bytes, task.delivery_bytes()
-        )
-    except (DelegationFrameV2Error, V2ValidationError):
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    try:
-        completed = run_delegation_v2_runtime(compiled, frame, first_observation)
-    except ChildStatusLostError:
-        print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
-        return EXECUTOR_FAILED_EXIT_CODE
-    except (V2ValidationError, OSError, ValueError):
-        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
-        return 4
-    return _report_executor_result(completed)
-
-
-def delegation_qualification_candidate(evidence_path: Path, runtime_path: Path) -> int:
-    """Print a review candidate without changing the package trust registry."""
-    _load_delegation_family()
-    try:
-        normalized_runtime_path = validate_runtime_path_lexically(str(runtime_path))
-        evidence = load_conformance_evidence(evidence_path)
-        candidate = build_qualification_candidate(evidence, Path(normalized_runtime_path))
-    except DelegationInvalidInputError:
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    print(canonical_json_bytes(candidate).decode("ascii"))
-    return 0
-
-
-def v2_route_from_standard_input(
-    policy_path: Path,
-    source_vendor: str,
-    runtime_path: Path,
-) -> int:
-    """Render an API review descriptor without sending data to a provider."""
-    _load_api_family()
-    try:
-        runtime_observation = observe_api_runtime(runtime_path)
-        runtime_path = Path(runtime_observation.lexical_path)
-        policy = load_api_policy(policy_path)
-        task = read_task_from_standard_input()
-        tier, route = select_api_route(task, policy, source_vendor)
-    except InvalidTaskError:
-        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
-        return 2
-    except (V2InvalidInputError, InvalidInputError):
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    except RouteSelectionError:
-        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
-        return 3
-    print(
-        json.dumps(
-            render_api_route(
-                route,
-                policy,
-                tier,
-                source_vendor,
-                runtime_path,
-                runtime_observation,
-            )
-        )
-    )
-    return 0
-
-
-def v2_run_from_standard_input(
-    policy_path: Path,
-    source_vendor: str,
-    runtime_path: Path,
-    confirm_api_egress: bool,
-    acknowledged_fingerprint: str | None,
-) -> int:
-    """Start one acknowledged external API runtime without handling credentials."""
-    _load_api_family()
-    _load_legacy_run_family()
-    try:
-        policy = load_api_policy(policy_path)
-    except (V2InvalidInputError, InvalidInputError):
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-
-    if not confirm_api_egress:
-        print(json.dumps({"error": "api_confirmation_required"}), file=sys.stderr)
-        return 5
-    if acknowledged_fingerprint is None:
-        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
-        return 6
-    try:
-        validate_runtime_process_context()
-    except DelegationRuntimeUnavailableError:
-        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
-        return 4
-    try:
-        runtime_observation = observe_api_runtime(runtime_path)
-        runtime_path = Path(runtime_observation.lexical_path)
-    except V2InvalidInputError:
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    try:
-        task = read_task_from_standard_input()
-        tier, route = select_api_route(task, policy, source_vendor)
-    except InvalidTaskError:
-        print(json.dumps({"error": "invalid_task"}), file=sys.stderr)
-        return 2
-    except RouteSelectionError:
-        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
-        return 3
-    if acknowledged_fingerprint != route_fingerprint(
-        route,
-        policy,
-        tier,
-        source_vendor,
-        runtime_path,
-        runtime_observation,
-    ):
-        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
-        return 6
-    try:
-        final_observation = observe_api_runtime(runtime_path)
-    except V2InvalidInputError:
-        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
-        return 4
-    if final_observation != runtime_observation:
-        print(json.dumps({"error": "route_fingerprint_mismatch"}), file=sys.stderr)
-        return 6
-    try:
-        # 로케일 인코딩을 쓰는 text 모드는 비ASCII 태스크에서 UnicodeEncodeError를 내고,
-        # 그 예외 메시지가 태스크 문자와 위치를 진단에 노출한다. 항상 UTF-8 바이트로 넘긴다.
-        completed_process = run_owned_foreground(
-            (
-                str(runtime_path),
-                "--provider",
-                route.provider,
-                "--model",
-                route.model,
-                "--effort",
-                route.effort,
-            ),
-            task.encode("utf-8"),
-            cleanup_grace_seconds=0,
-            terminate_grace_seconds=0,
-        )
-    except ChildStatusLostError:
-        print(json.dumps({"error": "executor_failed"}), file=sys.stderr)
-        return EXECUTOR_FAILED_EXIT_CODE
-    except (OSError, ValueError):
-        # ValueError 는 argv 를 실제로 인코딩하는 단계에서 나온다(NUL, 서로게이트).
-        # 검증기가 이미 막고 있지만, 규칙에 빈틈이 생겨도 트레이스백 대신
-        # 진단으로 닫히도록 두 번째 방어선을 둔다.
-        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
-        return 4
-    return _report_executor_result(completed_process)
 
 
 def classify_from_standard_input(
@@ -2221,7 +1562,7 @@ def route_from_standard_input(
             except (OSError, V2ValidationError, ValueError):
                 print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
                 return 3
-            print(canonical_json_bytes(review).decode("ascii"))
+            print(canonical_json_bytes_v2(review).decode("ascii"))
             return 0
     else:
         dispatched = None
@@ -2736,8 +2077,6 @@ def _execute_native_v3(
     explicit_tier: Tier | None,
     confirm_endpoint_transition: bool,
     *,
-    purpose: PurposeV3,
-    confirm_native_delegation: bool,
     usage_store: Path | None,
     usage_rework: bool,
     usage_escalation: bool,
@@ -2768,14 +2107,17 @@ def _execute_native_v3(
             source_vendor=validated_vendor,
             source_profile_id=validated_profile,
             tier=validated_tier,
-            purpose=purpose,
+            purpose="native_route",
         )
     except V2ValidationError:
         print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
         return 3
-    if "native_delegation" in selected.required_confirmations and not confirm_native_delegation:
-        print(json.dumps({"error": "confirmation_required"}), file=sys.stderr)
-        return 5
+    # `delegate native` 는 0.32.0 에서 사라졌으므로 CLI 는 이 확인을 더 이상
+    # 제공하지 않는다. 확인을 요구하는 선택지가 남아 있다면 승인 없이 실행하는
+    # 대신 태스크를 읽기 전에 닫는다.
+    if "native_delegation" in selected.required_confirmations:
+        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
+        return 3
     if "endpoint_transition" in selected.required_confirmations and not confirm_endpoint_transition:
         print(json.dumps({"error": "confirmation_required"}), file=sys.stderr)
         return 5
@@ -2881,7 +2223,7 @@ def _native_v3_run(
     use_default_usage_store: bool,
     interactive_review: bool = False,
 ) -> int:
-    """Preserve the ordinary schema-3 run contract and purpose binding."""
+    """Preserve the ordinary schema-3 run contract."""
     return _execute_native_v3(
         policy,
         source_vendor,
@@ -2889,98 +2231,11 @@ def _native_v3_run(
         acknowledged_fingerprint,
         explicit_tier,
         confirm_endpoint_transition,
-        purpose="native_route",
-        confirm_native_delegation=False,
         usage_store=usage_store,
         usage_rework=usage_rework,
         usage_escalation=usage_escalation,
         use_default_usage_store=use_default_usage_store,
         interactive_review=interactive_review,
-    )
-
-
-def native_v3_delegation_route(
-    policy_path: Path,
-    source_vendor: str,
-    source_profile: str,
-    tier: Tier,
-) -> int:
-    """Print one task-free, observation-bound native-delegation descriptor."""
-    _load_native_family()
-    try:
-        raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
-        version, dispatched = dispatch_native_policy_schema(raw_policy)
-    except (InvalidInputError, V2ValidationError):
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    if version != 3 or not isinstance(dispatched, NativePolicyV3):
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    try:
-        validated_vendor, validated_profile, validated_tier = validate_native_selector_v3(
-            source_vendor, source_profile, tier
-        )
-    except V2ValidationError:
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    try:
-        selected = compile_static_native_policy_v3(
-            dispatched,
-            source_vendor=validated_vendor,
-            source_profile_id=validated_profile,
-            tier=validated_tier,
-            purpose="native_delegation",
-        )
-    except V2ValidationError:
-        print(json.dumps({"error": "unsupported_route"}), file=sys.stderr)
-        return 3
-    try:
-        observed = observe_executable(selected.executable)
-        review = bind_native_observation_v3(selected, observed)
-    except (OSError, V2ValidationError, ValueError):
-        print(json.dumps({"error": "executor_unavailable"}), file=sys.stderr)
-        return 4
-    print(canonical_json_bytes(review).decode("ascii"))
-    return 0
-
-
-def native_v3_delegation_run_from_standard_input(
-    policy_path: Path,
-    source_vendor: str,
-    source_profile: str,
-    tier: Tier,
-    confirm_native_delegation: bool,
-    confirm_endpoint_transition: bool,
-    acknowledged_fingerprint: str | None,
-    usage_store: Path | None = None,
-    usage_rework: bool = False,
-    usage_escalation: bool = False,
-    use_default_usage_store: bool = False,
-) -> int:
-    """Run one reviewed bounded subtask through the schema-3 native adapter."""
-    _load_native_family()
-    try:
-        raw_policy = _read_json_object(policy_path, max_bytes=MAX_NATIVE_POLICY_BYTES)
-        version, dispatched = dispatch_native_policy_schema(raw_policy)
-    except (InvalidInputError, V2ValidationError):
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    if version != 3 or not isinstance(dispatched, NativePolicyV3):
-        print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
-        return 2
-    return _execute_native_v3(
-        dispatched,
-        source_vendor,
-        source_profile,
-        acknowledged_fingerprint,
-        tier,
-        confirm_endpoint_transition,
-        purpose="native_delegation",
-        confirm_native_delegation=confirm_native_delegation,
-        usage_store=usage_store,
-        usage_rework=usage_rework,
-        usage_escalation=usage_escalation,
-        use_default_usage_store=use_default_usage_store,
     )
 
 
@@ -3206,76 +2461,6 @@ def _main_json(
         )
     if arguments.command == "render":
         return render_workflow_route(arguments.policy, arguments.descriptor)
-    if arguments.command == "delegate" and arguments.delegate_command == "route":
-        return delegation_route(
-            arguments.policy,
-            arguments.runtime_manifest,
-            arguments.delegation_runtime,
-            arguments.source_vendor,
-            arguments.tier,
-            arguments.require_qualified_runtime,
-            arguments.source_profile,
-        )
-    if arguments.command == "delegate" and arguments.delegate_command == "run":
-        return delegation_run_from_standard_input(
-            arguments.policy,
-            arguments.runtime_manifest,
-            arguments.delegation_runtime,
-            arguments.source_vendor,
-            arguments.tier,
-            arguments.confirm_trusted_delegation_runtime,
-            arguments.ack_route_fingerprint,
-            arguments.require_qualified_runtime,
-            arguments.source_profile,
-        )
-    if arguments.command == "delegate" and arguments.delegate_command == "qualification-candidate":
-        return delegation_qualification_candidate(
-            arguments.evidence,
-            arguments.delegation_runtime,
-        )
-    if (
-        arguments.command == "delegate"
-        and arguments.delegate_command == "native"
-        and arguments.native_delegation_command == "route"
-    ):
-        return native_v3_delegation_route(
-            arguments.policy,
-            arguments.source_vendor,
-            arguments.source_profile,
-            arguments.tier,
-        )
-    if (
-        arguments.command == "delegate"
-        and arguments.delegate_command == "native"
-        and arguments.native_delegation_command == "run"
-    ):
-        return native_v3_delegation_run_from_standard_input(
-            arguments.policy,
-            arguments.source_vendor,
-            arguments.source_profile,
-            arguments.tier,
-            arguments.confirm_native_delegation,
-            arguments.confirm_endpoint_transition,
-            arguments.ack_route_fingerprint,
-            arguments.usage_store,
-            arguments.usage_rework,
-            arguments.usage_escalation,
-            use_default_usage_store,
-        )
-    if arguments.command == "v2" and arguments.api_command == "route":
-        return v2_route_from_standard_input(
-            arguments.policy,
-            arguments.source_vendor,
-            arguments.api_runtime,
-        )
-    if arguments.command == "v2" and arguments.api_command == "run":
-        return v2_run_from_standard_input(
-            arguments.policy,
-            arguments.source_vendor,
-            arguments.api_runtime,
-            arguments.confirm_api_egress,
-            arguments.ack_route_fingerprint,
-        )
     print(json.dumps({"error": "invalid_input"}), file=sys.stderr)
     return 2
 
@@ -3420,7 +2605,7 @@ def main(
     # Execution surfaces inherit vendor stdout/stderr directly. Capturing those
     # streams to prettify router receipts would silently change the one-child
     # foreground contract.
-    if not human or command in {"run", "delegate", "v2", "select"}:
+    if not human or command in {"run", "select"}:
         # run 의 stdout 은 자식 것이므로 사람용 렌더링은 하지 않지만, stdout 이
         # 단말이라는 사실은 검토를 기본으로 켜는 근거로 넘긴다.
         return _main_json(

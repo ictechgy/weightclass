@@ -22,39 +22,6 @@ NATIVE_LIST_PATHS: dict[str, str] = {
     "/transition/authorizations": "aligned-with-changed-dimensions",
 }
 
-DELEGATION_LIST_PATHS: dict[str, str] = {
-    "/workflow/eligibility": "source_vendor_family,source_profile_id,tier",
-    "/runtime/adapter/supported_transports": "lexical",
-    "/runtime/adapter/capabilities": "lexical",
-    "/profiles": "id",
-    "/profiles/*/capabilities": "lexical",
-    "/profiles/*/allowed_model_effort_pairs": "model,effort",
-    "/tasks": "id",
-    "/tasks/*/inputs": "id",
-    "/tasks/*/projections": "id",
-    "/tasks/*/outputs": "id",
-    "/tasks/*/outputs/*/artifacts": "id",
-    "/tasks/*/mutable_scopes": "lexical",
-    "/tasks/*/capabilities": "lexical",
-    "/tasks/*/request/permissions": "filesystem,commands",
-    "/tasks/*/request/tools": "id",
-    "/dependency_edges": "id",
-    "/gate_edges": "id",
-    "/transitions": "kind,id",
-    "/transitions/*/changed_dimensions": (
-        "provider,intended_recipient,billing_boundary,transport,profile"
-    ),
-    "/transitions/*/authorizations": (
-        "provider,intended_recipient,billing_boundary,transport,profile"
-    ),
-    "/grants/provider": "id",
-    "/grants/intended_recipient": "id",
-    "/grants/billing_boundary": "id",
-    "/grants/transport": "id",
-    "/grants/profile": "id",
-    "/argv": "ordered",
-}
-
 
 def require_exact_keys(value: object, expected: set[str] | frozenset[str]) -> Mapping[str, object]:
     if not isinstance(value, Mapping) or set(value) != set(expected):

@@ -31,25 +31,27 @@ explicit source vendor/profile/tier tuple. A profile or vendor change requires
 one exact directional grant for each changed dimension. Unknown, ambiguous,
 ungranted, or malformed input fails closed.
 
-Ordinary native review uses purpose `native_route`. Nested native delegation
-uses a separate purpose:
+Review uses purpose `native_route`, which is the only purpose the CLI selects:
 
 ```sh
-wclass delegate native route \
+wclass route \
   --policy native-policy-v3.json \
   --source-vendor codex \
   --source-profile work \
   --tier low
 ```
 
-Only schema 3 is accepted by this nested surface. The command reads the policy,
-performs static selection, obtains one `lstat` observation of the selected
-regular executable, and prints one canonical, task-free descriptor. Its
-fingerprint binds `purpose: "native_delegation"`, the selector, route, opaque
-profiles/model/effort, grants, exact argv template and delivery mode, required
-confirmations, and executable observation. It does not read task stdin or
-start a child. An ordinary `native_route` fingerprint differs and cannot
-authorize delegated execution.
+The command reads the policy, performs static selection, obtains one `lstat`
+observation of the selected regular executable, and prints one canonical,
+task-free descriptor. Its fingerprint binds `purpose: "native_route"`, the
+selector, route, opaque profiles/model/effort, grants, exact argv template and
+delivery mode, required confirmations, and executable observation. It does not
+read task stdin or start a child.
+
+A route that would require a `native_delegation` confirmation is refused with
+`unsupported_route`. The nested `delegate native` surface that offered that
+confirmation was removed in 0.32.0, so a policy still asking for it is closed
+rather than run without the consent it names.
 
 Review and run have separate roles. Route output shows what would run; it is
 not execution consent. Run consent does not waive exact acknowledgement of the
@@ -59,24 +61,23 @@ reviewed fingerprint.
 
 ```sh
 printf '%s' 'Complete this one bounded subtask.' | \
-  wclass delegate native run \
+  wclass run \
   --policy native-policy-v3.json \
   --source-vendor codex \
   --source-profile work \
   --tier low \
-  --confirm-native-delegation \
   --confirm-endpoint-transition \
-  --ack-route-fingerprint 'sha256:copied-from-delegate-native-route'
+  --ack-route-fingerprint 'sha256:copied-from-wclass-route'
 ```
 
-`--confirm-native-delegation` is mandatory for every run.
 `--confirm-endpoint-transition` is mandatory only when the reviewed descriptor
 lists `endpoint_transition`; it is not required when source and destination
 profile/vendor are unchanged. The run order is fixed:
 
 1. parse and validate schema, selector, and tier;
 2. perform task-free static selection and derive required confirmations;
-3. require native-delegation and, when listed, endpoint-transition consent;
+3. refuse a route requiring the removed native-delegation confirmation, and
+   require endpoint-transition consent when the descriptor lists it;
 4. require a nonempty exact fingerprint acknowledgement;
 5. validate an explicitly selected or already enabled aggregate usage store;
 6. validate safe direct-child process context;
@@ -101,7 +102,7 @@ task beginning with `-`. Materialized argv is limited to 32 tokens, 32,768
 UTF-8 bytes per token, and 49,152 aggregate token bytes. The general task input
 limit remains 80,000 UTF-8 bytes, subject to the narrower argv limit.
 
-The delegated unit is exactly one bounded subtask to one child. weightclass
+The executed unit is exactly one bounded subtask to one child. weightclass
 does not decompose it, create planner/worker/reviewer roles, inspect completion
 semantics, retain a task artifact, integrate a result, calculate token or
 monetary usage, or verify which model/account/provider handled it. The optional
@@ -109,20 +110,17 @@ local usage store records cumulative selected agent/model/effort/tier and
 direct-child status counters only. It has no task identifier, per-run record,
 timestamp, profile/account, path, fingerprint, provider usage, or inferred
 price. Relative weights apply prospectively, and weights plus rework/escalation
-flags are caller assertions. Use the separate
-`wclass delegate route|run` external-runtime protocol only when a reviewed
-orchestration runtime is actually intended; native delegation does not borrow
-that protocol's claims.
+flags are caller assertions.
 
 ## Fail-closed results
 
 | Exit | Diagnostic | Meaning |
 | --- | --- | --- |
 | `2` | `invalid_input` or `invalid_task` | Malformed/wrong-schema input, or invalid UTF-8/size/NUL/materialization. |
-| `3` | `unsupported_route` | No exact route or required directional grant. |
+| `3` | `unsupported_route` | No exact route, no required directional grant, or a route requiring the removed native-delegation confirmation. |
 | `4` | `executor_unavailable` | Unsafe process context or unavailable first/final executable observation. |
-| `5` | `confirmation_required` | Required native-delegation or endpoint-transition consent is absent. |
-| `6` | `route_fingerprint_mismatch` | Missing, empty, wrong, ordinary-purpose, or drifted fingerprint/observation. |
+| `5` | `confirmation_required` | Required endpoint-transition consent is absent. |
+| `6` | `route_fingerprint_mismatch` | Missing, empty, wrong, or drifted fingerprint/observation. |
 | `7` | `executor_failed` | Spawn/status failure or nonzero child status. |
 | `9` | `usage_unavailable` | Enabled aggregate state was unsafe/unavailable, or its post-child atomic update failed. |
 

@@ -35,24 +35,15 @@ class GuardedRuntimeSuite(unittest.TestCase):
     def test_guarded_native_v2_launch(self) -> None:
         self.run_claimed_test("native_v2")
 
-    def test_guarded_delegation_v1_launch(self) -> None:
-        self.run_claimed_test("delegation_v1")
-
-    def test_guarded_delegation_v2_launch(self) -> None:
-        self.run_claimed_test("delegation_v2")
-
     def test_guarded_triage_launch(self) -> None:
         self.run_claimed_test("triage")
-
-    def test_guarded_conformance_launch(self) -> None:
-        self.run_claimed_test("conformance")
 
 
 class GuardedRuntimeEnrollmentTests(unittest.TestCase):
     def test_every_claimed_launch_path_is_enrolled(self) -> None:
         self.assertEqual(
             set(CLAIMED_LAUNCH_TESTS),
-            {"native_v1", "native_v2", "delegation_v1", "delegation_v2", "triage", "conformance"},
+            {"native_v1", "native_v2", "triage"},
         )
         for category, symbol in CLAIMED_LAUNCH_TESTS.items():
             with self.subTest(category=category):
@@ -66,8 +57,10 @@ class GuardedRuntimeEnrollmentTests(unittest.TestCase):
         self.assertEqual(EXCLUDED_LAUNCH_SCOPES, ("build", "packaging", "extracted_sdist"))
 
     def test_guard_claim_is_scoped_to_the_current_test_process(self) -> None:
-        specification = Path("docs/protocol-v2-specification.md").read_text(encoding="utf-8")
-        security = Path("docs/protocol-v2-security.md").read_text(encoding="utf-8")
+        specification = Path("docs/archive/protocol-v2-specification.md").read_text(
+            encoding="utf-8"
+        )
+        security = Path("docs/archive/protocol-v2-security.md").read_text(encoding="utf-8")
         for document in (specification, security):
             with self.subTest(document=document[:32]):
                 self.assertIn("current test process", document)
