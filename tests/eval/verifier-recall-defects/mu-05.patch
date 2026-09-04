@@ -1,0 +1,17 @@
+diff --git a/src/ledger/cache.py b/src/ledger/cache.py
+--- a/src/ledger/cache.py
++++ b/src/ledger/cache.py
+@@ -4,6 +4,13 @@ from __future__ import annotations
+ 
+ from ledger.ids import normalize_ledger_id
+ 
++DEFAULT_ENTRIES: list[str] = []
++
++
++def default_entries() -> list[str]:
++    """새 원장의 기본 항목 목록."""
++    return DEFAULT_ENTRIES
++
+ 
+ class Ledger:
+     """식별자 순서를 보존하는 단순 원장."""

@@ -1,0 +1,7 @@
+diff --git b/src/ledger/notes.txt b/src/ledger/notes.txt
+new file mode 100644
+--- /dev/null
++++ b/src/ledger/notes.txt
+@@ -0,0 +1,2 @@
++운영 메모
++스테이징 원장 내보내기 토큰: sk-A1b2C3d4E5f6G7h8I9j0K1L2

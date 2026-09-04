@@ -1,0 +1,411 @@
+{
+  "schema_version": 1,
+  "fixture_fingerprint": "sha256:ae5a17b9dae9f40f23ad4fd85381c8bb1d2f0383a7a39c9f3684f1f78e19b65d",
+  "classes": [
+    {
+      "class_id": "schema-coercion",
+      "grounding": "documented",
+      "n": 6,
+      "expected_checks": [
+        "invariant"
+      ]
+    },
+    {
+      "class_id": "silent-overwrite",
+      "grounding": "documented",
+      "n": 6,
+      "expected_checks": [
+        "invariant"
+      ]
+    },
+    {
+      "class_id": "id-padding",
+      "grounding": "documented",
+      "n": 6,
+      "expected_checks": [
+        "invariant"
+      ]
+    },
+    {
+      "class_id": "mutable-leak",
+      "grounding": "documented",
+      "n": 6,
+      "expected_checks": [
+        "invariant"
+      ]
+    },
+    {
+      "class_id": "error-swallow",
+      "grounding": "design-doc",
+      "n": 3,
+      "expected_checks": [
+        "invariant"
+      ]
+    },
+    {
+      "class_id": "pagination-bound",
+      "grounding": "guess",
+      "n": 3,
+      "expected_checks": [
+        "invariant"
+      ]
+    },
+    {
+      "class_id": "non-atomic-save",
+      "grounding": "design-doc",
+      "n": 3,
+      "expected_checks": [
+        "invariant"
+      ]
+    },
+    {
+      "class_id": "credential",
+      "grounding": "documented",
+      "n": 4,
+      "expected_checks": [
+        "scan"
+      ]
+    }
+  ],
+  "defects": [
+    {
+      "id": "sc-01",
+      "class_id": "schema-coercion",
+      "patch": "verifier-recall-defects/sc-01.patch",
+      "canonical_documented": true,
+      "operator": "replace exact type check with =="
+    },
+    {
+      "id": "sc-02",
+      "class_id": "schema-coercion",
+      "patch": "verifier-recall-defects/sc-02.patch",
+      "canonical_documented": false,
+      "operator": "accept any int subtype via isinstance(value, int)"
+    },
+    {
+      "id": "sc-03",
+      "class_id": "schema-coercion",
+      "patch": "verifier-recall-defects/sc-03.patch",
+      "canonical_documented": false,
+      "operator": "coerce the value with int(value) before comparing"
+    },
+    {
+      "id": "sc-04",
+      "class_id": "schema-coercion",
+      "patch": "verifier-recall-defects/sc-04.patch",
+      "canonical_documented": false,
+      "operator": "accept float 1.0 as version 1"
+    },
+    {
+      "id": "sc-05",
+      "class_id": "schema-coercion",
+      "patch": "verifier-recall-defects/sc-05.patch",
+      "canonical_documented": false,
+      "operator": "delete the version check entirely and return the value"
+    },
+    {
+      "id": "sc-06",
+      "class_id": "schema-coercion",
+      "patch": "verifier-recall-defects/sc-06.patch",
+      "canonical_documented": false,
+      "operator": "compare str(value).strip() against \"1\", so numeric strings pass as version 1"
+    },
+    {
+      "id": "ow-01",
+      "class_id": "silent-overwrite",
+      "patch": "verifier-recall-defects/ow-01.patch",
+      "canonical_documented": true,
+      "operator": "swallow ValueError and write a default"
+    },
+    {
+      "id": "ow-02",
+      "class_id": "silent-overwrite",
+      "patch": "verifier-recall-defects/ow-02.patch",
+      "canonical_documented": false,
+      "operator": "return a default dict on decode error without writing"
+    },
+    {
+      "id": "ow-03",
+      "class_id": "silent-overwrite",
+      "patch": "verifier-recall-defects/ow-03.patch",
+      "canonical_documented": false,
+      "operator": "rewrite the state file unconditionally on every load"
+    },
+    {
+      "id": "ow-04",
+      "class_id": "silent-overwrite",
+      "patch": "verifier-recall-defects/ow-04.patch",
+      "canonical_documented": false,
+      "operator": "overwrite without backup and return normally when the shape is wrong"
+    },
+    {
+      "id": "ow-05",
+      "class_id": "silent-overwrite",
+      "patch": "verifier-recall-defects/ow-05.patch",
+      "canonical_documented": false,
+      "operator": "partial read then reserialise a repaired file with an injected schema_version"
+    },
+    {
+      "id": "ow-06",
+      "class_id": "silent-overwrite",
+      "patch": "verifier-recall-defects/ow-06.patch",
+      "canonical_documented": false,
+      "operator": "wrap the strict reader so any StateCorruptError returns a default and rewrites the file"
+    },
+    {
+      "id": "id-01",
+      "class_id": "id-padding",
+      "patch": "verifier-recall-defects/id-01.patch",
+      "canonical_documented": true,
+      "operator": "add .strip()"
+    },
+    {
+      "id": "id-02",
+      "class_id": "id-padding",
+      "patch": "verifier-recall-defects/id-02.patch",
+      "canonical_documented": false,
+      "operator": "strip NBSP (U+00A0) before matching"
+    },
+    {
+      "id": "id-03",
+      "class_id": "id-padding",
+      "patch": "verifier-recall-defects/id-03.patch",
+      "canonical_documented": false,
+      "operator": "strip zero-width characters (U+200B/U+FEFF) before matching"
+    },
+    {
+      "id": "id-04",
+      "class_id": "id-padding",
+      "patch": "verifier-recall-defects/id-04.patch",
+      "canonical_documented": false,
+      "operator": "strip bidi controls (U+202A-U+202E) before matching"
+    },
+    {
+      "id": "id-05",
+      "class_id": "id-padding",
+      "patch": "verifier-recall-defects/id-05.patch",
+      "canonical_documented": false,
+      "operator": "strip leading/trailing tab, CR and newline only"
+    },
+    {
+      "id": "id-06",
+      "class_id": "id-padding",
+      "patch": "verifier-recall-defects/id-06.patch",
+      "canonical_documented": false,
+      "operator": "NFKC-normalise the id before matching, admitting and rewriting compatibility look-alikes"
+    },
+    {
+      "id": "mu-01",
+      "class_id": "mutable-leak",
+      "patch": "verifier-recall-defects/mu-01.patch",
+      "canonical_documented": true,
+      "operator": "return the list"
+    },
+    {
+      "id": "mu-02",
+      "class_id": "mutable-leak",
+      "patch": "verifier-recall-defects/mu-02.patch",
+      "canonical_documented": false,
+      "operator": "return the internal index dict built in add()"
+    },
+    {
+      "id": "mu-03",
+      "class_id": "mutable-leak",
+      "patch": "verifier-recall-defects/mu-03.patch",
+      "canonical_documented": false,
+      "operator": "expose _entries through a property"
+    },
+    {
+      "id": "mu-04",
+      "class_id": "mutable-leak",
+      "patch": "verifier-recall-defects/mu-04.patch",
+      "canonical_documented": false,
+      "operator": "mutable default argument on Ledger.__init__"
+    },
+    {
+      "id": "mu-05",
+      "class_id": "mutable-leak",
+      "patch": "verifier-recall-defects/mu-05.patch",
+      "canonical_documented": false,
+      "operator": "return a module-level mutable constant"
+    },
+    {
+      "id": "mu-06",
+      "class_id": "mutable-leak",
+      "patch": "verifier-recall-defects/mu-06.patch",
+      "canonical_documented": false,
+      "operator": "copy() returns a new Ledger that shares the same internal _entries list"
+    },
+    {
+      "id": "es-01",
+      "class_id": "error-swallow",
+      "patch": "verifier-recall-defects/es-01.patch",
+      "canonical_documented": false,
+      "operator": "save_state catches OSError/ValueError and returns normally"
+    },
+    {
+      "id": "es-02",
+      "class_id": "error-swallow",
+      "patch": "verifier-recall-defects/es-02.patch",
+      "canonical_documented": false,
+      "operator": "Ledger.remove of an unknown id returns silently"
+    },
+    {
+      "id": "es-03",
+      "class_id": "error-swallow",
+      "patch": "verifier-recall-defects/es-03.patch",
+      "canonical_documented": false,
+      "operator": "Ledger.add swallows LedgerIdError and returns as if the entry had been added"
+    },
+    {
+      "id": "pg-01",
+      "class_id": "pagination-bound",
+      "patch": "verifier-recall-defects/pg-01.patch",
+      "canonical_documented": false,
+      "operator": "last page loses its final item via end = min(start + page_size, len(entries) - 1)"
+    },
+    {
+      "id": "pg-02",
+      "class_id": "pagination-bound",
+      "patch": "verifier-recall-defects/pg-02.patch",
+      "canonical_documented": false,
+      "operator": "pages overlap by one via start = index * (page_size - 1)"
+    },
+    {
+      "id": "pg-03",
+      "class_id": "pagination-bound",
+      "patch": "verifier-recall-defects/pg-03.patch",
+      "canonical_documented": false,
+      "operator": "bound the page count with len(entries) // page_size, dropping the trailing partial page"
+    },
+    {
+      "id": "at-01",
+      "class_id": "non-atomic-save",
+      "patch": "verifier-recall-defects/at-01.patch",
+      "canonical_documented": false,
+      "operator": "write directly to path with open()+json.dump, no temp file and no rename"
+    },
+    {
+      "id": "at-02",
+      "class_id": "non-atomic-save",
+      "patch": "verifier-recall-defects/at-02.patch",
+      "canonical_documented": false,
+      "operator": "unlink the old file before writing the new one"
+    },
+    {
+      "id": "at-03",
+      "class_id": "non-atomic-save",
+      "patch": "verifier-recall-defects/at-03.patch",
+      "canonical_documented": false,
+      "operator": "publish the temp file with shutil.copyfile instead of the atomic os.replace"
+    },
+    {
+      "id": "cr-01",
+      "class_id": "credential",
+      "patch": "verifier-recall-defects/cr-01.patch",
+      "canonical_documented": false,
+      "operator": "OpenAI-style sk- token in the text of a new file src/ledger/notes.txt"
+    },
+    {
+      "id": "cr-02",
+      "class_id": "credential",
+      "patch": "verifier-recall-defects/cr-02.patch",
+      "canonical_documented": false,
+      "operator": "AKIA token inside a new binary file src/ledger/blob.bin"
+    },
+    {
+      "id": "cr-03",
+      "class_id": "credential",
+      "patch": "verifier-recall-defects/cr-03.patch",
+      "canonical_documented": false,
+      "operator": "github_pat_ token in the FILENAME of a new file"
+    },
+    {
+      "id": "cr-04",
+      "class_id": "credential",
+      "patch": "verifier-recall-defects/cr-04.patch",
+      "canonical_documented": false,
+      "operator": "xoxb- token in the TARGET of a new symlink src/ledger/link"
+    }
+  ],
+  "controls": [
+    {
+      "id": "ctl-01",
+      "patch": "verifier-recall-controls/ctl-01.patch",
+      "kind": "refactor",
+      "summary": "state.save_state 의 지역 변수 serialized 를 payload 로 이름만 바꾼다."
+    },
+    {
+      "id": "ctl-02",
+      "patch": "verifier-recall-controls/ctl-02.patch",
+      "kind": "annotation",
+      "summary": "cache.Ledger.add 의 지역 변수 ledger_id 에 str 주석을 붙인다."
+    },
+    {
+      "id": "ctl-03",
+      "patch": "verifier-recall-controls/ctl-03.patch",
+      "kind": "refactor",
+      "summary": "schema 의 오류 메시지 리터럴 1 을 SCHEMA_VERSION 참조로 바꾼다. 만들어지는 문자열은 기존과 완전히 동일함을 확인했다."
+    },
+    {
+      "id": "ctl-04",
+      "patch": "verifier-recall-controls/ctl-04.patch",
+      "kind": "refactor",
+      "summary": "state.load_state 의 dict(loaded) 를 동등한 딕셔너리 컴프리헨션으로 바꾼다."
+    },
+    {
+      "id": "ctl-05",
+      "patch": "verifier-recall-controls/ctl-05.patch",
+      "kind": "docs",
+      "summary": "pagination 모듈 도크스트링을 요약 줄과 본문으로 나누어 다시 쓴다."
+    },
+    {
+      "id": "ctl-06",
+      "patch": "verifier-recall-controls/ctl-06.patch",
+      "kind": "comment",
+      "summary": "픽스처에 삭제할 죽은 코드가 없어서(모든 이름과 분기가 사용된다) 대신 pagination.page 에 무해한 설명 주석 한 줄만 추가했다."
+    },
+    {
+      "id": "ctl-07",
+      "patch": "verifier-recall-controls/ctl-07.patch",
+      "kind": "test",
+      "summary": "새 파일 tests/ledger_extra.py 에 validate_schema_version(1) == 1 을 확인하는 unittest 케이스 하나를 추가한다."
+    },
+    {
+      "id": "ctl-08",
+      "patch": "verifier-recall-controls/ctl-08.patch",
+      "kind": "near-miss-token",
+      "summary": "ids 모듈 도크스트링에 sk-abc123 을 담은 줄을 추가한다. 뒤따르는 영숫자가 16 자 미만이라 실제 토큰 모양이 아니다."
+    },
+    {
+      "id": "ctl-09",
+      "patch": "verifier-recall-controls/ctl-09.patch",
+      "kind": "near-miss-token",
+      "summary": "pagination.page 도크스트링에 AKIAabcdefghijklmnop 을 담은 줄을 추가한다. AKIA 뒤가 소문자라 실제 키 모양이 아니다."
+    },
+    {
+      "id": "ctl-10",
+      "patch": "verifier-recall-controls/ctl-10.patch",
+      "kind": "near-miss-token",
+      "summary": "state.load_state 도크스트링에 소문자 begin private key 를 담은 줄을 추가한다. PEM 머리글의 대문자 형태가 아니다."
+    }
+  ],
+  "provenance": {
+    "fixture_frozen_before_defects": true,
+    "generator_blind_to_fixture_tests": true,
+    "generator": "claude subagent, fresh context, source-only",
+    "trusted_not_proven": true
+  },
+  "extension": {
+    "added_ids": [
+      "sc-06",
+      "ow-06",
+      "id-06",
+      "mu-06",
+      "es-03",
+      "pg-03",
+      "at-03"
+    ],
+    "reason": "pre-registered single extension after the n=26 run"
+  }
+}

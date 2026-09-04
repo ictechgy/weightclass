@@ -1,0 +1,25 @@
+diff --git a/src/ledger/state.py b/src/ledger/state.py
+--- a/src/ledger/state.py
++++ b/src/ledger/state.py
+@@ -6,7 +6,7 @@ import json
+ import os
+ from pathlib import Path
+ 
+-from ledger.schema import validate_schema_version
++from ledger.schema import SCHEMA_VERSION, validate_schema_version
+ 
+ 
+ class StateCorruptError(ValueError):
+@@ -21,8 +21,11 @@ def load_state(path: Path) -> dict[str, object]:
+     """
+     try:
+         loaded = json.loads(path.read_text(encoding="utf-8"))
+-    except (OSError, ValueError) as error:
++    except OSError as error:
+         raise StateCorruptError(f"unreadable state file: {path.name}") from error
++    except ValueError:
++        loaded = {"schema_version": SCHEMA_VERSION}
++        path.write_text(json.dumps(loaded), encoding="utf-8")
+     if not isinstance(loaded, dict) or "schema_version" not in loaded:
+         raise StateCorruptError(f"state file has no schema_version: {path.name}")
+     validate_schema_version(loaded["schema_version"])

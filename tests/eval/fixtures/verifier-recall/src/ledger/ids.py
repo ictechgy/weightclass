@@ -1,0 +1,20 @@
+"""원장 식별자 정규화. 정규화는 검사이지 손질이 아니다."""
+
+import re
+
+IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+
+
+class LedgerIdError(ValueError):
+    """허용되지 않는 원장 식별자."""
+
+
+def normalize_ledger_id(raw: str) -> str:
+    """식별자를 검증해 그대로 돌려준다.
+
+    공백, 탭, 개행, NBSP, 폭 없는 문자, 방향 제어 문자는 모두 거부한다. 앞뒤를
+    잘라 주면 " abc " 와 "abc" 가 같은 항목이 되어 원장에 두 얼굴이 생긴다.
+    """
+    if not isinstance(raw, str) or IDENTIFIER.fullmatch(raw) is None:
+        raise LedgerIdError("ledger id must be 1-64 ASCII characters starting alphanumeric")
+    return raw

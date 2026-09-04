@@ -1,0 +1,21 @@
+diff --git a/src/ledger/state.py b/src/ledger/state.py
+--- a/src/ledger/state.py
++++ b/src/ledger/state.py
+@@ -3,7 +3,7 @@
+ from __future__ import annotations
+ 
+ import json
+-import os
++import shutil
+ from pathlib import Path
+ 
+ from ledger.schema import validate_schema_version
+@@ -40,7 +40,7 @@ def save_state(path: Path, state: dict[str, object]) -> None:
+     temporary = path.with_name(path.name + ".tmp")
+     try:
+         temporary.write_text(serialized, encoding="utf-8")
+-        os.replace(temporary, path)
++        shutil.copyfile(temporary, path)
+     finally:
+         if temporary.exists():
+             temporary.unlink()

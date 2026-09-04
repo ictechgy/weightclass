@@ -1,6 +1,6 @@
 # Handoff
 
-_Last updated: 2026-09-04 KST by Claude (0.31.1 released)_
+_Last updated: 2026-09-05 KST by Claude (cheap-first closed at A0)_
 
 _Flexible advisory vendor support follow-up: 2026-08-23 KST._
 
@@ -8,6 +8,42 @@ Current release: **0.31.1** on PyPI and the Homebrew tap (release run `338611185
 Release `v0.31.1` marked latest, tap commit `1a24a54`). The usability batch below merged on
 2026-09-04 as #186 → #191 → #188 → #189 → #190 and shipped in that release. Nothing is
 unreleased on `main` except the formula-source PR and this handoff note.
+
+## Cheap-first decision: closed at Stage A0 (2026-09-05, no-go)
+
+After 0.31.1 the owner chose to pursue the one measured lever, model grade, through
+cheap-first routing with a verify gate. The plan in `docs/cheap-first-decision-plan.md`
+made verifier recall (A0) a prerequisite for measuring `p`, and A0 failed.
+
+- **What was built.** A frozen synthetic fixture with ordinary acceptance tests
+  (calibrated so the four documented canonical defects pass them), a pre-registration
+  (`tests/eval/verifier-recall-preregistration.md`), a blind-generated catalogue of
+  33 non-credential defects + 4 credential defects + 10 controls, five verify
+  compositions C0–C4, and an offline runner `tests/eval/verifier_recall.py` with
+  in-process unit tests. Both run reports are committed under `tests/eval/`.
+- **Result.** At n = 33 the plan's default `verify.sh` (tests + secret scan) caught
+  6/33; adding ruff and mypy reached 7/33; adding a class-aware invariant script
+  reached 24/33, Wilson 95% [0.56, 0.85], below the pre-registered lower bound of
+  0.80. Credential defects 4/4, controls 10/10 for every composition. Verdict no-go
+  after the single pre-registered extension. Full reading in
+  `docs/verifier-recall-result.md`.
+- **Consequence.** Stage B was never started; the V1 one-child contract is unchanged.
+  The finding is the answer to Next Steps item D: verification of this kind catches
+  the defects someone thought to test for, and a blind generator finds others.
+- **Process notes.** The first full run was discarded because `mypy` could not start
+  under the scrubbed environment; `UV_PYTHON_INSTALL_DIR` was added as a tool-
+  resolution allowance and disclosed in §4. GLM audited the harness and the verdict
+  (arithmetic, extension rule, patch validity, controls) and found the no-go robust to
+  excluding two borderline instances or treating the extension as a holdout; its
+  wording corrections are in the result document.
+- **Frozen files.** `tests/eval/verifier-recall-checks/` is excluded from repository
+  ruff and mypy because its fingerprints are bound into the reports. Do not restyle it.
+- **Optional follow-up, not authorized:** one blind holdout set scored as a separate
+  row (the §7 row that the §6 extension consumed). It would not change the verdict.
+
+The product question that remains is the one recorded before this work: narrow the
+tool to the launcher it is (option 2) or archive it (option 3). Nothing measured here
+argues for keeping the cost-saving framing.
 
 ## 0.31.1 release record
 

@@ -1,0 +1,13 @@
+diff --git a/src/ledger/pagination.py b/src/ledger/pagination.py
+--- a/src/ledger/pagination.py
++++ b/src/ledger/pagination.py
+@@ -9,6 +9,9 @@ def page(entries: Sequence[str], page_size: int, index: int) -> tuple[str, ...]:
+     `page_size` 는 1 이상, `index` 는 0 이상이어야 한다. 범위를 벗어난 페이지는
+     빈 튜플이다. 경계는 `start:start + page_size` 로 잘라 마지막 항목이 빠지지
+     않게 한다.
++
++    항목 값은 해석하지 않는다. AKIAabcdefghijklmnop 같은 문자열도 그냥 문자열로
++    다룬다.
+     """
+     if page_size < 1 or index < 0:
+         raise ValueError("page_size must be >= 1 and index >= 0")

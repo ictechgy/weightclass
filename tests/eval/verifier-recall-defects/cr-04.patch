@@ -1,0 +1,7 @@
+diff --git b/src/ledger/link b/src/ledger/link
+new file mode 120000
+--- /dev/null
++++ b/src/ledger/link
+@@ -0,0 +1 @@
++xoxb-1a2B3c4D5e6F
+\ No newline at end of file

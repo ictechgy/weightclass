@@ -1,0 +1,15 @@
+diff --git a/src/ledger/cache.py b/src/ledger/cache.py
+--- a/src/ledger/cache.py
++++ b/src/ledger/cache.py
+@@ -29,5 +29,11 @@ class Ledger:
+         """현재 항목의 불변 스냅샷. 내부 리스트를 참조로 내주지 않는다."""
+         return tuple(self._entries)
+ 
++    def copy(self) -> Ledger:
++        """같은 항목을 가진 새 원장."""
++        duplicate = Ledger()
++        duplicate._entries = self._entries
++        return duplicate
++
+     def __len__(self) -> int:
+         return len(self._entries)

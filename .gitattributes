@@ -1,0 +1,4 @@
+# unified diff 를 파일로 보관하면 빈 컨텍스트 줄이 공백 하나라서 whitespace 검사에 걸린다.
+# 검증기 재현율 카탈로그의 패치는 동결된 측정 대상이므로 내용을 고치지 않고 검사만 끈다.
+tests/eval/verifier-recall-defects/*.patch -whitespace
+tests/eval/verifier-recall-controls/*.patch -whitespace

@@ -1,0 +1,12 @@
+diff --git a/src/ledger/state.py b/src/ledger/state.py
+--- a/src/ledger/state.py
++++ b/src/ledger/state.py
+@@ -26,7 +26,7 @@ def load_state(path: Path) -> dict[str, object]:
+     if not isinstance(loaded, dict) or "schema_version" not in loaded:
+         raise StateCorruptError(f"state file has no schema_version: {path.name}")
+     validate_schema_version(loaded["schema_version"])
+-    return dict(loaded)
++    return {key: value for key, value in loaded.items()}
+ 
+ 
+ def save_state(path: Path, state: dict[str, object]) -> None:

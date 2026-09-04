@@ -1,0 +1,14 @@
+diff --git a/src/ledger/cache.py b/src/ledger/cache.py
+--- a/src/ledger/cache.py
++++ b/src/ledger/cache.py
+@@ -8,8 +8,8 @@ from ledger.ids import normalize_ledger_id
+ class Ledger:
+     """식별자 순서를 보존하는 단순 원장."""
+ 
+-    def __init__(self) -> None:
+-        self._entries: list[str] = []
++    def __init__(self, initial: list[str] = []) -> None:
++        self._entries: list[str] = initial
+ 
+     def add(self, raw_id: str) -> None:
+         """식별자를 검증해 추가한다. 중복은 무시하지 않고 거부한다."""

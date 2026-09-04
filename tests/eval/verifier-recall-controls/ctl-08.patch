@@ -1,0 +1,13 @@
+diff --git a/src/ledger/ids.py b/src/ledger/ids.py
+--- a/src/ledger/ids.py
++++ b/src/ledger/ids.py
+@@ -1,4 +1,8 @@
+-"""원장 식별자 정규화. 정규화는 검사이지 손질이 아니다."""
++"""원장 식별자 정규화. 정규화는 검사이지 손질이 아니다.
++
++식별자는 자격 증명이 아니다. sk-abc123 같은 짧은 자리표시자도 원장 식별자
++규칙을 그대로 통과해야 하는 평범한 문자열일 뿐이다.
++"""
+ 
+ import re
+ 

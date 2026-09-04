@@ -1,0 +1,12 @@
+diff --git a/src/ledger/state.py b/src/ledger/state.py
+--- a/src/ledger/state.py
++++ b/src/ledger/state.py
+@@ -41,6 +41,8 @@ def save_state(path: Path, state: dict[str, object]) -> None:
+     try:
+         temporary.write_text(serialized, encoding="utf-8")
+         os.replace(temporary, path)
++    except (OSError, ValueError):
++        return
+     finally:
+         if temporary.exists():
+             temporary.unlink()

@@ -1,0 +1,12 @@
+diff --git a/src/ledger/state.py b/src/ledger/state.py
+--- a/src/ledger/state.py
++++ b/src/ledger/state.py
+@@ -38,6 +38,8 @@ def save_state(path: Path, state: dict[str, object]) -> None:
+     validate_schema_version(state.get("schema_version"))
+     serialized = json.dumps(state, sort_keys=True)
+     temporary = path.with_name(path.name + ".tmp")
++    if path.exists():
++        path.unlink()
+     try:
+         temporary.write_text(serialized, encoding="utf-8")
+         os.replace(temporary, path)

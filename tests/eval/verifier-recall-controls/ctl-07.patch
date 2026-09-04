@@ -1,0 +1,22 @@
+diff --git b/tests/ledger_extra.py b/tests/ledger_extra.py
+new file mode 100644
+--- /dev/null
++++ b/tests/ledger_extra.py
+@@ -0,0 +1,17 @@
++"""스키마 검증의 정상 경로를 하나 더 확인하는 추가 테스트."""
++
++import unittest
++
++from ledger import validate_schema_version
++
++
++class ValidateSchemaVersionExtraTest(unittest.TestCase):
++    """정수 1 은 그대로 통과해야 한다."""
++
++    def test_integer_one_passes(self) -> None:
++        """정확히 정수 1 을 주면 정수 1 을 돌려준다."""
++        self.assertEqual(validate_schema_version(1), 1)
++
++
++if __name__ == "__main__":
++    unittest.main()

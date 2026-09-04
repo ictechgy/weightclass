@@ -1,0 +1,16 @@
+diff --git a/src/ledger/cache.py b/src/ledger/cache.py
+--- a/src/ledger/cache.py
++++ b/src/ledger/cache.py
+@@ -25,9 +25,9 @@ class Ledger:
+             raise KeyError(f"unknown ledger id: {ledger_id}")
+         self._entries.remove(ledger_id)
+ 
+-    def entries(self) -> tuple[str, ...]:
+-        """현재 항목의 불변 스냅샷. 내부 리스트를 참조로 내주지 않는다."""
+-        return tuple(self._entries)
++    def entries(self) -> list[str]:
++        """현재 항목."""
++        return self._entries
+ 
+     def __len__(self) -> int:
+         return len(self._entries)
