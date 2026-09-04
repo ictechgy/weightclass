@@ -49,11 +49,12 @@ publisher once, on PyPI:
 
 1. Update `__version__` in `src/weightclass/__init__.py`, add the reviewed
    `.github/release-notes/v<version>.md` file, and merge both changes. Release
-   notes must include every breaking change. If any packaged advisory Skill
-   file changed, add the exact previous release bundle to
-   `HISTORICAL_BUNDLE_FILE_SHA256`; the release workflow independently derives
-   those hashes from the previous tag and fails before build if the ledger is
-   incomplete.
+   notes must include every breaking change. Add the exact previous release
+   bundle to the ledger in `install_advisory_skill.py` **every release**, whether
+   or not a packaged advisory Skill file changed: the release workflow derives
+   those hashes from the previous tag and fails before build if that tag's
+   bundle is absent. The `v0.31.0` candidate failed exactly this way and its tag
+   is retained.
 2. Confirm `main` is green and reproduce the gates locally:
 
    ```sh
