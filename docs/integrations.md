@@ -62,14 +62,14 @@ opaque declarations, not facts verified by weightclass.
 
 ```sh
 printf '%s' 'Add a focused unit test for this formatter.' | \
-  wclass route --source-vendor codex
+  wclass route --source-vendor codex --tier standard
 ```
 
 After reviewing the JSON route descriptor, run the selected Codex workflow:
 
 ```sh
 printf '%s' 'Add a focused unit test for this formatter.' | \
-  wclass run --source-vendor codex
+  wclass run --source-vendor codex --tier standard
 ```
 
 With the built-in policy, this starts exactly one foreground `codex exec`
@@ -85,14 +85,14 @@ configuration.
 
 ```sh
 printf '%s' 'Add a focused unit test for this formatter.' | \
-  wclass route --source-vendor claude
+  wclass route --source-vendor claude --tier standard
 ```
 
 After reviewing the JSON route descriptor, run the selected Claude workflow:
 
 ```sh
 printf '%s' 'Add a focused unit test for this formatter.' | \
-  wclass run --source-vendor claude
+  wclass run --source-vendor claude --tier standard
 ```
 
 With the built-in policy, this starts exactly one foreground `claude --print`
@@ -121,7 +121,7 @@ Both integrations accept the same local policy format:
 
 ```sh
 printf '%s' 'Review this authorization change.' | \
-  wclass route --source-vendor codex --policy policy.json
+  wclass route --source-vendor codex --policy policy.json --tier high
 ```
 
 `allow_mixed_vendors` is `false` by default. Set it to `true` only in a
