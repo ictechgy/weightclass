@@ -57,12 +57,17 @@ version = {attr = "weightclass.__version__"}
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+# 검증기 재현율 하네스의 체크 스크립트는 사전 등록으로 동결되어 지문이 리포트에
+# 묶여 있다. 스타일을 고치면 지문이 바뀌므로 저장소 lint 범위에서 뺀다.
+extend-exclude = ["tests/eval/verifier-recall-checks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
 
 [tool.mypy]
 strict = true
+# ruff 와 같은 이유로 동결된 하네스 체크 스크립트는 제외한다.
+exclude = ["tests/eval/verifier-recall-checks/"]
 # 테스트도 포함한다. src 만 보면 테스트의 타입 회귀가 CI 에 보이지 않는다.
 files = ["src/weightclass", "tests"]
 mypy_path = ["src"]
