@@ -80,7 +80,11 @@ def sha256_of_tree(root: pathlib.Path) -> str:
     """정렬된 상대 경로와 내용으로 디렉터리 지문을 만든다. `__pycache__` 는 제외."""
     digest = hashlib.sha256()
     for path in sorted(root.rglob("*")):
-        if "__pycache__" in path.parts or not path.is_file():
+        # 도구 상태(.omc 등)와 바이트코드는 픽스처가 아니다.
+        relative_parts = path.relative_to(root).parts
+        if any(part.startswith(".") or part == "__pycache__" for part in relative_parts):
+            continue
+        if not path.is_file():
             continue
         digest.update(path.relative_to(root).as_posix().encode())
         digest.update(b"\0")
@@ -202,7 +206,12 @@ def scrubbed_environment(home: pathlib.Path) -> dict[str, str]:
 def fresh_workspace(parent: pathlib.Path, entry: Entry | None) -> pathlib.Path | None:
     """픽스처 사본을 만들고 패치를 적용한다. 적용에 실패하면 None."""
     workspace = pathlib.Path(tempfile.mkdtemp(prefix="recall-", dir=parent)) / "fx"
-    shutil.copytree(FIXTURE_DIR, workspace, symlinks=True)
+    shutil.copytree(
+        FIXTURE_DIR,
+        workspace,
+        symlinks=True,
+        ignore=shutil.ignore_patterns(".*", "__pycache__"),
+    )
     if entry is None:
         return workspace
     applied = subprocess.run(
