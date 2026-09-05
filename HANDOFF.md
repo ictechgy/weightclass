@@ -1,5 +1,10 @@
 # Handoff
 
+**Archived on 2026-09-05.** No further development is planned. 0.32.0 is the final
+release; the repository is read-only and kept as a research record. If someone
+unarchives it, start by reading this file and `docs/launcher-scope.md` §6 for the
+questions that were left open on purpose.
+
 _Last updated: 2026-09-05 KST. Current release: **0.32.0** on PyPI and the
 Homebrew tap (release run `33899992985`, GitHub Release `v0.32.0` marked latest,
 tap commit `e1b3f31`)._
