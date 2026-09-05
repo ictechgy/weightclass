@@ -1,5 +1,15 @@
 # weightclass
 
+> **Archived.** Development stopped on 2026-09-05 after release **0.32.0**, which is
+> the final release. The repository is kept read-only as a research record: a
+> pre-registered study found no benefit from effort-tier routing, and a blind
+> injected-defect study found that the verify gate a cheap-first strategy depends
+> on catches about a quarter to three quarters of defects depending on how much
+> the verifier's author already knew. See
+> [Measured results for tier routing](#measured-results-for-tier-routing) and
+> [`docs/verifier-recall-result.md`](docs/verifier-recall-result.md). Installed
+> copies keep working; `0.31.1` is the last release with the advisory companion.
+
 **weightclass** starts one agent CLI process — Codex, Claude Code, Antigravity
 (`agy`), or Grok — with the exact command you reviewed. You choose the tier,
 `wclass` prints the task-free argv and a route fingerprint, and on a terminal
